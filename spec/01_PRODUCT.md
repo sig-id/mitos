@@ -4,6 +4,7 @@ Status: draft v0.1
 Date: 2026-05-20  
 Working name: **Agent Terminal Runtime**  
 Core implementation decision: **use `libghostty` / `libghostty-vt` for terminal emulation and screen-state parsing; do not fork the Ghostty GUI.**
+Primary implementation language: **Zig**, with direct `libghostty-vt` integration and an out-of-process Nucleus sandbox backend on Linux.
 
 ---
 
@@ -240,7 +241,7 @@ sandbox:
     memory: 4G
     cpus: 4
     pids: 1024
-  toolchain_rootfs: agent-rust-node
+  toolchain_rootfs: agent-zig-node
   credentials:
     pass_through: explicit_only
 
@@ -740,7 +741,7 @@ Performance:
 Initial distribution:
 
 ```text
-cargo install agent-terminal-runtime
+zig build -Doptimize=ReleaseSafe
 brew install agent-terminal-runtime
 prebuilt binaries for macOS/Linux
 Linux package includes or locates compatible Nucleus backend
@@ -783,3 +784,4 @@ CI runner image
 - OpenAI Terms of Use: https://openai.com/policies/row-terms-of-use/
 - Nucleus local spec: `/media/data/proj/nucleus/spec`
 - Mitos Nucleus integration contract: `spec/03_NUCLEUS_INTEGRATION.md`
+- Mitos Zig implementation plan: `spec/04_IMPLEMENTATION_PLAN.md`

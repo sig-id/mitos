@@ -3,7 +3,7 @@
 Status: draft v0.1  
 Date: 2026-05-20  
 Core terminal dependency: **`libghostty` / `libghostty-vt`**  
-Primary implementation language: **Rust**, with a narrow FFI wrapper around `libghostty-vt`.
+Primary implementation language: **Zig**, integrating `libghostty-vt` directly behind a narrow internal terminal module.
 
 ---
 
@@ -60,7 +60,7 @@ Therefore:
 
 `libghostty-vt` should be wrapped behind a narrow internal interface because its public API may evolve.
 
-No product component outside `terminal_ghostty` should import raw `libghostty` bindings.
+No product component outside `src/terminal/ghostty.zig` should import raw `libghostty` symbols.
 
 ### 2.4 Local-first by default
 
@@ -179,14 +179,14 @@ MVP should start with direct mode. Daemon mode is useful for long-running UI ses
 
 Core operations:
 
-```rust
-trait RuntimeApi {
-    fn start_run(&self, request: StartRunRequest) -> Result<RunId>;
-    fn subscribe(&self, run_id: RunId) -> EventStream;
-    fn approve(&self, approval_id: ApprovalId, decision: ApprovalDecision) -> Result<()>;
-    fn cancel_run(&self, run_id: RunId) -> Result<()>;
-    fn get_report(&self, run_id: RunId) -> Result<RunReport>;
-}
+```zig
+pub const RuntimeApi = struct {
+    start_run: *const fn (*RuntimeApi, StartRunRequest) anyerror!RunId,
+    subscribe: *const fn (*RuntimeApi, RunId) EventStream,
+    approve: *const fn (*RuntimeApi, ApprovalId, ApprovalDecision) anyerror!void,
+    cancel_run: *const fn (*RuntimeApi, RunId) anyerror!void,
+    get_report: *const fn (*RuntimeApi, RunId) anyerror!RunReport,
+};
 ```
 
 ---
@@ -220,21 +220,21 @@ Created → PreparingWorkspace → StartingAdapter → Running → Finalizing �
 
 The adapter registry resolves the best adapter for the requested provider.
 
-```rust
-trait AgentAdapter {
-    fn provider(&self) -> ProviderId;
-    fn capabilities(&self) -> AdapterCapabilities;
-    fn start(&mut self, ctx: AdapterContext, task: Task) -> Result<AdapterHandle>;
-}
+```zig
+pub const AgentAdapter = struct {
+    provider: ProviderId,
+    capabilities: AdapterCapabilities,
+    start: *const fn (*AgentAdapter, AdapterContext, Task) anyerror!AdapterHandle,
+};
 
-struct AdapterCapabilities {
+pub const AdapterCapabilities = struct {
     supports_headless: bool,
     supports_json_output: bool,
     supports_streaming_events: bool,
     supports_interactive_pty: bool,
     supports_cost_reporting: bool,
     supports_model_selection: bool,
-}
+};
 ```
 
 Adapter selection:
@@ -342,73 +342,73 @@ The PTY adapter must not parse terminal output with only regex or ANSI stripping
 
 ### 4.7.2 Integration boundary
 
-Create an internal crate:
+Create an internal Zig module:
 
 ```text
-crates/terminal_ghostty
+src/terminal/ghostty.zig
 ```
 
-This crate is the only code that links to `libghostty-vt`.
+This module is the only code that directly links to `libghostty-vt`.
 
-Public Rust-facing interface:
+Public Zig-facing interface:
 
-```rust
-pub trait TerminalCore {
-    fn write_from_pty(&mut self, bytes: &[u8]) -> Result<TerminalEffects>;
-    fn resize(&mut self, cols: u16, rows: u16, cell_px: CellSize) -> Result<()>;
-    fn snapshot(&self) -> ScreenSnapshot;
-    fn visible_text(&self) -> String;
-    fn scrollback_text(&self, max_lines: usize) -> String;
-    fn encode_key(&self, key: KeyInput) -> Result<Vec<u8>>;
-    fn encode_paste(&self, paste: &str) -> Result<Vec<u8>>;
-}
+```zig
+pub const TerminalCore = struct {
+    write_from_pty: *const fn (*TerminalCore, []const u8) TerminalError!TerminalEffects,
+    resize: *const fn (*TerminalCore, u16, u16, CellSize) TerminalError!void,
+    snapshot: *const fn (*TerminalCore, std.mem.Allocator) TerminalError!ScreenSnapshot,
+    visible_text: *const fn (*TerminalCore, std.mem.Allocator) TerminalError![]u8,
+    scrollback_text: *const fn (*TerminalCore, std.mem.Allocator, usize) TerminalError![]u8,
+    encode_key: *const fn (*TerminalCore, KeyInput, std.mem.Allocator) TerminalError![]u8,
+    encode_paste: *const fn (*TerminalCore, []const u8, std.mem.Allocator) TerminalError![]u8,
+};
 ```
 
-`libghostty` types must not leak beyond this crate.
+`libghostty` types must not leak beyond this module.
 
 ### 4.7.3 Screen snapshot model
 
-```rust
-pub struct ScreenSnapshot {
-    pub cols: u16,
-    pub rows: u16,
-    pub cursor: CursorState,
-    pub title: Option<String>,
-    pub alternate_screen: bool,
-    pub cells: Vec<Cell>,
-    pub timestamp: DateTime<Utc>,
-}
+```zig
+pub const ScreenSnapshot = struct {
+    cols: u16,
+    rows: u16,
+    cursor: CursorState,
+    title: ?[]const u8,
+    alternate_screen: bool,
+    cells: []const Cell,
+    timestamp_ms: i64,
+};
 
-pub struct Cell {
-    pub x: u16,
-    pub y: u16,
-    pub text: String,
-    pub style: CellStyle,
-}
+pub const Cell = struct {
+    x: u16,
+    y: u16,
+    text: []const u8,
+    style: CellStyle,
+};
 
-pub struct CellStyle {
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub inverse: bool,
-    pub fg: Option<Color>,
-    pub bg: Option<Color>,
-}
+pub const CellStyle = struct {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+    fg: ?Color,
+    bg: ?Color,
+};
 ```
 
 ### 4.7.4 Terminal effects
 
 When processing PTY bytes, the terminal core may emit effects:
 
-```rust
-pub enum TerminalEffect {
-    Bell,
-    TitleChanged(String),
-    WriteToPty(Vec<u8>),
-    ClipboardRequest,
-    ClipboardSet { data: Vec<u8> },
-    ScreenChanged,
-}
+```zig
+pub const TerminalEffect = union(enum) {
+    bell,
+    title_changed: []const u8,
+    write_to_pty: []const u8,
+    clipboard_request,
+    clipboard_set: []const u8,
+    screen_changed,
+};
 ```
 
 Security-sensitive effects, especially clipboard and paste effects, must be routed through policy.
@@ -418,17 +418,17 @@ Security-sensitive effects, especially clipboard and paste effects, must be rout
 Recommended initial approach:
 
 ```text
-third_party/ghostty/       pinned Git submodule or vendored source
-crates/terminal_ghostty/   Rust wrapper
-build.rs                   builds or links libghostty-vt
-bindings.rs                generated by bindgen or handwritten minimal FFI
+third_party/ghostty/        pinned Git submodule or vendored source
+src/terminal/ghostty.zig    direct libghostty-vt integration
+src/terminal/core.zig       product-facing terminal API
+build.zig                   builds or links the selected libghostty-vt objects
 ```
 
 Guidelines:
 
 - Pin a known working Ghostty commit.
-- Keep a compatibility matrix in `crates/terminal_ghostty/COMPAT.md`.
-- Prefer a small handwritten FFI surface if bindgen produces unstable/noisy bindings.
+- Keep a compatibility matrix in `src/terminal/COMPAT.md`.
+- Prefer direct Zig integration over a secondary language bridge. Use a C ABI shim only if upstream `libghostty-vt` exposes a stable boundary that is easier to maintain.
 - Run golden tests against terminal byte sequences.
 - Treat `libghostty-vt` API churn as an integration risk.
 
@@ -450,14 +450,14 @@ Inputs:
 
 Outputs:
 
-```rust
-pub enum PromptEvent {
-    ApprovalRequested(ApprovalRequest),
-    QuestionAsked(ContextQuestion),
-    FinalAnswerCandidate(String),
-    IdleDetected,
-    ErrorDetected(String),
-}
+```zig
+pub const PromptEvent = union(enum) {
+    approval_requested: ApprovalRequest,
+    question_asked: ContextQuestion,
+    final_answer_candidate: []const u8,
+    idle_detected,
+    error_detected: []const u8,
+};
 ```
 
 Detection layers:
@@ -477,32 +477,32 @@ The detector should never directly inject input. It only emits events.
 
 The Policy Engine decides whether an action is allowed.
 
-```rust
-pub trait PolicyEngine {
-    fn evaluate(&self, action: Action, context: PolicyContext) -> PolicyDecision;
-}
+```zig
+pub const PolicyEngine = struct {
+    evaluate: *const fn (*PolicyEngine, Action, PolicyContext) PolicyDecision,
+};
 
-pub enum PolicyDecision {
-    Allow { rule_id: RuleId },
-    Ask { rule_id: Option<RuleId>, reason: String },
-    Block { rule_id: Option<RuleId>, reason: String },
-}
+pub const PolicyDecision = union(enum) {
+    allow: struct { rule_id: RuleId },
+    ask: struct { rule_id: ?RuleId, reason: []const u8 },
+    block: struct { rule_id: ?RuleId, reason: []const u8 },
+};
 ```
 
 Action categories:
 
-```rust
-pub enum Action {
-    ReadPath(PathBuf),
-    WritePath(PathBuf),
-    DeletePath(PathBuf),
-    RunCommand { argv: Vec<String>, cwd: PathBuf },
-    NetworkAccess { destination: Option<String> },
-    InstallPackage { manager: String, package: String },
-    GitPush { remote: String, branch: String },
-    ReadSecret { path_or_env: String },
-    TerminalInput { bytes: Vec<u8>, reason: String },
-}
+```zig
+pub const Action = union(enum) {
+    read_path: []const u8,
+    write_path: []const u8,
+    delete_path: []const u8,
+    run_command: struct { argv: []const []const u8, cwd: []const u8 },
+    network_access: struct { destination: ?[]const u8 },
+    install_package: struct { manager: []const u8, package: []const u8 },
+    git_push: struct { remote: []const u8, branch: []const u8 },
+    read_secret: struct { path_or_env: []const u8 },
+    terminal_input: struct { bytes: []const u8, reason: []const u8 },
+};
 ```
 
 Policy sources:
@@ -537,17 +537,17 @@ Responsibilities:
 
 Approval request structure:
 
-```rust
-pub struct ApprovalRequest {
-    pub id: ApprovalId,
-    pub run_id: RunId,
-    pub action: Action,
-    pub source: ApprovalSource,
-    pub risk: RiskLevel,
-    pub terminal_context: Option<ScreenSnapshot>,
-    pub matched_rule: Option<RuleId>,
-    pub suggested_decision: Option<PolicyDecision>,
-}
+```zig
+pub const ApprovalRequest = struct {
+    id: ApprovalId,
+    run_id: RunId,
+    action: Action,
+    source: ApprovalSource,
+    risk: RiskLevel,
+    terminal_context: ?ScreenSnapshot,
+    matched_rule: ?RuleId,
+    suggested_decision: ?PolicyDecision,
+};
 ```
 
 ---
@@ -621,16 +621,16 @@ Mitos responsibilities:
 - Inject approved terminal input.
 - Redact and persist run artifacts.
 
-Rust-facing abstraction:
+Zig-facing abstraction:
 
-```rust
-trait SandboxBackend {
-    fn prepare(&self, request: SandboxRequest) -> Result<SandboxHandle>;
-    fn spawn(&self, handle: &SandboxHandle, command: SandboxCommand) -> Result<SandboxProcess>;
-    fn attach_pty(&self, handle: &SandboxHandle, size: PtySize) -> Result<SandboxPty>;
-    fn events(&self, handle: &SandboxHandle) -> EventStream<SandboxEvent>;
-    fn terminate(&self, handle: &SandboxHandle, reason: TerminationReason) -> Result<()>;
-}
+```zig
+pub const SandboxBackend = struct {
+    prepare: *const fn (*SandboxBackend, SandboxRequest) anyerror!SandboxHandle,
+    spawn: *const fn (*SandboxBackend, *SandboxHandle, SandboxCommand) anyerror!SandboxProcess,
+    attach_pty: *const fn (*SandboxBackend, *SandboxHandle, PtySize) anyerror!SandboxPty,
+    events: *const fn (*SandboxBackend, *SandboxHandle) EventStream,
+    terminate: *const fn (*SandboxBackend, *SandboxHandle, TerminationReason) anyerror!void,
+};
 ```
 
 The default Linux launch profile:
@@ -707,28 +707,28 @@ Trace store layout:
 
 ### 4.13.1 Event schema
 
-```rust
-pub enum RuntimeEvent {
-    RunStarted(RunStarted),
-    WorkspaceCreated(WorkspaceCreated),
-    SandboxPrepared(SandboxPrepared),
-    SandboxEvent(SandboxEvent),
-    ResourceSample(ResourceSample),
-    AdapterSelected(AdapterSelected),
-    ProcessSpawned(ProcessSpawned),
-    PtyBytes(PtyBytesMeta),
-    ScreenUpdated(ScreenUpdated),
-    PromptDetected(PromptDetected),
-    ApprovalRequested(ApprovalRequested),
-    ApprovalResolved(ApprovalResolved),
-    FileChanged(FileChanged),
-    CommandObserved(CommandObserved),
-    GitDiffCaptured(GitDiffCaptured),
-    HeadlessOutputReceived(HeadlessOutputReceived),
-    FinalAnswerDetected(FinalAnswerDetected),
-    RunCompleted(RunCompleted),
-    RunFailed(RunFailed),
-}
+```zig
+pub const RuntimeEvent = union(enum) {
+    run_started: RunStarted,
+    workspace_created: WorkspaceCreated,
+    sandbox_prepared: SandboxPrepared,
+    sandbox_event: SandboxEvent,
+    resource_sample: ResourceSample,
+    adapter_selected: AdapterSelected,
+    process_spawned: ProcessSpawned,
+    pty_bytes: PtyBytesMeta,
+    screen_updated: ScreenUpdated,
+    prompt_detected: PromptDetected,
+    approval_requested: ApprovalRequested,
+    approval_resolved: ApprovalResolved,
+    file_changed: FileChanged,
+    command_observed: CommandObserved,
+    git_diff_captured: GitDiffCaptured,
+    headless_output_received: HeadlessOutputReceived,
+    final_answer_detected: FinalAnswerDetected,
+    run_completed: RunCompleted,
+    run_failed: RunFailed,
+};
 ```
 
 Raw PTY bytes should generally be stored outside JSONL because they are binary and high-volume. `PtyBytes` events should reference offsets into `terminal.raw`.
@@ -890,117 +890,101 @@ Important rule:
 
 ---
 
-## 6. Runtime crate layout
+## 6. Runtime module layout
 
-Recommended Rust workspace:
+Recommended Zig project layout:
 
 ```text
 agent-terminal-runtime/
-  Cargo.toml
-  crates/
-    atr_cli/                 # CLI binary
+  build.zig
+  build.zig.zon
+  src/
+    main.zig                 # CLI binary
     runtime/                 # session manager + runtime API
-    adapters/                # provider adapter traits + registry
-    adapters_claude/         # provider-specific adapter
-    adapters_codex/
-    adapters_gemini/
-    pty_runner/              # Unix PTY + Windows ConPTY abstraction
-    terminal_core/           # terminal trait and shared types
-    terminal_ghostty/        # libghostty-vt FFI wrapper
+    adapters/                # provider adapter contracts + registry
+    providers/
+      claude.zig             # provider-specific adapter
+      codex.zig
+      gemini.zig
+    pty/                     # Unix PTY + Windows ConPTY abstraction
+    terminal/
+      core.zig               # product-facing terminal API
+      ghostty.zig            # direct libghostty-vt integration
+      snapshot.zig
+      COMPAT.md
     policy/                  # rules, actions, policy engine
     approvals/               # approval controller
     workspace/               # git worktree manager
-    sandbox/                 # sandbox abstraction
-    sandbox_nucleus/         # Linux Nucleus backend
+    sandbox/
+      backend.zig            # sandbox abstraction
+      nucleus.zig            # Linux Nucleus backend
     observability/           # fs/process/git observers
-    trace_store/             # event log + artifact writer
+    trace/                   # event log + artifact writer
     redaction/               # secret redaction
     report/                  # final report generator
     watcher/                 # optional local/remote model classifier
-    test_fixtures/           # fake CLIs, golden terminal streams
+    fixtures/                # fake CLIs, golden terminal streams
   third_party/
     ghostty/                 # pinned source or submodule
 ```
 
 ---
 
-## 7. `libghostty` FFI design
+## 7. `libghostty` Zig integration design
 
 ## 7.1 Binding strategy
 
-Two possible approaches:
+Mitos should use Zig-native integration first.
 
-### Option A: generated bindings
+Recommended approach:
 
-Use `bindgen` over the C headers.
+- Pin Ghostty source under `third_party/ghostty/`.
+- Build or link the required `libghostty-vt` objects from `build.zig`.
+- Keep all direct Ghostty calls in `src/terminal/ghostty.zig`.
+- Expose only owned, product-level terminal types from `src/terminal/core.zig`.
 
-Pros:
+A C ABI shim is acceptable only if upstream `libghostty-vt` exposes a stable C boundary that is simpler to maintain than direct Zig integration. Do not introduce another implementation language solely to call `libghostty-vt`.
 
-- Faster initial integration.
-- Less manual FFI code.
+Tradeoffs:
 
-Cons:
-
-- Bindings may be noisy.
-- API churn creates large diffs.
-- Harder to maintain a clean Rust abstraction.
-
-### Option B: handwritten minimal FFI
-
-Write only the small C function set required by `TerminalCore`.
-
-Pros:
-
-- Stable Rust-facing API.
-- Easier review.
-- Smaller unsafe surface.
-
-Cons:
-
-- Slower initial integration.
-- Requires manual updates when C API changes.
-
-Recommendation:
-
-> Start with handwritten minimal FFI if the required API surface is small; otherwise use bindgen internally but expose only clean safe wrappers.
+- Direct Zig integration matches Ghostty’s implementation language and avoids unnecessary language boundaries.
+- A narrow C ABI can be useful for version isolation if upstream stabilizes it.
+- Either path must preserve the same product-facing `TerminalCore` contract.
 
 ---
 
 ## 7.2 Safe wrapper contract
 
-`terminal_ghostty` should expose safe Rust methods and keep unsafe code local.
+`src/terminal/ghostty.zig` should expose Zig methods that own all terminal handles and allocator-backed snapshots.
 
-```rust
-pub struct GhosttyTerminal {
-    raw: NonNull<ffi::ghostty_terminal_t>,
+```zig
+pub const GhosttyTerminal = struct {
+    raw: *ghostty.Terminal,
+    allocator: std.mem.Allocator,
     cols: u16,
     rows: u16,
-}
 
-impl TerminalCore for GhosttyTerminal {
-    fn write_from_pty(&mut self, bytes: &[u8]) -> Result<TerminalEffects> {
-        // unsafe FFI call here only
+    pub fn writeFromPty(self: *GhosttyTerminal, bytes: []const u8) TerminalError!TerminalEffects {
+        // call libghostty-vt here only
     }
 
-    fn snapshot(&self) -> ScreenSnapshot {
-        // convert libghostty cell/state into owned Rust types
+    pub fn snapshot(self: *GhosttyTerminal) TerminalError!ScreenSnapshot {
+        // convert libghostty cell/state into owned Zig types
     }
-}
 
-impl Drop for GhosttyTerminal {
-    fn drop(&mut self) {
-        // free libghostty terminal
+    pub fn deinit(self: *GhosttyTerminal) void {
+        // free libghostty terminal and owned buffers
     }
-}
+};
 ```
 
 Safety rules:
 
-- All FFI handles are owned by safe wrapper structs.
-- No borrowed data from `libghostty` escapes beyond wrapper call lifetime.
-- All snapshots are converted into owned Rust data.
-- All functions that can fail map into `Result<TerminalError>`.
-- FFI calls are fuzzed/golden-tested with terminal byte streams.
+- All raw `libghostty` handles are owned by `src/terminal/ghostty.zig`.
+- No borrowed data from `libghostty` escapes beyond the wrapper call lifetime.
+- All snapshots are converted into allocator-owned Zig data.
+- All functions that can fail return Zig error unions.
+- Terminal calls are fuzzed/golden-tested with terminal byte streams.
 
 ---
 
@@ -1031,20 +1015,24 @@ expected: visible text + cell styles + cursor state + normalized prompt
 
 ## 8.1 Generic adapter interface
 
-```rust
-pub trait AgentAdapter: Send {
-    fn id(&self) -> AdapterId;
-    fn provider(&self) -> ProviderId;
-    fn detect(&self) -> Result<AdapterDetection>;
-    fn capabilities(&self) -> AdapterCapabilities;
-    fn start(&mut self, ctx: AdapterContext, task: Task) -> Result<Box<dyn AdapterRun>>;
-}
+```zig
+pub const AgentAdapter = struct {
+    id: AdapterId,
+    provider: ProviderId,
+    vtable: *const VTable,
 
-pub trait AdapterRun {
-    fn event_stream(&mut self) -> Pin<Box<dyn Stream<Item = RuntimeEvent> + Send>>;
-    fn send_input(&mut self, input: AdapterInput) -> Result<()>;
-    fn cancel(&mut self) -> Result<()>;
-}
+    pub const VTable = struct {
+        detect: *const fn (*AgentAdapter) anyerror!AdapterDetection,
+        capabilities: *const fn (*AgentAdapter) AdapterCapabilities,
+        start: *const fn (*AgentAdapter, AdapterContext, Task) anyerror!AdapterRun,
+    };
+};
+
+pub const AdapterRun = struct {
+    event_stream: EventStream,
+    send_input: *const fn (*AdapterRun, AdapterInput) anyerror!void,
+    cancel: *const fn (*AdapterRun) anyerror!void,
+};
 ```
 
 ## 8.2 Detection
@@ -1060,24 +1048,24 @@ Each adapter should detect:
 
 Example:
 
-```rust
-pub struct AdapterDetection {
-    pub available: bool,
-    pub binary: Option<PathBuf>,
-    pub version: Option<String>,
-    pub auth_status: AuthStatus,
-    pub warnings: Vec<String>,
-}
+```zig
+pub const AdapterDetection = struct {
+    available: bool,
+    binary: ?[]const u8,
+    version: ?[]const u8,
+    auth_status: AuthStatus,
+    warnings: []const []const u8,
+};
 ```
 
 ## 8.3 Provider-specific prompt detectors
 
 Each provider adapter may register prompt detectors.
 
-```rust
-pub trait ProviderPromptDetector {
-    fn detect(&self, snapshot: &ScreenSnapshot, context: &PromptContext) -> Vec<PromptEvent>;
-}
+```zig
+pub const ProviderPromptDetector = struct {
+    detect: *const fn (*ProviderPromptDetector, ScreenSnapshot, PromptContext, std.mem.Allocator) anyerror![]PromptEvent,
+};
 ```
 
 Provider-specific detectors should be tested against recorded sessions.
@@ -1219,7 +1207,7 @@ Trusted:
 - Policy engine.
 - Trace store.
 - Sandbox setup.
-- `terminal_ghostty` wrapper.
+- `src/terminal/ghostty.zig` wrapper.
 
 Untrusted or semi-trusted:
 
@@ -1433,9 +1421,9 @@ CI runner container
 
 Potential requirements:
 
-- Rust stable.
-- Zig toolchain for building `libghostty-vt` from source.
-- C toolchain.
+- Zig stable/tagged toolchain for mitos and `libghostty-vt` integration.
+- C toolchain only where required by third-party dependencies.
+- Pinned Ghostty / `libghostty-vt` source or a compatible prebuilt artifact.
 - Platform-specific PTY/ConPTY support.
 
 Distribution should prefer prebuilt binaries so users do not need Zig locally.
@@ -1448,7 +1436,7 @@ Linux distributions should include or locate a compatible Nucleus binary. The mi
 
 ### Milestone 0: terminal-core proof
 
-- Build `terminal_ghostty` wrapper.
+- Build `src/terminal/ghostty.zig` integration.
 - Feed sample ANSI/VT streams.
 - Produce visible text and screen snapshots.
 - Golden tests pass.
@@ -1519,7 +1507,13 @@ Watcher model may classify or explain, but policy remains deterministic unless t
 
 ### 16.4 Do not depend on provider CLIs as stable APIs
 
+Provider CLIs can change flags, output, and terminal flows. Treat provider adapters as compatibility layers with tests against recorded sessions.
+
 Provider CLIs are external, changing dependencies. Every provider adapter must have version detection, fixtures, and fallback behavior.
+
+### 16.5 Implement mitos in Zig
+
+Use Zig as the primary implementation language. Do not introduce another implementation language solely for `libghostty-vt` or Nucleus integration. Nucleus remains an out-of-process sandbox backend behind the stable launch/event contract.
 
 ---
 
@@ -1536,3 +1530,4 @@ Provider CLIs are external, changing dependencies. Every provider adapter must h
 - OpenAI Terms of Use: https://openai.com/policies/row-terms-of-use/
 - Nucleus local spec: `/media/data/proj/nucleus/spec`
 - Mitos Nucleus integration contract: `spec/03_NUCLEUS_INTEGRATION.md`
+- Mitos Zig implementation plan: `spec/04_IMPLEMENTATION_PLAN.md`

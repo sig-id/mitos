@@ -60,7 +60,7 @@ vm              future high-risk local VM runner
 
 ## 3. Launch Contract
 
-Mitos launches a provider process through Nucleus using either a stable Rust API or a machine-readable config file / config FD. The exact transport is not product-visible, but the semantic contract is stable.
+Mitos launches a provider process through Nucleus using an out-of-process launch contract: CLI invocation, config file / config FD, or another machine-readable transport. The Zig runtime must not depend on Nucleus internals. The exact transport is not product-visible, but the semantic contract is stable.
 
 Required launch fields:
 
@@ -109,16 +109,16 @@ events:
 
 Nucleus must return:
 
-```rust
-struct SandboxHandle {
+```zig
+pub const SandboxHandle = struct {
     run_id: RunId,
-    backend: "nucleus",
-    container_id: String,
-    process_id: Option<u32>,
-    workspace_mount: PathBuf, // /workspace
+    backend: BackendId = .nucleus,
+    container_id: []const u8,
+    process_id: ?u32,
+    workspace_mount: []const u8, // /workspace
     event_stream: SandboxEventStream,
     io: SandboxIo,
-}
+};
 ```
 
 ---
@@ -322,7 +322,7 @@ Mitos refers to toolchains by profile name:
 
 ```yaml
 sandbox:
-  toolchain_rootfs: agent-rust-node
+  toolchain_rootfs: agent-zig-node
 ```
 
 Each profile defines:
