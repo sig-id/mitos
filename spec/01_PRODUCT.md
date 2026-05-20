@@ -227,6 +227,22 @@ workspace:
   mode: git-worktree
   base_branch: main
   clean_before_run: true
+  container_mount: /workspace
+
+sandbox:
+  backend: nucleus
+  mode: strict-agent
+  runtime: gvisor
+  network: none
+  workdir: /workspace
+  home: /home/agent
+  resources:
+    memory: 4G
+    cpus: 4
+    pids: 1024
+  toolchain_rootfs: agent-rust-node
+  credentials:
+    pass_through: explicit_only
 
 providers:
   claude:
@@ -387,6 +403,8 @@ Each run should produce a durable artifact directory.
     terminal.raw
     terminal.redacted.txt
     terminal.snapshots.jsonl
+    sandbox.events.jsonl
+    resources.jsonl
     final.md
     diff.patch
     files_changed.json
@@ -405,6 +423,11 @@ created_at: 2026-05-20T18:00:00Z
 task: Fix failing tests
 provider: claude
 adapter: pty
+sandbox:
+  backend: nucleus
+  mode: strict-agent
+  runtime: gvisor
+  network: none
 workspace: /path/to/repo/.worktrees/01HXYZ
 base_commit: abc123
 head_commit: def456
@@ -419,6 +442,7 @@ Example:
 
 ```json
 {"type":"RunStarted","run_id":"01HXYZ","timestamp":"2026-05-20T18:00:00Z"}
+{"type":"SandboxPrepared","backend":"nucleus","mode":"strict-agent","workspace_mount":"/workspace"}
 {"type":"ProcessSpawned","argv":["claude"],"pid":12345}
 {"type":"PromptDetected","prompt_kind":"approval","risk":"medium","text":"Run npm test?"}
 {"type":"ApprovalDecision","decision":"allow","rule":"allow run_tests"}
@@ -460,7 +484,10 @@ P0:
 - At least one PTY adapter.
 - `libghostty-vt` terminal-state integration.
 - Raw and redacted transcript capture.
-- Git worktree isolation.
+- Git worktree isolation mounted into a Nucleus `/workspace`.
+- Linux sandbox backend using completed Nucleus strict-agent mode.
+- Nucleus PTY/console bridge for interactive provider CLIs.
+- Nucleus event ingestion into `events.jsonl`.
 - Before/after Git diff capture.
 - Basic allow/ask/block policy file.
 - Approval event log.
@@ -478,6 +505,8 @@ P1:
 - Command classification.
 - Provider version detection.
 - Timeout / cancellation / process-tree cleanup.
+- Provider toolchain rootfs profiles for common CLI stacks.
+- Domain-to-egress policy helper for provider API access.
 
 P2:
 
@@ -488,6 +517,7 @@ P2:
 - Gitomi integration.
 - Artifact signing.
 - Remote runner support.
+- macOS and Windows sandbox backends with a Nucleus-compatible contract.
 
 ---
 
@@ -662,10 +692,12 @@ A terminal controls visible I/O, not the child process’s full authority.
 
 Mitigation:
 
-- Implement sandboxing separately.
+- Use Nucleus strict-agent mode as the default Linux sandbox backend.
 - Use restricted environment variables.
 - Use Git worktrees and filesystem boundaries.
-- Add OS-level sandboxing/containerization later.
+- Mount the run worktree into `/workspace`; mount provider credentials explicitly.
+- Keep terminal parsing and approval policy in the runtime, not in Nucleus.
+- Add non-Linux sandbox backends behind the same sandbox contract.
 
 ---
 
@@ -711,6 +743,7 @@ Initial distribution:
 cargo install agent-terminal-runtime
 brew install agent-terminal-runtime
 prebuilt binaries for macOS/Linux
+Linux package includes or locates compatible Nucleus backend
 ```
 
 Later:
@@ -731,8 +764,9 @@ CI runner image
 3. Should local policy be repository-owned, user-owned, or both?
 4. How much provider-specific semantic detection should be hard-coded versus model-classified?
 5. Should the watcher model ever be allowed to answer provider prompts automatically without a matching deterministic policy rule?
-6. What is the minimum sandbox acceptable for public release?
+6. Which non-Linux sandbox backend should follow Nucleus first: macOS Seatbelt, Windows job objects, or a VM/remote runner?
 7. Should the product eventually expose an MCP server so agents can write traces directly?
+8. Which provider toolchain rootfs profiles should ship first?
 
 ---
 
@@ -747,3 +781,5 @@ CI runner image
 - Gemini CLI headless mode: https://google-gemini.github.io/gemini-cli/docs/cli/headless.html
 - Anthropic Agent SDK provider-boundary note: https://code.claude.com/docs/en/agent-sdk/overview
 - OpenAI Terms of Use: https://openai.com/policies/row-terms-of-use/
+- Nucleus local spec: `/media/data/proj/nucleus/spec`
+- Mitos Nucleus integration contract: `spec/03_NUCLEUS_INTEGRATION.md`

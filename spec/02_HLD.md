@@ -119,8 +119,8 @@ Every meaningful event is appended to a local event log. Reports, replay views, 
                 ▼                             ▼
 ┌──────────────────────────────┐    ┌───────────────────────────────┐
 │       Sandbox Layer           │    │        Observability           │
-│ workspace / env / process /   │    │ fs watcher / git diff /        │
-│ network restrictions          │    │ process monitor / redactor     │
+│ Nucleus backend / workspace / │    │ fs watcher / git diff /        │
+│ env / process / network       │    │ process monitor / redactor     │
 └───────────────┬──────────────┘    └──────────────┬────────────────┘
                 │                                  │
                 ▼                                  ▼
@@ -560,27 +560,99 @@ Stage 1 MVP sandbox:
 
 - Git worktree per run.
 - Clean environment variable allowlist.
-- Working directory locked to workspace.
+- Working directory locked to `/workspace`.
 - Pre-run and post-run Git diff.
 - Process-tree cleanup.
-- Configurable network warning, not full enforcement.
+- Linux: Nucleus strict-agent backend is the default enforced sandbox.
+- Nucleus emits sandbox lifecycle/resource/audit events into the trace.
 
-Stage 2 sandbox:
+Portable fallback sandbox:
 
-- Linux: Bubblewrap / namespaces / cgroups where available.
 - macOS: Seatbelt-style sandbox profile where available.
 - Windows: Job objects + restricted token, or WSL/container backend.
 - File allowlist / denylist.
-- Optional network block.
+- Network warning where enforcement is unavailable.
 
-Stage 3 sandbox:
+High-risk sandbox:
 
-- Container runner.
+- Nucleus gVisor runtime for untrusted Linux workloads.
 - VM runner for high-risk tasks.
 - Remote ephemeral runner.
 - Deterministic cache mounts.
 
 The sandbox layer must be independent of `libghostty`.
+
+### 4.11.1 Nucleus backend
+
+Nucleus is the completed Linux sandbox backend.
+
+The detailed contract lives in `spec/03_NUCLEUS_INTEGRATION.md`.
+
+Mitos invokes Nucleus through a stable launch contract:
+
+```text
+Mitos RunRequest
+  → Nucleus strict-agent config
+  → process running in /workspace
+  → PTY/stdio stream back to mitos
+  → Nucleus JSONL events back to TraceStore
+```
+
+Nucleus responsibilities:
+
+- Create Linux namespaces.
+- Apply cgroup resource limits.
+- Apply seccomp and Landlock policy.
+- Drop capabilities.
+- Mount the run worktree at `/workspace`.
+- Mount a sandbox home at `/home/agent`.
+- Mount explicit provider credentials under `/run/secrets`.
+- Enforce network mode and egress policy.
+- Attach PTY/console for interactive provider CLIs.
+- Emit sandbox lifecycle, audit, and resource events.
+
+Mitos responsibilities:
+
+- Create and diff the Git worktree.
+- Build the provider command and environment.
+- Decide policy approvals.
+- Parse terminal output through `libghostty-vt`.
+- Detect provider prompts.
+- Inject approved terminal input.
+- Redact and persist run artifacts.
+
+Rust-facing abstraction:
+
+```rust
+trait SandboxBackend {
+    fn prepare(&self, request: SandboxRequest) -> Result<SandboxHandle>;
+    fn spawn(&self, handle: &SandboxHandle, command: SandboxCommand) -> Result<SandboxProcess>;
+    fn attach_pty(&self, handle: &SandboxHandle, size: PtySize) -> Result<SandboxPty>;
+    fn events(&self, handle: &SandboxHandle) -> EventStream<SandboxEvent>;
+    fn terminate(&self, handle: &SandboxHandle, reason: TerminationReason) -> Result<()>;
+}
+```
+
+The default Linux launch profile:
+
+```yaml
+sandbox:
+  backend: nucleus
+  mode: strict-agent
+  runtime: gvisor
+  workspace_mount: /workspace
+  workdir: /workspace
+  home: /home/agent
+  network: none
+  resources:
+    memory: 4G
+    cpus: 4
+    pids: 1024
+```
+
+When a provider requires network access, mitos must translate policy into an explicit Nucleus network profile before launch. Network access cannot be granted only by answering a terminal prompt.
+
+Non-Linux backends must implement the same high-level contract but may provide weaker enforcement until platform-specific hardening is complete.
 
 ---
 
@@ -622,6 +694,8 @@ Trace store layout:
     terminal.raw
     terminal.redacted.txt
     terminal.snapshots.jsonl
+    sandbox.events.jsonl
+    resources.jsonl
     final.md
     diff.patch
     files_changed.json
@@ -637,6 +711,9 @@ Trace store layout:
 pub enum RuntimeEvent {
     RunStarted(RunStarted),
     WorkspaceCreated(WorkspaceCreated),
+    SandboxPrepared(SandboxPrepared),
+    SandboxEvent(SandboxEvent),
+    ResourceSample(ResourceSample),
     AdapterSelected(AdapterSelected),
     ProcessSpawned(ProcessSpawned),
     PtyBytes(PtyBytesMeta),
@@ -737,8 +814,9 @@ User runs atr
   → CLI loads config
   → Session Manager creates run
   → Workspace Manager creates git worktree
+  → Sandbox Backend prepares Nucleus strict-agent container
   → Adapter Registry selects headless adapter
-  → Headless Adapter spawns provider command
+  → Headless Adapter spawns provider command inside sandbox
   → stdout/stderr parsed into events
   → Observability captures diff/files/tests
   → Report Generator writes final.md
@@ -750,10 +828,12 @@ Sequence:
 ```text
 CLI → SessionManager: start_run(task, provider)
 SessionManager → WorkspaceManager: create_worktree()
+SessionManager → SandboxBackend: prepare_nucleus(workspace, policy)
 SessionManager → AdapterRegistry: select(provider, headless preferred)
-Adapter → ProcessRunner: spawn(argv, cwd, env)
+Adapter → SandboxBackend: spawn(argv, cwd=/workspace, env)
 ProcessRunner → Adapter: stdout/stderr chunks
 Adapter → TraceStore: HeadlessOutputReceived events
+SandboxBackend → TraceStore: SandboxEvent / ResourceSample events
 SessionManager → GitObserver: capture_diff()
 SessionManager → ReportGenerator: finalize()
 ```
@@ -765,8 +845,9 @@ SessionManager → ReportGenerator: finalize()
 ```text
 User runs atr with PTY adapter
   → Session Manager creates workspace
-  → PTY Runner opens PTY
-  → Provider CLI starts in PTY
+  → Sandbox Backend prepares Nucleus strict-agent container
+  → PTY Runner opens PTY or connects to Nucleus console socket
+  → Provider CLI starts in PTY inside sandbox
   → PTY bytes flow into libghostty-vt
   → Terminal snapshots update
   → Prompt Detector emits approval request
@@ -783,6 +864,7 @@ Sequence:
 PTYRunner → RawLog: append bytes
 PTYRunner → GhosttyTerminal: write_from_pty(bytes)
 GhosttyTerminal → PromptDetector: snapshot + visible text
+SandboxBackend → TraceStore: SandboxEvent / ResourceSample events
 PromptDetector → PolicyEngine: action candidate
 PolicyEngine → ApprovalController: ask/allow/block
 ApprovalController → PTYRunner: inject input if allowed
@@ -829,6 +911,7 @@ agent-terminal-runtime/
     approvals/               # approval controller
     workspace/               # git worktree manager
     sandbox/                 # sandbox abstraction
+    sandbox_nucleus/         # Linux Nucleus backend
     observability/           # fs/process/git observers
     trace_store/             # event log + artifact writer
     redaction/               # secret redaction
@@ -1018,6 +1101,14 @@ Benefits:
 - Makes diff capture easy.
 - Supports parallel runs.
 
+On Linux, the worktree is mounted into Nucleus at:
+
+```text
+/workspace
+```
+
+The provider process always starts with `cwd=/workspace`. Host paths should not be exposed to provider CLIs except through explicit Nucleus mounts.
+
 ## 9.2 Environment policy
 
 Default environment should be minimal.
@@ -1046,22 +1137,75 @@ SSH_AUTH_SOCK
 GITHUB_TOKEN
 ```
 
-Provider CLIs may need credentials. The runtime should support explicit credential pass-through per provider rather than inheriting all environment variables.
+Provider CLIs may need credentials. The runtime must support explicit credential pass-through per provider rather than inheriting all environment variables.
+
+Linux default:
+
+```text
+HOME             /home/agent
+WORKSPACE        /workspace
+RUN_ID           <run_id>
+```
+
+Secrets are mounted through Nucleus under `/run/secrets` and exposed to provider CLIs only through provider-specific adapter configuration. Mitos should not pass sensitive values through argv.
 
 ## 9.3 File access
 
-MVP:
+Nucleus default file layout:
 
-- Denylist secret paths in policy.
-- Detect suspicious access where observable.
-- Use Git diff for output changes.
+```text
+/workspace       writable run worktree
+/context         optional read-only supplemental context
+/home/agent      sandbox home
+/run/secrets     explicit provider credentials
+/tmp             writable scratch
+```
 
-Later:
+Default access policy:
 
-- Enforced filesystem sandbox.
-- Read-only mounts.
-- Writeable workspace only.
-- Separate sandbox home.
+- `/workspace`: read/write, execute when the selected toolchain requires running build or test outputs.
+- `/context`: read-only.
+- `/home/agent`: read/write.
+- `/run/secrets`: read-only and provider-scoped.
+- Host private paths such as `~/.ssh`, cloud credentials, and host config directories are never mounted by default.
+
+Mitos policy evaluates semantic actions before launch and during runtime. Nucleus enforces the kernel-level allowlist that mitos derives from that policy.
+
+## 9.4 Network policy
+
+Default Linux network mode:
+
+```text
+network: none
+```
+
+If a provider adapter requires API access, mitos must request a Nucleus launch profile with explicit egress. Runtime approval prompts cannot widen kernel network policy after launch unless the run is restarted with a new sandbox profile.
+
+Network policy translation:
+
+```text
+Mitos Action::NetworkAccess(destination)
+  → provider/domain allowlist
+  → Nucleus network mode + egress policy
+  → SandboxPrepared event records effective policy
+```
+
+## 9.5 Nucleus event ingestion
+
+Nucleus emits JSONL events for lifecycle and enforcement state. Mitos maps them into runtime events:
+
+```text
+nucleus container_start        → SandboxPrepared
+nucleus cgroup_created         → SandboxEvent
+nucleus seccomp_applied        → SandboxEvent
+nucleus landlock_applied       → SandboxEvent
+nucleus capabilities_dropped   → SandboxEvent
+nucleus egress_policy_applied  → SandboxEvent
+nucleus resource_sample        → ResourceSample
+nucleus container_stop         → SandboxEvent
+```
+
+Nucleus stdout/stderr or PTY bytes remain workload output. Nucleus audit events must be carried on a separate event file descriptor, sidecar JSONL file, or other machine-readable control stream.
 
 ---
 
@@ -1184,7 +1328,8 @@ Mitigation:
 
 - Minimal env.
 - Worktree isolation.
-- OS sandbox in later phase.
+- Nucleus strict-agent sandbox on Linux.
+- Nucleus Landlock/seccomp/cgroup enforcement events recorded in trace.
 - Path denylist.
 - Process monitor.
 
@@ -1217,6 +1362,8 @@ Mitigation:
 - Event serialization.
 - Adapter command construction.
 - Report generation.
+- Nucleus launch config generation.
+- Sandbox event mapping.
 
 ## 13.2 Terminal golden tests
 
@@ -1236,6 +1383,8 @@ Create fake provider CLIs that simulate:
 - Attempted secret read.
 - Process hang.
 
+Run the fake CLIs both without a sandbox backend and inside Nucleus strict-agent mode on Linux CI hosts where Nucleus is available.
+
 ## 13.4 Real provider smoke tests
 
 Optional tests gated by environment:
@@ -1254,6 +1403,10 @@ These should never run in normal CI without explicit credentials.
 - Path traversal.
 - Prompt injection in repository files.
 - Dangerous command approval prompts.
+- Nucleus denies host private path reads.
+- Nucleus blocks network in `network: none`.
+- Nucleus enforces cgroup PID and memory limits.
+- Nucleus PTY console cannot bypass approval injection tracing.
 
 ---
 
@@ -1287,6 +1440,8 @@ Potential requirements:
 
 Distribution should prefer prebuilt binaries so users do not need Zig locally.
 
+Linux distributions should include or locate a compatible Nucleus binary. The mitos release must record the supported Nucleus contract version and fail clearly when the installed Nucleus backend is too old.
+
 ---
 
 ## 15. Milestones
@@ -1306,10 +1461,13 @@ Distribution should prefer prebuilt binaries so users do not need Zig locally.
 - Apply policy.
 - Inject response.
 - Generate report.
+- Run the same fake CLI inside Nucleus strict-agent mode.
+- Capture Nucleus sandbox events.
 
 ### Milestone 2: real provider headless run
 
 - Implement one headless adapter.
+- Launch through Nucleus on Linux.
 - Capture output.
 - Capture diff.
 - Generate report.
@@ -1317,6 +1475,7 @@ Distribution should prefer prebuilt binaries so users do not need Zig locally.
 ### Milestone 3: real provider PTY run
 
 - Implement one PTY provider adapter.
+- Connect provider PTY through Nucleus console support on Linux.
 - Detect provider approval prompt.
 - Human approval flow.
 - Raw and redacted logs.
@@ -1375,3 +1534,5 @@ Provider CLIs are external, changing dependencies. Every provider adapter must h
 - Gemini CLI headless mode: https://google-gemini.github.io/gemini-cli/docs/cli/headless.html
 - Anthropic Agent SDK provider-boundary note: https://code.claude.com/docs/en/agent-sdk/overview
 - OpenAI Terms of Use: https://openai.com/policies/row-terms-of-use/
+- Nucleus local spec: `/media/data/proj/nucleus/spec`
+- Mitos Nucleus integration contract: `spec/03_NUCLEUS_INTEGRATION.md`

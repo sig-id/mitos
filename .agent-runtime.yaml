@@ -1,0 +1,53 @@
+version: 1
+workspace:
+  mode: git-worktree
+  base_branch: main
+  clean_before_run: true
+  container_mount: /workspace
+
+sandbox:
+  backend: nucleus
+  mode: strict-agent
+  runtime: gvisor
+  network: none
+  workdir: /workspace
+  home: /home/agent
+  resources:
+    memory: 4G
+    cpus: 4
+    pids: 1024
+  toolchain_rootfs: agent-rust-node
+  credentials:
+    pass_through: explicit_only
+
+providers:
+  claude:
+    adapter_order: [headless_json, pty]
+  codex:
+    adapter_order: [exec_json, pty]
+  gemini:
+    adapter_order: [headless_json, pty]
+
+policy:
+  default: ask
+  allow:
+    - action: read_workspace
+    - action: write_workspace
+    - action: run_tests
+    - command: "git diff*"
+    - command: "git status*"
+  ask:
+    - action: install_package
+    - action: network_access
+    - action: git_push
+    - action: write_outside_workspace
+  block:
+    - path: "~/.ssh/**"
+    - path: "~/.aws/**"
+    - path: "~/.config/gh/**"
+    - command: "rm -rf /*"
+
+watcher:
+  enabled: false
+  mode: local_only
+  model: ollama:qwen3-coder
