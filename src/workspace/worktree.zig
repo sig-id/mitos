@@ -271,6 +271,7 @@ test "git worktree lifecycle captures pre and post run snapshots" {
     try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "init" });
     try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "config", "user.email", "agent@example.invalid" });
     try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "config", "user.name", "Agent Runtime" });
+    try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "config", "commit.gpgsign", "false" });
     try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "add", "README.md" });
     try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "commit", "-m", "initial" });
 

@@ -151,6 +151,7 @@ pub const AdapterEvent = union(enum) {
     stderr: []const u8,
     structured: []const u8,
     terminal_bytes: []const u8,
+    terminal_snapshot: []const u8,
     final_output: []const u8,
     error_message: []const u8,
 };

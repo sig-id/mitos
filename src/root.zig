@@ -16,7 +16,7 @@ pub const terminal = @import("terminal/core.zig");
 pub const trace = @import("trace/mod.zig");
 pub const workspace = @import("workspace/worktree.zig");
 
-const terminal_ghostty = @import("terminal/ghostty.zig");
+pub const terminal_ghostty = @import("terminal/ghostty.zig");
 
 test {
     const std = @import("std");

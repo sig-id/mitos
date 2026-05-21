@@ -1,5 +1,6 @@
 const std = @import("std");
 const adapters = @import("../adapters/types.zig");
+const prompt = @import("../prompt/root.zig");
 
 pub const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
@@ -163,6 +164,34 @@ pub fn emitStructuredJsonl(
         if (!try isJsonObjectLine(allocator, line)) continue;
 
         try sink.emit(sink.context, .{ .structured = line });
+    }
+}
+
+pub fn emitDetectedPrompts(
+    allocator: std.mem.Allocator,
+    sink: ?adapters.AdapterEventSink,
+    provider: adapters.ProviderId,
+    adapter: adapters.AdapterId,
+    bytes: []const u8,
+    timestamp_ms: @import("../runtime/types.zig").TimestampMs,
+) !void {
+    const event_sink = sink orelse return;
+    const trimmed = std.mem.trim(u8, bytes, " \t\r\n");
+    if (trimmed.len == 0) return;
+
+    const events = try prompt.providers.detect(.{
+        .visible_text = trimmed,
+        .scrollback_text = trimmed,
+    }, .{
+        .provider = provider,
+        .adapter = adapter,
+        .timestamp_ms = timestamp_ms,
+    }, allocator);
+    defer prompt.freeEvents(allocator, events);
+
+    for (events) |event| {
+        const runtime_event = prompt.toRuntimeEvent(event);
+        try event_sink.emit(event_sink.context, .{ .prompt_detected = runtime_event.prompt_detected });
     }
 }
 

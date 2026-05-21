@@ -181,6 +181,22 @@ fn startExec(
     try headless.emitLaunchPlan(context.event_sink, self.provider.value, self.id.value);
     const result = try headless.executeAndEmit(context.allocator, command, context.event_sink, .{});
     defer result.deinit(context.allocator);
+    try headless.emitDetectedPrompts(
+        context.allocator,
+        context.event_sink,
+        self.provider,
+        self.id,
+        result.stdout,
+        context.started_at_ms,
+    );
+    try headless.emitDetectedPrompts(
+        context.allocator,
+        context.event_sink,
+        self.provider,
+        self.id,
+        result.stderr,
+        context.started_at_ms,
+    );
 
     return .{
         .run_id = context.run_id,
@@ -260,6 +276,7 @@ test "codex exec adapter start runs configured provider binary" {
     try fake_bin.writeExecutable("codex",
         \\#!/bin/sh
         \\if [ "$1" = "exec" ] && [ "$2" = "--json" ] && [ "$3" = "--color" ] && [ "$4" = "never" ]; then
+        \\  printf 'Run npm install? [y/N]\n'
         \\  printf '{"final_output":"codex fake done"}\n'
         \\  exit 0
         \\fi
@@ -286,6 +303,7 @@ test "codex exec adapter start runs configured provider binary" {
     try std.testing.expect(recorder.saw_process_spawned);
     try std.testing.expect(recorder.saw_process_exited);
     try std.testing.expect(recorder.saw_structured);
+    try std.testing.expect(recorder.saw_prompt);
     try std.testing.expect(recorder.saw_final);
     try std.testing.expect(recorder.saw_expected_final);
     try std.testing.expectEqual(@as(?u8, 0), recorder.exit_code);

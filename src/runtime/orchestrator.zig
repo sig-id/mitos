@@ -7,6 +7,8 @@ const redaction = @import("../redaction/redactor.zig");
 const report = @import("../report/generator.zig");
 const runtime = @import("types.zig");
 const sandbox = @import("../sandbox/backend.zig");
+const headless = @import("../providers/headless.zig");
+const terminal = @import("../terminal/core.zig");
 const trace_file = @import("../trace/file_store.zig");
 const trace_types = @import("../trace/types.zig");
 
@@ -125,6 +127,9 @@ pub const AdapterRunOptions = struct {
     listeners: []const RuntimeEventSink = &.{},
     sandbox_event_stream: ?*sandbox.SandboxEventStream = null,
     sandbox_backend: ?AdapterSandboxOptions = null,
+    require_sandbox_execution: bool = false,
+    policy_config: policy_engine.PolicyConfig = .{},
+    terminal_core: ?*terminal.TerminalCore = null,
 };
 
 pub const AdapterSandboxOptions = struct {
@@ -148,8 +153,11 @@ const AdapterEventBridge = struct {
     allocator: std.mem.Allocator,
     fanout: *EventFanout,
     redactor: redaction.Redactor,
+    policy_config: policy_engine.PolicyConfig,
+    run_id: runtime.RunId,
     timestamp_ms: *runtime.TimestampMs,
     trace: *trace_file.FileTrace,
+    blocked_by_policy: bool = false,
 
     fn emit(context: *anyopaque, event: adapters.AdapterEvent) anyerror!void {
         const self: *AdapterEventBridge = @ptrCast(@alignCast(context));
@@ -172,6 +180,7 @@ const AdapterEventBridge = struct {
                     .text = redacted,
                     .risk = prompt.risk,
                 } });
+                try self.routeDetectedApproval(prompt.prompt_kind, redacted, prompt.risk);
             },
             .stdout => |bytes| try self.emitStream(.stdout, bytes),
             .stderr => |bytes| try self.emitStream(.stderr, bytes),
@@ -183,11 +192,24 @@ const AdapterEventBridge = struct {
                     bytes,
                 );
                 defer self.allocator.free(redacted);
-                try self.trace.appendJsonl(.terminal_raw, bytes);
-                try self.trace.appendJsonl(.terminal_redacted, redacted);
+                try self.trace.appendBytes(.terminal_raw, bytes);
+                try self.trace.appendBytes(.terminal_redacted, redacted);
                 try self.emitRuntime(.{ .adapter_output = .{
                     .stream = .terminal,
                     .bytes = redacted,
+                } });
+            },
+            .terminal_snapshot => |bytes| {
+                const redacted = try self.redactor.redactAlloc(
+                    self.allocator,
+                    .terminal_text,
+                    bytes,
+                );
+                defer self.allocator.free(redacted);
+                try self.trace.appendJsonl(.terminal_snapshots, redacted);
+                try self.emitRuntime(.{ .screen_snapshot = .{
+                    .kind = @tagName(trace_types.ArtifactKind.terminal_snapshots),
+                    .path = trace_types.defaultArtifactPath(.terminal_snapshots),
                 } });
             },
             .final_output => |bytes| {
@@ -235,6 +257,86 @@ const AdapterEventBridge = struct {
     fn emitRuntime(self: *AdapterEventBridge, event: runtime.RuntimeEvent) !void {
         _ = try self.fanout.emit(self.timestamp_ms.*, event);
         self.timestamp_ms.* += 1;
+    }
+
+    fn routeDetectedApproval(
+        self: *AdapterEventBridge,
+        prompt_kind: []const u8,
+        prompt_text: []const u8,
+        risk_name: ?[]const u8,
+    ) !void {
+        if (!std.mem.eql(u8, prompt_kind, "approval_requested")) return;
+
+        const risk = parseRiskLevel(risk_name) orelse .medium;
+        const action: policy.Action = .{ .terminal_input = .{
+            .bytes = "",
+            .reason = prompt_text,
+        } };
+        var deterministic_policy: policy_engine.DeterministicPolicy = .{
+            .config = self.policy_config,
+        };
+        const audited = deterministic_policy.evaluateAudited(action, .{
+            .run_id = self.run_id,
+            .cwd = "/workspace",
+            .timestamp_ms = self.timestamp_ms.*,
+        });
+        try self.emitRuntime(.{ .policy_decision = .{
+            .action_kind = @tagName(audited.action_kind),
+            .decision = audited.decisionName(),
+            .rule_id = if (audited.rule_id) |rule| rule.value else null,
+            .reason = audited.reason,
+        } });
+
+        const approval_id_text = try std.fmt.allocPrint(
+            self.allocator,
+            "approval-{d}",
+            .{self.timestamp_ms.*},
+        );
+        defer self.allocator.free(approval_id_text);
+        const approval_id = policy.ApprovalId{ .value = approval_id_text };
+        var approval_store: approvals.FileApprovalStore = .{
+            .allocator = self.allocator,
+            .run_dir = self.trace.run_dir,
+        };
+        try approval_store.persistRequest(.{
+            .id = approval_id,
+            .run_id = self.run_id,
+            .action = action,
+            .source = .provider_prompt,
+            .risk = risk,
+            .matched_rule = audited.rule_id,
+            .suggested_decision = audited.decision,
+        }, self.timestamp_ms.*);
+        try self.emitRuntime(.{ .approval_requested = .{
+            .approval_id = approval_id.value,
+            .action_kind = @tagName(action.kind()),
+            .risk = @tagName(risk),
+        } });
+
+        switch (audited.decision) {
+            .allow => {
+                try approval_store.recordDecision(approval_id, .allow_once, "policy", self.timestamp_ms.*);
+                try self.emitRuntime(.{ .approval_decision = .{
+                    .approval_id = approval_id.value,
+                    .decision = approvals.approvalDecisionName(.allow_once),
+                    .decided_by = "policy",
+                } });
+            },
+            .block => {
+                self.blocked_by_policy = true;
+                try approval_store.recordDecision(approval_id, .deny, "policy", self.timestamp_ms.*);
+                try self.emitRuntime(.{ .approval_decision = .{
+                    .approval_id = approval_id.value,
+                    .decision = approvals.approvalDecisionName(.deny),
+                    .decided_by = "policy",
+                } });
+                try self.emitRuntime(.{ .error_reported = .{
+                    .message = audited.reason,
+                    .component = "policy",
+                } });
+            },
+            .ask => {},
+        }
     }
 };
 
@@ -335,11 +437,70 @@ pub fn runAdapter(
         .allocator = allocator,
         .fanout = &fanout,
         .redactor = options.redactor,
+        .policy_config = options.policy_config,
+        .run_id = run_id,
         .timestamp_ms = &timestamp_ms,
         .trace = &trace,
     };
 
-    const adapter_run = adapter.start(adapter, .{
+    const adapter_run = if (sandbox_handle) |handle| sandbox_run: {
+        if (sandboxHasProcessResult(handle)) {
+            break :sandbox_run try emitSandboxProcessResult(
+                allocator,
+                adapter,
+                &bridge,
+                sandbox_backend.?.id,
+                options.sandbox_backend.?.launch,
+                handle,
+                run_id,
+                timestamp_ms,
+            );
+        }
+        if (options.require_sandbox_execution) {
+            _ = try fanout.emit(timestamp_ms, .{ .error_reported = .{
+                .message = "sandbox backend returned no process output",
+                .component = "sandbox",
+            } });
+            timestamp_ms += 1;
+            try stopSandboxIfActive(&fanout, &timestamp_ms, sandbox_backend, &sandbox_handle);
+            try emitTransition(&fanout, timestamp_ms, try lifecycle.fail("sandbox backend returned no process output"));
+            timestamp_ms += 1;
+            const report_ref = try report.generate(allocator, trace.run_dir, options.redactor);
+            _ = try fanout.emit(timestamp_ms, .{ .trace_artifact = .{
+                .kind = @tagName(report_ref.kind),
+                .path = report_ref.path,
+            } });
+            return adapterResult(allocator, run_id, .failed, .failed);
+        }
+        break :sandbox_run adapter.start(adapter, .{
+            .allocator = allocator,
+            .run_id = run_id,
+            .workspace_host_path = options.workspace_host_path,
+            .workspace_container_path = effective_workspace_container_path,
+            .env = options.env,
+            .event_sink = .{
+                .context = &bridge,
+                .emit = AdapterEventBridge.emit,
+            },
+            .terminal_core = options.terminal_core,
+            .started_at_ms = timestamp_ms,
+        }, options.task) catch |err| {
+            _ = try fanout.emit(timestamp_ms, .{ .error_reported = .{
+                .message = @errorName(err),
+                .component = "adapter",
+            } });
+            timestamp_ms += 1;
+            try stopSandboxIfActive(&fanout, &timestamp_ms, sandbox_backend, &sandbox_handle);
+            try emitTransition(&fanout, timestamp_ms, try lifecycle.fail(@errorName(err)));
+            timestamp_ms += 1;
+            const report_ref = try report.generate(allocator, trace.run_dir, options.redactor);
+            _ = try fanout.emit(timestamp_ms, .{ .trace_artifact = .{
+                .kind = @tagName(report_ref.kind),
+                .path = report_ref.path,
+            } });
+            return adapterResult(allocator, run_id, .failed, .failed);
+        };
+    } else adapter.start(adapter, .{
         .allocator = allocator,
         .run_id = run_id,
         .workspace_host_path = options.workspace_host_path,
@@ -349,6 +510,7 @@ pub fn runAdapter(
             .context = &bridge,
             .emit = AdapterEventBridge.emit,
         },
+        .terminal_core = options.terminal_core,
         .started_at_ms = timestamp_ms,
     }, options.task) catch |err| {
         _ = try fanout.emit(timestamp_ms, .{ .error_reported = .{
@@ -377,7 +539,11 @@ pub fn runAdapter(
     try emitTransition(&fanout, timestamp_ms, try lifecycle.finalize("collecting artifacts"));
     timestamp_ms += 1;
 
-    const final_state: runtime.RunState = switch (adapter_run.status) {
+    const adapter_status: adapters.AdapterRunStatus = if (bridge.blocked_by_policy and adapter_run.status == .completed)
+        .failed
+    else
+        adapter_run.status;
+    const final_state: runtime.RunState = switch (adapter_status) {
         .completed => .completed,
         .failed => .failed,
         .cancelled => .cancelled,
@@ -386,7 +552,7 @@ pub fn runAdapter(
     switch (final_state) {
         .completed => try emitTransition(&fanout, timestamp_ms, try lifecycle.complete("adapter completed")),
         .failed => {
-            if (!adapter_run.status.isTerminal()) {
+            if (!adapter_status.isTerminal()) {
                 _ = try fanout.emit(timestamp_ms, .{ .error_reported = .{
                     .message = "adapter returned non-terminal status",
                     .component = "runtime",
@@ -406,7 +572,7 @@ pub fn runAdapter(
         .path = report_ref.path,
     } });
 
-    return adapterResult(allocator, run_id, adapter_run.status, final_state);
+    return adapterResult(allocator, run_id, adapter_status, final_state);
 }
 
 pub fn ingestSandboxEvent(fanout: *EventFanout, event: sandbox.SandboxEvent) !runtime.RuntimeEventRecord {
@@ -431,6 +597,112 @@ pub fn drainSandboxEvents(
         count += 1;
     }
     return count;
+}
+
+fn sandboxHasProcessResult(handle: sandbox.SandboxHandle) bool {
+    return handle.stdout != null or
+        handle.stderr != null or
+        handle.exit_code != null or
+        handle.signal != null;
+}
+
+fn emitSandboxProcessResult(
+    allocator: std.mem.Allocator,
+    adapter: *adapters.AgentAdapter,
+    bridge: *AdapterEventBridge,
+    backend_id: sandbox.BackendId,
+    launch: sandbox.SandboxLaunchConfig,
+    handle: sandbox.SandboxHandle,
+    run_id: runtime.RunId,
+    started_at_ms: runtime.TimestampMs,
+) !adapters.AdapterRun {
+    _ = backend_id;
+    const sink: adapters.AdapterEventSink = .{
+        .context = bridge,
+        .emit = AdapterEventBridge.emit,
+    };
+
+    try bridge.emitEvent(.{ .process_spawned = .{
+        .argv = launch.command.argv,
+        .cwd = launch.command.cwd,
+        .pid = handle.process_id,
+    } });
+
+    if (handle.stdout) |stdout| {
+        if (stdout.len > 0) {
+            try bridge.emitEvent(.{ .stdout = stdout });
+            try headless.emitStructuredJsonl(allocator, sink, stdout);
+            try headless.emitDetectedPrompts(
+                allocator,
+                sink,
+                adapter.provider,
+                adapter.id,
+                stdout,
+                started_at_ms,
+            );
+        }
+    }
+    if (handle.stderr) |stderr| {
+        if (stderr.len > 0) {
+            try bridge.emitEvent(.{ .stderr = stderr });
+            try headless.emitDetectedPrompts(
+                allocator,
+                sink,
+                adapter.provider,
+                adapter.id,
+                stderr,
+                started_at_ms,
+            );
+        }
+    }
+
+    const status = sandboxAdapterStatus(handle);
+    if (status == .completed) {
+        const stdout = handle.stdout orelse "";
+        const final_output = try headless.extractFinalOutputAlloc(allocator, stdout);
+        defer allocator.free(final_output);
+        if (final_output.len > 0) try bridge.emitEvent(.{ .final_output = final_output });
+    } else if (handle.stderr) |stderr| {
+        if (stderr.len > 0) try bridge.emitEvent(.{ .error_message = stderr });
+    } else {
+        try bridge.emitEvent(.{ .error_message = "sandbox provider command failed" });
+    }
+
+    try bridge.emitEvent(.{ .process_exited = .{
+        .pid = handle.process_id,
+        .exit_code = handle.exit_code,
+        .signal = handle.signal,
+    } });
+
+    return .{
+        .run_id = run_id,
+        .adapter_id = adapter.id,
+        .mode = adapterModeFromCapabilities(adapter.capabilities),
+        .status = status,
+        .process_id = handle.process_id,
+        .started_at_ms = started_at_ms,
+    };
+}
+
+fn sandboxAdapterStatus(handle: sandbox.SandboxHandle) adapters.AdapterRunStatus {
+    if (handle.exit_code) |code| return if (code == 0) .completed else .failed;
+    if (handle.signal != null) return .failed;
+    return if ((handle.stdout orelse "").len > 0) .completed else .failed;
+}
+
+fn adapterModeFromCapabilities(capabilities: adapters.AdapterCapabilities) adapters.AdapterMode {
+    if (capabilities.supportsMode(.exec_json)) return .exec_json;
+    if (capabilities.supportsMode(.headless_json)) return .headless_json;
+    if (capabilities.supportsMode(.pty)) return .pty;
+    return .raw_shell;
+}
+
+fn parseRiskLevel(risk_name: ?[]const u8) ?policy.RiskLevel {
+    const name = risk_name orelse return null;
+    inline for (std.meta.fields(policy.RiskLevel)) |field| {
+        if (std.mem.eql(u8, name, field.name)) return @field(policy.RiskLevel, field.name);
+    }
+    return null;
 }
 
 fn stopSandboxIfActive(
@@ -923,6 +1195,76 @@ test "adapter run captures real headless process output into trace" {
     try std.testing.expectEqualStrings("local done", final);
 }
 
+test "adapter prompt events are routed through policy approvals" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var adapter: adapters.AgentAdapter = .{
+        .id = .{ .value = "prompt.adapter" },
+        .provider = .{ .value = "prompt" },
+        .capabilities = .{ .supports_headless = true },
+        .start = startPromptAdapter,
+    };
+    const result = try runAdapter(allocator, tmp.dir, &adapter, .{
+        .task = .{ .text = "prompt" },
+        .run_id = "01HPROMPT",
+        .workspace_host_path = ".",
+        .policy_config = .{
+            .default_effect = .allow,
+            .default_reason = "test allows prompts",
+        },
+    });
+    defer result.deinit(allocator);
+
+    var run_dir = try tmp.dir.openDir(result.relative_path, .{});
+    defer run_dir.close();
+    const events = try run_dir.readFileAlloc(
+        allocator,
+        trace_types.defaultArtifactPath(.events),
+        16 * 1024,
+    );
+    defer allocator.free(events);
+    try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "\"type\":\"policy_decision\""));
+    try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "\"type\":\"approval_requested\""));
+    try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "\"type\":\"approval_decision\""));
+
+    const approvals_text = try run_dir.readFileAlloc(
+        allocator,
+        trace_types.defaultArtifactPath(.approvals),
+        16 * 1024,
+    );
+    defer allocator.free(approvals_text);
+    try std.testing.expect(std.mem.containsAtLeast(u8, approvals_text, 1, "\"suggested_decision\":\"allow\""));
+    try std.testing.expect(std.mem.containsAtLeast(u8, approvals_text, 1, "\"decision\":\"allow_once\""));
+}
+
+test "blocked prompt policy fails the run" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var adapter: adapters.AgentAdapter = .{
+        .id = .{ .value = "prompt.adapter" },
+        .provider = .{ .value = "prompt" },
+        .capabilities = .{ .supports_headless = true },
+        .start = startPromptAdapter,
+    };
+    const result = try runAdapter(allocator, tmp.dir, &adapter, .{
+        .task = .{ .text = "prompt" },
+        .run_id = "01HPROMPTBLOCK",
+        .workspace_host_path = ".",
+        .policy_config = .{
+            .default_effect = .block,
+            .default_reason = "test blocks prompts",
+        },
+    });
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(adapters.AdapterRunStatus.failed, result.adapter_status);
+    try std.testing.expectEqual(runtime.RunState.failed, result.final_state);
+}
+
 test "adapter run records failed adapter status" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -1069,6 +1411,16 @@ test "adapter run can launch through sandbox backend" {
     defer allocator.free(events);
     try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "\"backend\":\"nucleus\""));
     try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "container_start"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "\"type\":\"approval_requested\""));
+    try std.testing.expect(std.mem.containsAtLeast(u8, events, 1, "\"type\":\"final_output\""));
+
+    const final = try run_dir.readFileAlloc(
+        allocator,
+        trace_types.defaultArtifactPath(.final_output),
+        16 * 1024,
+    );
+    defer allocator.free(final);
+    try std.testing.expectEqualStrings("sandbox done", final);
 }
 
 test "adapter run records sandbox launch failure as failed run" {
@@ -1154,6 +1506,8 @@ const RuntimeFakeNucleusTransport = struct {
         return .{
             .container_id = "nucleus-runtime-id",
             .process_id = 7,
+            .exit_code = 0,
+            .stdout = "FAKE_APPROVAL: Run tests? [y/N]\n{\"final_output\":\"sandbox done\"}\n",
             .event_jsonl =
             \\{"timestamp":"2026-05-20T18:00:01.000Z","run_id":"01HNUC","container_id":"nucleus-runtime-id","event_type":"container_start","detail":"started","is_error":false}
             \\
@@ -1209,6 +1563,28 @@ fn startFailingAdapter(
         .adapter_id = self.id,
         .mode = .headless_json,
         .status = .failed,
+        .started_at_ms = context.started_at_ms,
+    };
+}
+
+fn startPromptAdapter(
+    self: *adapters.AgentAdapter,
+    context: adapters.AdapterContext,
+    _: adapters.Task,
+) anyerror!adapters.AdapterRun {
+    if (context.event_sink) |sink| {
+        try sink.emit(sink.context, .{ .prompt_detected = .{
+            .prompt_kind = "approval_requested",
+            .text = "Run tests? [y/N]",
+            .risk = "low",
+        } });
+        try sink.emit(sink.context, .{ .final_output = "prompt handled" });
+    }
+    return .{
+        .run_id = context.run_id,
+        .adapter_id = self.id,
+        .mode = .headless_json,
+        .status = .completed,
         .started_at_ms = context.started_at_ms,
     };
 }

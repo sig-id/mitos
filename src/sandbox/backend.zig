@@ -80,6 +80,7 @@ pub const SandboxLaunchConfig = struct {
     resources: ?ResourceLimits = null,
     network: NetworkMode,
     secrets: []const SecretMount = &.{},
+    toolchain_rootfs: ?[]const u8 = null,
 };
 
 pub const SandboxCapabilities = struct {
@@ -95,6 +96,10 @@ pub const SandboxHandle = struct {
     backend: BackendId,
     sandbox_id: []const u8,
     process_id: ?u32 = null,
+    exit_code: ?u8 = null,
+    signal: ?u8 = null,
+    stdout: ?[]const u8 = null,
+    stderr: ?[]const u8 = null,
     workspace_mount: []const u8,
     event_stream: ?SandboxEventStream = null,
     io: SandboxIo = .{},

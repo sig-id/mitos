@@ -177,6 +177,10 @@ fn detectPrompts(
     const scrollback = try core.scrollback_text(core, context.allocator, 4096);
     defer context.allocator.free(scrollback);
 
+    const snapshot_json = try renderSnapshotJson(context.allocator, visible);
+    defer context.allocator.free(snapshot_json);
+    try sink.emit(sink.context, .{ .terminal_snapshot = snapshot_json });
+
     const events = try prompt.providers.detect(.{
         .visible_text = visible,
         .scrollback_text = scrollback,
@@ -191,6 +195,18 @@ fn detectPrompts(
         const runtime_event = prompt.toRuntimeEvent(event);
         try sink.emit(sink.context, .{ .prompt_detected = runtime_event.prompt_detected });
     }
+}
+
+fn renderSnapshotJson(allocator: std.mem.Allocator, visible_text: []const u8) ![]u8 {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var json: std.json.Stringify = .{ .writer = &out.writer };
+    try json.beginObject();
+    try json.objectField("visible_text");
+    try json.write(visible_text);
+    try json.endObject();
+    try out.writer.writeByte('\n');
+    return out.toOwnedSlice();
 }
 
 fn pollProcessTerm(pid: std.posix.pid_t) ?pty_core.ProcessTerm {
@@ -341,6 +357,7 @@ test "pty adapter emits semantic prompt events from terminal text" {
     }, .{ .text = "Run npm install? [y/N]" });
 
     try std.testing.expect(recorder.saw_terminal_bytes);
+    try std.testing.expect(recorder.saw_snapshot);
     try std.testing.expect(recorder.saw_prompt);
 }
 
@@ -388,6 +405,7 @@ test "pty runner spawns a command and observes output through terminal core" {
     try std.testing.expect(recorder.saw_process_spawned);
     try std.testing.expect(recorder.saw_process_exited);
     try std.testing.expectEqual(@as(?u8, 0), recorder.exit_code);
+    try std.testing.expect(recorder.saw_snapshot);
     try std.testing.expect(recorder.saw_prompt);
 }
 
@@ -441,6 +459,7 @@ const PromptRecorder = struct {
     saw_process_spawned: bool = false,
     saw_process_exited: bool = false,
     saw_terminal_bytes: bool = false,
+    saw_snapshot: bool = false,
     saw_prompt: bool = false,
 };
 
@@ -453,6 +472,7 @@ fn recordPrompt(context: *anyopaque, event: adapters.AdapterEvent) anyerror!void
             recorder.exit_code = process.exit_code;
         },
         .terminal_bytes => recorder.saw_terminal_bytes = true,
+        .terminal_snapshot => recorder.saw_snapshot = true,
         .prompt_detected => recorder.saw_prompt = true,
         else => {},
     }

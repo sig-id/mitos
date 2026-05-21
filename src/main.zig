@@ -14,7 +14,7 @@ const RunOptions = struct {
 };
 
 const fake_modes = [_]AdapterMode{ .exec_json, .headless_json };
-const codex_modes = [_]AdapterMode{.exec_json};
+const codex_modes = [_]AdapterMode{ .exec_json, .pty };
 const claude_modes = [_]AdapterMode{.headless_json};
 const gemini_modes = [_]AdapterMode{.headless_json};
 const no_modes = [_]AdapterMode{};
@@ -135,38 +135,169 @@ fn runCommand(
         break :blk generated_run_id.?;
     };
 
-    const mode_order = modeOrder(provider, options.mode);
+    var loaded_config = try loadProjectConfigIfPresent(allocator);
+    defer if (loaded_config) |*loaded| loaded.deinit();
+    const project_config = if (loaded_config) |loaded| loaded.value else null;
+    const configured_provider = configuredProvider(project_config, provider);
+    const effective_project_config = if (configured_provider != null) project_config else null;
+
+    const mode_order = modeOrder(provider, options.mode, configured_provider);
     if (mode_order.len == 0) {
-        try stderr.print("error: no headless CLI adapter is configured for provider '{s}'\n", .{provider});
+        try stderr.print("error: no CLI adapter is configured for provider '{s}'\n", .{provider});
         try stderr.writeAll("Run 'mitos providers' to see supported providers.\n");
         return 2;
     }
 
     var catalog: mitos.providers.catalog.DefaultAdapters = undefined;
     catalog.init();
-    const selection = catalog.registry().selectByName(
-        allocator,
-        provider,
-        mode_order,
-    ) catch |err| {
+    const registry = catalog.registry();
+    const skip_host_detection = if (effective_project_config) |cfg|
+        cfg.sandbox.backend == .nucleus
+    else
+        false;
+    const selection = (if (skip_host_detection)
+        registry.selectByNameNoDetect(provider, mode_order)
+    else
+        registry.selectByName(allocator, provider, mode_order)) catch |err| {
         try stderr.print("error: could not select adapter for provider '{s}': {s}\n", .{
             provider,
             @errorName(err),
         });
-        try stderr.writeAll("Provider CLIs must be installed and authenticated on PATH.\n");
+        if (skip_host_detection) {
+            try stderr.writeAll("Check the configured provider adapter_order in .agent-runtime.yaml.\n");
+        } else {
+            try stderr.writeAll("Provider CLIs must be installed and authenticated on PATH.\n");
+        }
         return 1;
     };
     defer selection.deinit(allocator);
 
+    const run_id_value = try mitos.runtime.RunId.init(run_id);
+    var absolute_workspace: ?[]u8 = null;
+    defer if (absolute_workspace) |path| allocator.free(path);
+    const workspace_root = if (effective_project_config != null) blk: {
+        absolute_workspace = try std.fs.cwd().realpathAlloc(allocator, options.workspace);
+        break :blk absolute_workspace.?;
+    } else options.workspace;
+
+    var prepared_workspace: ?mitos.workspace.PreparedWorkspace = null;
+    defer if (prepared_workspace) |*prepared| prepared.deinit(allocator);
+
+    const workspace_host_path = if (effective_project_config) |cfg| blk: {
+        if (cfg.workspace.mode == .git_worktree) {
+            prepared_workspace = try mitos.workspace.prepareGitWorktree(
+                allocator,
+                workspace_root,
+                run_id_value,
+                cfg.workspace,
+            );
+            break :blk prepared_workspace.?.plan.host_path;
+        }
+        break :blk workspace_root;
+    } else workspace_root;
+
+    var owned_policy_config: ?mitos.policy.engine.OwnedPolicyConfig = null;
+    defer if (owned_policy_config) |*owned| owned.deinit();
+    const runtime_policy = if (effective_project_config) |cfg| blk: {
+        owned_policy_config = try mitos.policy.engine.fromProjectPolicy(allocator, cfg.policy);
+        break :blk owned_policy_config.?.config;
+    } else mitos.policy.engine.PolicyConfig{};
+
+    var terminal: ?mitos.terminal_ghostty.ManagedTerminal = null;
+    defer if (terminal) |*managed| managed.deinit();
+    var terminal_core: ?mitos.terminal.TerminalCore = null;
+    if (selection.mode == .pty) {
+        terminal = try mitos.terminal_ghostty.ManagedTerminal.init(allocator, .{});
+        if (terminal) |*managed| terminal_core = managed.asCore();
+    }
+
+    var provider_command: ?mitos.providers.headless.HeadlessCommand = null;
+    defer if (provider_command) |command| command.deinit(allocator);
+    var nucleus_cli: mitos.nucleus.NucleusCliTransport = .{ .allocator = allocator };
+    var nucleus_backend: mitos.nucleus.NucleusBackend = undefined;
+    var use_nucleus = false;
+    defer if (use_nucleus) nucleus_backend.deinit();
+    var sandbox_mounts: [3]mitos.sandbox.MountSpec = undefined;
+    var sandbox_launch: mitos.sandbox.SandboxLaunchConfig = undefined;
+    var sandbox_options: ?mitos.runtime.orchestrator.AdapterSandboxOptions = null;
+    const workspace_container_path: ?[]const u8 = if (effective_project_config) |cfg| blk: {
+        if (cfg.sandbox.backend != .nucleus) break :blk null;
+        if (selection.mode == .pty) {
+            try stderr.writeAll("error: nucleus sandbox execution is only wired for headless provider modes\n");
+            return 2;
+        }
+
+        provider_command = try buildProviderCommand(
+            allocator,
+            selection.adapter.id.value,
+            .{ .text = task_text },
+            cfg.sandbox.workdir,
+        );
+        sandbox_mounts = .{
+            .{
+                .host_path = workspace_host_path,
+                .container_path = cfg.workspace.container_mount,
+                .access = .read_write_execute,
+            },
+            .{
+                .container_path = cfg.sandbox.home,
+                .access = .read_write,
+                .type = .tmpfs,
+            },
+            .{
+                .host_path = workspace_root,
+                .container_path = "/context",
+                .access = .read_only,
+                .optional = true,
+            },
+        };
+        sandbox_launch = .{
+            .run_id = run_id_value,
+            .backend = .nucleus,
+            .mode = cfg.sandbox.mode,
+            .runtime = cfg.sandbox.runtime,
+            .command = .{
+                .argv = provider_command.?.argv,
+                .cwd = cfg.sandbox.workdir,
+            },
+            .mounts = &sandbox_mounts,
+            .resources = cfg.sandbox.resources,
+            .network = cfg.sandbox.network,
+            .toolchain_rootfs = cfg.sandbox.toolchain_rootfs,
+        };
+        nucleus_backend = mitos.nucleus.NucleusBackend.init(allocator, nucleus_cli.transport());
+        use_nucleus = true;
+        sandbox_options = .{
+            .backend = &nucleus_backend.backend,
+            .launch = sandbox_launch,
+        };
+        break :blk cfg.workspace.container_mount;
+    } else null;
+
     const result = mitos.runtime.orchestrator.runAdapter(allocator, std.fs.cwd(), selection.adapter, .{
         .task = .{ .text = task_text },
         .run_id = run_id,
-        .workspace_host_path = options.workspace,
+        .workspace_host_path = workspace_host_path,
+        .workspace_container_path = workspace_container_path,
+        .policy_config = runtime_policy,
+        .sandbox_backend = sandbox_options,
+        .require_sandbox_execution = use_nucleus,
+        .terminal_core = if (terminal_core) |*core| core else null,
     }) catch |err| {
         try stderr.print("error: run failed before artifacts were finalized: {s}\n", .{@errorName(err)});
         return 1;
     };
     defer result.deinit(allocator);
+
+    persistWorkspaceArtifacts(
+        allocator,
+        result.relative_path,
+        workspace_host_path,
+        &prepared_workspace,
+        mitos.redaction.Redactor{},
+    ) catch |err| {
+        try stderr.print("warning: workspace artifacts were not finalized: {s}\n", .{@errorName(err)});
+    };
 
     try stdout.print("run_id: {s}\n", .{result.run_id.value});
     try stdout.print("provider: {s}\n", .{provider});
@@ -255,7 +386,7 @@ fn parseHeadlessMode(value: []const u8, stderr: anytype) !AdapterMode {
         return error.InvalidArguments;
     };
     return switch (mode) {
-        .headless_json, .exec_json => mode,
+        .headless_json, .exec_json, .pty => mode,
         else => {
             try stderr.print("error: mode '{s}' is registered but not wired to this CLI yet\n", .{value});
             return error.InvalidArguments;
@@ -263,20 +394,123 @@ fn parseHeadlessMode(value: []const u8, stderr: anytype) !AdapterMode {
     };
 }
 
-fn modeOrder(provider: []const u8, requested: ?AdapterMode) []const AdapterMode {
+fn modeOrder(
+    provider: []const u8,
+    requested: ?AdapterMode,
+    configured_provider: ?mitos.config.ProviderConfig,
+) []const AdapterMode {
     if (requested) |mode| {
         return switch (mode) {
             .headless_json => &[_]AdapterMode{.headless_json},
             .exec_json => &[_]AdapterMode{.exec_json},
+            .pty => &[_]AdapterMode{.pty},
             else => &no_modes,
         };
     }
+
+    if (configured_provider) |configured| return configured.adapter_order;
 
     if (std.mem.eql(u8, provider, "fake")) return &fake_modes;
     if (std.mem.eql(u8, provider, "codex")) return &codex_modes;
     if (std.mem.eql(u8, provider, "claude")) return &claude_modes;
     if (std.mem.eql(u8, provider, "gemini")) return &gemini_modes;
     return &no_modes;
+}
+
+fn configuredProvider(
+    project_config: ?mitos.config.ProjectConfig,
+    provider: []const u8,
+) ?mitos.config.ProviderConfig {
+    const cfg = project_config orelse return null;
+    for (cfg.providers) |configured| {
+        if (std.mem.eql(u8, configured.name, provider)) return configured;
+    }
+    return null;
+}
+
+fn loadProjectConfigIfPresent(allocator: std.mem.Allocator) !?mitos.config.LoadedProjectConfig {
+    return mitos.config.loadProjectConfig(allocator, std.fs.cwd()) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => err,
+    };
+}
+
+fn buildProviderCommand(
+    allocator: std.mem.Allocator,
+    adapter_id: []const u8,
+    task: mitos.adapters.Task,
+    cwd: []const u8,
+) !mitos.providers.headless.HeadlessCommand {
+    if (std.mem.eql(u8, adapter_id, "codex.exec")) {
+        return mitos.providers.codex.buildExecCommand(allocator, task, cwd);
+    }
+    if (std.mem.eql(u8, adapter_id, "claude.print")) {
+        return mitos.providers.claude.buildPrintCommand(allocator, task, cwd);
+    }
+    if (std.mem.eql(u8, adapter_id, "gemini.headless")) {
+        return mitos.providers.gemini.buildHeadlessCommand(allocator, task, cwd);
+    }
+    return error.UnsupportedSandboxAdapter;
+}
+
+fn persistWorkspaceArtifacts(
+    allocator: std.mem.Allocator,
+    run_relative_path: []const u8,
+    workspace_path: []const u8,
+    prepared_workspace: *?mitos.workspace.PreparedWorkspace,
+    redactor: mitos.redaction.Redactor,
+) !void {
+    var run_dir = try std.fs.cwd().openDir(run_relative_path, .{});
+    defer run_dir.close();
+
+    const snapshot = if (prepared_workspace.*) |*prepared|
+        try mitos.workspace.finalizeGitWorktree(allocator, prepared, true)
+    else
+        try mitos.workspace.captureWorkspaceSnapshot(allocator, workspace_path);
+    defer snapshot.deinit(allocator);
+
+    const redacted_diff = try redactor.redactAlloc(allocator, .report, snapshot.diff_patch);
+    defer allocator.free(redacted_diff);
+    try run_dir.writeFile(.{
+        .sub_path = mitos.trace.defaultArtifactPath(.diff_patch),
+        .data = redacted_diff,
+    });
+
+    const files_json = try renderChangedFilesJson(allocator, snapshot.changed_files);
+    defer allocator.free(files_json);
+    const redacted_files = try redactor.redactAlloc(allocator, .report, files_json);
+    defer allocator.free(redacted_files);
+    try run_dir.writeFile(.{
+        .sub_path = mitos.trace.defaultArtifactPath(.files_changed),
+        .data = redacted_files,
+    });
+
+    _ = try mitos.report.generate(allocator, run_dir, redactor);
+}
+
+fn renderChangedFilesJson(
+    allocator: std.mem.Allocator,
+    changes: []const mitos.workspace.FileChange,
+) ![]u8 {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    var json: std.json.Stringify = .{
+        .writer = &out.writer,
+        .options = .{ .whitespace = .indent_2 },
+    };
+    try json.beginArray();
+    for (changes) |change| {
+        try json.beginObject();
+        try json.objectField("status");
+        try json.write(change.status);
+        try json.objectField("path");
+        try json.write(change.path);
+        try json.endObject();
+    }
+    try json.endArray();
+    try out.writer.writeByte('\n');
+    return out.toOwnedSlice();
 }
 
 fn printVersion(writer: anytype) !void {
@@ -294,7 +528,7 @@ fn printHelp(writer: anytype) !void {
         \\  mitos version
         \\
         \\Commands:
-        \\  run        Run a task through a built-in headless adapter.
+        \\  run        Run a task through a built-in adapter.
         \\  providers  List built-in providers and currently wired adapter modes.
         \\  version    Print the mitos version.
         \\
@@ -319,7 +553,7 @@ fn printRunHelp(writer: anytype) !void {
         \\  --task-file <path>    Read task text from a file.
         \\  --run-id <id>         Artifact directory name under .runs/.
         \\  --workspace <path>    Workspace path used as provider cwd. Defaults to ".".
-        \\  --mode <mode>         Adapter mode: exec_json or headless_json.
+        \\  --mode <mode>         Adapter mode: exec_json, headless_json, or pty.
         \\  -h, --help            Show this help.
         \\
         \\Provider CLIs must already be installed and authenticated for real providers.
@@ -331,13 +565,9 @@ fn printProviders(writer: anytype) !void {
     try writer.writeAll(
         \\Built-in providers:
         \\  fake    exec_json, headless_json  local deterministic test adapter
-        \\  codex   exec_json                 runs `codex exec --json`
+        \\  codex   exec_json, pty            runs `codex exec --json` or interactive `codex`
         \\  claude  headless_json             runs `claude --print --output-format stream-json`
         \\  gemini  headless_json             runs `gemini --prompt ... --output-format stream-json`
-        \\
-        \\Registered but not wired to this CLI yet:
-        \\  pty adapters require terminal-core attachment and runtime prompt routing.
-        \\
     );
 }
 
@@ -389,10 +619,28 @@ test "run option parser accepts task and provider" {
     try std.testing.expectEqualStrings("/tmp/work", options.workspace);
 }
 
-test "run option parser rejects unwired pty mode" {
+test "run option parser accepts pty mode" {
     var err: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer err.deinit();
 
     const args = [_][]const u8{ "--provider", "codex", "--task", "hello", "--mode", "pty" };
-    try std.testing.expectError(error.InvalidArguments, parseRunOptions(&args, &err.writer));
+    const options = try parseRunOptions(&args, &err.writer);
+    try std.testing.expectEqual(AdapterMode.pty, options.mode.?);
+}
+
+test "mode order honors project provider config before built-in defaults" {
+    const cfg: mitos.config.ProjectConfig = .{
+        .version = mitos.config.supported_version,
+        .workspace = .{ .base_branch = "main" },
+        .sandbox = .{},
+        .providers = &.{
+            .{ .name = "codex", .adapter_order = &.{ .pty, .exec_json } },
+        },
+        .policy = .{},
+        .watcher = .{},
+    };
+
+    const order = modeOrder("codex", null, configuredProvider(cfg, "codex"));
+    try std.testing.expectEqual(AdapterMode.pty, order[0]);
+    try std.testing.expectEqual(AdapterMode.exec_json, order[1]);
 }

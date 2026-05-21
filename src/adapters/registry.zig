@@ -62,6 +62,30 @@ pub const AdapterRegistry = struct {
         return SelectionError.ProviderNotRegistered;
     }
 
+    pub fn selectNoDetect(
+        self: AdapterRegistry,
+        provider: types.ProviderId,
+        priority_order: []const types.AdapterMode,
+    ) anyerror!AdapterSelection {
+        var saw_provider = false;
+
+        for (priority_order) |mode| {
+            for (self.adapters) |adapter| {
+                if (!providerEql(adapter.provider, provider)) continue;
+                saw_provider = true;
+
+                if (!adapter.capabilities.supportsMode(mode)) continue;
+                return .{
+                    .adapter = adapter,
+                    .mode = mode,
+                };
+            }
+        }
+
+        if (saw_provider) return SelectionError.AdapterUnavailable;
+        return SelectionError.ProviderNotRegistered;
+    }
+
     pub fn selectByName(
         self: AdapterRegistry,
         allocator: std.mem.Allocator,
@@ -70,6 +94,17 @@ pub const AdapterRegistry = struct {
     ) anyerror!AdapterSelection {
         return try self.select(
             allocator,
+            try types.ProviderId.init(provider_name),
+            priority_order,
+        );
+    }
+
+    pub fn selectByNameNoDetect(
+        self: AdapterRegistry,
+        provider_name: []const u8,
+        priority_order: []const types.AdapterMode,
+    ) anyerror!AdapterSelection {
+        return try self.selectNoDetect(
             try types.ProviderId.init(provider_name),
             priority_order,
         );
@@ -161,6 +196,29 @@ test "adapter selection skips unavailable detections" {
     defer selection.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("fake.fallback", selection.adapter.id.value);
+}
+
+test "adapter selection can bypass host detection for sandbox execution" {
+    const provider = try types.ProviderId.init("fake");
+
+    var unavailable = types.AgentAdapter{
+        .id = try types.AdapterId.init("fake.unavailable"),
+        .provider = provider,
+        .capabilities = .{
+            .supports_headless = true,
+            .supports_json_output = true,
+        },
+        .detect = unavailableDetect,
+        .start = dummyStart,
+    };
+
+    const adapters = [_]*types.AgentAdapter{&unavailable};
+    const registry = AdapterRegistry.init(&adapters);
+    const selection = try registry.selectByNameNoDetect("fake", &.{.headless_json});
+    defer selection.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("fake.unavailable", selection.adapter.id.value);
+    try std.testing.expect(selection.detection == null);
 }
 
 test "adapter selection accepts provider names from config" {

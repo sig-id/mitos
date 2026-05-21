@@ -116,6 +116,10 @@ pub const NormalizedNucleusEvent = struct {
 pub const NucleusLaunchResult = struct {
     container_id: []const u8,
     process_id: ?u32 = null,
+    exit_code: ?u8 = null,
+    signal: ?u8 = null,
+    stdout: ?[]const u8 = null,
+    stderr: ?[]const u8 = null,
     event_jsonl: ?[]const u8 = null,
 };
 
@@ -373,7 +377,7 @@ pub fn buildLaunchConfigFromSandbox(
         .environment = environment,
         .resources = resources,
         .network = launch.network,
-        .toolchain_rootfs = try allocator.dupe(u8, "unspecified"),
+        .toolchain_rootfs = try allocator.dupe(u8, launch.toolchain_rootfs orelse "unspecified"),
         .events_format = try allocator.dupe(u8, default_events_format),
         .events_channel = try allocator.dupe(u8, default_events_channel),
     };
@@ -444,8 +448,8 @@ pub fn renderLaunchJson(allocator: std.mem.Allocator, launch: NucleusLaunchConfi
     return out.toOwnedSlice();
 }
 
-pub fn parseLaunchResultJson(allocator: std.mem.Allocator, stdout: []const u8) !NucleusLaunchResult {
-    const trimmed = std.mem.trim(u8, stdout, " \t\r\n");
+pub fn parseLaunchResultJson(allocator: std.mem.Allocator, output: []const u8) !NucleusLaunchResult {
+    const trimmed = std.mem.trim(u8, output, " \t\r\n");
     if (trimmed.len == 0) return error.InvalidLaunchResult;
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -486,15 +490,41 @@ pub fn parseLaunchResultJson(allocator: std.mem.Allocator, stdout: []const u8) !
         };
     }
 
+    var stdout: ?[]u8 = null;
+    errdefer if (stdout) |bytes| allocator.free(bytes);
+    if (jsonObjectField(parsed, "stdout")) |value| {
+        stdout = switch (value) {
+            .null => null,
+            .string => |text| try allocator.dupe(u8, text),
+            else => return error.InvalidLaunchResult,
+        };
+    }
+
+    var stderr: ?[]u8 = null;
+    errdefer if (stderr) |bytes| allocator.free(bytes);
+    if (jsonObjectField(parsed, "stderr")) |value| {
+        stderr = switch (value) {
+            .null => null,
+            .string => |text| try allocator.dupe(u8, text),
+            else => return error.InvalidLaunchResult,
+        };
+    }
+
     return .{
         .container_id = container_id,
         .process_id = process_id,
+        .exit_code = try optionalU8Field(parsed, "exit_code"),
+        .signal = try optionalU8Field(parsed, "signal"),
+        .stdout = stdout,
+        .stderr = stderr,
         .event_jsonl = event_jsonl,
     };
 }
 
 pub fn deinitNucleusLaunchResult(allocator: std.mem.Allocator, result: NucleusLaunchResult) void {
     allocator.free(result.container_id);
+    if (result.stdout) |bytes| allocator.free(bytes);
+    if (result.stderr) |bytes| allocator.free(bytes);
     if (result.event_jsonl) |jsonl| allocator.free(jsonl);
 }
 
@@ -619,6 +649,10 @@ fn launchBackend(backend: *sandbox.SandboxBackend, launch: sandbox.SandboxLaunch
     errdefer self.allocator.free(sandbox_id);
     const workspace_mount = try self.allocator.dupe(u8, default_workspace_mount);
     errdefer self.allocator.free(workspace_mount);
+    const stdout = if (result.stdout) |bytes| try self.allocator.dupe(u8, bytes) else null;
+    errdefer if (stdout) |bytes| self.allocator.free(bytes);
+    const stderr = if (result.stderr) |bytes| try self.allocator.dupe(u8, bytes) else null;
+    errdefer if (stderr) |bytes| self.allocator.free(bytes);
 
     var event_stream: ?sandbox.SandboxEventStream = null;
     if (result.event_jsonl) |jsonl| {
@@ -631,6 +665,10 @@ fn launchBackend(backend: *sandbox.SandboxBackend, launch: sandbox.SandboxLaunch
         .backend = .nucleus,
         .sandbox_id = sandbox_id,
         .process_id = result.process_id,
+        .exit_code = result.exit_code,
+        .signal = result.signal,
+        .stdout = stdout,
+        .stderr = stderr,
         .workspace_mount = workspace_mount,
         .event_stream = event_stream,
     };
@@ -644,6 +682,8 @@ fn stopBackend(backend: *sandbox.SandboxBackend, handle: sandbox.SandboxHandle) 
         event_stream.deinit(self.allocator);
     }
     self.allocator.free(handle.sandbox_id);
+    if (handle.stdout) |bytes| self.allocator.free(bytes);
+    if (handle.stderr) |bytes| self.allocator.free(bytes);
     self.allocator.free(handle.workspace_mount);
 }
 
@@ -917,6 +957,18 @@ fn jsonStringValue(value: std.json.Value) ?[]const u8 {
     };
 }
 
+fn optionalU8Field(value: std.json.Value, key: []const u8) !?u8 {
+    const field = jsonObjectField(value, key) orelse return null;
+    return switch (field) {
+        .null => null,
+        .integer => |integer| blk: {
+            if (integer < 0 or integer > std.math.maxInt(u8)) return error.InvalidLaunchResult;
+            break :blk @intCast(integer);
+        },
+        else => error.InvalidLaunchResult,
+    };
+}
+
 fn expectCliExitedZero(term: std.process.Child.Term) NucleusError!void {
     switch (term) {
         .Exited => |code| if (code == 0) return else return error.NucleusUnavailable,
@@ -1028,12 +1080,15 @@ test "nucleus launch config renders strict-agent contract json" {
 test "nucleus cli launch result parses owned fields" {
     const allocator = std.testing.allocator;
     const result = try parseLaunchResultJson(allocator,
-        \\{"container_id":"cli-id","process_id":99,"event_jsonl":"{\"timestamp\":\"2026-05-20T18:00:01.000Z\",\"run_id\":\"01HXYZ\",\"container_id\":\"cli-id\",\"event_type\":\"container_start\",\"is_error\":false}\n"}
+        \\{"container_id":"cli-id","process_id":99,"exit_code":0,"stdout":"{\"final_output\":\"done\"}\n","stderr":"","event_jsonl":"{\"timestamp\":\"2026-05-20T18:00:01.000Z\",\"run_id\":\"01HXYZ\",\"container_id\":\"cli-id\",\"event_type\":\"container_start\",\"is_error\":false}\n"}
     );
     defer deinitNucleusLaunchResult(allocator, result);
 
     try std.testing.expectEqualStrings("cli-id", result.container_id);
     try std.testing.expectEqual(@as(?u32, 99), result.process_id);
+    try std.testing.expectEqual(@as(?u8, 0), result.exit_code);
+    try std.testing.expectEqualStrings("{\"final_output\":\"done\"}\n", result.stdout.?);
+    try std.testing.expectEqualStrings("", result.stderr.?);
     try std.testing.expect(result.event_jsonl != null);
 }
 

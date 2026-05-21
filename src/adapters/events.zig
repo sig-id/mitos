@@ -1,5 +1,6 @@
 const std = @import("std");
 const runtime = @import("../runtime/types.zig");
+const trace = @import("../trace/types.zig");
 const types = @import("types.zig");
 
 pub fn toRuntimeEvent(event: types.AdapterEvent) runtime.RuntimeEvent {
@@ -11,6 +12,10 @@ pub fn toRuntimeEvent(event: types.AdapterEvent) runtime.RuntimeEvent {
         .stderr => |bytes| .{ .adapter_output = .{ .stream = .stderr, .bytes = bytes } },
         .structured => |bytes| .{ .adapter_output = .{ .stream = .structured, .bytes = bytes } },
         .terminal_bytes => |bytes| .{ .adapter_output = .{ .stream = .terminal, .bytes = bytes } },
+        .terminal_snapshot => |_| .{ .screen_snapshot = .{
+            .kind = @tagName(trace.ArtifactKind.terminal_snapshots),
+            .path = trace.defaultArtifactPath(.terminal_snapshots),
+        } },
         .final_output => |text| .{ .final_output = .{ .text = text } },
         .error_message => |message| .{ .error_reported = .{ .message = message, .component = "adapter" } },
     };

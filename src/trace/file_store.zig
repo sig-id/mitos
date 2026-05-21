@@ -131,6 +131,13 @@ pub const FileTrace = struct {
         try self.appendLine(trace.defaultArtifactPath(kind), line);
     }
 
+    pub fn appendBytes(self: *FileTrace, kind: trace.ArtifactKind, bytes: []const u8) !void {
+        var file = try self.run_dir.createFile(trace.defaultArtifactPath(kind), .{ .truncate = false });
+        defer file.close();
+        try file.seekFromEnd(0);
+        try file.writeAll(bytes);
+    }
+
     pub fn writeArtifact(
         self: *FileTrace,
         kind: trace.ArtifactKind,

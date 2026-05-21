@@ -55,6 +55,7 @@ pub const AdapterEventRecorder = struct {
     saw_final: bool = false,
     saw_expected_final: bool = false,
     saw_error: bool = false,
+    saw_prompt: bool = false,
 
     pub fn sink(self: *AdapterEventRecorder) adapters.AdapterEventSink {
         return .{
@@ -73,6 +74,7 @@ pub const AdapterEventRecorder = struct {
                 self.exit_code = process.exit_code;
             },
             .structured => self.saw_structured = true,
+            .prompt_detected => self.saw_prompt = true,
             .final_output => |text| {
                 self.saw_final = true;
                 if (std.mem.eql(u8, text, self.expected_final)) {

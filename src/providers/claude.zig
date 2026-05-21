@@ -108,6 +108,22 @@ fn startPrint(
     try headless.emitLaunchPlan(context.event_sink, self.provider.value, self.id.value);
     const result = try headless.executeAndEmit(context.allocator, command, context.event_sink, .{});
     defer result.deinit(context.allocator);
+    try headless.emitDetectedPrompts(
+        context.allocator,
+        context.event_sink,
+        self.provider,
+        self.id,
+        result.stdout,
+        context.started_at_ms,
+    );
+    try headless.emitDetectedPrompts(
+        context.allocator,
+        context.event_sink,
+        self.provider,
+        self.id,
+        result.stderr,
+        context.started_at_ms,
+    );
 
     return .{
         .run_id = context.run_id,
