@@ -1,5 +1,6 @@
 const std = @import("std");
 const runtime = @import("../runtime/types.zig");
+const terminal = @import("../terminal/core.zig");
 
 pub const IdentifierError = error{
     EmptyIdentifier,
@@ -29,6 +30,19 @@ pub const AdapterMode = enum {
     exec_json,
     pty,
     raw_shell,
+
+    pub fn fromName(mode_name: []const u8) ?AdapterMode {
+        inline for (std.meta.fields(AdapterMode)) |field| {
+            if (std.mem.eql(u8, mode_name, field.name)) {
+                return @field(AdapterMode, field.name);
+            }
+        }
+        return null;
+    }
+
+    pub fn name(self: AdapterMode) []const u8 {
+        return @tagName(self);
+    }
 };
 
 pub const AdapterCapabilities = struct {
@@ -50,6 +64,39 @@ pub const AdapterCapabilities = struct {
     }
 };
 
+pub const AuthStatus = enum {
+    unknown,
+    authenticated,
+    unauthenticated,
+    not_required,
+};
+
+pub const AdapterDetection = struct {
+    available: bool,
+    binary: ?[]const u8 = null,
+    version: ?[]const u8 = null,
+    owns_version: bool = false,
+    auth_status: AuthStatus = .unknown,
+    supported_modes: []const AdapterMode = &.{},
+    warnings: []const []const u8 = &.{},
+
+    pub fn supportsMode(self: AdapterDetection, mode: AdapterMode) bool {
+        if (!self.available) return false;
+        if (self.supported_modes.len == 0) return true;
+
+        for (self.supported_modes) |supported_mode| {
+            if (supported_mode == mode) return true;
+        }
+        return false;
+    }
+
+    pub fn deinit(self: AdapterDetection, allocator: std.mem.Allocator) void {
+        if (self.owns_version) {
+            if (self.version) |version| allocator.free(version);
+        }
+    }
+};
+
 pub const EnvVar = struct {
     name: []const u8,
     value: []const u8,
@@ -61,11 +108,14 @@ pub const Task = struct {
 };
 
 pub const AdapterContext = struct {
+    allocator: std.mem.Allocator = std.heap.page_allocator,
     run_id: runtime.RunId,
     workspace_host_path: []const u8,
     workspace_container_path: ?[]const u8 = null,
     env: []const EnvVar = &.{},
     event_sink: ?AdapterEventSink = null,
+    terminal_core: ?*terminal.TerminalCore = null,
+    started_at_ms: runtime.TimestampMs = 0,
 };
 
 pub const AdapterRunStatus = enum {
@@ -94,6 +144,9 @@ pub const AdapterRun = struct {
 };
 
 pub const AdapterEvent = union(enum) {
+    process_spawned: runtime.ProcessSpawned,
+    process_exited: runtime.ProcessExited,
+    prompt_detected: runtime.PromptDetected,
     stdout: []const u8,
     stderr: []const u8,
     structured: []const u8,
@@ -111,6 +164,7 @@ pub const AgentAdapter = struct {
     id: AdapterId,
     provider: ProviderId,
     capabilities: AdapterCapabilities,
+    detect: ?*const fn (*AgentAdapter, std.mem.Allocator) anyerror!AdapterDetection = null,
     start: *const fn (*AgentAdapter, AdapterContext, Task) anyerror!AdapterRun,
     cancel: ?*const fn (*AgentAdapter, AdapterRun) anyerror!void = null,
 };
@@ -130,4 +184,22 @@ test "adapter capability matching follows configured modes" {
 test "adapter run terminal states are classified" {
     try std.testing.expect(!AdapterRunStatus.running.isTerminal());
     try std.testing.expect(AdapterRunStatus.completed.isTerminal());
+}
+
+test "adapter detection can narrow supported modes" {
+    const detection: AdapterDetection = .{
+        .available = true,
+        .supported_modes = &.{.exec_json},
+    };
+
+    try std.testing.expect(detection.supportsMode(.exec_json));
+    try std.testing.expect(!detection.supportsMode(.pty));
+}
+
+test "adapter modes parse from config names" {
+    try std.testing.expectEqual(AdapterMode.headless_json, AdapterMode.fromName("headless_json").?);
+    try std.testing.expectEqual(AdapterMode.exec_json, AdapterMode.fromName("exec_json").?);
+    try std.testing.expectEqual(AdapterMode.pty, AdapterMode.fromName("pty").?);
+    try std.testing.expect(AdapterMode.fromName("missing") == null);
+    try std.testing.expectEqualStrings("pty", AdapterMode.pty.name());
 }

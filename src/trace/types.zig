@@ -15,6 +15,7 @@ pub const artifact_paths = struct {
     pub const commands = "commands.jsonl";
     pub const approvals = "approvals.jsonl";
     pub const test_results = "test_results.jsonl";
+    pub const report = "report.md";
     pub const screenshots_dir = "screenshots";
     pub const artifacts_dir = "artifacts";
 };
@@ -33,6 +34,7 @@ pub const ArtifactKind = enum {
     commands,
     approvals,
     test_results,
+    report,
     screenshot,
     artifact,
 };
@@ -52,6 +54,7 @@ pub fn defaultArtifactPath(kind: ArtifactKind) []const u8 {
         .commands => artifact_paths.commands,
         .approvals => artifact_paths.approvals,
         .test_results => artifact_paths.test_results,
+        .report => artifact_paths.report,
         .screenshot => artifact_paths.screenshots_dir,
         .artifact => artifact_paths.artifacts_dir,
     };
@@ -81,6 +84,7 @@ test "artifact paths match product artifact names" {
     try std.testing.expectEqualStrings("terminal.raw", defaultArtifactPath(.terminal_raw));
     try std.testing.expectEqualStrings("sandbox.events.jsonl", defaultArtifactPath(.sandbox_events));
     try std.testing.expectEqualStrings("final.md", defaultArtifactPath(.final_output));
+    try std.testing.expectEqualStrings("report.md", defaultArtifactPath(.report));
 }
 
 test "jsonl format defaults to newline-delimited utf-8" {

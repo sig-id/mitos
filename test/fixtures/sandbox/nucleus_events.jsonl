@@ -1,0 +1,7 @@
+{"timestamp":"2026-05-20T18:00:01.123Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"container_start","detail":"strict-agent container started","is_error":false,"mode":"strict-agent","runtime":"gvisor","workspace_mount":"/workspace","network":"none"}
+{"timestamp":"2026-05-20T18:00:01.210Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"cgroup_created","detail":"memory=4G cpus=4 pids=1024","is_error":false}
+{"timestamp":"2026-05-20T18:00:01.250Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"seccomp_applied","detail":"strict-agent profile loaded","is_error":false}
+{"timestamp":"2026-05-20T18:00:01.260Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"landlock_applied","detail":"/workspace read_write_execute","is_error":false}
+{"timestamp":"2026-05-20T18:00:02.000Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"resource_sample","detail":"periodic sample","is_error":false,"resources":{"cpu_millis":1042,"memory_bytes":134217728,"pids":12,"io_read_bytes":4096,"io_write_bytes":8192,"network_rx_bytes":0,"network_tx_bytes":0}}
+{"timestamp":"2026-05-20T18:00:02.500Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"egress_denied","detail":"blocked tcp api.example.com:443","is_error":true,"host":"api.example.com","port":443}
+{"timestamp":"2026-05-20T18:00:03.000Z","run_id":"01HXYZ","container_id":"nucleus-id","event_type":"container_stop","detail":"exit status 0","is_error":false}

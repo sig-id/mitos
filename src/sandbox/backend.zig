@@ -124,6 +124,7 @@ pub const SandboxEvent = struct {
 pub const SandboxEventStream = struct {
     context: *anyopaque,
     next: *const fn (*anyopaque, std.mem.Allocator) anyerror!?SandboxEvent,
+    deinit_event: ?*const fn (*anyopaque, std.mem.Allocator, SandboxEvent) void = null,
 };
 
 pub const ByteReader = struct {
