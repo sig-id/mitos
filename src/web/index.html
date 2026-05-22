@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mitos webpty</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0e14; }
+    #status {
+      font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #9aa5b1; padding: 4px 10px; background: #11151c;
+      border-bottom: 1px solid #1c2330;
+    }
+    #status.up { color: #7ee787; }
+    #status.down { color: #ff7b72; }
+    #terminal { position: absolute; top: 29px; left: 0; right: 0; bottom: 0; padding: 4px; }
+  </style>
+</head>
+<body>
+  <div id="status">connecting…</div>
+  <div id="terminal"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script>
+    // Client/server wire protocol (text frames, first byte is the command):
+    //   '0' + bytes        -> stdin written to the PTY
+    //   '1' + {cols,rows}  -> PTY window resize
+    // Server -> client frames are raw PTY output (binary), written verbatim.
+    const statusEl = document.getElementById("status");
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontSize: 14,
+      theme: { background: "#0b0e14" },
+      scrollback: 10000,
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById("terminal"));
+    fit.fit();
+
+    let ws;
+    let reconnectTimer = null;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || "";
+    }
+
+    function sendResize() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send("1" + JSON.stringify({ cols: term.cols, rows: term.rows }));
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(proto + "//" + location.host + "/ws");
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        setStatus("connected — " + location.host, "up");
+        fit.fit();
+        sendResize();
+        term.focus();
+      };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          term.write(ev.data);
+        } else {
+          term.write(new Uint8Array(ev.data));
+        }
+      };
+      ws.onclose = () => {
+        setStatus("disconnected — retrying…", "down");
+        if (!reconnectTimer) {
+          reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 1000);
+        }
+      };
+      ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    }
+
+    term.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send("0" + data);
+    });
+    term.onResize(() => sendResize());
+
+    window.addEventListener("resize", () => { fit.fit(); });
+
+    connect();
+  </script>
+</body>
+</html>

@@ -76,6 +76,9 @@ fn runCli(
     if (std.mem.eql(u8, command, "run")) {
         return try runCommand(allocator, args[2..], stdout, stderr);
     }
+    if (std.mem.eql(u8, command, "webpty")) {
+        return try webPtyCommand(allocator, args[2..], stdout, stderr);
+    }
 
     try stderr.print("error: unknown command '{s}'\n", .{command});
     try stderr.writeAll("Try 'mitos --help'.\n");
@@ -571,6 +574,217 @@ fn renderChangedFilesJson(
     return out.toOwnedSlice();
 }
 
+const WebPtyOptions = struct {
+    provider: ?[]const u8 = null,
+    task: ?[]const u8 = null,
+    task_file: ?[]const u8 = null,
+    workspace: []const u8 = ".",
+    addr: []const u8 = "127.0.0.1",
+    port: u16 = 7681,
+    cols: u16 = 80,
+    rows: u16 = 24,
+    env: []const []const u8 = &.{},
+    help: bool = false,
+};
+
+fn webPtyCommand(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    stdout: anytype,
+    stderr: anytype,
+) !u8 {
+    const options = parseWebPtyOptions(args, stderr) catch return 2;
+    defer if (options.env.len > 0) {
+        const default_empty: []const []const u8 = &.{};
+        if (options.env.ptr != default_empty.ptr) std.heap.page_allocator.free(options.env);
+    };
+
+    if (options.help) {
+        try printWebPtyHelp(stdout);
+        return 0;
+    }
+
+    const provider = options.provider orelse {
+        try stderr.writeAll("error: webpty requires --provider <name>\n");
+        try stderr.writeAll("Try 'mitos webpty --help'.\n");
+        return 2;
+    };
+    if ((options.task == null and options.task_file == null) or
+        (options.task != null and options.task_file != null))
+    {
+        try stderr.writeAll("error: webpty requires exactly one of --task <text> or --task-file <path>\n");
+        return 2;
+    }
+
+    var task_file_contents: ?[]u8 = null;
+    defer if (task_file_contents) |bytes| allocator.free(bytes);
+    const task_text = if (options.task) |task| task else blk: {
+        task_file_contents = try std.fs.cwd().readFileAlloc(allocator, options.task_file.?, 1024 * 1024);
+        break :blk task_file_contents.?;
+    };
+    if (std.mem.trim(u8, task_text, " \t\r\n").len == 0) {
+        try stderr.writeAll("error: task text is empty\n");
+        return 2;
+    }
+
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, options.workspace);
+    defer allocator.free(cwd);
+
+    var command = buildWebPtyCommand(allocator, provider, .{ .text = task_text }, cwd) catch |err| switch (err) {
+        error.UnsupportedProvider => {
+            try stderr.print("error: webpty does not support provider '{s}' (use codex or claude)\n", .{provider});
+            return 2;
+        },
+        else => return err,
+    };
+    defer command.deinit(allocator);
+
+    var env_vars: std.ArrayList(mitos.adapters.EnvVar) = .empty;
+    defer {
+        for (env_vars.items) |*env| {
+            allocator.free(env.name);
+            allocator.free(env.value);
+        }
+        env_vars.deinit(allocator);
+    }
+    for (options.env) |env_str| {
+        const eq_idx = std.mem.indexOfScalar(u8, env_str, '=') orelse {
+            try stderr.print("error: invalid env var '{s}' (missing =)\n", .{env_str});
+            return 2;
+        };
+        try env_vars.append(allocator, .{
+            .name = try allocator.dupe(u8, env_str[0..eq_idx]),
+            .value = try allocator.dupe(u8, env_str[eq_idx + 1 ..]),
+        });
+    }
+
+    return mitos.web.webpty.run(allocator, .{
+        .argv = command.argv,
+        .cwd = command.cwd,
+        .env = env_vars.items,
+        .addr = options.addr,
+        .port = options.port,
+        .size = .{ .cols = options.cols, .rows = options.rows },
+    }, stdout) catch |err| {
+        try stderr.print("error: webpty server failed: {s}\n", .{@errorName(err)});
+        return 1;
+    };
+}
+
+fn buildWebPtyCommand(
+    allocator: std.mem.Allocator,
+    provider: []const u8,
+    task: mitos.adapters.Task,
+    cwd: []const u8,
+) !mitos.providers.headless.HeadlessCommand {
+    if (std.mem.eql(u8, provider, "codex")) {
+        return mitos.providers.codex.buildPtyCommand(allocator, task, cwd);
+    }
+    if (std.mem.eql(u8, provider, "claude")) {
+        return mitos.providers.claude.buildPtyCommand(allocator, task, cwd);
+    }
+    return error.UnsupportedProvider;
+}
+
+fn parseWebPtyOptions(args: []const []const u8, stderr: anytype) !WebPtyOptions {
+    var options: WebPtyOptions = .{};
+    var env_list = std.ArrayList([]const u8).empty;
+    defer env_list.deinit(std.heap.page_allocator);
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (isHelp(arg)) {
+            options.help = true;
+        } else if (try takeValue(args, &i, arg, "--provider", stderr)) |v| {
+            options.provider = v;
+        } else if (try takeValue(args, &i, arg, "--task", stderr)) |v| {
+            options.task = v;
+        } else if (try takeValue(args, &i, arg, "--task-file", stderr)) |v| {
+            options.task_file = v;
+        } else if (try takeValue(args, &i, arg, "--workspace", stderr)) |v| {
+            options.workspace = v;
+        } else if (try takeValue(args, &i, arg, "--addr", stderr)) |v| {
+            options.addr = v;
+        } else if (try takeValue(args, &i, arg, "--port", stderr)) |v| {
+            options.port = parsePort(v, "--port", stderr) catch return error.InvalidArguments;
+        } else if (try takeValue(args, &i, arg, "--cols", stderr)) |v| {
+            options.cols = parsePort(v, "--cols", stderr) catch return error.InvalidArguments;
+        } else if (try takeValue(args, &i, arg, "--rows", stderr)) |v| {
+            options.rows = parsePort(v, "--rows", stderr) catch return error.InvalidArguments;
+        } else if (try takeValue(args, &i, arg, "--env", stderr)) |v| {
+            try env_list.append(std.heap.page_allocator, v);
+        } else {
+            try stderr.print("error: unknown webpty option '{s}'\n", .{arg});
+            return error.InvalidArguments;
+        }
+    }
+
+    if (env_list.items.len > 0) {
+        options.env = try std.heap.page_allocator.dupe([]const u8, env_list.items);
+    }
+    return options;
+}
+
+/// Match `--flag value` or `--flag=value`, returning the value (advancing `i`
+/// past a separate value argument). Returns null when `arg` is not `flag`.
+fn takeValue(
+    args: []const []const u8,
+    i: *usize,
+    arg: []const u8,
+    flag: []const u8,
+    stderr: anytype,
+) !?[]const u8 {
+    if (std.mem.eql(u8, arg, flag)) {
+        if (i.* + 1 >= args.len) {
+            try stderr.print("error: {s} requires a value\n", .{flag});
+            return error.InvalidArguments;
+        }
+        i.* += 1;
+        return args[i.*];
+    }
+    var eq_buf: [64]u8 = undefined;
+    if (flag.len + 1 <= eq_buf.len) {
+        const with_eq = std.fmt.bufPrint(&eq_buf, "{s}=", .{flag}) catch return null;
+        if (std.mem.startsWith(u8, arg, with_eq)) return arg[with_eq.len..];
+    }
+    return null;
+}
+
+fn parsePort(value: []const u8, flag: []const u8, stderr: anytype) !u16 {
+    return std.fmt.parseInt(u16, value, 10) catch {
+        try stderr.print("error: {s} must be an integer 0-65535\n", .{flag});
+        return error.InvalidArguments;
+    };
+}
+
+fn printWebPtyHelp(writer: anytype) !void {
+    try writer.writeAll(
+        \\Usage:
+        \\  mitos webpty --provider <name> --task <text> [options]
+        \\  mitos webpty --provider <name> --task-file <path> [options]
+        \\
+        \\Starts the agent in a PTY and serves a browser terminal that streams
+        \\the agent's input/output over a WebSocket. Open the printed URL.
+        \\
+        \\Options:
+        \\  --provider <name>     Provider to run: codex or claude.
+        \\  --task <text>         Initial task/prompt for the agent.
+        \\  --task-file <path>    Read the initial task from a file.
+        \\  --workspace <path>    Working directory for the agent. Defaults to ".".
+        \\  --addr <ip>           Bind address (IP literal). Defaults to 127.0.0.1.
+        \\  --port <n>            TCP port. Defaults to 7681. Use 0 for an ephemeral port.
+        \\  --cols <n>            Initial terminal columns. Defaults to 80.
+        \\  --rows <n>            Initial terminal rows. Defaults to 24.
+        \\  --env KEY=VALUE       Environment variables for the agent (repeatable).
+        \\  -h, --help            Show this help.
+        \\
+        \\Example:
+        \\  mitos webpty --provider claude --task "Explain this repo" --port 7681
+        \\
+    );
+}
+
 fn printVersion(writer: anytype) !void {
     try writer.print("mitos {s}\n", .{mitos.version});
 }
@@ -582,11 +796,13 @@ fn printHelp(writer: anytype) !void {
         \\Usage:
         \\  mitos run --provider <name> --task <text> [--run-id <id>] [--workspace <path>]
         \\  mitos run --provider <name> --task-file <path> [--mode <mode>]
+        \\  mitos webpty --provider <name> --task <text> [--port <n>]
         \\  mitos providers
         \\  mitos version
         \\
         \\Commands:
         \\  run        Run a task through a built-in adapter.
+        \\  webpty     Run the agent in a PTY and stream it to a browser terminal.
         \\  providers  List built-in providers and currently wired adapter modes.
         \\  version    Print the mitos version.
         \\
