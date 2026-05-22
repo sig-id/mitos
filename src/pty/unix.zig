@@ -145,6 +145,10 @@ pub const UnixPtySession = struct {
     }
 
     pub fn wait(self: *UnixPtySession) core.ProcessTerm {
+        // Reaping twice would have waitpid return ECHILD, which Zig's wrapper
+        // treats as unreachable. The child is gone once reaped, so report a
+        // benign exit on any second call.
+        if (self.waited) return .{ .exited = 0 };
         const result = std.posix.waitpid(self.pid, 0);
         self.waited = true;
         return processTermFromStatus(result.status);

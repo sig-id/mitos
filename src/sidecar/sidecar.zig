@@ -490,11 +490,19 @@ const State = struct {
             const deadline = std.time.milliTimestamp() + @as(i64, grace_ms);
             while (std.time.milliTimestamp() < deadline) {
                 const result = std.posix.waitpid(session.pid, std.os.linux.W.NOHANG);
-                if (result.pid != 0) break;
+                if (result.pid != 0) {
+                    // Child exited within the grace window and we just reaped
+                    // it here. Mark it so the blocking wait() below is skipped
+                    // — a second waitpid would hit ECHILD (unreachable).
+                    session.waited = true;
+                    break;
+                }
                 std.Thread.sleep(5 * std.time.ns_per_ms);
             }
-            _ = session.kill(9) catch {};
-            _ = session.wait();
+            if (!session.waited) {
+                _ = session.kill(9) catch {};
+                _ = session.wait();
+            }
         }
     }
 

@@ -7,7 +7,8 @@ defmodule Mitos.Application do
       Mitos.Supervisor (one_for_one)
       ├── Registry (Mitos.SessionRegistry)        # session_id → Session pid
       ├── Registry (Mitos.PubSub.Registry)         # session_id → subscribers
-      ├── Mitos.Orchestrator (DynamicSupervisor)   # one child per session
+      ├── Mitos.Orchestrator (DynamicSupervisor)   # one Session per session
+      ├── Mitos.Watchers (DynamicSupervisor)       # one PromptWatcher per agent run
       └── Mitos.Web.Endpoint (Plug.Cowboy)         # HTTP + WebSocket
 
   Each `Mitos.Session` GenServer owns one `mitos-term` OS process via a Port.
@@ -23,6 +24,7 @@ defmodule Mitos.Application do
       {Registry, keys: :unique, name: Mitos.SessionRegistry},
       {Registry, keys: :duplicate, name: Mitos.PubSub.Registry},
       Mitos.Orchestrator,
+      {DynamicSupervisor, strategy: :one_for_one, name: Mitos.Watchers},
       Mitos.Web.Endpoint
     ]
 
