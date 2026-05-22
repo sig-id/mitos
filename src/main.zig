@@ -662,6 +662,7 @@ fn webPtyCommand(
         .argv = command.argv,
         .cwd = command.cwd,
         .env = env_vars.items,
+        .provider = provider,
         .addr = options.addr,
         .port = options.port,
         .size = .{ .cols = options.cols, .rows = options.rows },

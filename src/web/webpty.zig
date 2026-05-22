@@ -14,12 +14,21 @@ const builtin = @import("builtin");
 const adapters = @import("../adapters/types.zig");
 const pty_core = @import("../pty/core.zig");
 const pty_unix = @import("../pty/unix.zig");
+const terminal = @import("../terminal/core.zig");
+const ghostty = @import("../terminal/ghostty.zig");
+const prompt = @import("../prompt/root.zig");
 const ws = @import("ws.zig");
 
 const index_html = @embedFile("index.html");
 
 /// Cap on retained PTY output replayed to clients that connect late.
 const scrollback_cap: usize = 256 * 1024;
+
+/// How many scrollback lines feed prompt detection from the libghostty tap.
+const detection_scrollback_lines: usize = 1024;
+
+/// Synthetic adapter label attached to prompt events from the webpty tap.
+const webpty_adapter_id = adapters.AdapterId{ .value = "webpty" };
 
 pub const WebPtyError = error{
     UnsupportedPlatform,
@@ -30,6 +39,8 @@ pub const Options = struct {
     argv: []const []const u8,
     cwd: ?[]const u8 = null,
     env: []const adapters.EnvVar = &.{},
+    /// Provider id (e.g. "claude") used to pick prompt-detection rules.
+    provider: []const u8 = "",
     addr: []const u8 = "127.0.0.1",
     port: u16 = 7681,
     size: pty_core.PtySize = .{ .cols = 80, .rows = 24 },
@@ -57,6 +68,14 @@ const Server = struct {
     pty_session: *pty_unix.UnixPtySession,
     pty_write_mutex: std.Thread.Mutex = .{},
 
+    // Server-side libghostty-vt tap: PTY output is fed here in addition to being
+    // streamed verbatim to the browser, so webpty can derive the parsed screen
+    // and run prompt detection without a second emulator on the client.
+    terminal_core: terminal.TerminalCore,
+    terminal_mutex: std.Thread.Mutex = .{},
+    provider_id: adapters.ProviderId,
+    last_prompt: ?[]u8 = null,
+
     clients: std.ArrayList(*Client) = .empty,
     client_threads: std.ArrayList(std.Thread) = .empty,
     registry_mutex: std.Thread.Mutex = .{},
@@ -71,6 +90,82 @@ const Server = struct {
         defer self.registry_mutex.unlock();
         for (self.clients.items) |client| {
             if (client.alive) client.send(.binary, bytes);
+        }
+    }
+
+    /// Broadcast a structured (JSON) event to clients as a text frame. Raw PTY
+    /// output uses binary frames, so the client distinguishes the two by type.
+    fn broadcastText(self: *Server, json: []const u8) void {
+        self.registry_mutex.lock();
+        defer self.registry_mutex.unlock();
+        for (self.clients.items) |client| {
+            if (client.alive) client.send(.text, json);
+        }
+    }
+
+    /// Feed a chunk of PTY output into the libghostty-vt tap, write any terminal
+    /// responses (e.g. cursor-position reports) back to the PTY, and broadcast
+    /// newly detected prompts to clients. Best-effort: emulation/detection
+    /// failures are swallowed so they never disrupt the byte stream the browser
+    /// renders.
+    fn feedTerminal(self: *Server, bytes: []const u8) void {
+        const allocator = self.allocator;
+        var pty_response: std.ArrayList(u8) = .empty;
+        defer pty_response.deinit(allocator);
+        var frames: std.ArrayList([]u8) = .empty;
+        defer frames.deinit(allocator);
+
+        // All terminal-core access is serialized: write_from_pty/snapshot run on
+        // the read-loop thread while resize runs on client threads. The PTY and
+        // client locks are taken only after releasing this one to avoid any
+        // lock-ordering inversion with resizePty.
+        self.terminal_mutex.lock();
+        feed: {
+            const effects = self.terminal_core.write_from_pty(&self.terminal_core, bytes, allocator) catch break :feed;
+            defer effects.deinit(allocator);
+            for (effects.items) |effect| switch (effect) {
+                .write_to_pty => |reply| pty_response.appendSlice(allocator, reply) catch {},
+                else => {},
+            };
+
+            const visible = self.terminal_core.visible_text(&self.terminal_core, allocator) catch break :feed;
+            defer allocator.free(visible);
+            const scrollback = self.terminal_core.scrollback_text(&self.terminal_core, allocator, detection_scrollback_lines) catch break :feed;
+            defer allocator.free(scrollback);
+
+            const events = prompt.providers.detect(.{
+                .visible_text = visible,
+                .scrollback_text = scrollback,
+            }, .{
+                .provider = self.provider_id,
+                .adapter = webpty_adapter_id,
+                .timestamp_ms = std.time.milliTimestamp(),
+            }, allocator) catch break :feed;
+            defer prompt.freeEvents(allocator, events);
+
+            // Event texts borrow `visible`/`scrollback`, so serialize to JSON
+            // while those buffers are still alive.
+            for (events) |event| {
+                const json = renderPromptJson(allocator, event) catch continue;
+                // Suppress consecutive identical prompts (a static prompt screen
+                // would otherwise re-fire on every redraw).
+                if (self.last_prompt) |last| {
+                    if (std.mem.eql(u8, last, json)) {
+                        allocator.free(json);
+                        continue;
+                    }
+                }
+                if (self.last_prompt) |last| allocator.free(last);
+                self.last_prompt = allocator.dupe(u8, json) catch null;
+                frames.append(allocator, json) catch allocator.free(json);
+            }
+        }
+        self.terminal_mutex.unlock();
+
+        if (pty_response.items.len > 0) self.writeToPty(pty_response.items);
+        for (frames.items) |json| {
+            self.broadcastText(json);
+            allocator.free(json);
         }
     }
 
@@ -97,11 +192,41 @@ const Server = struct {
 
     fn resizePty(self: *Server, cols: u16, rows: u16) void {
         if (cols == 0 or rows == 0) return;
-        self.pty_write_mutex.lock();
-        defer self.pty_write_mutex.unlock();
-        self.pty_session.pty.resize(.{ .cols = cols, .rows = rows }) catch {};
+        {
+            self.pty_write_mutex.lock();
+            defer self.pty_write_mutex.unlock();
+            self.pty_session.pty.resize(.{ .cols = cols, .rows = rows }) catch {};
+        }
+        // Keep the libghostty-vt tap's grid in sync with the PTY window. Taken
+        // separately from the PTY lock so feedTerminal (terminal lock -> nothing)
+        // and resize (pty lock; terminal lock) never nest in opposite orders.
+        self.terminal_mutex.lock();
+        defer self.terminal_mutex.unlock();
+        self.terminal_core.resize(&self.terminal_core, cols, rows, default_cell_size) catch {};
     }
 };
+
+const default_cell_size = terminal.CellSize{ .width_px = 8, .height_px = 16 };
+
+/// Serialize a detected prompt to the JSON event the browser consumes:
+/// `{"type":"prompt","kind":...,"risk":...,"text":...}`.
+fn renderPromptJson(allocator: std.mem.Allocator, event: prompt.PromptEvent) ![]u8 {
+    const runtime_event = prompt.toRuntimeEvent(event).prompt_detected;
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var json: std.json.Stringify = .{ .writer = &out.writer };
+    try json.beginObject();
+    try json.objectField("type");
+    try json.write("prompt");
+    try json.objectField("kind");
+    try json.write(runtime_event.prompt_kind);
+    try json.objectField("risk");
+    try json.write(runtime_event.risk);
+    try json.objectField("text");
+    try json.write(runtime_event.text);
+    try json.endObject();
+    return out.toOwnedSlice();
+}
 
 /// Run the webpty server until the agent process exits. Returns the child
 /// exit code (0 on clean exit). Blocks the calling thread.
@@ -116,23 +241,32 @@ pub fn run(allocator: std.mem.Allocator, options: Options, stdout: anytype) !u8 
     };
     errdefer net_server.deinit();
 
-    // Translate EnvVar pairs into the "KEY=VALUE" form the spawner expects.
+    // Inherit the parent environment (PATH/SHELL/HOME/TERM/...) and overlay the
+    // explicit env vars, mirroring the headless path. Without the inherited
+    // environment the child is spawned with an empty env and providers like
+    // claude fail immediately ("No suitable shell found").
     var env_arena = std.heap.ArenaAllocator.init(allocator);
     defer env_arena.deinit();
-    const spawn_env = try env_arena.allocator().alloc([]const u8, options.env.len);
-    for (options.env, 0..) |env_var, i| {
-        spawn_env[i] = try std.fmt.allocPrint(
-            env_arena.allocator(),
+    const env_alloc = env_arena.allocator();
+    var env_map = try std.process.getEnvMap(env_alloc);
+    for (options.env) |env_var| {
+        try env_map.put(env_var.name, env_var.value);
+    }
+    var spawn_env = try std.ArrayList([]const u8).initCapacity(env_alloc, env_map.count());
+    var env_it = env_map.iterator();
+    while (env_it.next()) |entry| {
+        spawn_env.appendAssumeCapacity(try std.fmt.allocPrint(
+            env_alloc,
             "{s}={s}",
-            .{ env_var.name, env_var.value },
-        );
+            .{ entry.key_ptr.*, entry.value_ptr.* },
+        ));
     }
 
     var session = try pty_unix.spawn(allocator, .{
         .argv = options.argv,
         .cwd = options.cwd,
         .size = options.size,
-        .env = spawn_env,
+        .env = spawn_env.items,
     });
     var session_active = true;
     defer if (session_active) {
@@ -141,11 +275,20 @@ pub fn run(allocator: std.mem.Allocator, options: Options, stdout: anytype) !u8 
         session.deinit();
     };
 
+    // The libghostty-vt tap that PTY output is mirrored into (see Server.feedTerminal).
+    var managed = try ghostty.ManagedTerminal.init(allocator, .{
+        .terminal = .{ .cols = options.size.cols, .rows = options.size.rows },
+    });
+    defer managed.deinit();
+
     var server = Server{
         .allocator = allocator,
         .net_server = net_server,
         .pty_session = &session,
+        .terminal_core = managed.asCore(),
+        .provider_id = .{ .value = options.provider },
     };
+    defer if (server.last_prompt) |last| allocator.free(last);
     defer {
         server.clients.deinit(allocator);
         server.client_threads.deinit(allocator);
@@ -187,6 +330,7 @@ pub fn run(allocator: std.mem.Allocator, options: Options, stdout: anytype) !u8 
         const bytes = buffer[0..read_len];
         server.appendScrollback(bytes);
         server.broadcast(bytes);
+        server.feedTerminal(bytes);
     }
 
     // Shut down: stop accepting, close the listener to unblock accept(), then
@@ -439,4 +583,71 @@ test "requestPath extracts the target" {
 test "asciiContainsIgnoreCase finds token in connection header" {
     try std.testing.expect(asciiContainsIgnoreCase("keep-alive, Upgrade", "upgrade"));
     try std.testing.expect(!asciiContainsIgnoreCase("keep-alive", "upgrade"));
+}
+
+test "renderPromptJson serializes a detected prompt for the browser" {
+    const json = try renderPromptJson(std.testing.allocator, .{ .approval_requested = .{
+        .text = "Do you want to proceed?",
+        .risk = .medium,
+    } });
+    defer std.testing.allocator.free(json);
+
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"type\":\"prompt\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"approval_requested\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"risk\":\"medium\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "Do you want to proceed?") != null);
+}
+
+fn readExactTest(fd: std.posix.fd_t, buffer: []u8) !void {
+    var offset: usize = 0;
+    while (offset < buffer.len) {
+        const n = try std.posix.read(fd, buffer[offset..]);
+        if (n == 0) return error.Closed;
+        offset += n;
+    }
+}
+
+test "feedTerminal renders PTY bytes through libghostty-vt and streams prompts as text frames" {
+    const allocator = std.testing.allocator;
+
+    var managed = try ghostty.ManagedTerminal.init(allocator, .{ .terminal = .{ .cols = 80, .rows = 24 } });
+    defer managed.deinit();
+
+    // A connected client backed by a pipe so we can read what the server
+    // actually puts on the wire (fds[1] = write end the client writes to,
+    // fds[0] = read end the test drains).
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+    var client = Client{ .fd = fds[1] };
+
+    // pty_session/net_server are unused on this path: plain-text input produces
+    // no write_to_pty effects, so the PTY is never touched.
+    var server = Server{
+        .allocator = allocator,
+        .net_server = undefined,
+        .pty_session = undefined,
+        .terminal_core = managed.asCore(),
+        .provider_id = .{ .value = "claude" },
+    };
+    defer if (server.last_prompt) |last| allocator.free(last);
+    try server.clients.append(allocator, &client);
+    defer server.clients.deinit(allocator);
+
+    // Feed a claude approval marker as if it had come off the PTY.
+    server.feedTerminal("Do you want to proceed?\n");
+
+    // The server should have emitted exactly one text (JSON) frame describing
+    // the detected prompt — unmasked, payload < 126 bytes.
+    var header: [2]u8 = undefined;
+    try readExactTest(fds[0], &header);
+    const opcode: u4 = @truncate(header[0] & 0x0f);
+    const len = header[1] & 0x7f;
+    const payload = try allocator.alloc(u8, len);
+    defer allocator.free(payload);
+    try readExactTest(fds[0], payload);
+
+    try std.testing.expectEqual(ws.Opcode.text, @as(ws.Opcode, @enumFromInt(opcode)));
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"type\":\"prompt\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "approval_requested") != null);
 }

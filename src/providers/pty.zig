@@ -84,23 +84,31 @@ pub fn runCommand(
 
     var env_arena = std.heap.ArenaAllocator.init(context.allocator);
     defer env_arena.deinit();
+    const arena = env_arena.allocator();
 
-    const env_vars = command.env;
-    const spawn_env = try env_arena.allocator().alloc([]const u8, env_vars.len);
-    for (env_vars, 0..) |env_var, i| {
-        const env_str = try std.fmt.allocPrint(
-            env_arena.allocator(),
+    // Inherit the parent environment (PATH/SHELL/HOME/TERM/...) and overlay the
+    // explicit --env vars on top, mirroring the headless path. Without this the
+    // child process is spawned with an empty environment and providers like
+    // claude fail immediately ("No suitable shell found").
+    var env_map = try std.process.getEnvMap(arena);
+    for (command.env) |env_var| {
+        try env_map.put(env_var.name, env_var.value);
+    }
+    var spawn_env = try std.ArrayList([]const u8).initCapacity(arena, env_map.count());
+    var env_it = env_map.iterator();
+    while (env_it.next()) |entry| {
+        spawn_env.appendAssumeCapacity(try std.fmt.allocPrint(
+            arena,
             "{s}={s}",
-            .{ env_var.name, env_var.value },
-        );
-        spawn_env[i] = env_str;
+            .{ entry.key_ptr.*, entry.value_ptr.* },
+        ));
     }
 
     var session = try pty_unix.spawn(context.allocator, .{
         .argv = command.argv,
         .cwd = command.cwd,
         .size = command.size,
-        .env = spawn_env,
+        .env = spawn_env.items,
     });
     var session_active = true;
     defer if (session_active) {

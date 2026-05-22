@@ -14,20 +14,49 @@
     }
     #status.up { color: #7ee787; }
     #status.down { color: #ff7b72; }
+    #prompt {
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 4px 10px; background: #1c1208; color: #f0b429;
+      border-bottom: 1px solid #3a2a10; white-space: pre-wrap;
+      display: none;
+    }
+    #prompt.high { background: #2a0f0f; color: #ff7b72; border-bottom-color: #5a1d1d; }
+    #prompt .kind { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
     #terminal { position: absolute; top: 29px; left: 0; right: 0; bottom: 0; padding: 4px; }
+    #terminal.with-prompt { top: 53px; }
   </style>
 </head>
 <body>
   <div id="status">connecting…</div>
+  <div id="prompt"></div>
   <div id="terminal"></div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script>
-    // Client/server wire protocol (text frames, first byte is the command):
+    // Client -> server (text frames, first byte is the command):
     //   '0' + bytes        -> stdin written to the PTY
     //   '1' + {cols,rows}  -> PTY window resize
-    // Server -> client frames are raw PTY output (binary), written verbatim.
+    // Server -> client:
+    //   binary frame       -> raw PTY output, written verbatim to xterm.js
+    //   text frame (JSON)   -> structured event from the libghostty-vt tap,
+    //                          e.g. {"type":"prompt","kind","risk","text"}
     const statusEl = document.getElementById("status");
+    const promptEl = document.getElementById("prompt");
+    const terminalEl = document.getElementById("terminal");
+
+    function showPrompt(evt) {
+      if (!evt || evt.type !== "prompt") return;
+      promptEl.innerHTML = "";
+      const kind = document.createElement("span");
+      kind.className = "kind";
+      kind.textContent = (evt.kind || "prompt").replace(/_/g, " ") + ": ";
+      promptEl.appendChild(kind);
+      promptEl.appendChild(document.createTextNode((evt.text || "").trim()));
+      promptEl.className = evt.risk === "high" ? "high" : "";
+      promptEl.style.display = "block";
+      terminalEl.classList.add("with-prompt");
+      fit.fit();
+    }
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -66,7 +95,8 @@
       };
       ws.onmessage = (ev) => {
         if (typeof ev.data === "string") {
-          term.write(ev.data);
+          // Structured event from the server-side libghostty-vt tap.
+          try { showPrompt(JSON.parse(ev.data)); } catch (e) {}
         } else {
           term.write(new Uint8Array(ev.data));
         }
