@@ -249,6 +249,15 @@ pub fn run(allocator: std.mem.Allocator, options: Options, stdout: anytype) !u8 
     defer env_arena.deinit();
     const env_alloc = env_arena.allocator();
     var env_map = try std.process.getEnvMap(env_alloc);
+    // Force a known-good terminal profile for the browser path. xterm.js is a
+    // full 256-color / truecolor parser, but agents inspect TERM/COLORTERM to
+    // decide whether to emit ANSI color; the parent may have TERM=dumb (e.g.
+    // mitos run from systemd) or a host-specific terminfo (xterm-ghostty,
+    // tmux-256color) the child binary doesn't ship. Override unconditionally
+    // so output rendered in the browser is always colored. Caller-supplied
+    // options.env still wins (applied below).
+    try env_map.put("TERM", "xterm-256color");
+    try env_map.put("COLORTERM", "truecolor");
     for (options.env) |env_var| {
         try env_map.put(env_var.name, env_var.value);
     }

@@ -19,9 +19,18 @@ pub const workspace = @import("workspace/worktree.zig");
 
 pub const terminal_ghostty = @import("terminal/ghostty.zig");
 
+pub const sidecar = struct {
+    pub const protocol = @import("sidecar/protocol.zig");
+    pub const msgpack = @import("sidecar/msgpack.zig");
+    pub const run = @import("sidecar/sidecar.zig");
+};
+
 test {
     const std = @import("std");
 
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(terminal_ghostty);
+    std.testing.refAllDecls(sidecar.protocol);
+    std.testing.refAllDecls(sidecar.msgpack);
+    std.testing.refAllDecls(sidecar.run);
 }

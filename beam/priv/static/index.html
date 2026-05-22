@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mitos</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0e14; color: #d0d7de;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #bar { display: flex; gap: 10px; align-items: center; padding: 6px 12px;
+      background: #11151c; border-bottom: 1px solid #1c2330; }
+    #bar input, #bar button {
+      background: #0b0e14; color: #d0d7de; border: 1px solid #1c2330;
+      padding: 4px 8px; border-radius: 4px; font: inherit;
+    }
+    #bar input { width: 380px; }
+    #status { margin-left: auto; color: #9aa5b1; }
+    #status.up { color: #7ee787; }
+    #status.down { color: #ff7b72; }
+    #terminal { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; padding: 4px; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <span>argv:</span>
+    <input id="argv" value='["/bin/sh","-i"]' />
+    <button id="start">start session</button>
+    <span id="status">idle</span>
+  </div>
+  <div id="terminal"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script>
+    // Wire contract with /ws/:session_id:
+    //   server -> client
+    //     binary frame    raw PTY bytes (xterm.js writes verbatim)
+    //     text frame      JSON {type:"event"|"snapshot", ...}
+    //   client -> server
+    //     binary frame    raw keystrokes / paste
+    //     text frame      JSON {type:"resize"|"signal", ...}
+    const statusEl = document.getElementById("status");
+    const argvEl = document.getElementById("argv");
+    const startBtn = document.getElementById("start");
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontSize: 13,
+      theme: { background: "#0b0e14", foreground: "#d0d7de" },
+      allowProposedApi: true,
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(document.getElementById("terminal"));
+    fit.fit();
+
+    let socket = null;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || "";
+    }
+
+    async function startSession() {
+      let argv;
+      try { argv = JSON.parse(argvEl.value); }
+      catch (e) { setStatus("argv must be JSON array", "down"); return; }
+
+      const resp = await fetch("/sessions", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({argv, cols: term.cols, rows: term.rows}),
+      });
+      if (!resp.ok) { setStatus("start failed: " + resp.status, "down"); return; }
+      const {session_id} = await resp.json();
+      connect(session_id);
+    }
+
+    function connect(sessionId) {
+      if (socket) { try { socket.close(); } catch (_) {} socket = null; }
+      term.clear();
+
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(sessionId)}`);
+      socket.binaryType = "arraybuffer";
+
+      socket.onopen = () => {
+        setStatus("connected: " + sessionId, "up");
+        // Tell the sidecar our viewport.
+        socket.send(JSON.stringify({type: "resize", cols: term.cols, rows: term.rows}));
+      };
+      socket.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          let msg;
+          try { msg = JSON.parse(ev.data); } catch (_) { return; }
+          if (msg.type === "event") {
+            const e = msg.event || {};
+            if (e.type === "exit" || e.type === "sidecar_exit") {
+              setStatus("session exited", "down");
+            }
+            // events are informational here; the brain consumes them via PubSub
+            console.debug("[event]", e);
+          } else if (msg.type === "snapshot") {
+            console.debug("[snapshot]", msg.snapshot);
+          }
+        } else {
+          // Raw PTY bytes — xterm.js is the VT parser.
+          term.write(new Uint8Array(ev.data));
+        }
+      };
+      socket.onclose = () => setStatus("disconnected", "down");
+      socket.onerror = () => setStatus("error", "down");
+    }
+
+    term.onData((data) => {
+      if (!socket || socket.readyState !== 1) return;
+      // Send keystrokes as binary frames (server forwards verbatim to PTY).
+      socket.send(new TextEncoder().encode(data));
+    });
+
+    window.addEventListener("resize", () => {
+      fit.fit();
+      if (socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({type: "resize", cols: term.cols, rows: term.rows}));
+      }
+    });
+
+    startBtn.addEventListener("click", startSession);
+  </script>
+</body>
+</html>

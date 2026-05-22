@@ -39,6 +39,23 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // mitos-term: the per-session sidecar binary. Owns one PTY + one
+    // libghostty-vt parser; speaks the {packet,4} protocol on stdin/stdout to
+    // the BEAM orchestrator. Crash isolation across the FFI boundary lives
+    // here — see src/sidecar/.
+    const sidecar_exe = b.addExecutable(.{
+        .name = "mitos-term",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/sidecar/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "mitos", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(sidecar_exe);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {

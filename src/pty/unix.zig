@@ -175,7 +175,12 @@ pub fn spawn(allocator: std.mem.Allocator, config: SpawnConfig) core.PtyError!Un
 
     const err_pipe = std.posix.pipe2(.{ .CLOEXEC = true }) catch return error.SpawnFailed;
     defer std.posix.close(err_pipe[0]);
-    errdefer std.posix.close(err_pipe[1]);
+    // The parent's write end of err_pipe is closed explicitly right after
+    // fork so that read() can return 0 when the child execs successfully.
+    // The errdefer below must therefore be conditional: closing the fd twice
+    // panics with `.BADF => unreachable` on the second close.
+    var err_write_open = true;
+    errdefer if (err_write_open) std.posix.close(err_pipe[1]);
 
     const pid = std.posix.fork() catch return error.ForkFailed;
     if (pid == 0) {
@@ -183,12 +188,15 @@ pub fn spawn(allocator: std.mem.Allocator, config: SpawnConfig) core.PtyError!Un
     }
 
     std.posix.close(err_pipe[1]);
+    err_write_open = false;
     errdefer _ = std.posix.waitpid(pid, 0);
 
     var child_error: [1]u8 = undefined;
     const n = std.posix.read(err_pipe[0], &child_error) catch return error.SpawnFailed;
     if (n != 0) {
-        _ = std.posix.waitpid(pid, 0);
+        // The errdefer above reaps the child; calling waitpid here too would
+        // race the kernel and trip `.CHILD => unreachable` in std.posix on
+        // the second wait.
         return switch (child_error[0]) {
             2 => error.ExecFailed,
             else => error.ChildSetupFailed,
