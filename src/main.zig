@@ -10,12 +10,13 @@ const RunOptions = struct {
     run_id: ?[]const u8 = null,
     workspace: []const u8 = ".",
     mode: ?AdapterMode = null,
+    env: []const []const u8 = &.{},
     help: bool = false,
 };
 
 const fake_modes = [_]AdapterMode{ .exec_json, .headless_json };
 const codex_modes = [_]AdapterMode{ .exec_json, .pty };
-const claude_modes = [_]AdapterMode{.headless_json};
+const claude_modes = [_]AdapterMode{ .headless_json, .pty };
 const gemini_modes = [_]AdapterMode{.headless_json};
 const no_modes = [_]AdapterMode{};
 
@@ -88,6 +89,15 @@ fn runCommand(
     stderr: anytype,
 ) !u8 {
     const options = parseRunOptions(args, stderr) catch return 2;
+    defer {
+        // Free the env slice if it was dynamically allocated
+        if (options.env.len > 0) {
+            const default_empty: []const []const u8 = &.{};
+            if (options.env.ptr != default_empty.ptr) {
+                std.heap.page_allocator.free(options.env);
+            }
+        }
+    }
     if (options.help) {
         try printRunHelp(stdout);
         return 0;
@@ -274,6 +284,34 @@ fn runCommand(
         break :blk cfg.workspace.container_mount;
     } else null;
 
+    var env_vars: std.ArrayList(mitos.adapters.EnvVar) = .empty;
+    for (options.env) |env_str| {
+        const eq_idx = std.mem.indexOfScalar(u8, env_str, '=') orelse {
+            try stderr.print("error: invalid env var '{s}' (missing =)\n", .{env_str});
+            return 2;
+        };
+        const name = try allocator.dupe(u8, env_str[0..eq_idx]);
+        const value = try allocator.dupe(u8, env_str[eq_idx + 1 ..]);
+        try env_vars.append(allocator, .{ .name = name, .value = value });
+    }
+    defer {
+        for (env_vars.items) |*env| {
+            allocator.free(env.name);
+            allocator.free(env.value);
+        }
+        env_vars.deinit(allocator);
+    }
+
+    var stdio_handler: mitos.runtime.orchestrator.StdioApprovalHandler = undefined;
+    const approval_handler = if (selection.mode == .pty) blk: {
+        stdio_handler = mitos.runtime.orchestrator.StdioApprovalHandler.init(
+            std.fs.File.stdin(),
+            std.fs.File.stdout(),
+            std.fs.File.stderr(),
+        );
+        break :blk stdio_handler.handler();
+    } else null;
+
     const result = mitos.runtime.orchestrator.runAdapter(allocator, std.fs.cwd(), selection.adapter, .{
         .task = .{ .text = task_text },
         .run_id = run_id,
@@ -283,6 +321,8 @@ fn runCommand(
         .sandbox_backend = sandbox_options,
         .require_sandbox_execution = use_nucleus,
         .terminal_core = if (terminal_core) |*core| core else null,
+        .env = env_vars.items,
+        .approval_handler = approval_handler,
     }) catch |err| {
         try stderr.print("error: run failed before artifacts were finalized: {s}\n", .{@errorName(err)});
         return 1;
@@ -312,6 +352,9 @@ fn runCommand(
 
 fn parseRunOptions(args: []const []const u8, stderr: anytype) !RunOptions {
     var options: RunOptions = .{};
+    var env_list = std.ArrayList([]const u8).empty;
+    defer env_list.deinit(std.heap.page_allocator);
+
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -371,10 +414,25 @@ fn parseRunOptions(args: []const []const u8, stderr: anytype) !RunOptions {
             options.mode = try parseHeadlessMode(args[i], stderr);
         } else if (stripPrefix(arg, "--mode=")) |value| {
             options.mode = try parseHeadlessMode(value, stderr);
+        } else if (std.mem.eql(u8, arg, "--env")) {
+            i += 1;
+            if (i >= args.len) {
+                try stderr.writeAll("error: --env requires a value\n");
+                return error.InvalidArguments;
+            }
+            try env_list.append(std.heap.page_allocator, args[i]);
+        } else if (stripPrefix(arg, "--env=")) |value| {
+            try env_list.append(std.heap.page_allocator, value);
         } else {
             try stderr.print("error: unknown run option '{s}'\n", .{arg});
             return error.InvalidArguments;
         }
+    }
+
+    // Convert env_list to a slice that will live beyond this function
+    if (env_list.items.len > 0) {
+        const duped = try std.heap.page_allocator.dupe([]const u8, env_list.items);
+        options.env = duped;
     }
 
     return options;
@@ -554,6 +612,7 @@ fn printRunHelp(writer: anytype) !void {
         \\  --run-id <id>         Artifact directory name under .runs/.
         \\  --workspace <path>    Workspace path used as provider cwd. Defaults to ".".
         \\  --mode <mode>         Adapter mode: exec_json, headless_json, or pty.
+        \\  --env KEY=VALUE       Environment variables to pass to provider (repeatable).
         \\  -h, --help            Show this help.
         \\
         \\Provider CLIs must already be installed and authenticated for real providers.
@@ -566,7 +625,7 @@ fn printProviders(writer: anytype) !void {
         \\Built-in providers:
         \\  fake    exec_json, headless_json  local deterministic test adapter
         \\  codex   exec_json, pty            runs `codex exec --json` or interactive `codex`
-        \\  claude  headless_json             runs `claude --print --output-format stream-json`
+        \\  claude  headless_json, pty        runs `claude --print` or interactive `claude`
         \\  gemini  headless_json             runs `gemini --prompt ... --output-format stream-json`
     );
 }

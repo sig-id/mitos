@@ -12,15 +12,17 @@ pub const DefaultAdapters = struct {
     codex_exec: adapters.AgentAdapter = undefined,
     codex_pty: adapters.AgentAdapter = undefined,
     claude_print: adapters.AgentAdapter = undefined,
+    claude_pty: adapters.AgentAdapter = undefined,
     gemini_headless: adapters.AgentAdapter = undefined,
     generic_pty: adapters.AgentAdapter = undefined,
-    adapter_ptrs: [6]*adapters.AgentAdapter = undefined,
+    adapter_ptrs: [7]*adapters.AgentAdapter = undefined,
 
     pub fn init(self: *DefaultAdapters) void {
         self.fake_headless = fake.initHeadlessAdapter();
         self.codex_exec = codex.initExecAdapter();
         self.codex_pty = codex.initPtyAdapter();
         self.claude_print = claude.initPrintAdapter();
+        self.claude_pty = claude.initPtyAdapter();
         self.gemini_headless = gemini.initHeadlessAdapter();
         self.generic_pty = pty.initAdapter();
         self.adapter_ptrs = .{
@@ -28,6 +30,7 @@ pub const DefaultAdapters = struct {
             &self.codex_exec,
             &self.codex_pty,
             &self.claude_print,
+            &self.claude_pty,
             &self.gemini_headless,
             &self.generic_pty,
         };

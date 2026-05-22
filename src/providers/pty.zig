@@ -22,6 +22,7 @@ pub const PtyCommand = struct {
     size: pty_core.PtySize = .{ .cols = 80, .rows = 24 },
     max_idle_polls_after_exit: usize = 10,
     max_total_polls: usize = 10_000,
+    env: []const adapters.EnvVar = &.{},
 };
 
 pub fn initAdapter() adapters.AgentAdapter {
@@ -81,10 +82,25 @@ pub fn runCommand(
 
     if (@import("builtin").os.tag != .linux) return PtyAdapterError.UnsupportedPlatform;
 
+    var env_arena = std.heap.ArenaAllocator.init(context.allocator);
+    defer env_arena.deinit();
+
+    const env_vars = command.env;
+    const spawn_env = try env_arena.allocator().alloc([]const u8, env_vars.len);
+    for (env_vars, 0..) |env_var, i| {
+        const env_str = try std.fmt.allocPrint(
+            env_arena.allocator(),
+            "{s}={s}",
+            .{ env_var.name, env_var.value },
+        );
+        spawn_env[i] = env_str;
+    }
+
     var session = try pty_unix.spawn(context.allocator, .{
         .argv = command.argv,
         .cwd = command.cwd,
         .size = command.size,
+        .env = spawn_env,
     });
     var session_active = true;
     defer if (session_active) {
@@ -138,6 +154,24 @@ pub fn runCommand(
         const effects = try core.write_from_pty(core, bytes, context.allocator);
         effects.deinit(context.allocator);
         try detectPrompts(self, context, core);
+
+        // Check for pending approval response to send to PTY
+        if (context.get_pending_response) |get_resp| {
+            if (context.response_context) |resp_ctx| {
+                if (get_resp(resp_ctx)) |response| {
+                    // Send the response to the PTY
+                    const encoded = try core.encode_paste(core, response, context.allocator);
+                    defer context.allocator.free(encoded);
+                    const written = try pty.write(&pty, encoded);
+                    _ = written;
+
+                    // If user requested quit, terminate the session
+                    if (std.mem.startsWith(u8, response, "q") or std.mem.startsWith(u8, response, "Q")) {
+                        break;
+                    }
+                }
+            }
+        }
     } else {
         return PtyAdapterError.ReadLoopExceeded;
     }

@@ -219,6 +219,7 @@ fn startPty(
     return try pty_provider.runCommand(self, context, .{
         .argv = command.argv,
         .cwd = command.cwd,
+        .env = context.env,
     });
 }
 

@@ -116,6 +116,8 @@ pub const AdapterContext = struct {
     event_sink: ?AdapterEventSink = null,
     terminal_core: ?*terminal.TerminalCore = null,
     started_at_ms: runtime.TimestampMs = 0,
+    get_pending_response: ?*const fn (*anyopaque) ?[]const u8 = null,
+    response_context: ?*anyopaque = null,
 };
 
 pub const AdapterRunStatus = enum {
