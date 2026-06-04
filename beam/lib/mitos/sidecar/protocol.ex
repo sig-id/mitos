@@ -11,7 +11,7 @@ defmodule Mitos.Sidecar.Protocol do
       0x01 RAW       opaque PTY bytes               sidecar -> BEAM
       0x02 EVENT     MessagePack-encoded event map  sidecar -> BEAM
       0x03 SNAPSHOT  MessagePack-encoded snapshot   sidecar -> BEAM
-      0x10 CONTROL   MessagePack-encoded command    BEAM    -> sidecar
+      0x10 CONTROL   MessagePack-encoded command    BEAM    -> engine
   """
 
   @raw 0x01
@@ -53,7 +53,9 @@ defmodule Mitos.Sidecar.Protocol do
 
   @doc """
   Encode a control command (map) into a payload ready for `Port.command/2`.
-  The map must include the `"cmd"` key (per the sidecar's dispatch).
+  The map must include the `"cmd"` key. Commands use the layering protocol
+  vocabulary (`OPEN`, `INPUT`, `RESIZE`, ...); legacy lowercase helpers remain
+  accepted by the sidecar while callers migrate.
   """
   @spec encode_control(map()) :: iodata()
   def encode_control(%{} = command) do
@@ -89,12 +91,32 @@ defmodule Mitos.Sidecar.Protocol do
     |> maybe_put(:idle_ms, opts[:idle_ms])
   end
 
+  def open_launch(%{} = launch_spec, opts \\ []) do
+    launch_spec =
+      launch_spec
+      |> Map.put_new(:version, 1)
+      |> maybe_put(:cols, opts[:cols])
+      |> maybe_put(:rows, opts[:rows])
+      |> maybe_put(:cwd, opts[:cwd])
+      |> maybe_put(:env, opts[:env])
+      |> maybe_put(:idle_ms, opts[:idle_ms])
+
+    %{cmd: "OPEN", launch_spec: launch_spec}
+  end
+
   def write_stdin(bytes) when is_binary(bytes),
     do: %{cmd: "write_stdin", bytes: %Msgpax.Bin{data: bytes}}
 
+  def input(bytes) when is_binary(bytes),
+    do: %{cmd: "INPUT", bytes: %Msgpax.Bin{data: bytes}}
+
   def resize(cols, rows), do: %{cmd: "resize", cols: cols, rows: rows}
   def signal(signum), do: %{cmd: "signal", signum: signum}
+  def authorize(action_id, token), do: %{cmd: "AUTHORIZE", action_id: action_id, token: token}
+  def deny(action_id, reason), do: %{cmd: "DENY", action_id: action_id, reason: reason}
   def snapshot_cmd(_opts \\ []), do: %{cmd: "snapshot"}
+  def snapshot_request, do: %{cmd: "SNAPSHOT_REQUEST"}
+  def cancel(reason \\ "cancelled"), do: %{cmd: "CANCEL", reason: reason}
   def shutdown(grace_ms \\ 100), do: %{cmd: "shutdown", grace_ms: grace_ms}
 
   defp maybe_put(map, _key, nil), do: map

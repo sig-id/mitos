@@ -54,5 +54,56 @@ defmodule Mitos.Sidecar.ProtocolTest do
       assert decoded["cmd"] == "write_stdin"
       assert decoded["bytes"] == <<0xFF, 0x00, "abc">>
     end
+
+    test "open_launch carries a versioned launch spec" do
+      iodata =
+        Protocol.encode_control(
+          Protocol.open_launch(
+            %{
+              provider: "fake",
+              task: "hello",
+              transport_order: ["stdio-json", "pty"],
+              policy: %{tier2_fast_path_rules: ["Run tests?"], redaction_patterns: ["SECRET"]},
+              authority: %{
+                socket_path: "/tmp/mitos-authority.sock",
+                project_id: "proj",
+                run_id: "run",
+                token: "tok"
+              }
+            },
+            cols: 100,
+            rows: 30,
+            env: %{"TERM" => "xterm-256color"}
+          )
+        )
+
+      bin = IO.iodata_to_binary(iodata)
+      <<0x10, body::binary>> = bin
+      decoded = Msgpax.unpack!(body)
+
+      assert decoded["cmd"] == "OPEN"
+      assert decoded["launch_spec"]["version"] == 1
+      assert decoded["launch_spec"]["provider"] == "fake"
+      assert decoded["launch_spec"]["task"] == "hello"
+      assert decoded["launch_spec"]["transport_order"] == ["stdio-json", "pty"]
+      assert decoded["launch_spec"]["cols"] == 100
+      assert decoded["launch_spec"]["env"]["TERM"] == "xterm-256color"
+      assert decoded["launch_spec"]["policy"]["tier2_fast_path_rules"] == ["Run tests?"]
+      assert decoded["launch_spec"]["policy"]["redaction_patterns"] == ["SECRET"]
+      assert decoded["launch_spec"]["authority"]["socket_path"] == "/tmp/mitos-authority.sock"
+      assert decoded["launch_spec"]["authority"]["token"] == "tok"
+    end
+
+    test "authorize and deny use control protocol vocabulary" do
+      encoded_authorize = Protocol.encode_control(Protocol.authorize("action-1", "tok"))
+      <<0x10, authorize_body::binary>> = IO.iodata_to_binary(encoded_authorize)
+      assert %{"cmd" => "AUTHORIZE", "action_id" => "action-1", "token" => "tok"} =
+               Msgpax.unpack!(authorize_body)
+
+      encoded_deny = Protocol.encode_control(Protocol.deny("action-1", "no"))
+      <<0x10, deny_body::binary>> = IO.iodata_to_binary(encoded_deny)
+      assert %{"cmd" => "DENY", "action_id" => "action-1", "reason" => "no"} =
+               Msgpax.unpack!(deny_body)
+    end
   end
 end

@@ -1,6 +1,7 @@
 const std = @import("std");
 const runtime = @import("../runtime/types.zig");
 const terminal = @import("../terminal/core.zig");
+const transport = @import("../transport/root.zig");
 
 pub const IdentifierError = error{
     EmptyIdentifier,
@@ -24,27 +25,6 @@ pub const AdapterId = struct {
     }
 };
 
-pub const AdapterMode = enum {
-    native_api,
-    headless_json,
-    exec_json,
-    pty,
-    raw_shell,
-
-    pub fn fromName(mode_name: []const u8) ?AdapterMode {
-        inline for (std.meta.fields(AdapterMode)) |field| {
-            if (std.mem.eql(u8, mode_name, field.name)) {
-                return @field(AdapterMode, field.name);
-            }
-        }
-        return null;
-    }
-
-    pub fn name(self: AdapterMode) []const u8 {
-        return @tagName(self);
-    }
-};
-
 pub const AdapterCapabilities = struct {
     supports_headless: bool = false,
     supports_json_output: bool = false,
@@ -53,13 +33,11 @@ pub const AdapterCapabilities = struct {
     supports_cost_reporting: bool = false,
     supports_model_selection: bool = false,
 
-    pub fn supportsMode(self: AdapterCapabilities, mode: AdapterMode) bool {
-        return switch (mode) {
-            .native_api => self.supports_streaming_events,
-            .headless_json => self.supports_headless and self.supports_json_output,
-            .exec_json => self.supports_headless and self.supports_json_output,
+    pub fn supportsTransport(self: AdapterCapabilities, transport_name: transport.TransportName) bool {
+        return switch (transport_name) {
+            .stdio_json => self.supports_headless and self.supports_json_output,
             .pty => self.supports_interactive_pty,
-            .raw_shell => self.supports_headless,
+            else => false,
         };
     }
 };
@@ -77,15 +55,15 @@ pub const AdapterDetection = struct {
     version: ?[]const u8 = null,
     owns_version: bool = false,
     auth_status: AuthStatus = .unknown,
-    supported_modes: []const AdapterMode = &.{},
+    supported_transports: []const transport.TransportName = &.{},
     warnings: []const []const u8 = &.{},
 
-    pub fn supportsMode(self: AdapterDetection, mode: AdapterMode) bool {
+    pub fn supportsTransport(self: AdapterDetection, transport_name: transport.TransportName) bool {
         if (!self.available) return false;
-        if (self.supported_modes.len == 0) return true;
+        if (self.supported_transports.len == 0) return true;
 
-        for (self.supported_modes) |supported_mode| {
-            if (supported_mode == mode) return true;
+        for (self.supported_transports) |supported_transport| {
+            if (supported_transport == transport_name) return true;
         }
         return false;
     }
@@ -139,7 +117,7 @@ pub const AdapterRunStatus = enum {
 pub const AdapterRun = struct {
     run_id: runtime.RunId,
     adapter_id: AdapterId,
-    mode: AdapterMode,
+    transport_name: transport.TransportName,
     status: AdapterRunStatus,
     process_id: ?u32 = null,
     started_at_ms: runtime.TimestampMs,
@@ -179,9 +157,8 @@ test "adapter capability matching follows configured modes" {
         .supports_interactive_pty = false,
     };
 
-    try std.testing.expect(capabilities.supportsMode(.headless_json));
-    try std.testing.expect(capabilities.supportsMode(.exec_json));
-    try std.testing.expect(!capabilities.supportsMode(.pty));
+    try std.testing.expect(capabilities.supportsTransport(.stdio_json));
+    try std.testing.expect(!capabilities.supportsTransport(.pty));
 }
 
 test "adapter run terminal states are classified" {
@@ -192,17 +169,9 @@ test "adapter run terminal states are classified" {
 test "adapter detection can narrow supported modes" {
     const detection: AdapterDetection = .{
         .available = true,
-        .supported_modes = &.{.exec_json},
+        .supported_transports = &.{.stdio_json},
     };
 
-    try std.testing.expect(detection.supportsMode(.exec_json));
-    try std.testing.expect(!detection.supportsMode(.pty));
-}
-
-test "adapter modes parse from config names" {
-    try std.testing.expectEqual(AdapterMode.headless_json, AdapterMode.fromName("headless_json").?);
-    try std.testing.expectEqual(AdapterMode.exec_json, AdapterMode.fromName("exec_json").?);
-    try std.testing.expectEqual(AdapterMode.pty, AdapterMode.fromName("pty").?);
-    try std.testing.expect(AdapterMode.fromName("missing") == null);
-    try std.testing.expectEqualStrings("pty", AdapterMode.pty.name());
+    try std.testing.expect(detection.supportsTransport(.stdio_json));
+    try std.testing.expect(!detection.supportsTransport(.pty));
 }

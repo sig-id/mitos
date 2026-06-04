@@ -1055,7 +1055,7 @@ test "nucleus launch config renders strict-agent contract json" {
         .version = config.supported_version,
         .workspace = workspace_cfg,
         .sandbox = .{},
-        .providers = &.{.{ .name = "fake", .adapter_order = &.{.exec_json} }},
+        .providers = &.{.{ .name = "fake", .transport_order = &.{.stdio_json} }},
         .policy = .{},
         .watcher = .{},
     };

@@ -6,6 +6,7 @@ const codex = @import("codex.zig");
 const fake = @import("fake.zig");
 const gemini = @import("gemini.zig");
 const pty = @import("pty.zig");
+const transport = @import("../transport/root.zig");
 
 pub const DefaultAdapters = struct {
     fake_headless: adapters.AgentAdapter = undefined,
@@ -48,7 +49,7 @@ pub const DefaultAdapters = struct {
         return try self.registry().selectByName(
             allocator,
             provider_config.name,
-            provider_config.adapter_order,
+            provider_config.transport_order,
         );
     }
 };
@@ -61,7 +62,7 @@ test "default adapter catalog registers fake codex and pty adapters" {
     const fake_selection = try registry.select(
         std.testing.allocator,
         .{ .value = "fake" },
-        &.{.exec_json},
+        &.{.stdio_json},
     );
     defer fake_selection.deinit(std.testing.allocator);
     const pty_selection = try registry.select(
@@ -81,11 +82,11 @@ test "default adapter catalog selects from parsed provider config" {
 
     const provider: config.ProviderConfig = .{
         .name = "codex",
-        .adapter_order = &.{ .pty, .exec_json },
+        .transport_order = &.{ .pty, .stdio_json },
     };
     const selection = try catalog.selectConfigured(std.testing.allocator, provider);
     defer selection.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("codex.pty", selection.adapter.id.value);
-    try std.testing.expectEqual(adapters.AdapterMode.pty, selection.mode);
+    try std.testing.expectEqual(transport.TransportName.pty, selection.transport_name);
 }

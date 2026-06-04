@@ -1,10 +1,12 @@
 const std = @import("std");
 const adapters = @import("../adapters/types.zig");
+const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "fake" };
 pub const headless_adapter_id = adapters.AdapterId{ .value = "fake.headless" };
+pub const pty_adapter_id = adapters.AdapterId{ .value = "fake.pty" };
 
-const supported_modes = [_]adapters.AdapterMode{ .headless_json, .exec_json };
+const supported_transports = [_]transport.TransportName{.stdio_json};
 
 pub fn initHeadlessAdapter() adapters.AgentAdapter {
     return .{
@@ -20,6 +22,24 @@ pub fn initHeadlessAdapter() adapters.AgentAdapter {
     };
 }
 
+pub fn buildPtyCommand(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) !@import("headless.zig").HeadlessCommand {
+    const argv = try allocator.alloc([]const u8, 5);
+    argv[0] = "/bin/sh";
+    argv[1] = "-c";
+    argv[2] = "printf 'FakeAgent\\r\\n'; printf 'FAKE_FINAL: %s\\r\\n' \"$1\"; sleep 0.3";
+    argv[3] = "mitos-fake-provider";
+    argv[4] = task.text;
+
+    return .{
+        .argv = argv,
+        .cwd = cwd,
+    };
+}
+
 fn detect(
     _: *adapters.AgentAdapter,
     _: std.mem.Allocator,
@@ -28,7 +48,7 @@ fn detect(
         .available = true,
         .binary = "mitos-fake-provider",
         .auth_status = .not_required,
-        .supported_modes = &supported_modes,
+        .supported_transports = &supported_transports,
     };
 }
 
@@ -46,7 +66,7 @@ fn start(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = .completed,
         .started_at_ms = context.started_at_ms,
     };
@@ -86,10 +106,22 @@ test "fake provider advertises headless modes only" {
     var adapter = initHeadlessAdapter();
     const detection = try adapter.detect.?(&adapter, std.testing.allocator);
 
-    try std.testing.expect(adapter.capabilities.supportsMode(.headless_json));
-    try std.testing.expect(adapter.capabilities.supportsMode(.exec_json));
-    try std.testing.expect(!adapter.capabilities.supportsMode(.pty));
-    try std.testing.expect(detection.supportsMode(.headless_json));
-    try std.testing.expect(detection.supportsMode(.exec_json));
-    try std.testing.expect(!detection.supportsMode(.pty));
+    try std.testing.expect(adapter.capabilities.supportsTransport(.stdio_json));
+    try std.testing.expect(!adapter.capabilities.supportsTransport(.pty));
+    try std.testing.expect(detection.supportsTransport(.stdio_json));
+    try std.testing.expect(!detection.supportsTransport(.pty));
+}
+
+test "fake pty command passes task as a shell argument" {
+    const command = try buildPtyCommand(
+        std.testing.allocator,
+        .{ .text = "hello" },
+        "/workspace",
+    );
+    defer command.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("/bin/sh", command.argv[0]);
+    try std.testing.expectEqualStrings("-c", command.argv[1]);
+    try std.testing.expectEqualStrings("mitos-fake-provider", command.argv[3]);
+    try std.testing.expectEqualStrings("hello", command.argv[4]);
 }

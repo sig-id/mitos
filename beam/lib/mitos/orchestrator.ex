@@ -18,7 +18,8 @@ defmodule Mitos.Orchestrator do
   Start a new session.
 
   Required:
-    * `:argv` — list of strings, the agent argv (claude/codex/etc.)
+    * `:launch_spec` — provider/task/transport order for agent runs, or
+    * `:argv` — legacy raw command for compatibility sessions
 
   Optional:
     * `:session_id` (default: random UUID-ish string)

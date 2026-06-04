@@ -1,6 +1,6 @@
 const std = @import("std");
-const adapters = @import("../adapters/types.zig");
 const sandbox = @import("../sandbox/backend.zig");
+const transport = @import("../transport/root.zig");
 
 pub const config_file_name = ".agent-runtime.yaml";
 pub const supported_version: u32 = 1;
@@ -70,7 +70,7 @@ pub const SandboxConfig = struct {
 
 pub const ProviderConfig = struct {
     name: []const u8,
-    adapter_order: []const adapters.AdapterMode,
+    transport_order: []const transport.TransportName,
 };
 
 pub const PolicyRule = struct {
@@ -122,7 +122,7 @@ pub const ProjectConfig = struct {
 
         if (self.providers.len == 0) return error.MissingField;
         for (self.providers) |provider| {
-            if (provider.name.len == 0 or provider.adapter_order.len == 0) return error.MissingField;
+            if (provider.name.len == 0 or provider.transport_order.len == 0) return error.MissingField;
         }
     }
 };
@@ -308,13 +308,14 @@ fn parseYamlSubset(arena: std.mem.Allocator, bytes: []const u8) !ProjectConfig {
                     if (pair.value.len != 0) return error.InvalidConfig;
                     try providers.append(arena, .{
                         .name = try dupString(arena, pair.key),
-                        .adapter_order = &.{},
+                        .transport_order = &.{},
                     });
                 } else if (indent == 4) {
                     if (providers.items.len == 0) return error.InvalidConfig;
                     const pair = try splitYamlKeyValue(item);
-                    if (!std.mem.eql(u8, pair.key, "adapter_order")) return error.InvalidConfig;
-                    providers.items[providers.items.len - 1].adapter_order = try parseAdapterOrderList(arena, pair.value);
+                    if (!std.mem.eql(u8, pair.key, "transport_order") and
+                        !std.mem.eql(u8, pair.key, "adapter_order")) return error.InvalidConfig;
+                    providers.items[providers.items.len - 1].transport_order = try parseTransportOrderList(arena, pair.value);
                 } else return error.InvalidConfig;
             },
             .policy => {
@@ -378,23 +379,26 @@ fn parseJsonProviders(arena: std.mem.Allocator, value: std.json.Value) ![]const 
     var iterator = object.iterator();
     while (iterator.next()) |entry| {
         const provider_value = entry.value_ptr.*;
-        const order = try parseJsonAdapterOrder(arena, try jsonRequired(provider_value, "adapter_order"));
+        const order_value = jsonOptional(provider_value, "transport_order") orelse
+            jsonOptional(provider_value, "adapter_order") orelse
+            return error.InvalidConfig;
+        const order = try parseJsonTransportOrder(arena, order_value);
         try result.append(arena, .{
             .name = try dupString(arena, entry.key_ptr.*),
-            .adapter_order = order,
+            .transport_order = order,
         });
     }
     return result.toOwnedSlice(arena);
 }
 
-fn parseJsonAdapterOrder(arena: std.mem.Allocator, value: std.json.Value) ![]const adapters.AdapterMode {
+fn parseJsonTransportOrder(arena: std.mem.Allocator, value: std.json.Value) ![]const transport.TransportName {
     const array = switch (value) {
         .array => |array| array,
         else => return error.InvalidConfig,
     };
-    const result = try arena.alloc(adapters.AdapterMode, array.items.len);
+    const result = try arena.alloc(transport.TransportName, array.items.len);
     for (array.items, 0..) |item, index| {
-        result[index] = try parseAdapterMode(try jsonString(item));
+        result[index] = try parseTransportName(try jsonString(item));
     }
     return result;
 }
@@ -566,23 +570,21 @@ fn parseWatcherMode(value: []const u8) ConfigError!WatcherMode {
     return error.InvalidEnumValue;
 }
 
-fn parseAdapterMode(value: []const u8) ConfigError!adapters.AdapterMode {
-    if (std.mem.eql(u8, value, "headless_json")) return .headless_json;
-    if (std.mem.eql(u8, value, "exec_json")) return .exec_json;
-    if (std.mem.eql(u8, value, "pty")) return .pty;
+fn parseTransportName(value: []const u8) ConfigError!transport.TransportName {
+    if (transport.TransportName.fromName(value)) |name| return name;
     return error.InvalidEnumValue;
 }
 
-fn parseAdapterOrderList(arena: std.mem.Allocator, value: []const u8) ![]const adapters.AdapterMode {
+fn parseTransportOrderList(arena: std.mem.Allocator, value: []const u8) ![]const transport.TransportName {
     const trimmed = std.mem.trim(u8, value, " \t");
     if (trimmed.len < 2 or trimmed[0] != '[' or trimmed[trimmed.len - 1] != ']') return error.InvalidConfig;
     const inner = std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t");
     if (inner.len == 0) return error.InvalidConfig;
 
-    var result: std.ArrayList(adapters.AdapterMode) = .empty;
+    var result: std.ArrayList(transport.TransportName) = .empty;
     var parts = std.mem.splitScalar(u8, inner, ',');
     while (parts.next()) |part| {
-        try result.append(arena, try parseAdapterMode(scalar(part)));
+        try result.append(arena, try parseTransportName(scalar(part)));
     }
     return result.toOwnedSlice(arena);
 }
@@ -665,9 +667,9 @@ test "project config parser accepts product yaml subset" {
         \\
         \\providers:
         \\  claude:
-        \\    adapter_order: [headless_json, pty]
+        \\    transport_order: [stdio-json, pty]
         \\  codex:
-        \\    adapter_order: [exec_json, pty]
+        \\    transport_order: [stdio-json, pty]
         \\
         \\policy:
         \\  default: ask
@@ -693,7 +695,7 @@ test "project config parser accepts product yaml subset" {
     try std.testing.expectEqual(sandbox.BackendId.nucleus, loaded.value.sandbox.backend);
     try std.testing.expectEqual(@as(u16, 4), loaded.value.sandbox.resources.cpus);
     try std.testing.expectEqual(@as(usize, 2), loaded.value.providers.len);
-    try std.testing.expectEqual(adapters.AdapterMode.headless_json, loaded.value.providers[0].adapter_order[0]);
+    try std.testing.expectEqual(transport.TransportName.stdio_json, loaded.value.providers[0].transport_order[0]);
     try std.testing.expectEqual(PolicyRuleKind.path, loaded.value.policy.block[0].kind);
     try std.testing.expect(loaded.value.watcher.enabled);
 }
@@ -720,7 +722,7 @@ test "project config parser accepts schema-shaped json" {
         \\    "credentials": { "pass_through": "explicit_only" }
         \\  },
         \\  "providers": {
-        \\    "codex": { "adapter_order": ["exec_json", "pty"] }
+        \\    "codex": { "transport_order": ["stdio-json", "pty"] }
         \\  },
         \\  "policy": {
         \\    "default": "ask",
@@ -739,7 +741,7 @@ test "project config parser accepts schema-shaped json" {
     defer loaded.deinit();
 
     try std.testing.expectEqual(sandbox.SandboxRuntime.gvisor, loaded.value.sandbox.runtime);
-    try std.testing.expectEqual(adapters.AdapterMode.exec_json, loaded.value.providers[0].adapter_order[0]);
+    try std.testing.expectEqual(transport.TransportName.stdio_json, loaded.value.providers[0].transport_order[0]);
     try std.testing.expectEqual(PolicyDisposition.ask, loaded.value.policy.default);
 }
 
@@ -771,7 +773,7 @@ test "project config loader reads default project file" {
         \\    pass_through: explicit_only
         \\providers:
         \\  fake:
-        \\    adapter_order: [exec_json]
+        \\    transport_order: [stdio-json]
         \\policy:
         \\  default: ask
         \\  allow:
@@ -799,7 +801,7 @@ test "config validation rejects mismatched nucleus profile" {
         .version = supported_version,
         .workspace = .{ .base_branch = "main" },
         .sandbox = .{ .backend = .nucleus, .mode = .host_process },
-        .providers = &.{.{ .name = "codex", .adapter_order = &.{.pty} }},
+        .providers = &.{.{ .name = "codex", .transport_order = &.{.pty} }},
         .policy = .{},
         .watcher = .{},
     };

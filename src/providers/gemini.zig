@@ -2,11 +2,13 @@ const std = @import("std");
 const adapter_detection = @import("../adapters/detection.zig");
 const adapters = @import("../adapters/types.zig");
 const headless = @import("headless.zig");
+const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "gemini" };
 pub const headless_adapter_id = adapters.AdapterId{ .value = "gemini.headless" };
+pub const pty_adapter_id = adapters.AdapterId{ .value = "gemini.pty" };
 
-const supported_modes = [_]adapters.AdapterMode{.headless_json};
+const supported_transports = [_]transport.TransportName{.stdio_json};
 const unavailable_warnings = [_][]const u8{"gemini binary was not found on PATH"};
 const unsupported_warnings = [_][]const u8{"gemini does not advertise --prompt stream-json support"};
 
@@ -44,6 +46,34 @@ pub fn buildHeadlessCommand(
     };
 }
 
+pub const PtyCommand = struct {
+    argv: []const []const u8,
+    cwd: []const u8,
+    initial_input: []const u8,
+
+    pub fn deinit(self: PtyCommand, allocator: std.mem.Allocator) void {
+        if (self.argv.len > 0) allocator.free(self.argv);
+        if (self.initial_input.len > 0) allocator.free(self.initial_input);
+    }
+};
+
+pub fn buildPtyCommand(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) !PtyCommand {
+    const argv = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(argv);
+    argv[0] = "gemini";
+
+    const initial_input = try std.fmt.allocPrint(allocator, "{s}\r", .{task.text});
+    return .{
+        .argv = argv,
+        .cwd = cwd,
+        .initial_input = initial_input,
+    };
+}
+
 fn detectHeadless(
     _: *adapters.AgentAdapter,
     allocator: std.mem.Allocator,
@@ -51,7 +81,7 @@ fn detectHeadless(
     if (!try adapter_detection.executableAvailable(allocator, "gemini")) {
         return .{
             .available = false,
-            .supported_modes = &supported_modes,
+            .supported_transports = &supported_transports,
             .warnings = &unavailable_warnings,
         };
     }
@@ -71,7 +101,7 @@ fn detectHeadless(
             .available = false,
             .binary = "gemini",
             .auth_status = .unknown,
-            .supported_modes = &supported_modes,
+            .supported_transports = &supported_transports,
             .warnings = &unsupported_warnings,
         };
     }
@@ -90,7 +120,7 @@ fn detectHeadless(
             allocator,
             &.{ "GEMINI_API_KEY", "GOOGLE_API_KEY" },
         ),
-        .supported_modes = &supported_modes,
+        .supported_transports = &supported_transports,
     };
 }
 
@@ -127,7 +157,7 @@ fn startHeadless(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = result.status(),
         .started_at_ms = context.started_at_ms,
     };
@@ -150,12 +180,25 @@ test "gemini headless command construction is deterministic" {
     try std.testing.expectEqualStrings("/workspace", command.cwd);
 }
 
+test "gemini pty command construction is deterministic" {
+    const command = try buildPtyCommand(
+        std.testing.allocator,
+        .{ .text = "Summarize this repository" },
+        "/workspace",
+    );
+    defer command.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("gemini", command.argv[0]);
+    try std.testing.expectEqualStrings("/workspace", command.cwd);
+    try std.testing.expectEqualStrings("Summarize this repository\r", command.initial_input);
+}
+
 test "gemini adapter advertises headless json support" {
     var adapter = initHeadlessAdapter();
 
     try std.testing.expectEqualStrings("gemini", adapter.provider.value);
-    try std.testing.expect(adapter.capabilities.supportsMode(.headless_json));
-    try std.testing.expect(!adapter.capabilities.supportsMode(.pty));
+    try std.testing.expect(adapter.capabilities.supportsTransport(.stdio_json));
+    try std.testing.expect(!adapter.capabilities.supportsTransport(.pty));
 }
 
 test "gemini headless adapter start runs configured provider binary" {

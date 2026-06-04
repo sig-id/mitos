@@ -1,22 +1,36 @@
-# HLD.md — Agent Terminal Runtime
+# HLD.md — Mitos High-Level Design (Engine + Control-Plane Seam)
 
-Status: draft v0.1  
-Date: 2026-05-20  
-Core terminal dependency: **`libghostty` / `libghostty-vt`**  
-Primary implementation language: **Zig**, integrating `libghostty-vt` directly behind a narrow internal terminal module.
+Status: draft v0.2 (reconciled with layering)  
+Date: 2026-06-04 (originally 2026-05-20)  
+Core terminal dependency: **`libghostty` / `libghostty-vt`** — one transport codec, not the spine.  
+Implementation: deterministic **control plane (orchestrator)** in BEAM/Elixir; **agent engine** in Zig (owns transports, codecs, provider registry, terminal core, sandbox invocation); **Nucleus** (gVisor) enforcement on Linux.
+
+> **Reconciliation note.** This document predates the layering decision. Where it
+> describes a *single* Zig runtime that owns the lifecycle, adapters, and policy
+> (notably §3's split, §4.3, §4.4, §4.9–4.10), read it through `05_LAYERING.md`,
+> which reassigns those roles across a control plane (BEAM) and an engine (Zig)
+> connected by one versioned protocol. `00_ARCHITECTURE.md` is the constitution:
+> **mitos is the whole AI-native OS**, and what this HLD details is mostly the
+> *engine* plus how it sits beneath the orchestrator. The Zig-level component
+> design below (terminal core, sandbox, redaction, golden tests) remains valid as
+> **engine internals**; only the ownership/lifecycle framing is superseded.
 
 ---
 
 ## 1. Executive summary
 
-Agent Terminal Runtime is a local-first runtime for executing AI coding agents and provider CLIs under policy control.
+Mitos is a local-first AI-native operating system for executing AI coding agents
+and provider CLIs under deterministic policy control. This HLD details its agent
+**engine** and the seam to the control plane.
 
-The runtime supports two execution families:
+The engine supports two execution families:
 
 1. **Structured execution** through provider APIs or provider headless CLI modes.
-2. **Interactive execution** through a pseudoterminal, using `libghostty-vt` to parse VT sequences and maintain terminal screen state.
+2. **Interactive execution** through a pseudoterminal, using `libghostty-vt` to
+   parse VT sequences and maintain terminal screen state.
 
-The system is intentionally designed so `libghostty` is an internal terminal-core dependency, not the top-level product abstraction.
+The system is intentionally designed so `libghostty` is an internal
+terminal-core *codec*, not the top-level product abstraction.
 
 The top-level abstraction is:
 
@@ -24,7 +38,11 @@ The top-level abstraction is:
 Agent Run → Agent Session → Events → Policy Decisions → Artifacts
 ```
 
-The terminal layer is one way of observing and controlling an agent session.
+The terminal is *one transport codec* for observing and controlling a session.
+The **single run lifecycle state machine lives in the control-plane orchestrator
+(BEAM)**, not in the engine; the engine exposes sessions, transports, and a typed
+event stream, and accepts control commands over the protocol (`05_LAYERING.md`
+§2, §5).
 
 ---
 
@@ -32,15 +50,16 @@ The terminal layer is one way of observing and controlling an agent session.
 
 ### 2.1 Headless first, PTY second
 
-Use provider-native structured modes whenever possible.
+Use provider-native structured modes whenever possible. The orchestrator states a
+*transport preference order*; the engine resolves availability and selects.
 
 Priority order:
 
 ```text
-1. Native API / SDK adapter
-2. Headless CLI adapter with JSON or stream output
-3. Interactive CLI over PTY
-4. Raw shell adapter
+1. Native API / SDK transport
+2. Headless CLI transport with JSON or stream output
+3. Interactive CLI over PTY (libghostty codec)
+4. Raw shell transport (escape hatch)
 ```
 
 PTY automation is powerful but brittle. It is the universal fallback, not the preferred semantic interface.
@@ -70,66 +89,61 @@ Runs, logs, diffs, and approvals are stored locally. Remote model calls for watc
 
 Every meaningful event is appended to a local event log. Reports, replay views, summaries, and audits are derived from that log.
 
+### 2.6 Two layers, one boundary
+
+Control and execution are separated. The **orchestrator (BEAM)** decides
+(lifecycle, policy *decisions*, approvals, provider/transport *selection*, the
+canonical trace) and the **engine (Zig)** executes and enforces (transports,
+codecs, provider knowledge, terminal core, sandbox invocation, synchronous
+policy enforcement). They are connected by a single versioned control protocol.
+This section supersedes the single-runtime framing the rest of §3–§5 inherited
+(`05_LAYERING.md` §1, §2, §5).
+
 ---
 
 ## 3. High-level system diagram
 
+> Superseded split: the original diagram showed a single Zig runtime whose
+> "Session Manager" owned the lifecycle, the "Adapter Registry," and the "Policy
+> Engine." `05_LAYERING.md` reassigns these across two layers. The reconciled
+> diagram:
+
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
-│                          User Surfaces                            │
-│                                                                  │
-│   CLI: atr run       Local Web UI       Future Native App         │
-└───────────────┬─────────────────────┬────────────────────────────┘
-                │                     │
-                ▼                     ▼
+│                          Entry Surfaces                           │
+│   CLI: atr run        Web / WebSocket UI        Future / MCP        │
+└───────────────┬───────────────────────────────────┬──────────────┘
+                ▼                                   ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Runtime API                               │
-│          local daemon or direct in-process CLI runtime             │
-└────────────────────────────┬─────────────────────────────────────┘
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                       Session Manager                             │
-│                                                                  │
-│  creates runs, resolves providers, owns lifecycle, streams events  │
-└───────────────┬─────────────────────────────┬────────────────────┘
-                │                             │
-                ▼                             ▼
+│                 CONTROL PLANE — Orchestrator (BEAM)               │
+│  single run lifecycle · policy DECISIONS (Tier 1/3) · approvals   │
+│  provider/transport SELECTION · authority plane · canonical trace │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │  control protocol (versioned)
+                                │  OPEN/INPUT/AUTHORIZE/CANCEL  ↓
+                                │  events  ↑  (RUN_STARTED, ACTION_REQUESTED…)
+┌───────────────────────────────▼──────────────────────────────────┐
+│                     ENGINE — agent runtime (Zig)                  │
+│  Transport registry (stdio · pty · socket · http · cloud-job)     │
+│  Codecs (text · json-stream · acp · mcp · vt-screen)              │
+│  Provider registry (argv · prompt detectors) · sync ENFORCEMENT   │
+│  terminal core (libghostty-vt) · raw spool + first-pass redaction │
+└───────────────┬───────────────────────────────────┬──────────────┘
+                ▼                                   ▼
 ┌──────────────────────────────┐    ┌───────────────────────────────┐
-│       Adapter Registry        │    │        Policy Engine           │
-│                              │    │ allow / ask / block decisions  │
-│ API / headless / PTY adapters │    └──────────────┬────────────────┘
-└───────────────┬──────────────┘                   │
-                │                                  ▼
-                │                     ┌───────────────────────────────┐
-                │                     │      Approval Controller       │
-                │                     │ human UI / local watcher model │
-                │                     └───────────────────────────────┘
-                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                        Execution Layer                            │
-│                                                                  │
-│  Headless process runner        PTY runner + terminal core         │
-│                                 ┌─────────────────────────────┐    │
-│                                 │ libghostty-vt wrapper        │    │
-│                                 │ screen state / scrollback    │    │
-│                                 │ VT parsing / snapshots       │    │
-│                                 └─────────────────────────────┘    │
-└───────────────┬─────────────────────────────┬────────────────────┘
-                │                             │
-                ▼                             ▼
-┌──────────────────────────────┐    ┌───────────────────────────────┐
-│       Sandbox Layer           │    │        Observability           │
-│ Nucleus backend / workspace / │    │ fs watcher / git diff /        │
-│ env / process / network       │    │ process monitor / redactor     │
+│   Sandbox — Nucleus (gVisor)  │    │        Observability           │
+│ enforces Tier-1 launch authn  │    │ fs watcher / git diff /        │
+│ workspace / env / net / creds │    │ process monitor / redactor     │
 └───────────────┬──────────────┘    └──────────────┬────────────────┘
-                │                                  │
-                ▼                                  ▼
+                ▼                                   ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Trace Store                               │
-│ events.jsonl, terminal.raw, snapshots, diff.patch, approvals,      │
-│ commands, files_changed, test_results, final.md                    │
+│         Trace Store (canonical writer = orchestrator)            │
+│ events.jsonl, run.yaml, report ·· engine writes terminal.raw only │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+The authority plane (typed agent → runtime callbacks) is a control-plane service
+exposed into the sandbox as a unix socket; see §4.16.
 
 ---
 
@@ -171,11 +185,14 @@ Responsibilities:
 Can run in two modes:
 
 ```text
-1. Direct mode: CLI starts runtime in-process.
-2. Daemon mode: CLI connects to local runtime daemon over Unix socket / named pipe.
+1. Orchestrated mode: CLI/UI connects to the BEAM control plane (the normal case),
+   which drives the engine over the control protocol.
+2. Embedded mode: the engine runs with its embedded controller and no BEAM
+   (CI/standalone) — same engine, degenerate driver (05_LAYERING.md §8).
 ```
 
-MVP should start with direct mode. Daemon mode is useful for long-running UI sessions later.
+Embedded mode is the cheapest path for early headless runs and CI; orchestrated
+mode is the full OS (lifecycle, approvals, authority plane, multi-run, UI).
 
 Core operations:
 
@@ -193,32 +210,49 @@ pub const RuntimeApi = struct {
 
 ## 4.3 Session Manager
 
-The Session Manager owns the run lifecycle.
+> **Reassigned by `05_LAYERING.md` §2, §8.** The *single* run lifecycle state
+> machine lives in the **orchestrator (BEAM)**. The Zig
+> `src/runtime/orchestrator.zig` is demoted to a thin **embedded controller**
+> used only when running headless with no BEAM (CI/standalone) — same engine,
+> degenerate driver. On the engine side, a "session" becomes a
+> transport-agnostic handle over the control protocol, not a PTY-sidecar owner.
 
-Responsibilities:
+The lifecycle below is owned by the orchestrator; the engine reports the
+transitions as typed events rather than deciding them.
 
-- Create run ID.
-- Create workspace.
-- Resolve provider adapter.
-- Start execution.
-- Route events to trace store.
-- Route approval requests to policy engine.
-- Handle cancellation and cleanup.
-- Finalize artifacts.
+Responsibilities (orchestrator):
+
+- Create run ID; mint the run-scoped capability (`OD_TOKEN`).
+- Create workspace; compile policy (Tier-1 launch + Tier-2 fast-path).
+- Select provider + transport *preference order* (engine resolves the impl).
+- Drive execution over the control protocol; route events to the trace store.
+- Evaluate Tier-3 approval requests (scraped prompt *or* brokered tool call).
+- Handle cancellation, resume, and cleanup; finalize artifacts.
 
 Lifecycle:
 
 ```text
-Created → PreparingWorkspace → StartingAdapter → Running → Finalizing → Completed
-                                                       └→ Failed
-                                                       └→ Cancelled
+Created → PreparingWorkspace → StartingTransport → Running → Finalizing → Completed
+                                                         └→ Failed
+                                                         └→ Cancelled
 ```
 
 ---
 
-## 4.4 Provider Adapter Registry
+## 4.4 Provider / Transport Registry
 
-The adapter registry resolves the best adapter for the requested provider.
+> **Reframed by `05_LAYERING.md` §3.** The flat `AdapterMode`
+> (`native_api | headless_json | exec_json | pty | raw_shell`) is decomposed into
+> three orthogonal axes — **transport** (byte movement) × **codec**
+> (interpretation) × **lifecycle** (one-shot | durable-session). A named
+> transport is a composition (`pty = pty + vt-screen + durable-session`,
+> `stdio-json = stdio + json-stream + one-shot`, etc.). Adding one is composition,
+> not a new monolith. *All* provider-specific knowledge (argv builders, prompt
+> rules, codec choice) lives in the engine's provider registry; the BEAM
+> `Mitos.Adapter.*` modules are deleted. The structs below are the engine-side
+> contract, now keyed by transport axes rather than a flat mode enum.
+
+The registry resolves the best transport for the requested provider.
 
 ```zig
 pub const AgentAdapter = struct {
@@ -251,11 +285,11 @@ Example config:
 ```yaml
 providers:
   claude:
-    adapter_order: [headless_json, pty]
+    transport_order: [native_api, headless-json, pty]
   codex:
-    adapter_order: [exec_json, pty]
+    transport_order: [exec-json, pty]
   gemini:
-    adapter_order: [headless_json, pty]
+    transport_order: [headless-json, pty]
 ```
 
 ---
@@ -436,6 +470,14 @@ Guidelines:
 
 ## 4.8 Prompt Detector
 
+> **Demoted to a fallback by `05_LAYERING.md` §6.** Prompt detection becomes part
+> of the engine's **`vt-screen` codec**, not a top-level component. It is the
+> path for *dumb* CLIs that expose nothing but a terminal. The preferred path is
+> the **authority plane** (§4.16): the agent makes a typed `tool_broker` /
+> `approval` call, so `ACTION_REQUESTED` originates from a structured channel
+> instead of the codec guessing from pixels. This directly mitigates the
+> terminal-parsing fragility risk (§12.1).
+
 The Prompt Detector turns terminal state into semantic events.
 
 Inputs:
@@ -474,6 +516,18 @@ The detector should never directly inject input. It only emits events.
 ---
 
 ## 4.9 Policy Engine
+
+> **Split by `05_LAYERING.md` §4.** Policy is *decided* in the control plane and
+> *enforced* across three tiers: **Tier 1 (Launch)** — network/mounts/limits/env,
+> enforced by Nucleus at launch; **Tier 2 (Synchronous invariants)** —
+> input-injection gating, escape/clipboard sanitization, secret redaction, and
+> *compiled auto-allow patterns*, enforced by the engine with no round-trip;
+> **Tier 3 (Decisional)** — `run_command`/`install_package`/`git_push`/… →
+> allow/ask/block, decided by the orchestrator. The engine never makes a
+> discretionary decision: it enforces compiled rules (Tier 1/2) or bubbles up
+> `ACTION_REQUESTED` and blocks until the orchestrator returns an authorization
+> token or denial. The `PolicyEngine` struct below is the *decision* contract
+> (orchestrator); the *fast-path enforcement* is its compiled Tier-2 projection.
 
 The Policy Engine decides whether an action is allowed.
 
@@ -524,16 +578,19 @@ explicit block > explicit ask > explicit allow > default
 
 ## 4.10 Approval Controller
 
-The Approval Controller mediates between policy decisions and terminal input.
+The Approval Controller is a **control-plane** service mediating between Tier-3
+policy decisions and engine-side effects.
 
 Responsibilities:
 
-- Create approval request.
+- Create approval request from an `ACTION_REQUESTED` event (scraped prompt or
+  brokered `tool_broker` call — one Tier-3 engine, two entry points).
 - Present request to CLI/UI.
 - Optionally ask local watcher model for explanation, not authority.
 - Apply user decision.
-- Inject approved input into PTY if needed.
-- Persist decision.
+- On allow, **mint an authorization token** and return `AUTHORIZE(action_id,
+  token)`; the engine injects input/performs the effect only with that token.
+- Persist decision to the canonical trace.
 
 Approval request structure:
 
@@ -684,6 +741,13 @@ The runtime cannot reliably infer every command from terminal output alone. It s
 
 ## 4.13 Trace Store
 
+> **Ownership (`05_LAYERING.md` §7).** The **orchestrator** is the canonical
+> trace writer (`events.jsonl`, `run.yaml`, report) — centralizing audit for
+> server / multi-run / durability. The **engine** writes only the high-volume raw
+> spool (`terminal.raw`) locally and emits `RAW_REF(offset, len)`; first-pass
+> redaction happens at the engine boundary so raw secrets never cross the seam.
+> Durable run state is checkpointed from this stream to enable cancel/resume.
+
 Trace store layout:
 
 ```text
@@ -719,8 +783,11 @@ pub const RuntimeEvent = union(enum) {
     pty_bytes: PtyBytesMeta,
     screen_updated: ScreenUpdated,
     prompt_detected: PromptDetected,
+    action_requested: ActionRequested,       // scraped prompt OR brokered tool call
+    authorize_granted: AuthorizeGranted,      // token minted by control plane
     approval_requested: ApprovalRequested,
     approval_resolved: ApprovalResolved,
+    artifact_registered: ArtifactRegistered,  // via authority plane (§4.16)
     file_changed: FileChanged,
     command_observed: CommandObserved,
     git_diff_captured: GitDiffCaptured,
@@ -805,6 +872,35 @@ remote watcher may see only explicit user-approved context
 
 ---
 
+## 4.16 Authority / callback plane
+
+The authority plane is how a non-deterministic agent calls *back* into mitos
+through a typed, capability-scoped channel rather than screen-scraped key
+presses. It is a **control-plane (BEAM) service**, not an engine concern
+(`00_ARCHITECTURE.md` §2.5, `05_LAYERING.md` §6).
+
+- Exposed *into the sandbox as a unix-domain socket* at a well-known path — no
+  real network needed, so the default `network: none` stays intact. The engine's
+  only job is to mount that socket and inject env.
+- **Prompt = affordance, env = authority.** The system prompt tells the agent
+  what it *may* do; the injected env makes the callback actually work for
+  subprocesses, scripts, retries, and remote workers:
+
+```text
+OD_DAEMON_URL    unix socket into the control plane
+OD_PROJECT_ID
+OD_RUN_ID
+OD_TOKEN         run-scoped capability; its scope == the Tier-3 policy
+```
+
+- Surface (MCP over that socket): `tool_broker` (agent requests an action →
+  orchestrator runs Tier-3 policy → grant/deny), `approval`,
+  `artifact_register`, `memory_fetch`, `subrun_spawn`.
+- This makes `ACTION_REQUESTED` originate from a structured call; the vt-screen
+  prompt detector (§4.8) demotes to the fallback for dumb CLIs.
+
+---
+
 ## 5. Execution flows
 
 ## 5.1 Headless execution flow
@@ -886,46 +982,72 @@ Prompt detected: "Run npm install? [y/N]"
 
 Important rule:
 
-> The runtime must never let the prompt detector itself decide to press keys. All injected input must be traceable to either deterministic policy or explicit user approval.
+> The runtime must never let the prompt detector itself decide to press keys. All
+> injected input must be traceable to either deterministic policy or explicit user
+> approval.
+
+This rule is now **structural** (`05_LAYERING.md` §4): input injection requires an
+`AUTHORIZE(action_id, token)` that only the control plane mints. The engine cannot
+press keys on its own — it either matches a compiled Tier-2 auto-allow pattern or
+blocks on `ACTION_REQUESTED` until a token arrives.
 
 ---
 
 ## 6. Runtime module layout
 
-Recommended Zig project layout:
+Mitos is two cooperating artifacts. The **engine** (Zig) layout below is mostly
+unchanged, but its role narrows: `runtime/` keeps only the *embedded controller*
+(no-BEAM case); `adapters/` + `providers/` become the **provider + transport
+registry**; a `transport/` + `codec/` split replaces the flat adapter mode
+(`05_LAYERING.md` §3, §8). Provider knowledge that previously lived in BEAM moves
+here.
+
+Engine (Zig):
 
 ```text
-agent-terminal-runtime/
+mitos/                       # engine
   build.zig
   build.zig.zon
   src/
-    main.zig                 # CLI binary
-    runtime/                 # session manager + runtime API
-    adapters/                # provider adapter contracts + registry
+    main.zig                 # CLI binary + embedded controller (no-BEAM)
+    runtime/                 # embedded controller only (lifecycle owned by BEAM)
+    transport/               # stdio · pty · socket · http-stream · cloud-job
+    codec/                   # text · json-stream · acp · mcp · vt-screen
     providers/
-      claude.zig             # provider-specific adapter
-      codex.zig
-      gemini.zig
+      registry.zig           # provider → argv · transport pref · codec · rules
+      claude.zig  codex.zig  gemini.zig
     pty/                     # Unix PTY + Windows ConPTY abstraction
     terminal/
       core.zig               # product-facing terminal API
       ghostty.zig            # direct libghostty-vt integration
       snapshot.zig
       COMPAT.md
-    policy/                  # rules, actions, policy engine
-    approvals/               # approval controller
+    policy/                  # Tier-2 compiled enforcement (decisions live in BEAM)
     workspace/               # git worktree manager
     sandbox/
       backend.zig            # sandbox abstraction
       nucleus.zig            # Linux Nucleus backend
     observability/           # fs/process/git observers
-    trace/                   # event log + artifact writer
-    redaction/               # secret redaction
-    report/                  # final report generator
-    watcher/                 # optional local/remote model classifier
+    trace/                   # raw spool writer + RAW_REF (canonical writer = BEAM)
+    redaction/               # first-pass secret redaction
+    protocol/                # control protocol codec (the BEAM ↔ engine seam)
     fixtures/                # fake CLIs, golden terminal streams
   third_party/
     ghostty/                 # pinned source or submodule
+```
+
+Control plane (BEAM/Elixir):
+
+```text
+beam/                        # orchestrator
+  lib/mitos/
+    orchestrator.ex          # the single run lifecycle state machine
+    session.ex               # transport-agnostic handle over the control protocol
+    policy/                  # Tier-1/Tier-3 decisions + compiler to Tier-2
+    approval.ex              # approval controller (mints AUTHORIZE tokens)
+    authority/               # authority plane: MCP over sandbox unix socket
+    trace.ex                 # canonical events.jsonl / run.yaml / report writer
+    web/                     # web + WebSocket UI (xterm.js)
 ```
 
 ---
@@ -1199,14 +1321,24 @@ Nucleus stdout/stderr or PTY bytes remain workload output. Nucleus audit events 
 
 ## 10. Security boundaries
 
+## 10.0 Determinism boundary
+
+The governing rule (`00_ARCHITECTURE.md` §5): the **agent decides what to
+propose; mitos decides what is allowed; mitos records what happened; mitos
+advances durable state.** The test: if the process crashes after an agent emits a
+tool call but before the effect is committed, can mitos recover without guessing?
+Authority lives in the control plane and Nucleus, never in the agent or the
+terminal.
+
 ## 10.1 Trusted components
 
 Trusted:
 
-- Runtime binary.
-- Policy engine.
+- Orchestrator (control plane): lifecycle, policy decisions, approval controller,
+  authority plane, canonical trace.
+- Engine binary + its compiled Tier-2 enforcement.
 - Trace store.
-- Sandbox setup.
+- Sandbox setup / Nucleus enforcement.
 - `src/terminal/ghostty.zig` wrapper.
 
 Untrusted or semi-trusted:
@@ -1286,8 +1418,11 @@ Report generation reads from `events.jsonl`, Git diff, and final output.
 
 Mitigation:
 
+- **Structural:** prefer the authority plane (§4.16) so actions arrive as typed
+  `tool_broker` calls, not screen-scraped prompts; vt-screen detection is only
+  the fallback for dumb CLIs (`05_LAYERING.md` §6).
 - Provider version detection.
-- Adapter compatibility warnings.
+- Transport/codec compatibility warnings.
 - Recorded fixture tests.
 - Fallback to human approval.
 
@@ -1511,14 +1646,28 @@ Provider CLIs can change flags, output, and terminal flows. Treat provider adapt
 
 Provider CLIs are external, changing dependencies. Every provider adapter must have version detection, fixtures, and fallback behavior.
 
-### 16.5 Implement mitos in Zig
+### 16.5 Two-language split: engine in Zig, control plane on BEAM
 
-Use Zig as the primary implementation language. Do not introduce another implementation language solely for `libghostty-vt` or Nucleus integration. Nucleus remains an out-of-process sandbox backend behind the stable launch/event contract.
+The **engine** is Zig: do not introduce another language *inside the engine*
+solely for `libghostty-vt` or Nucleus integration. The **control plane /
+orchestrator** is BEAM/Elixir (`05_LAYERING.md` §1.2) — chosen for the lifecycle,
+supervision, web/WebSocket UI, and authority plane, on the assumption it runs
+co-located on the server. The seam between them is a single versioned protocol,
+drawn so BEAM is swappable later without touching the engine; the engine can run
+headless with an embedded controller when no BEAM is present. Nucleus remains an
+out-of-process sandbox backend behind the stable launch/event contract.
+
+(The earlier "implement everything in Zig as a single runtime" framing is
+superseded; it conflated the engine with the whole OS.)
 
 ---
 
 ## 17. References
 
+- `00_ARCHITECTURE.md` — the constitution: mitos = the AI-native OS.
+- `01_PRODUCT.md` — product thesis, policy model, run artifacts.
+- `05_LAYERING.md` — control-plane ↔ engine seam, policy tiers, control protocol,
+  authority plane; reassigns this document's §3 split.
 - Ghostty repository: https://github.com/ghostty-org/ghostty
 - Ghostty about / `libghostty`: https://ghostty.org/docs/about
 - Ghostling minimal `libghostty` terminal: https://github.com/ghostty-org/ghostling

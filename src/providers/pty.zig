@@ -4,6 +4,7 @@ const prompt = @import("../prompt/root.zig");
 const pty_core = @import("../pty/core.zig");
 const pty_unix = @import("../pty/unix.zig");
 const terminal = @import("../terminal/core.zig");
+const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "generic-pty" };
 pub const adapter_id = adapters.AdapterId{ .value = "generic-pty.terminal" };
@@ -14,7 +15,7 @@ pub const PtyAdapterError = error{
     UnsupportedPlatform,
 };
 
-const supported_modes = [_]adapters.AdapterMode{.pty};
+const supported_transports = [_]transport.TransportName{.pty};
 
 pub const PtyCommand = struct {
     argv: []const []const u8,
@@ -45,7 +46,7 @@ fn detect(
     return .{
         .available = true,
         .auth_status = .not_required,
-        .supported_modes = &supported_modes,
+        .supported_transports = &supported_transports,
     };
 }
 
@@ -67,7 +68,7 @@ fn start(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .pty,
+        .transport_name = .pty,
         .status = .completed,
         .started_at_ms = context.started_at_ms,
     };
@@ -197,7 +198,7 @@ pub fn runCommand(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .pty,
+        .transport_name = .pty,
         .status = switch (final_term) {
             .exited => |code| if (code == 0) .completed else .failed,
             else => .failed,

@@ -11,6 +11,7 @@ const headless = @import("../providers/headless.zig");
 const terminal = @import("../terminal/core.zig");
 const trace_file = @import("../trace/file_store.zig");
 const trace_types = @import("../trace/types.zig");
+const transport_types = @import("../transport/root.zig");
 
 pub const ApprovalHandler = struct {
     context: *anyopaque,
@@ -805,7 +806,7 @@ fn emitSandboxProcessResult(
     return .{
         .run_id = run_id,
         .adapter_id = adapter.id,
-        .mode = adapterModeFromCapabilities(adapter.capabilities),
+        .transport_name = adapterTransportFromCapabilities(adapter.capabilities),
         .status = status,
         .process_id = handle.process_id,
         .started_at_ms = started_at_ms,
@@ -818,11 +819,10 @@ fn sandboxAdapterStatus(handle: sandbox.SandboxHandle) adapters.AdapterRunStatus
     return if ((handle.stdout orelse "").len > 0) .completed else .failed;
 }
 
-fn adapterModeFromCapabilities(capabilities: adapters.AdapterCapabilities) adapters.AdapterMode {
-    if (capabilities.supportsMode(.exec_json)) return .exec_json;
-    if (capabilities.supportsMode(.headless_json)) return .headless_json;
-    if (capabilities.supportsMode(.pty)) return .pty;
-    return .raw_shell;
+fn adapterTransportFromCapabilities(capabilities: adapters.AdapterCapabilities) transport_types.TransportName {
+    if (capabilities.supportsTransport(.stdio_json)) return .stdio_json;
+    if (capabilities.supportsTransport(.pty)) return .pty;
+    return .stdio_json;
 }
 
 fn parseRiskLevel(risk_name: ?[]const u8) ?policy.RiskLevel {
@@ -913,7 +913,7 @@ pub fn runFake(
     _ = try fanout.emit(timestamp_ms, .{ .adapter_started = .{
         .provider = options.provider,
         .adapter = options.adapter,
-        .mode = @tagName(adapters.AdapterMode.headless_json),
+        .mode = transport_types.TransportName.stdio_json.name(),
     } });
     timestamp_ms += 1;
 
@@ -1689,7 +1689,7 @@ fn startFailingAdapter(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = .failed,
         .started_at_ms = context.started_at_ms,
     };
@@ -1711,7 +1711,7 @@ fn startPromptAdapter(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = .completed,
         .started_at_ms = context.started_at_ms,
     };
@@ -1737,7 +1737,7 @@ fn startLocalHeadlessAdapter(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = result.status(),
         .started_at_ms = context.started_at_ms,
     };

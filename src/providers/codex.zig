@@ -3,13 +3,14 @@ const adapter_detection = @import("../adapters/detection.zig");
 const adapters = @import("../adapters/types.zig");
 const headless = @import("headless.zig");
 const pty_provider = @import("pty.zig");
+const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "codex" };
 pub const exec_adapter_id = adapters.AdapterId{ .value = "codex.exec" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "codex.pty" };
 
-const supported_modes = [_]adapters.AdapterMode{.exec_json};
-const pty_supported_modes = [_]adapters.AdapterMode{.pty};
+const supported_transports = [_]transport.TransportName{.stdio_json};
+const pty_supported_transports = [_]transport.TransportName{.pty};
 const unavailable_warnings = [_][]const u8{"codex binary was not found on PATH"};
 const no_json_warnings = [_][]const u8{"codex exec does not advertise --json support"};
 const no_pty_warnings = [_][]const u8{"codex does not advertise interactive PTY flags"};
@@ -87,7 +88,7 @@ fn detectExec(
         return .{
             .available = false,
             .auth_status = .unknown,
-            .supported_modes = &supported_modes,
+            .supported_transports = &supported_transports,
             .warnings = &unavailable_warnings,
         };
     }
@@ -101,7 +102,7 @@ fn detectExec(
             .available = false,
             .binary = "codex",
             .auth_status = .unknown,
-            .supported_modes = &supported_modes,
+            .supported_transports = &supported_transports,
             .warnings = &no_json_warnings,
         };
     }
@@ -120,7 +121,7 @@ fn detectExec(
             allocator,
             &.{ "OPENAI_API_KEY", "CODEX_API_KEY" },
         ),
-        .supported_modes = &supported_modes,
+        .supported_transports = &supported_transports,
     };
 }
 
@@ -131,7 +132,7 @@ fn detectPty(
     if (!try adapter_detection.executableAvailable(allocator, "codex")) {
         return .{
             .available = false,
-            .supported_modes = &pty_supported_modes,
+            .supported_transports = &pty_supported_transports,
             .warnings = &unavailable_warnings,
         };
     }
@@ -145,7 +146,7 @@ fn detectPty(
             .available = false,
             .binary = "codex",
             .auth_status = .unknown,
-            .supported_modes = &pty_supported_modes,
+            .supported_transports = &pty_supported_transports,
             .warnings = &no_pty_warnings,
         };
     }
@@ -164,7 +165,7 @@ fn detectPty(
             allocator,
             &.{ "OPENAI_API_KEY", "CODEX_API_KEY" },
         ),
-        .supported_modes = &pty_supported_modes,
+        .supported_transports = &pty_supported_transports,
     };
 }
 
@@ -201,7 +202,7 @@ fn startExec(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .exec_json,
+        .transport_name = .stdio_json,
         .status = result.status(),
         .started_at_ms = context.started_at_ms,
     };
@@ -244,8 +245,8 @@ test "codex adapter advertises exec json support" {
     var adapter = initExecAdapter();
 
     try std.testing.expectEqualStrings("codex", adapter.provider.value);
-    try std.testing.expect(adapter.capabilities.supportsMode(.exec_json));
-    try std.testing.expect(!adapter.capabilities.supportsMode(.pty));
+    try std.testing.expect(adapter.capabilities.supportsTransport(.stdio_json));
+    try std.testing.expect(!adapter.capabilities.supportsTransport(.pty));
 }
 
 test "codex pty command construction is deterministic" {
@@ -267,8 +268,8 @@ test "codex pty adapter advertises interactive support" {
     var adapter = initPtyAdapter();
 
     try std.testing.expectEqualStrings("codex.pty", adapter.id.value);
-    try std.testing.expect(adapter.capabilities.supportsMode(.pty));
-    try std.testing.expect(!adapter.capabilities.supportsMode(.exec_json));
+    try std.testing.expect(adapter.capabilities.supportsTransport(.pty));
+    try std.testing.expect(!adapter.capabilities.supportsTransport(.stdio_json));
 }
 
 test "codex exec adapter start runs configured provider binary" {

@@ -1,34 +1,69 @@
-# PRODUCT.md — Agent Terminal Runtime
+# PRODUCT.md — Mitos: AI-Native Agent Operating System
 
-Status: draft v0.1  
-Date: 2026-05-20  
-Working name: **Agent Terminal Runtime**  
-Core implementation decision: **use `libghostty` / `libghostty-vt` for terminal emulation and screen-state parsing; do not fork the Ghostty GUI.**
-Primary implementation language: **Zig**, with direct `libghostty-vt` integration and an out-of-process Nucleus sandbox backend on Linux.
+Status: draft v0.2
+Date: 2026-06-04
+Name: **mitos** (earlier working name: "Agent Terminal Runtime")
+
+What it is: **an AI-native agent operating system** — a deterministic runtime
+that runs coding agents as controlled, sandboxed, auditable *workers*, while the
+runtime itself keeps authority over state, policy, tools, memory, and artifacts.
+See `00_ARCHITECTURE.md` for the constitution and `05_LAYERING.md` for the
+internal control-plane / engine seam.
+
+Implementation shape: a deterministic **control plane (orchestrator)** on
+BEAM/Elixir; an **agent engine** in Zig that owns pluggable transports
+(stdio-json, ACP, MCP, cloud-job, http-stream, and a `libghostty-vt` terminal
+codec); enforcement via **Nucleus** (gVisor strict-agent) on Linux. The terminal
+is *one transport codec, not the spine.*
 
 ---
 
 ## 1. One-line description
 
-Agent Terminal Runtime is a local-first, provider-neutral runtime that runs AI coding CLIs in controlled sessions, captures what they do, applies approval policies, and produces auditable traces, diffs, transcripts, and run reports.
+Mitos is a local-first, provider-neutral AI-native operating system: it runs AI
+coding agents inside a deterministic runtime that owns the run lifecycle, applies
+approval policy, grants scoped capabilities, captures complete evidence, and
+produces auditable traces, diffs, transcripts, and run reports.
 
-The product uses provider APIs or headless CLI modes when available, and falls back to supervised PTY/terminal execution using `libghostty` when an AI CLI only exposes an interactive terminal interface.
+The runtime prefers provider APIs and headless CLI modes; it falls back to
+supervised PTY/terminal execution (`libghostty`) only as one transport among
+many, for agents that expose nothing better.
 
 ---
 
 ## 2. Product thesis
 
-AI coding CLIs are becoming the default interface for frontier coding agents, but each provider’s CLI has different modes, permissions, prompts, output formats, authentication models, and workflow assumptions.
+AI coding agents are becoming the default interface for frontier coding work, but
+each provider ships a different CLI with different modes, permissions, prompts,
+output formats, authentication, and workflow assumptions. Meanwhile, most "agent
+frameworks" are a prompt wrapped in a loop: they let the model drive, and hope it
+stays inside the lines.
 
-Developers want to use the best model for each job without rebuilding their workflow around each provider. Teams want repeatable, auditable, policy-controlled agent runs, not opaque terminal sessions.
+Both problems have the same answer. The winning abstraction is not *another
+terminal*, and it is not *a smarter prompt loop*. It is:
 
-The winning abstraction is not “another terminal emulator.”
+> A deterministic AI-native runtime that delegates ambiguous work to stochastic
+> agents while retaining authority over state, tools, effects, and audit.
 
-The winning abstraction is:
+The agent is the stochastic executor. **Mitos is the operating system.**
 
-> A controlled agent-session runtime that can use a terminal as the universal compatibility layer.
+### 2.1 The product as a layered runtime
 
-`libghostty` gives the product a strong terminal core, but the product’s durable value is in orchestration, sandboxing, approval policy, tracing, provider adapters, and workflow automation.
+At a product level, mitos is six cooperating layers (full architecture in
+`00_ARCHITECTURE.md`):
+
+| Layer | What the user gets |
+|---|---|
+| **Entry surfaces** | One way to launch and review runs from CLI, web viewer, API, CI, or MCP — all hitting the same backend. |
+| **Orchestrator** | The control plane: a single, durable run lifecycle; policy decisions; approvals; scheduling. |
+| **Agent engine** | Pluggable transports to any provider/agent; structured-first, PTY as compatibility. |
+| **Tools & authority** | Typed, capability-scoped tool calls the agent makes *back* into the runtime — not screen-scraped. |
+| **Memory** | Runtime-owned context the agent consumes and proposes updates to (target; see §11/§15). |
+| **Artifacts & event log** | Durable diffs, reports, transcripts, and an append-only audit trail for every run. |
+
+`libghostty` gives mitos a strong terminal codec, but the durable value is the
+orchestration, sandboxing, approval policy, authority plane, tracing, and
+transport abstraction around it.
 
 ---
 
@@ -36,37 +71,31 @@ The winning abstraction is:
 
 ### 3.1 Provider CLIs create workflow fragmentation
 
-Many AI providers ship their own coding CLI or terminal agent. These tools are useful, but they often assume the user will work inside that provider’s own harness.
-
-This creates several problems:
-
-- Each provider has a different invocation style.
-- Each provider handles permissions and approvals differently.
-- Headless / CI mode differs across providers.
-- Output formats are inconsistent.
-- Interactive terminal flows are difficult to automate safely.
-- Users cannot easily compare or swap providers in the same workflow.
-- Teams cannot easily audit what the agent saw, changed, approved, or executed.
+Each provider ships its own coding CLI assuming you work inside its harness:
+different invocation styles, permission models, headless modes, output formats,
+and auth. Users cannot easily compare or swap providers in one workflow, and
+teams cannot audit what an agent saw, changed, approved, or executed.
 
 ### 3.2 Terminal transcripts alone are not enough
 
-A terminal transcript shows visible text, but does not reliably tell the whole story.
-
-A production-grade agent runtime also needs:
-
-- Git diffs before and after the run.
-- Files created, edited, or deleted.
-- Commands executed.
-- Approval requests and decisions.
-- Process tree metadata.
-- Sandbox/network state.
-- Redacted terminal transcript.
-- Raw terminal bytes for debugging.
-- Structured provider events when available.
+A transcript shows visible text but not the whole story. A production runtime
+also needs git diffs before/after, files touched, commands run, approval requests
+and decisions, process-tree metadata, sandbox/network state, redacted and raw
+transcripts, and structured provider events when available.
 
 ### 3.3 Existing headless modes are useful but provider-specific
 
-Some provider CLIs already expose non-interactive/headless modes. The product should use those modes first. The PTY/terminal layer should be a compatibility fallback, not the only execution path.
+Some provider CLIs expose non-interactive modes. Mitos should use those first;
+the PTY/terminal codec is a compatibility fallback, not the primary path.
+
+### 3.4 Agent frameworks are prompt-driven, not state-driven
+
+The deeper problem: most agent runtimes let the model implicitly own state,
+authority, and control flow. When the process crashes after the agent emits an
+effect but before it commits, they cannot recover without guessing. Mitos draws a
+hard determinism boundary (`00_ARCHITECTURE.md` §5): the agent proposes; the
+runtime decides what is allowed, records what happened, and advances durable
+state.
 
 ---
 
@@ -74,98 +103,77 @@ Some provider CLIs already expose non-interactive/headless modes. The product sh
 
 ### 4.1 Primary goals
 
-1. Run AI coding CLIs through a single local runtime.
-2. Prefer native API/headless modes when available.
-3. Use PTY + `libghostty` terminal emulation when interactive execution is required.
-4. Capture complete run evidence: transcript, screen state, diff, commands, approvals, artifacts, final output.
-5. Apply user-defined policy to approvals and risky actions.
-6. Make interactive AI CLIs usable in controlled automation workflows.
-7. Preserve user control: bring-your-own CLI, bring-your-own account, bring-your-own API key.
-8. Provide a foundation for local-first agent traces that can later integrate with Gitomi or other Git-native collaboration tools.
+1. Own the run lifecycle in a single deterministic control plane.
+2. Run any provider's agent through pluggable transports; prefer structured
+   APIs/headless modes; use PTY + `libghostty` only when required.
+3. Capture complete run evidence: transcript, screen state, diff, commands,
+   approvals, tool calls, artifacts, final output, event log.
+4. Apply user-defined policy to approvals and risky actions, with enforcement
+   split across launch (sandbox), synchronous invariants (engine), and
+   discretionary decisions (orchestrator).
+5. Give agents a typed, capability-scoped **authority plane** to call tools and
+   request approvals — not screen-scraped key presses.
+6. Make interactive AI CLIs usable in controlled automation.
+7. Preserve user control: bring-your-own CLI, account, and API key; local-first.
+8. Provide durable run state for cancel/resume and, later, cloud-job reattach.
+9. Lay the foundation for runtime-owned memory and Git-native artifacts (Gitomi
+   integration later).
 
 ### 4.2 Non-goals
 
-This product is not:
+Mitos is not:
 
-- A provider subscription reseller.
-- A way to bypass provider rate limits, subscriptions, or safety restrictions.
+- A provider subscription reseller or a way to bypass rate limits / safety.
+- A prompt-wrapper agent loop without durable state or an authority boundary.
+- *Just* a terminal emulator, nor a replacement for Ghostty, iTerm, WezTerm,
+  VS Code, or JetBrains.
 - A model-training data extractor.
-- A full replacement for Ghostty, iTerm, Alacritty, WezTerm, VS Code, or JetBrains.
 - A general-purpose RPA system for arbitrary desktop GUIs.
-- A guarantee that all provider CLIs can be safely automated.
-- A security boundary by itself. The terminal layer is observability and interaction; sandboxing must be implemented separately.
+- A security boundary *by itself* — the terminal observes; **Nucleus enforces**.
 
 ---
 
 ## 5. Target users
 
 ### 5.1 Solo developer / power user
-
-Wants to use Claude Code, Codex, Gemini CLI, Aider, OpenCode, local agents, and custom scripts without learning a different workflow for each tool.
-
-Main value:
-
-- One command to run different agents.
-- Reusable task templates.
-- Local transcripts and diffs.
-- Ability to compare provider outputs.
+Wants to use Claude Code, Codex, Gemini CLI, Aider, OpenCode, local agents, and
+custom scripts without learning a different workflow per tool. Value: one command
+to run any agent, reusable task templates, local transcripts and diffs, provider
+comparison.
 
 ### 5.2 Staff engineer / tech lead
-
-Wants AI coding assistance, but needs reviewable evidence before trusting generated changes.
-
-Main value:
-
-- Run report.
-- Approval history.
-- Test output.
-- Git diff capture.
-- Safe defaults.
+Wants AI assistance but needs reviewable evidence before trusting changes. Value:
+run report, approval history, test output, diff capture, safe defaults.
 
 ### 5.3 Platform / DevTools engineer
-
-Wants to introduce AI coding agents into team workflows without losing policy control.
-
-Main value:
-
-- Central policy files.
-- Local-first audit logs.
-- CI-compatible execution.
-- Provider adapter model.
-- Secrets and network controls.
+Wants to introduce agents into team workflows without losing policy control.
+Value: central policy files, local-first audit logs, CI-compatible execution,
+transport/provider abstraction, secrets and network controls.
 
 ### 5.4 Open-source maintainer
-
-Wants to run agents on issues, PRs, documentation, and maintenance tasks while preserving a trace of decisions.
-
-Main value:
-
-- Repeatable task runs.
-- Publicly shareable sanitized traces.
-- Git-native artifacts.
-- Agent-generated patch review.
+Wants to run agents on issues, PRs, docs, and maintenance while preserving a
+decision trace. Value: repeatable runs, shareable sanitized traces, Git-native
+artifacts, agent-generated patch review.
 
 ---
 
 ## 6. Core user jobs
 
-1. **Run a provider CLI safely**  
-   “Run this coding agent on my repository, but keep it inside a controlled workspace.”
-
-2. **Make an interactive agent usable in automation**  
-   “When the CLI asks routine questions, apply my policy instead of requiring me to watch the terminal for an hour.”
-
-3. **Review what happened**  
-   “Show me what files changed, what commands ran, what approvals were requested, and what the final answer was.”
-
-4. **Compare providers**  
-   “Run the same task with Claude, Codex, Gemini, and a local model, then compare diffs and test results.”
-
-5. **Run in CI or batch mode**  
-   “Use agent workflows in scripts without opening a TUI.”
-
-6. **Preserve agent context**  
-   “Store the useful parts of the agent run as structured local metadata, not just a final patch.”
+1. **Run a provider agent safely** — "Run this agent on my repo, but keep it in a
+   controlled, sandboxed workspace."
+2. **Make an interactive agent usable in automation** — "Apply my policy to
+   routine prompts instead of making me babysit the terminal."
+3. **Let the agent call tools under capability** — "When the agent needs to write
+   an artifact or request an approval, route it through a typed channel I can
+   audit, not a guessed key press."
+4. **Review what happened** — "Show me files changed, commands run, approvals
+   requested, tools called, and the final answer."
+5. **Compare providers** — "Run the same task with Claude, Codex, Gemini, and a
+   local model; compare diffs and tests."
+6. **Run in CI or batch** — "Use agent workflows in scripts without a TUI."
+7. **Resume a run** — "Kill it mid-run and pick up from the last checkpoint."
+8. **Preserve agent context** — "Store the useful parts as structured local
+   metadata, not just a final patch."
 
 ---
 
@@ -173,54 +181,39 @@ Main value:
 
 ### 7.1 CLI
 
-The first product surface should be a CLI.
-
-Example commands:
+The first surface is a CLI. It can run the orchestrator embedded (one-shot/CI) or
+talk to a running daemon.
 
 ```bash
 atr run --provider claude --task "Fix failing tests"
 atr run --provider codex --task-file tasks/review.md
-atr run --provider gemini --mode headless --task "Summarize this repo"
+atr run --provider gemini --transport headless-json --task "Summarize this repo"
 atr compare --providers claude,codex,gemini --task "Find security issues"
 atr report runs/2026-05-20T18-00-00Z
+atr resume <run_id>
 ```
 
 ### 7.2 Local run viewer
 
-A local viewer shows:
+Shows terminal replay, screen-state snapshots rendered through the `libghostty`
+codec, diff viewer, approval timeline, tool-call timeline, command timeline,
+final answer, test results, and raw/redacted logs. The first viewer can be static
+HTML or a local web UI; a native app comes later.
 
-- Terminal replay.
-- Screen-state snapshots rendered through the `libghostty` terminal core.
-- Diff viewer.
-- Approval timeline.
-- Command timeline.
-- Final answer.
-- Test results.
-- Raw and redacted logs.
+### 7.3 Runtime daemon (the orchestrator)
 
-The first viewer can be simple: static HTML or a local web UI. A native app can come later.
+The daemon is the authority-bearing core, not an optional extra. It is the
+control plane: it owns the run lifecycle, mints scoped capabilities, runs the
+authority plane, serves live run state, handles approvals, streams events to
+clients, and writes the canonical trace. The CLI may embed a degenerate
+controller for headless/standalone use with no BEAM (see `05_LAYERING.md` §8).
 
-### 7.3 Runtime daemon
-
-A local daemon is optional for MVP but useful later.
-
-Responsibilities:
-
-- Manage active sessions.
-- Serve live terminal state.
-- Handle approval prompts.
-- Stream events to UI clients.
-- Persist traces.
+Responsibilities: manage active sessions; serve live state; handle approval
+prompts; broker tool calls; stream events; persist traces and durable state.
 
 ### 7.4 Config file
 
-Project-level configuration lives in:
-
-```text
-.agent-runtime.yaml
-```
-
-Example:
+Project-level configuration lives in `.agent-runtime.yaml`:
 
 ```yaml
 version: 1
@@ -237,21 +230,22 @@ sandbox:
   network: none
   workdir: /workspace
   home: /home/agent
-  resources:
-    memory: 4G
-    cpus: 4
-    pids: 1024
+  resources: { memory: 4G, cpus: 4, pids: 1024 }
   toolchain_rootfs: agent-zig-node
-  credentials:
-    pass_through: explicit_only
+  credentials: { pass_through: explicit_only }
 
 providers:
   claude:
-    adapter_order: [headless_json, pty]
+    transport_order: [native_api, headless-json, pty]
   codex:
-    adapter_order: [exec_json, pty]
+    transport_order: [exec-json, pty]
   gemini:
-    adapter_order: [headless_json, pty]
+    transport_order: [headless-json, pty]
+
+authority:
+  # the runtime's typed callback plane, mounted into the sandbox as a unix socket
+  enabled: true
+  tools: [artifact_register, approval, tool_broker, memory_fetch, subrun_spawn]
 
 policy:
   default: ask
@@ -279,122 +273,109 @@ watcher:
 
 ---
 
-## 8. Adapter strategy
+## 8. Transport and adapter strategy
 
-The product should use an adapter ladder, from most structured to least structured.
+The engine selects a transport per provider, from most structured to least. The
+orchestrator states a *preference order*; the engine resolves availability and
+picks the highest-preference available transport. The orchestrator never names an
+implementation (`05_LAYERING.md` §3).
 
 ```text
-1. Native API / SDK adapter
-2. Provider headless CLI adapter
-3. Provider interactive CLI over PTY
-4. Raw shell / custom CLI adapter
+1. Native API / SDK transport
+2. Provider headless CLI (structured: json / stream-json)
+3. Provider interactive CLI over PTY (libghostty codec)
+4. Raw shell / custom CLI (escape hatch)
 ```
 
 The default rule:
 
-> Prefer structured interfaces. Use terminal automation only when structured interfaces are missing or insufficient.
+> Prefer structured interfaces. Use terminal automation only when structured
+> interfaces are missing or insufficient.
 
-### 8.1 Native API / SDK adapter
+A transport is a composition of three orthogonal axes — *transport* (byte
+movement) × *codec* (interpretation) × *lifecycle* (one-shot vs durable-session)
+— so adding one is composition, not a new monolith (`05_LAYERING.md` §3.1).
 
-Used when the provider exposes stable APIs for messages, tool calls, approvals, costs, and structured events.
+### 8.1 Native API / SDK
+Best semantic fidelity, least parsing, best cost/token accounting, easiest
+automation. Used when the provider exposes stable APIs for messages, tool calls,
+approvals, costs, and structured events.
 
-Benefits:
+### 8.2 Headless CLI (structured)
+Provider CLI with a non-interactive command emitting text/JSON/stream-JSON.
+Usually compatible with provider-authenticated local workflows; good for CI.
 
-- Best semantic fidelity.
-- Less terminal parsing.
-- Better cost / token accounting.
-- Easier automation.
+### 8.3 PTY via `libghostty`
+Used only when the CLI is interactive or the user explicitly wants the provider's
+TUI. The engine spawns the CLI in a pseudoterminal, feeds output into
+`libghostty-vt`, maintains screen state and scrollback, extracts visible text and
+semantic regions, detects prompts/approval screens, injects policy-approved input
+(only with an authorization token, §9), and records raw bytes + normalized
+transcript.
 
-### 8.2 Headless CLI adapter
-
-Used when the provider CLI exposes a non-interactive command with text, JSON, stream JSON, or structured output.
-
-Benefits:
-
-- Usually compatible with provider-authenticated local workflows.
-- Easier than PTY scraping.
-- Good for CI and scripts.
-
-### 8.3 PTY adapter using `libghostty`
-
-Used when the provider CLI is interactive or when the user explicitly wants the provider’s TUI experience.
-
-Responsibilities:
-
-- Spawn CLI inside a pseudoterminal.
-- Feed PTY output into `libghostty-vt`.
-- Maintain terminal screen state and scrollback.
-- Extract visible text and semantic regions.
-- Detect prompts and approval screens.
-- Inject user or policy-approved input.
-- Record raw terminal bytes and normalized transcript.
+### 8.4 Callbacks: prompt = affordance, env = authority
+For any transport, the agent calls back into the runtime through the authority
+plane. The system prompt tells the agent what it *may* do; injected env
+(`OD_DAEMON_URL`, `OD_PROJECT_ID`, `OD_RUN_ID`, `OD_TOKEN`) is what actually
+authorizes the callback for subprocesses, scripts, retries, and remote workers
+(`00_ARCHITECTURE.md` §2.5).
 
 ---
 
 ## 9. Permission and policy model
 
-The runtime must separate “terminal interaction” from “authority.”
+Mitos separates *interaction* from *authority*. A transport can answer `y` or
+send text, but the policy engine decides whether the runtime is allowed to, and
+input injection requires an authorization token the control plane mints.
 
-A terminal can answer `y`, press Enter, or send text. But the policy engine decides whether the runtime is allowed to do that.
-
-### 9.1 Policy decision types
+### 9.1 Decision types
 
 ```text
-allow  — runtime may proceed without human approval
-ask    — runtime must pause and request approval
-block  — runtime must deny or terminate the action
+allow  — proceed without human approval
+ask    — pause and request approval
+block  — deny or terminate
 ```
 
-### 9.2 Default policy
+### 9.2 Enforcement tiers
 
-Default policy should be conservative.
+Policy is *decided* in the control plane and *enforced* across three tiers
+(`05_LAYERING.md` §4):
 
-Allowed by default:
+| Tier | What | Enforced by |
+|---|---|---|
+| **1 — Launch** | network/egress, fs mounts & rw boundaries, resource limits, env & credential allow/deny | Nucleus, at launch |
+| **2 — Synchronous** | input-injection gating, escape/clipboard sanitization, secret redaction, compiled auto-allow patterns | Engine, no round-trip |
+| **3 — Decisional** | run_command, install_package, git_push, write_outside_workspace, read_secret → allow/ask/block | Orchestrator, via authorization token |
 
-- Read files inside workspace.
-- Write files inside workspace.
-- Run common test commands.
-- Run `git status`, `git diff`, `git log`.
-- Create local branches / worktrees.
+Two entry points feed the *same* Tier-3 engine: a scraped prompt (PTY codec) and
+a typed `tool_broker` call over the authority plane. The typed path is preferred;
+screen-scraping is the fallback for dumb CLIs.
 
-Ask by default:
+### 9.3 Default policy
 
-- Install packages.
-- Access network.
-- Run unknown shell commands.
-- Modify files outside workspace.
-- Read hidden config files.
-- Push to remote.
-- Change global Git config.
-- Invoke credential helpers.
+Conservative by default. **Allow:** read/write inside workspace, common test
+commands, `git status|diff|log`, local branches/worktrees. **Ask:** install
+packages, network, unknown shell commands, writes outside workspace, hidden
+config reads, push, global Git config changes, credential-helper invocation.
+**Block:** private-key dirs, env exfiltration, shell-startup edits, deleting
+outside the workspace, disabling sandboxing, bypassing provider limits/safety.
 
-Blocked by default:
+### 9.4 Approval UX
 
-- Read private key directories.
-- Exfiltrate environment variables.
-- Modify shell startup files.
-- Delete directories outside the workspace.
-- Disable sandboxing.
-- Bypass provider rate limits or safety restrictions.
-
-### 9.3 Approval UX
-
-Every approval prompt should show:
-
-- Detected action.
-- Source: provider prompt, command parser, filesystem observer, or model classifier.
-- Raw terminal context.
-- Normalized explanation.
-- Policy rule matched.
-- Suggested decision.
-- Risk level.
-- Options: allow once, allow for this run, add project rule, deny, terminate.
+Every approval prompt shows: detected action; source (provider prompt, command
+parser, filesystem observer, authority-plane tool call, or model classifier); raw
+context; normalized explanation; matched policy rule; suggested decision; risk
+level; options (allow once, allow for this run, add project rule, deny,
+terminate).
 
 ---
 
-## 10. Run artifacts
+## 10. Run artifacts and event log
 
-Each run should produce a durable artifact directory.
+Each run produces a durable artifact directory. The orchestrator is the canonical
+trace writer; the engine writes only the high-volume raw spool and emits
+`RAW_REF` offsets, with first-pass redaction at the engine boundary
+(`05_LAYERING.md` §7).
 
 ```text
 .runs/
@@ -406,6 +387,7 @@ Each run should produce a durable artifact directory.
     terminal.snapshots.jsonl
     sandbox.events.jsonl
     resources.jsonl
+    tools.jsonl
     final.md
     diff.patch
     files_changed.json
@@ -423,102 +405,78 @@ run_id: 01HXYZ
 created_at: 2026-05-20T18:00:00Z
 task: Fix failing tests
 provider: claude
-adapter: pty
-sandbox:
-  backend: nucleus
-  mode: strict-agent
-  runtime: gvisor
-  network: none
+transport: pty
+codec: vt-screen
+sandbox: { backend: nucleus, mode: strict-agent, runtime: gvisor, network: none }
 workspace: /path/to/repo/.worktrees/01HXYZ
 base_commit: abc123
 head_commit: def456
+capabilities: [artifact.write, project.read, tests.run]
 status: completed
 ```
 
 ### 10.2 `events.jsonl`
 
-Append-only event log.
-
-Example:
+Append-only event log, in the engine→control-plane vocabulary
+(`05_LAYERING.md` §5):
 
 ```json
-{"type":"RunStarted","run_id":"01HXYZ","timestamp":"2026-05-20T18:00:00Z"}
-{"type":"SandboxPrepared","backend":"nucleus","mode":"strict-agent","workspace_mount":"/workspace"}
-{"type":"ProcessSpawned","argv":["claude"],"pid":12345}
-{"type":"PromptDetected","prompt_kind":"approval","risk":"medium","text":"Run npm test?"}
-{"type":"ApprovalDecision","decision":"allow","rule":"allow run_tests"}
-{"type":"FileChanged","path":"src/lib.rs","change":"modified"}
-{"type":"RunCompleted","status":"completed"}
+{"type":"RUN_STARTED","run_id":"01HXYZ","timestamp":"2026-05-20T18:00:00Z"}
+{"type":"SANDBOX_EVENT","backend":"nucleus","mode":"strict-agent","workspace_mount":"/workspace"}
+{"type":"PROCESS_SPAWNED","argv":["claude"],"pid":12345}
+{"type":"PROMPT_DETECTED","prompt_kind":"approval","risk":"medium","text":"Run npm test?"}
+{"type":"ACTION_REQUESTED","action_id":"a1","action":"run_tests","source":"tool_broker"}
+{"type":"AUTHORIZE","action_id":"a1","rule":"allow run_tests"}
+{"type":"FILE_CHANGED","path":"src/lib.rs","change":"modified"}
+{"type":"RUN_COMPLETED","status":"completed"}
 ```
 
 ---
 
 ## 11. MVP scope
 
-### 11.1 MVP principles
+### 11.1 Principles
 
-The MVP should prove the core agent-runtime value without trying to become a polished daily-driver terminal.
+Prove the core agent-OS value without becoming a polished daily-driver terminal.
+Prioritize: running agent tasks, reliable traces, basic policy, useful reports,
+and the pluggable-transport contract. Do **not** prioritize: a beautiful native
+terminal, advanced panes/tabs, a team SaaS dashboard, cross-device sync, or
+desktop automation.
 
-MVP should prioritize:
+### 11.2 Features
 
-- Running agent tasks.
-- Capturing reliable traces.
-- Applying basic policy.
-- Producing useful reports.
-- Supporting provider adapters.
-
-MVP should not prioritize:
-
-- Beautiful native terminal UI.
-- Advanced panes/tabs/splits.
-- Team SaaS dashboard.
-- Cross-device sync.
-- Full desktop automation.
-
-### 11.2 MVP features
-
-P0:
+**P0:**
 
 - Local CLI: `atr run`.
-- Provider adapter abstraction.
-- At least one headless adapter.
-- At least one PTY adapter.
-- `libghostty-vt` terminal-state integration.
+- Orchestrator (control plane) owning the single run lifecycle.
+- Engine `Transport` contract; refactor the existing PTY path behind it.
+- At least one structured transport (e.g. Claude `--print stream-json`).
+- At least one PTY transport via `libghostty-vt`.
+- Unified typed-event stream regardless of transport.
 - Raw and redacted transcript capture.
 - Git worktree isolation mounted into a Nucleus `/workspace`.
-- Linux sandbox backend using completed Nucleus strict-agent mode.
-- Nucleus PTY/console bridge for interactive provider CLIs.
-- Nucleus event ingestion into `events.jsonl`.
+- Linux sandbox via Nucleus strict-agent; PTY/console bridge; event ingestion.
 - Before/after Git diff capture.
-- Basic allow/ask/block policy file.
-- Approval event log.
-- Final Markdown run report.
+- Basic allow/ask/block policy + Tier-1 launch config + Tier-2 fast-path.
+- Approval event log; final Markdown run report.
 - Fake-provider test harness.
 
-P1:
+**P1:**
 
-- Claude Code adapter.
-- Codex CLI adapter.
-- Gemini CLI adapter.
-- Local model watcher via Ollama-compatible endpoint.
-- Terminal replay viewer.
-- Secret redaction.
-- Command classification.
-- Provider version detection.
-- Timeout / cancellation / process-tree cleanup.
-- Provider toolchain rootfs profiles for common CLI stacks.
-- Domain-to-egress policy helper for provider API access.
+- Claude Code, Codex, Gemini CLI transports.
+- Local watcher via Ollama-compatible endpoint.
+- Terminal replay viewer; secret redaction; command classification.
+- Provider version detection; timeout/cancellation/process-tree cleanup.
+- Authority plane (typed `tool_broker`/`approval`) over the sandbox unix socket.
+- Durable run state + cancel/resume keyed by `run_id`.
+- Provider toolchain rootfs profiles; domain-to-egress policy helper.
 
-P2:
+**P2:**
 
-- Native desktop UI.
-- CI integration.
-- Multi-agent comparison runs.
-- Team policy templates.
-- Gitomi integration.
-- Artifact signing.
-- Remote runner support.
-- macOS and Windows sandbox backends with a Nucleus-compatible contract.
+- Native desktop UI; CI integration; multi-agent comparison runs.
+- Team policy templates; Gitomi integration; artifact signing.
+- Cloud-job transport + reattach; runtime-owned memory subsystem.
+- macOS/Windows sandbox backends behind the Nucleus-compatible contract.
 
 ---
 
@@ -530,64 +488,38 @@ P2:
 atr run --provider codex --task "Explain and fix the failing tests"
 ```
 
-User sees:
-
 ```text
 Creating worktree... done
-Provider: codex
-Adapter: exec/headless
+Provider: codex   Transport: exec-json (structured)
 Running task...
-Files changed: 3
-Tests: passed
-Approvals: 0
-Report: .runs/01HXYZ/final.md
-Patch: .runs/01HXYZ/diff.patch
+Files changed: 3   Tests: passed   Approvals: 0
+Report: .runs/01HXYZ/final.md   Patch: .runs/01HXYZ/diff.patch
 ```
 
 ### 12.2 Supervised interactive run
 
 ```bash
-atr run --provider claude --adapter pty --task "Implement RBAC for admin API"
+atr run --provider claude --transport pty --task "Implement RBAC for admin API"
 ```
-
-User sees live terminal output. The runtime detects a provider approval prompt:
 
 ```text
 Approval requested
-Action: run command
-Command: npm install @casl/ability
-Risk: medium
-Policy: ask install_package
-
+Action: run command   Command: npm install @casl/ability
+Risk: medium   Policy: ask install_package
 [Allow once] [Allow for this run] [Deny] [Terminate]
 ```
 
 ### 12.3 Auto-answer routine prompt
 
-Provider asks:
-
-```text
-Run cargo test? [Y/n]
-```
-
-Policy matches:
-
-```yaml
-allow:
-  - action: run_tests
-```
-
-Runtime sends `y\n`, logs the decision, and continues.
+Provider asks `Run cargo test? [Y/n]`; policy matches `allow: run_tests`; the
+orchestrator mints an authorization token; the engine injects `y\n`, logs the
+decision, and continues.
 
 ### 12.4 Compare providers
 
 ```bash
-atr compare \
-  --providers claude,codex,gemini \
-  --task "Find possible security issues in this auth module"
+atr compare --providers claude,codex,gemini --task "Find security issues in this auth module"
 ```
-
-Output:
 
 ```text
 Provider   Files changed   Tests   Approvals   Status
@@ -600,17 +532,15 @@ gemini     0               n/a     0           analysis-only
 
 ## 13. Compliance and provider-boundary principles
 
-The product must avoid becoming a provider-access workaround.
-
-Rules:
+Mitos must not become a provider-access workaround.
 
 1. Users bring their own installed provider CLIs or API keys.
-2. The product does not resell provider subscriptions.
-3. The product does not pool user accounts.
-4. The product does not bypass provider rate limits, safety mitigations, or usage restrictions.
-5. The product does not hide its automation from the user.
-6. The product keeps provider-specific credentials local unless the user explicitly configures a remote runner.
-7. The product should prefer official APIs and documented CLI modes when available.
+2. No reselling of provider subscriptions.
+3. No pooling of user accounts.
+4. No bypassing provider rate limits, safety mitigations, or usage restrictions.
+5. No hiding automation from the user.
+6. Provider credentials stay local unless the user configures a remote runner.
+7. Prefer official APIs and documented CLI modes when available.
 
 ---
 
@@ -618,24 +548,14 @@ Rules:
 
 Default posture: local-first.
 
-- Run traces are stored locally.
-- Remote watcher models are disabled by default.
-- Local watcher models are preferred.
-- Secrets are redacted before logs are displayed or exported.
-- Environment variables are minimized.
-- `.runs/` can be Git-ignored by default.
-- The user can explicitly export sanitized traces.
+- Run traces are stored locally; `.runs/` can be Git-ignored by default.
+- Remote watcher models are disabled by default; local watchers preferred.
+- Secrets are redacted before logs are displayed or exported; redaction happens
+  at the engine boundary so raw secrets never cross the control-plane seam.
+- Environment variables are minimized; the user can export sanitized traces.
 
-Sensitive values to redact:
-
-- API keys.
-- SSH private keys.
-- OAuth tokens.
-- Database URLs.
-- Cookie headers.
-- Authorization headers.
-- `.env` values.
-- Cloud credentials.
+Redact: API keys, SSH private keys, OAuth tokens, database URLs, cookie headers,
+authorization headers, `.env` values, cloud credentials.
 
 ---
 
@@ -643,145 +563,112 @@ Sensitive values to redact:
 
 ### 15.1 Terminal parsing fragility
 
-Provider CLIs can change their TUI layout. `libghostty` improves terminal correctness, but does not solve semantic interpretation by itself.
-
-Mitigation:
-
-- Use headless modes first.
-- Keep provider-specific prompt detectors.
-- Keep raw terminal logs.
-- Add fake-CLI regression tests.
-- Version adapters by provider CLI version.
+Provider TUIs change layout; `libghostty` improves terminal correctness but not
+semantic interpretation. **Primary mitigation is structural:** the authority
+plane (`00_ARCHITECTURE.md` §2.5) lets agents make typed `tool_broker`/`approval`
+calls, so `ACTION_REQUESTED` originates from a structured channel rather than the
+vt-screen codec guessing from pixels. Screen-scraping demotes to the fallback for
+dumb CLIs. Additional mitigations: prefer headless transports, keep
+provider-specific detectors, keep raw logs, add fake-CLI regression tests,
+version detectors by provider CLI version.
 
 ### 15.2 `libghostty` API churn
 
-`libghostty-vt` is usable, but its API may evolve.
-
-Mitigation:
-
-- Wrap it behind a narrow internal interface.
-- Pin a tested commit.
-- Build compatibility tests.
-- Avoid leaking `libghostty` API types across the runtime.
+`libghostty-vt` is usable but evolving. Mitigation: wrap it behind a narrow
+internal interface (`src/terminal/ghostty.zig`), pin a tested commit, add
+compatibility tests, never leak `libghostty` types across the engine.
 
 ### 15.3 False approvals
 
-The most dangerous failure mode is auto-approving a risky action.
-
-Mitigation:
-
-- Conservative default policy.
-- No auto-approval for high-risk actions.
-- Human approval for unknown commands.
-- Process, filesystem, and network observers in addition to terminal parsing.
+The most dangerous failure is auto-approving a risky action. Mitigation:
+conservative defaults; no auto-approval for high-risk actions; human approval for
+unknown commands; process/filesystem/network observers in addition to prompt
+parsing; input injection gated behind an orchestrator-minted token.
 
 ### 15.4 Provider terms and account risk
 
-Provider terms may restrict third-party use of subscription logins or automated extraction.
-
-Mitigation:
-
-- BYO local CLI only.
-- No credential pooling.
-- No proxying provider access to other users.
-- Prefer API-key mode for third-party/commercial workflows where required.
-- Provide clear user-visible compliance warnings.
+Provider terms may restrict third-party use of subscription logins or automated
+extraction. Mitigation: BYO local CLI only; no credential pooling; no proxying
+provider access; prefer API-key mode where required; clear compliance warnings.
 
 ### 15.5 Terminal is not a sandbox
 
-A terminal controls visible I/O, not the child process’s full authority.
-
-Mitigation:
-
-- Use Nucleus strict-agent mode as the default Linux sandbox backend.
-- Use restricted environment variables.
-- Use Git worktrees and filesystem boundaries.
-- Mount the run worktree into `/workspace`; mount provider credentials explicitly.
-- Keep terminal parsing and approval policy in the runtime, not in Nucleus.
-- Add non-Linux sandbox backends behind the same sandbox contract.
+A terminal controls visible I/O, not the child's full authority. Mitigation:
+Nucleus strict-agent as the default Linux sandbox; restricted env; Git worktrees
+and filesystem boundaries; mount the worktree into `/workspace` and credentials
+explicitly; keep policy/approval in the runtime, not in Nucleus; add non-Linux
+backends behind the same contract.
 
 ---
 
 ## 16. Success metrics
 
-Activation:
-
-- Time from install to first completed run.
-- Percentage of users completing first run report.
-
-Reliability:
-
-- Run completion rate.
-- Prompt-detection precision/recall.
-- Provider adapter breakage rate after CLI updates.
-
-Safety:
-
-- False auto-approval rate.
-- Blocked dangerous-action count.
-- Secret-redaction misses.
-
-Value:
-
-- Percentage of runs with useful diffs.
-- Percentage of runs where report is opened.
-- Repeat usage per repository.
-- Provider comparison usage.
-
-Performance:
-
-- PTY output processing latency.
-- Terminal snapshot generation latency.
-- Run report generation time.
+- **Activation:** time from install to first completed run; share of users
+  completing a first run report.
+- **Reliability:** run completion rate; prompt-detection precision/recall;
+  transport breakage rate after provider CLI updates.
+- **Safety:** false auto-approval rate; blocked dangerous-action count;
+  secret-redaction misses.
+- **Value:** share of runs with useful diffs; share of runs where the report is
+  opened; repeat usage per repo; provider-comparison usage.
+- **Performance:** transport/PTY processing latency; snapshot generation latency;
+  report generation time.
 
 ---
 
 ## 17. Packaging
 
-Initial distribution:
+Mitos ships as two cooperating artifacts: the BEAM orchestrator and the Zig
+engine (plus a located/bundled Nucleus backend on Linux). Standalone packaging of
+the BEAM control plane is a known cost and an explicit non-goal for now
+(`05_LAYERING.md` §1.2); the Zig engine can run headless with an embedded
+controller for CI/standalone.
 
 ```text
-zig build -Doptimize=ReleaseSafe
-brew install agent-terminal-runtime
+zig build -Doptimize=ReleaseSafe          # engine
+mix release                                # orchestrator
 prebuilt binaries for macOS/Linux
-Linux package includes or locates compatible Nucleus backend
+Linux package includes or locates a compatible Nucleus backend
 ```
 
-Later:
-
-```text
-native desktop app
-VS Code extension
-Gitomi integration
-CI runner image
-```
+Later: native desktop app, VS Code extension, Gitomi integration, CI runner
+image.
 
 ---
 
 ## 18. Open questions
 
-1. Should the first UI be a local web viewer, a Tauri app, or a pure terminal/TUI?
-2. Should traces be stored in `.runs/`, `.git/refs/agent/*`, or a Gitomi metadata ref?
-3. Should local policy be repository-owned, user-owned, or both?
-4. How much provider-specific semantic detection should be hard-coded versus model-classified?
-5. Should the watcher model ever be allowed to answer provider prompts automatically without a matching deterministic policy rule?
-6. Which non-Linux sandbox backend should follow Nucleus first: macOS Seatbelt, Windows job objects, or a VM/remote runner?
-7. Should the product eventually expose an MCP server so agents can write traces directly?
-8. Which provider toolchain rootfs profiles should ship first?
+1. Should the first UI be a local web viewer, a Tauri app, or a TUI?
+2. Should traces live in `.runs/`, `.git/refs/agent/*`, or a Gitomi metadata ref?
+3. Should local policy be repo-owned, user-owned, or both?
+4. How much provider-specific semantic detection is hard-coded vs
+   model-classified?
+5. Should the watcher model ever answer provider prompts without a matching
+   deterministic policy rule?
+6. Which non-Linux sandbox backend follows Nucleus first: macOS Seatbelt, Windows
+   job objects, or a VM/remote runner?
+7. The authority plane already settles *inbound* MCP (agent → runtime callbacks).
+   Open question: should mitos *also* expose an **outbound MCP server** so
+   external clients/agents can drive runs and read traces directly?
+8. Which provider toolchain rootfs profiles ship first?
 
 ---
 
 ## 19. References
 
-- Ghostty repository: https://github.com/ghostty-org/ghostty
-- Ghostty about / `libghostty`: https://ghostty.org/docs/about
-- Ghostling minimal `libghostty` terminal: https://github.com/ghostty-org/ghostling
-- Ghostty VT documentation: https://ghostty.org/docs/vt
-- OpenAI Codex non-interactive mode: https://developers.openai.com/codex/noninteractive
-- Claude Code headless mode: https://code.claude.com/docs/en/headless
-- Gemini CLI headless mode: https://google-gemini.github.io/gemini-cli/docs/cli/headless.html
-- Anthropic Agent SDK provider-boundary note: https://code.claude.com/docs/en/agent-sdk/overview
+- `00_ARCHITECTURE.md` — the constitution: mitos = the AI-native OS.
+- `02_HLD.md` — component-level high-level design.
+- `03_NUCLEUS_INTEGRATION.md` — sandbox launch/event (enforcement) contract.
+- `04_IMPLEMENTATION_PLAN.md` — original Zig workstreams.
+- `05_LAYERING.md` — the orchestrator ↔ engine seam, policy tiers, control protocol.
+- Ghostty: https://github.com/ghostty-org/ghostty · `libghostty`:
+  https://ghostty.org/docs/about · VT docs: https://ghostty.org/docs/vt
+- Ghostling minimal `libghostty` terminal:
+  https://github.com/ghostty-org/ghostling
+- OpenAI Codex non-interactive: https://developers.openai.com/codex/noninteractive
+- Claude Code headless: https://code.claude.com/docs/en/headless
+- Gemini CLI headless:
+  https://google-gemini.github.io/gemini-cli/docs/cli/headless.html
+- Anthropic Agent SDK: https://code.claude.com/docs/en/agent-sdk/overview
 - OpenAI Terms of Use: https://openai.com/policies/row-terms-of-use/
 - Nucleus local spec: `/media/data/proj/nucleus/spec`
-- Mitos Nucleus integration contract: `spec/03_NUCLEUS_INTEGRATION.md`
-- Mitos Zig implementation plan: `spec/04_IMPLEMENTATION_PLAN.md`

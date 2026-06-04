@@ -7,7 +7,6 @@ pub const AdapterDetection = types.AdapterDetection;
 pub const AdapterEvent = types.AdapterEvent;
 pub const AdapterEventSink = types.AdapterEventSink;
 pub const AdapterId = types.AdapterId;
-pub const AdapterMode = types.AdapterMode;
 pub const AdapterRun = types.AdapterRun;
 pub const AdapterRunStatus = types.AdapterRunStatus;
 pub const AgentAdapter = types.AgentAdapter;

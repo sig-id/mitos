@@ -3,13 +3,14 @@ const adapter_detection = @import("../adapters/detection.zig");
 const adapters = @import("../adapters/types.zig");
 const headless = @import("headless.zig");
 const pty_provider = @import("pty.zig");
+const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "claude" };
 pub const print_adapter_id = adapters.AdapterId{ .value = "claude.print" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "claude.pty" };
 
-const supported_modes = [_]adapters.AdapterMode{.headless_json};
-const pty_supported_modes = [_]adapters.AdapterMode{.pty};
+const supported_transports = [_]transport.TransportName{.stdio_json};
+const pty_supported_transports = [_]transport.TransportName{.pty};
 const unavailable_warnings = [_][]const u8{"claude binary was not found on PATH"};
 const unsupported_warnings = [_][]const u8{"claude does not advertise --print stream-json support"};
 const no_pty_warnings = [_][]const u8{"claude does not advertise interactive PTY support"};
@@ -86,7 +87,7 @@ fn detectPrint(
     if (!try adapter_detection.executableAvailable(allocator, "claude")) {
         return .{
             .available = false,
-            .supported_modes = &supported_modes,
+            .supported_transports = &supported_transports,
             .warnings = &unavailable_warnings,
         };
     }
@@ -106,7 +107,7 @@ fn detectPrint(
             .available = false,
             .binary = "claude",
             .auth_status = .unknown,
-            .supported_modes = &supported_modes,
+            .supported_transports = &supported_transports,
             .warnings = &unsupported_warnings,
         };
     }
@@ -125,7 +126,7 @@ fn detectPrint(
             allocator,
             &.{"ANTHROPIC_API_KEY"},
         ),
-        .supported_modes = &supported_modes,
+        .supported_transports = &supported_transports,
     };
 }
 
@@ -136,7 +137,7 @@ fn detectPty(
     if (!try adapter_detection.executableAvailable(allocator, "claude")) {
         return .{
             .available = false,
-            .supported_modes = &pty_supported_modes,
+            .supported_transports = &pty_supported_transports,
             .warnings = &unavailable_warnings,
         };
     }
@@ -152,7 +153,7 @@ fn detectPty(
             .available = false,
             .binary = "claude",
             .auth_status = .unknown,
-            .supported_modes = &pty_supported_modes,
+            .supported_transports = &pty_supported_transports,
             .warnings = &no_pty_warnings,
         };
     }
@@ -171,7 +172,7 @@ fn detectPty(
             allocator,
             &.{"ANTHROPIC_API_KEY"},
         ),
-        .supported_modes = &pty_supported_modes,
+        .supported_transports = &pty_supported_transports,
     };
 }
 
@@ -208,7 +209,7 @@ fn startPrint(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = result.status(),
         .started_at_ms = context.started_at_ms,
     };
@@ -251,8 +252,8 @@ test "claude adapter advertises headless json support" {
     var adapter = initPrintAdapter();
 
     try std.testing.expectEqualStrings("claude", adapter.provider.value);
-    try std.testing.expect(adapter.capabilities.supportsMode(.headless_json));
-    try std.testing.expect(!adapter.capabilities.supportsMode(.pty));
+    try std.testing.expect(adapter.capabilities.supportsTransport(.stdio_json));
+    try std.testing.expect(!adapter.capabilities.supportsTransport(.pty));
 }
 
 test "claude print adapter start runs configured provider binary" {
@@ -310,6 +311,6 @@ test "claude pty adapter advertises interactive support" {
     var adapter = initPtyAdapter();
 
     try std.testing.expectEqualStrings("claude.pty", adapter.id.value);
-    try std.testing.expect(adapter.capabilities.supportsMode(.pty));
-    try std.testing.expect(!adapter.capabilities.supportsMode(.headless_json));
+    try std.testing.expect(adapter.capabilities.supportsTransport(.pty));
+    try std.testing.expect(!adapter.capabilities.supportsTransport(.stdio_json));
 }

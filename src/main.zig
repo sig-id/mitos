@@ -1,7 +1,7 @@
 const std = @import("std");
 const mitos = @import("mitos");
 
-const AdapterMode = mitos.adapters.AdapterMode;
+const TransportName = mitos.transport.TransportName;
 
 const RunOptions = struct {
     provider: ?[]const u8 = null,
@@ -9,16 +9,16 @@ const RunOptions = struct {
     task_file: ?[]const u8 = null,
     run_id: ?[]const u8 = null,
     workspace: []const u8 = ".",
-    mode: ?AdapterMode = null,
+    transport_name: ?TransportName = null,
     env: []const []const u8 = &.{},
     help: bool = false,
 };
 
-const fake_modes = [_]AdapterMode{ .exec_json, .headless_json };
-const codex_modes = [_]AdapterMode{ .exec_json, .pty };
-const claude_modes = [_]AdapterMode{ .headless_json, .pty };
-const gemini_modes = [_]AdapterMode{.headless_json};
-const no_modes = [_]AdapterMode{};
+const fake_transports = [_]TransportName{.stdio_json};
+const codex_transports = [_]TransportName{ .stdio_json, .pty };
+const claude_transports = [_]TransportName{ .stdio_json, .pty };
+const gemini_transports = [_]TransportName{.stdio_json};
+const no_transports = [_]TransportName{};
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -154,9 +154,9 @@ fn runCommand(
     const configured_provider = configuredProvider(project_config, provider);
     const effective_project_config = if (configured_provider != null) project_config else null;
 
-    const mode_order = modeOrder(provider, options.mode, configured_provider);
-    if (mode_order.len == 0) {
-        try stderr.print("error: no CLI adapter is configured for provider '{s}'\n", .{provider});
+    const transport_order = transportOrder(provider, options.transport_name, configured_provider);
+    if (transport_order.len == 0) {
+        try stderr.print("error: no transport is configured for provider '{s}'\n", .{provider});
         try stderr.writeAll("Run 'mitos providers' to see supported providers.\n");
         return 2;
     }
@@ -169,15 +169,15 @@ fn runCommand(
     else
         false;
     const selection = (if (skip_host_detection)
-        registry.selectByNameNoDetect(provider, mode_order)
+        registry.selectByNameNoDetect(provider, transport_order)
     else
-        registry.selectByName(allocator, provider, mode_order)) catch |err| {
-        try stderr.print("error: could not select adapter for provider '{s}': {s}\n", .{
+        registry.selectByName(allocator, provider, transport_order)) catch |err| {
+        try stderr.print("error: could not select transport for provider '{s}': {s}\n", .{
             provider,
             @errorName(err),
         });
         if (skip_host_detection) {
-            try stderr.writeAll("Check the configured provider adapter_order in .agent-runtime.yaml.\n");
+            try stderr.writeAll("Check the configured provider transport_order in .agent-runtime.yaml.\n");
         } else {
             try stderr.writeAll("Provider CLIs must be installed and authenticated on PATH.\n");
         }
@@ -219,7 +219,7 @@ fn runCommand(
     var terminal: ?mitos.terminal_ghostty.ManagedTerminal = null;
     defer if (terminal) |*managed| managed.deinit();
     var terminal_core: ?mitos.terminal.TerminalCore = null;
-    if (selection.mode == .pty) {
+    if (selection.transport_name == .pty) {
         terminal = try mitos.terminal_ghostty.ManagedTerminal.init(allocator, .{});
         if (terminal) |*managed| terminal_core = managed.asCore();
     }
@@ -235,7 +235,7 @@ fn runCommand(
     var sandbox_options: ?mitos.runtime.orchestrator.AdapterSandboxOptions = null;
     const workspace_container_path: ?[]const u8 = if (effective_project_config) |cfg| blk: {
         if (cfg.sandbox.backend != .nucleus) break :blk null;
-        if (selection.mode == .pty) {
+        if (selection.transport_name == .pty) {
             try stderr.writeAll("error: nucleus sandbox execution is only wired for headless provider modes\n");
             return 2;
         }
@@ -306,7 +306,7 @@ fn runCommand(
     }
 
     var stdio_handler: mitos.runtime.orchestrator.StdioApprovalHandler = undefined;
-    const approval_handler = if (selection.mode == .pty) blk: {
+    const approval_handler = if (selection.transport_name == .pty) blk: {
         stdio_handler = mitos.runtime.orchestrator.StdioApprovalHandler.init(
             std.fs.File.stdin(),
             std.fs.File.stdout(),
@@ -414,9 +414,18 @@ fn parseRunOptions(args: []const []const u8, stderr: anytype) !RunOptions {
                 try stderr.writeAll("error: --mode requires a value\n");
                 return error.InvalidArguments;
             }
-            options.mode = try parseHeadlessMode(args[i], stderr);
+            options.transport_name = try parseTransportFlag(args[i], stderr);
         } else if (stripPrefix(arg, "--mode=")) |value| {
-            options.mode = try parseHeadlessMode(value, stderr);
+            options.transport_name = try parseTransportFlag(value, stderr);
+        } else if (std.mem.eql(u8, arg, "--transport")) {
+            i += 1;
+            if (i >= args.len) {
+                try stderr.writeAll("error: --transport requires a value\n");
+                return error.InvalidArguments;
+            }
+            options.transport_name = try parseTransportFlag(args[i], stderr);
+        } else if (stripPrefix(arg, "--transport=")) |value| {
+            options.transport_name = try parseTransportFlag(value, stderr);
         } else if (std.mem.eql(u8, arg, "--env")) {
             i += 1;
             if (i >= args.len) {
@@ -441,41 +450,40 @@ fn parseRunOptions(args: []const []const u8, stderr: anytype) !RunOptions {
     return options;
 }
 
-fn parseHeadlessMode(value: []const u8, stderr: anytype) !AdapterMode {
-    const mode = AdapterMode.fromName(value) orelse {
-        try stderr.print("error: unknown adapter mode '{s}'\n", .{value});
+fn parseTransportFlag(value: []const u8, stderr: anytype) !TransportName {
+    const transport_name = TransportName.fromName(value) orelse {
+        try stderr.print("error: unknown transport '{s}'\n", .{value});
         return error.InvalidArguments;
     };
-    return switch (mode) {
-        .headless_json, .exec_json, .pty => mode,
+    return switch (transport_name) {
+        .stdio_json, .pty => transport_name,
         else => {
-            try stderr.print("error: mode '{s}' is registered but not wired to this CLI yet\n", .{value});
+            try stderr.print("error: transport '{s}' is registered but not wired to this CLI yet\n", .{value});
             return error.InvalidArguments;
         },
     };
 }
 
-fn modeOrder(
+fn transportOrder(
     provider: []const u8,
-    requested: ?AdapterMode,
+    requested: ?TransportName,
     configured_provider: ?mitos.config.ProviderConfig,
-) []const AdapterMode {
-    if (requested) |mode| {
-        return switch (mode) {
-            .headless_json => &[_]AdapterMode{.headless_json},
-            .exec_json => &[_]AdapterMode{.exec_json},
-            .pty => &[_]AdapterMode{.pty},
-            else => &no_modes,
+) []const TransportName {
+    if (requested) |transport_name| {
+        return switch (transport_name) {
+            .stdio_json => &[_]TransportName{.stdio_json},
+            .pty => &[_]TransportName{.pty},
+            else => &no_transports,
         };
     }
 
-    if (configured_provider) |configured| return configured.adapter_order;
+    if (configured_provider) |configured| return configured.transport_order;
 
-    if (std.mem.eql(u8, provider, "fake")) return &fake_modes;
-    if (std.mem.eql(u8, provider, "codex")) return &codex_modes;
-    if (std.mem.eql(u8, provider, "claude")) return &claude_modes;
-    if (std.mem.eql(u8, provider, "gemini")) return &gemini_modes;
-    return &no_modes;
+    if (std.mem.eql(u8, provider, "fake")) return &fake_transports;
+    if (std.mem.eql(u8, provider, "codex")) return &codex_transports;
+    if (std.mem.eql(u8, provider, "claude")) return &claude_transports;
+    if (std.mem.eql(u8, provider, "gemini")) return &gemini_transports;
+    return &no_transports;
 }
 
 fn configuredProvider(
@@ -796,13 +804,13 @@ fn printHelp(writer: anytype) !void {
         \\
         \\Usage:
         \\  mitos run --provider <name> --task <text> [--run-id <id>] [--workspace <path>]
-        \\  mitos run --provider <name> --task-file <path> [--mode <mode>]
+        \\  mitos run --provider <name> --task-file <path> [--transport <name>]
         \\  mitos webpty --provider <name> --task <text> [--port <n>]
         \\  mitos providers
         \\  mitos version
         \\
         \\Commands:
-        \\  run        Run a task through a built-in adapter.
+        \\  run        Run a task through a built-in transport.
         \\  webpty     Run the agent in a PTY and stream it to a browser terminal.
         \\  providers  List built-in providers and currently wired adapter modes.
         \\  version    Print the mitos version.
@@ -828,7 +836,7 @@ fn printRunHelp(writer: anytype) !void {
         \\  --task-file <path>    Read task text from a file.
         \\  --run-id <id>         Artifact directory name under .runs/.
         \\  --workspace <path>    Workspace path used as provider cwd. Defaults to ".".
-        \\  --mode <mode>         Adapter mode: exec_json, headless_json, or pty.
+        \\  --transport <name>    Transport: stdio-json or pty. `--mode` is a legacy alias.
         \\  --env KEY=VALUE       Environment variables to pass to provider (repeatable).
         \\  -h, --help            Show this help.
         \\
@@ -840,10 +848,10 @@ fn printRunHelp(writer: anytype) !void {
 fn printProviders(writer: anytype) !void {
     try writer.writeAll(
         \\Built-in providers:
-        \\  fake    exec_json, headless_json  local deterministic test adapter
-        \\  codex   exec_json, pty            runs `codex exec --json` or interactive `codex`
-        \\  claude  headless_json, pty        runs `claude --print` or interactive `claude`
-        \\  gemini  headless_json             runs `gemini --prompt ... --output-format stream-json`
+        \\  fake    stdio-json  local deterministic test provider
+        \\  codex   stdio-json, pty  runs `codex exec --json` or interactive `codex`
+        \\  claude  stdio-json, pty  runs `claude --print` or interactive `claude`
+        \\  gemini  stdio-json       runs `gemini --prompt ... --output-format stream-json`
     );
 }
 
@@ -895,28 +903,28 @@ test "run option parser accepts task and provider" {
     try std.testing.expectEqualStrings("/tmp/work", options.workspace);
 }
 
-test "run option parser accepts pty mode" {
+test "run option parser accepts pty transport" {
     var err: std.io.Writer.Allocating = .init(std.testing.allocator);
     defer err.deinit();
 
-    const args = [_][]const u8{ "--provider", "codex", "--task", "hello", "--mode", "pty" };
+    const args = [_][]const u8{ "--provider", "codex", "--task", "hello", "--transport", "pty" };
     const options = try parseRunOptions(&args, &err.writer);
-    try std.testing.expectEqual(AdapterMode.pty, options.mode.?);
+    try std.testing.expectEqual(TransportName.pty, options.transport_name.?);
 }
 
-test "mode order honors project provider config before built-in defaults" {
+test "transport order honors project provider config before built-in defaults" {
     const cfg: mitos.config.ProjectConfig = .{
         .version = mitos.config.supported_version,
         .workspace = .{ .base_branch = "main" },
         .sandbox = .{},
         .providers = &.{
-            .{ .name = "codex", .adapter_order = &.{ .pty, .exec_json } },
+            .{ .name = "codex", .transport_order = &.{ .pty, .stdio_json } },
         },
         .policy = .{},
         .watcher = .{},
     };
 
-    const order = modeOrder("codex", null, configuredProvider(cfg, "codex"));
-    try std.testing.expectEqual(AdapterMode.pty, order[0]);
-    try std.testing.expectEqual(AdapterMode.exec_json, order[1]);
+    const order = transportOrder("codex", null, configuredProvider(cfg, "codex"));
+    try std.testing.expectEqual(TransportName.pty, order[0]);
+    try std.testing.expectEqual(TransportName.stdio_json, order[1]);
 }

@@ -74,7 +74,7 @@ defmodule Mitos.Web.Router do
           |> maybe(:rows, body["rows"])
           |> maybe(:env, body["env"])
           |> maybe(:argv, body["argv"])
-          |> maybe(:adapter_order, decode_order(body["adapter_order"]))
+          |> maybe(:transport_order, decode_order(body["transport_order"] || body["adapter_order"]))
 
         case Mitos.Agent.start(opts) do
           {:ok, run} ->
@@ -107,14 +107,14 @@ defmodule Mitos.Web.Router do
   defp maybe(opts, _key, nil), do: opts
   defp maybe(opts, key, value), do: Keyword.put(opts, key, value)
 
-  # adapter_order arrives as JSON strings; map to the mode atoms the registry
-  # walks. Unknown names are dropped rather than risking atom-table growth.
-  @modes ~w(native_api headless_json exec_json pty raw_shell)
+  # transport_order arrives as JSON strings. `adapter_order` is still accepted
+  # as a compatibility alias and normalized by Mitos.Agent.
+  @modes ~w(native_api headless_json exec_json pty raw_shell stdio-json stdio_json acp mcp http-stream http_stream cloud-job cloud_job)
   defp decode_order(nil), do: nil
 
   defp decode_order(order) when is_list(order) do
     Enum.flat_map(order, fn
-      m when m in @modes -> [String.to_existing_atom(m)]
+      m when m in @modes -> [m]
       _ -> []
     end)
   end

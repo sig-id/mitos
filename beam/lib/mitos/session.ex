@@ -1,8 +1,8 @@
 defmodule Mitos.Session do
   @moduledoc """
   One BEAM process per agent session. Owns a `mitos-term` OS process via a
-  Port and bridges between it and Phoenix subscribers (browser WS clients,
-  prompt detectors, the orchestration brain).
+  Port and bridges between it and Phoenix subscribers (browser WS clients and
+  the orchestration brain).
 
   Lifetime is tied to the Port: when the Session goes away the Port closes,
   the sidecar sees EOF on stdin and exits — no socket cleanup, no zombies.
@@ -20,7 +20,8 @@ defmodule Mitos.Session do
   Subscribers receive messages from `Mitos.PubSub`:
 
       {:mitos, session_id, {:raw, bytes}}        # opaque PTY bytes
-      {:mitos, session_id, {:event, %{...}}}     # title/bell/idle/exit/error
+      {:mitos, session_id, {:event, %{...}}}     # typed engine events
+      {:mitos, session_id, {:prompt, event}}     # semantic prompt events
       {:mitos, session_id, {:snapshot, %{...}}}  # on-demand grid snapshot
 
   New subscribers get a `{:mitos, session_id, {:replay, bytes}}` on attach to
@@ -40,6 +41,7 @@ defmodule Mitos.Session do
     :session_id,
     :port,
     :sidecar_path,
+    :launch_spec,
     :argv,
     :cwd,
     :env,
@@ -47,6 +49,8 @@ defmodule Mitos.Session do
     :rows,
     :idle_ms,
     :snapshot_waiter,
+    :trace,
+    :authority,
     backend: :unknown,
     scrollback: <<>>,
     exited?: false
@@ -80,6 +84,12 @@ defmodule Mitos.Session do
   def signal(server, signum) when is_integer(signum),
     do: GenServer.cast(server, {:signal, signum})
 
+  def authorize(server, action_id, token) when is_binary(action_id) and is_binary(token),
+    do: GenServer.cast(server, {:authorize, action_id, token})
+
+  def deny(server, action_id, reason) when is_binary(action_id) and is_binary(reason),
+    do: GenServer.cast(server, {:deny, action_id, reason})
+
   @doc """
   Request a structured snapshot. Returns `{:ok, snapshot}` (the parsed
   msgpack map from the sidecar) or `{:error, reason}`. Synchronous: blocks
@@ -95,10 +105,13 @@ defmodule Mitos.Session do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
+
     state = %__MODULE__{
       session_id: Keyword.fetch!(opts, :session_id),
       sidecar_path: Keyword.fetch!(opts, :sidecar_path),
-      argv: Keyword.fetch!(opts, :argv),
+      launch_spec: opts[:launch_spec],
+      argv: opts[:argv],
       cwd: opts[:cwd],
       env: opts[:env],
       cols: Keyword.get(opts, :cols, 80),
@@ -106,14 +119,17 @@ defmodule Mitos.Session do
       idle_ms: Keyword.get(opts, :idle_ms, 250)
     }
 
-    Process.flag(:trap_exit, true)
+    state = %{state | trace: Mitos.Trace.open!(trace_options(state, opts))}
+    state = maybe_start_authority(state, opts)
+
     {:ok, state, {:continue, :open_port}}
   end
 
   @impl true
   def handle_continue(:open_port, state) do
     port =
-      Port.open({:spawn_executable, state.sidecar_path},
+      Port.open(
+        {:spawn_executable, state.sidecar_path},
         # packet: 4 → 4-byte big-endian length frame, exactly what the sidecar
         # speaks. :binary keeps payloads as binaries (not charlists).
         # :exit_status forwards the OS exit code as a message when the
@@ -123,16 +139,7 @@ defmodule Mitos.Session do
 
     send_control(port, Protocol.hello())
 
-    send_control(
-      port,
-      Protocol.open(state.argv,
-        cwd: state.cwd,
-        env: encode_env(state.env),
-        cols: state.cols,
-        rows: state.rows,
-        idle_ms: state.idle_ms
-      )
-    )
+    send_control(port, open_command(state))
 
     {:noreply, %{state | port: port}}
   end
@@ -150,12 +157,16 @@ defmodule Mitos.Session do
         handle_event(event, state)
 
       {:snapshot, snap} ->
+        state = trace_snapshot(state, snap)
         state = reply_snapshot(state, {:ok, snap})
         Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:snapshot, snap}})
         {:noreply, state}
 
       {:unknown, tag, _} ->
-        Logger.warning("mitos session #{inspect(state.session_id)} got unknown frame tag 0x#{Integer.to_string(tag, 16)}")
+        Logger.warning(
+          "mitos session #{inspect(state.session_id)} got unknown frame tag 0x#{Integer.to_string(tag, 16)}"
+        )
+
         {:noreply, state}
     end
   end
@@ -164,7 +175,9 @@ defmodule Mitos.Session do
   # this as terminal — the supervisor decides whether to restart us.
   def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
     Logger.info("mitos session #{inspect(state.session_id)} sidecar exited code=#{code}")
-    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, %{"type" => "sidecar_exit", "code" => code}}})
+    event = %{"type" => "sidecar_exit", "code" => code}
+    state = trace_event(state, event)
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
 
     state = reply_snapshot(state, {:error, :sidecar_exited})
     {:stop, :normal, %{state | port: nil, exited?: true}}
@@ -173,6 +186,10 @@ defmodule Mitos.Session do
   def handle_info({:EXIT, port, reason}, %{port: port} = state) do
     state = reply_snapshot(state, {:error, :sidecar_exited})
     {:stop, reason, %{state | port: nil, exited?: true}}
+  end
+
+  def handle_info({:authority_event, event}, state) do
+    handle_event(event, state)
   end
 
   def handle_info(_other, state), do: {:noreply, state}
@@ -185,7 +202,7 @@ defmodule Mitos.Session do
   def handle_call(:snapshot, from, state) do
     case state.snapshot_waiter do
       nil ->
-        send_control(state.port, Protocol.snapshot_cmd())
+        send_control(state.port, Protocol.snapshot_request())
         {:noreply, %{state | snapshot_waiter: from}}
 
       _ ->
@@ -195,7 +212,7 @@ defmodule Mitos.Session do
 
   @impl true
   def handle_cast({:write_stdin, bytes}, state) do
-    send_control(state.port, Protocol.write_stdin(bytes))
+    send_control(state.port, Protocol.input(bytes))
     {:noreply, state}
   end
 
@@ -209,6 +226,16 @@ defmodule Mitos.Session do
     {:noreply, state}
   end
 
+  def handle_cast({:authorize, action_id, token}, state) do
+    send_control(state.port, Protocol.authorize(action_id, token))
+    {:noreply, state}
+  end
+
+  def handle_cast({:deny, action_id, reason}, state) do
+    send_control(state.port, Protocol.deny(action_id, reason))
+    {:noreply, state}
+  end
+
   def handle_cast({:shutdown, grace_ms}, state) do
     if state.port, do: send_control(state.port, Protocol.shutdown(grace_ms))
     {:noreply, state}
@@ -216,6 +243,14 @@ defmodule Mitos.Session do
 
   @impl true
   def terminate(_reason, state) do
+    if state.authority do
+      try do
+        Mitos.Authority.stop(state.authority)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
     if state.port && not state.exited? do
       try do
         send_control(state.port, Protocol.shutdown(50))
@@ -235,30 +270,143 @@ defmodule Mitos.Session do
     Port.command(port, Protocol.encode_control(command))
   end
 
+  defp open_command(%{launch_spec: %{} = launch_spec} = state) do
+    Protocol.open_launch(launch_spec,
+      cwd: state.cwd,
+      env: encode_env(state.env),
+      cols: state.cols,
+      rows: state.rows,
+      idle_ms: state.idle_ms
+    )
+  end
+
+  defp open_command(%{argv: [_ | _] = argv} = state) do
+    Protocol.open(argv,
+      cwd: state.cwd,
+      env: encode_env(state.env),
+      cols: state.cols,
+      rows: state.rows,
+      idle_ms: state.idle_ms
+    )
+  end
+
+  defp open_command(_state), do: raise(ArgumentError, "Session requires :launch_spec or :argv")
+
   defp handle_event(%{"type" => "hello", "backend" => backend} = event, state) do
+    state = trace_event(state, event)
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     {:noreply, %{state | backend: String.to_atom(backend)}}
+  end
+
+  defp handle_event(%{"type" => "PROMPT_DETECTED"} = event, state) do
+    state = trace_event(state, event)
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+
+    if prompt = prompt_event(event) do
+      Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:prompt, prompt}})
+    end
+
+    {:noreply, state}
   end
 
   defp handle_event(%{"type" => "exit"} = event, state) do
     # The sidecar reports the agent's exit *and then* exits itself; we don't
     # have to wait for the Port `:exit_status` to come around. Stopping here
     # keeps the Session lifetime tight against the agent process lifetime.
+    state = trace_event(state, event)
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     state = reply_snapshot(state, {:error, :exited})
     {:stop, :normal, %{state | exited?: true}}
   end
 
-  defp handle_event(%{"type" => "error"} = event, state) do
+  defp handle_event(%{"type" => type} = event, state) when type in ["ERROR", "error"] do
     Logger.warning("mitos session #{inspect(state.session_id)} sidecar error: #{inspect(event)}")
+    state = trace_event(state, event)
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     {:noreply, state}
   end
 
   defp handle_event(event, state) do
+    state = trace_event(state, event)
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     {:noreply, state}
   end
+
+  defp trace_options(state, opts) do
+    [
+      run_id: state.session_id,
+      launch_spec: state.launch_spec
+    ]
+    |> maybe_put_option(:base_dir, Keyword.get(opts, :trace_base_dir))
+  end
+
+  defp maybe_put_option(opts, _key, nil), do: opts
+  defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp maybe_start_authority(%{launch_spec: nil} = state, _opts), do: state
+
+  defp maybe_start_authority(state, opts) do
+    if launch_spec_has_authority?(state.launch_spec) do
+      state
+    else
+      {:ok, authority} =
+        Mitos.Authority.start_link(
+          run_id: state.session_id,
+          session: self(),
+          project_id: Keyword.get(opts, :project_id, "default")
+        )
+
+      authority_spec = Mitos.Authority.launch_spec(authority)
+
+      %{
+        state
+        | authority: authority,
+          launch_spec: Map.put(state.launch_spec, :authority, authority_spec)
+      }
+    end
+  end
+
+  defp launch_spec_has_authority?(%{} = launch_spec) do
+    Map.has_key?(launch_spec, :authority) or Map.has_key?(launch_spec, "authority")
+  end
+
+  defp trace_event(%{trace: nil} = state, _event), do: state
+
+  defp trace_event(state, event) do
+    %{state | trace: Mitos.Trace.append_event(state.trace, event)}
+  end
+
+  defp trace_snapshot(%{trace: nil} = state, _snapshot), do: state
+
+  defp trace_snapshot(state, snapshot) do
+    %{state | trace: Mitos.Trace.append_snapshot(state.trace, snapshot)}
+  end
+
+  defp prompt_event(%{"prompt_kind" => "approval_requested", "text" => text} = event) do
+    risk =
+      event
+      |> Map.get("risk", "medium")
+      |> risk_atom()
+
+    {:approval_requested, %{text: text, risk: risk, action: nil}}
+  end
+
+  defp prompt_event(%{"prompt_kind" => "question_asked", "text" => text}),
+    do: {:question_asked, %{text: text}}
+
+  defp prompt_event(%{"prompt_kind" => "final_answer_candidate", "text" => text}),
+    do: {:final_answer_candidate, String.trim(text)}
+
+  defp prompt_event(%{"prompt_kind" => "error_detected", "text" => text}),
+    do: {:error_detected, String.trim(text)}
+
+  defp prompt_event(%{"prompt_kind" => "idle_detected"}), do: :idle_detected
+  defp prompt_event(_event), do: nil
+
+  defp risk_atom("low"), do: :low
+  defp risk_atom("medium"), do: :medium
+  defp risk_atom("high"), do: :high
+  defp risk_atom(_), do: :medium
 
   defp append_scrollback(state, bytes) do
     new = state.scrollback <> bytes

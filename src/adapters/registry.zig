@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const transport = @import("../transport/root.zig");
 
 pub const SelectionError = error{
     ProviderNotRegistered,
@@ -8,7 +9,7 @@ pub const SelectionError = error{
 
 pub const AdapterSelection = struct {
     adapter: *types.AgentAdapter,
-    mode: types.AdapterMode,
+    transport_name: transport.TransportName,
     detection: ?types.AdapterDetection = null,
 
     pub fn deinit(self: AdapterSelection, allocator: std.mem.Allocator) void {
@@ -27,16 +28,16 @@ pub const AdapterRegistry = struct {
         self: AdapterRegistry,
         allocator: std.mem.Allocator,
         provider: types.ProviderId,
-        priority_order: []const types.AdapterMode,
+        priority_order: []const transport.TransportName,
     ) anyerror!AdapterSelection {
         var saw_provider = false;
 
-        for (priority_order) |mode| {
+        for (priority_order) |transport_name| {
             for (self.adapters) |adapter| {
                 if (!providerEql(adapter.provider, provider)) continue;
                 saw_provider = true;
 
-                if (!adapter.capabilities.supportsMode(mode)) continue;
+                if (!adapter.capabilities.supportsTransport(transport_name)) continue;
 
                 const detected = if (adapter.detect) |detect_fn|
                     try detect_fn(adapter, allocator)
@@ -44,7 +45,7 @@ pub const AdapterRegistry = struct {
                     null;
 
                 if (detected) |detection| {
-                    if (!detection.supportsMode(mode)) {
+                    if (!detection.supportsTransport(transport_name)) {
                         detection.deinit(allocator);
                         continue;
                     }
@@ -52,7 +53,7 @@ pub const AdapterRegistry = struct {
 
                 return .{
                     .adapter = adapter,
-                    .mode = mode,
+                    .transport_name = transport_name,
                     .detection = detected,
                 };
             }
@@ -65,19 +66,19 @@ pub const AdapterRegistry = struct {
     pub fn selectNoDetect(
         self: AdapterRegistry,
         provider: types.ProviderId,
-        priority_order: []const types.AdapterMode,
+        priority_order: []const transport.TransportName,
     ) anyerror!AdapterSelection {
         var saw_provider = false;
 
-        for (priority_order) |mode| {
+        for (priority_order) |transport_name| {
             for (self.adapters) |adapter| {
                 if (!providerEql(adapter.provider, provider)) continue;
                 saw_provider = true;
 
-                if (!adapter.capabilities.supportsMode(mode)) continue;
+                if (!adapter.capabilities.supportsTransport(transport_name)) continue;
                 return .{
                     .adapter = adapter,
-                    .mode = mode,
+                    .transport_name = transport_name,
                 };
             }
         }
@@ -90,7 +91,7 @@ pub const AdapterRegistry = struct {
         self: AdapterRegistry,
         allocator: std.mem.Allocator,
         provider_name: []const u8,
-        priority_order: []const types.AdapterMode,
+        priority_order: []const transport.TransportName,
     ) anyerror!AdapterSelection {
         return try self.select(
             allocator,
@@ -102,7 +103,7 @@ pub const AdapterRegistry = struct {
     pub fn selectByNameNoDetect(
         self: AdapterRegistry,
         provider_name: []const u8,
-        priority_order: []const types.AdapterMode,
+        priority_order: []const transport.TransportName,
     ) anyerror!AdapterSelection {
         return try self.selectNoDetect(
             try types.ProviderId.init(provider_name),
@@ -123,7 +124,7 @@ fn dummyStart(
     return .{
         .run_id = context.run_id,
         .adapter_id = self.id,
-        .mode = .headless_json,
+        .transport_name = .stdio_json,
         .status = .completed,
         .started_at_ms = context.started_at_ms,
     };
@@ -155,12 +156,12 @@ test "adapter selection follows configured priority order" {
     const selection = try registry.select(
         std.testing.allocator,
         provider,
-        &.{ .pty, .headless_json },
+        &.{ .pty, .stdio_json },
     );
     defer selection.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("fake.pty", selection.adapter.id.value);
-    try std.testing.expectEqual(types.AdapterMode.pty, selection.mode);
+    try std.testing.expectEqual(transport.TransportName.pty, selection.transport_name);
 }
 
 test "adapter selection skips unavailable detections" {
@@ -191,7 +192,7 @@ test "adapter selection skips unavailable detections" {
     const selection = try registry.select(
         std.testing.allocator,
         provider,
-        &.{.headless_json},
+        &.{.stdio_json},
     );
     defer selection.deinit(std.testing.allocator);
 
@@ -214,7 +215,7 @@ test "adapter selection can bypass host detection for sandbox execution" {
 
     const adapters = [_]*types.AgentAdapter{&unavailable};
     const registry = AdapterRegistry.init(&adapters);
-    const selection = try registry.selectByNameNoDetect("fake", &.{.headless_json});
+    const selection = try registry.selectByNameNoDetect("fake", &.{.stdio_json});
     defer selection.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("fake.unavailable", selection.adapter.id.value);
@@ -238,7 +239,7 @@ test "adapter selection accepts provider names from config" {
     const selection = try registry.selectByName(
         std.testing.allocator,
         "fake",
-        &.{.headless_json},
+        &.{.stdio_json},
     );
     defer selection.deinit(std.testing.allocator);
 
