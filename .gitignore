@@ -12,3 +12,4 @@
 /beam/*.ez
 erl_crash.dump
 /beam/priv/static/cache_manifest.json
+/beam/.runs/
