@@ -2,7 +2,6 @@ const std = @import("std");
 const adapter_detection = @import("../adapters/detection.zig");
 const adapters = @import("../adapters/types.zig");
 const headless = @import("headless.zig");
-const pty_provider = @import("pty.zig");
 const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "codex" };
@@ -10,10 +9,8 @@ pub const exec_adapter_id = adapters.AdapterId{ .value = "codex.exec" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "codex.pty" };
 
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const pty_supported_transports = [_]transport.TransportName{.pty};
 const unavailable_warnings = [_][]const u8{"codex binary was not found on PATH"};
 const no_json_warnings = [_][]const u8{"codex exec does not advertise --json support"};
-const no_pty_warnings = [_][]const u8{"codex does not advertise interactive PTY flags"};
 
 pub fn initExecAdapter() adapters.AgentAdapter {
     return .{
@@ -27,19 +24,6 @@ pub fn initExecAdapter() adapters.AgentAdapter {
         },
         .detect = detectExec,
         .start = startExec,
-    };
-}
-
-pub fn initPtyAdapter() adapters.AgentAdapter {
-    return .{
-        .id = pty_adapter_id,
-        .provider = provider_id,
-        .capabilities = .{
-            .supports_interactive_pty = true,
-            .supports_streaming_events = true,
-        },
-        .detect = detectPty,
-        .start = startPty,
     };
 }
 
@@ -125,50 +109,6 @@ fn detectExec(
     };
 }
 
-fn detectPty(
-    _: *adapters.AgentAdapter,
-    allocator: std.mem.Allocator,
-) anyerror!adapters.AdapterDetection {
-    if (!try adapter_detection.executableAvailable(allocator, "codex")) {
-        return .{
-            .available = false,
-            .supported_transports = &pty_supported_transports,
-            .warnings = &unavailable_warnings,
-        };
-    }
-
-    if (!try adapter_detection.commandOutputContains(
-        allocator,
-        &.{ "codex", "--help" },
-        "--no-alt-screen",
-    )) {
-        return .{
-            .available = false,
-            .binary = "codex",
-            .auth_status = .unknown,
-            .supported_transports = &pty_supported_transports,
-            .warnings = &no_pty_warnings,
-        };
-    }
-
-    const version = adapter_detection.commandOutputTrimmedAlloc(
-        allocator,
-        &.{ "codex", "--version" },
-    ) catch null;
-
-    return .{
-        .available = true,
-        .binary = "codex",
-        .version = version,
-        .owns_version = version != null,
-        .auth_status = try adapter_detection.authStatusFromEnv(
-            allocator,
-            &.{ "OPENAI_API_KEY", "CODEX_API_KEY" },
-        ),
-        .supported_transports = &pty_supported_transports,
-    };
-}
-
 fn startExec(
     self: *adapters.AgentAdapter,
     context: adapters.AdapterContext,
@@ -206,22 +146,6 @@ fn startExec(
         .status = result.status(),
         .started_at_ms = context.started_at_ms,
     };
-}
-
-fn startPty(
-    self: *adapters.AgentAdapter,
-    context: adapters.AdapterContext,
-    task: adapters.Task,
-) anyerror!adapters.AdapterRun {
-    const cwd = context.workspace_host_path;
-    const command = try buildPtyCommand(context.allocator, task, cwd);
-    defer command.deinit(context.allocator);
-
-    return try pty_provider.runCommand(self, context, .{
-        .argv = command.argv,
-        .cwd = command.cwd,
-        .env = context.env,
-    });
 }
 
 test "codex exec command construction is deterministic" {
@@ -262,14 +186,6 @@ test "codex pty command construction is deterministic" {
     try std.testing.expectEqualStrings("--cd", command.argv[2]);
     try std.testing.expectEqualStrings("/workspace", command.argv[3]);
     try std.testing.expectEqualStrings("Fix failing tests", command.argv[4]);
-}
-
-test "codex pty adapter advertises interactive support" {
-    var adapter = initPtyAdapter();
-
-    try std.testing.expectEqualStrings("codex.pty", adapter.id.value);
-    try std.testing.expect(adapter.capabilities.supportsTransport(.pty));
-    try std.testing.expect(!adapter.capabilities.supportsTransport(.stdio_json));
 }
 
 test "codex exec adapter start runs configured provider binary" {

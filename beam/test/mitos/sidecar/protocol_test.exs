@@ -95,14 +95,26 @@ defmodule Mitos.Sidecar.ProtocolTest do
     end
 
     test "authorize and deny use control protocol vocabulary" do
-      encoded_authorize = Protocol.encode_control(Protocol.authorize("action-1", "tok"))
+      encoded_authorize = Protocol.encode_control(Protocol.authorize("request-1", "tok", origin: :terminal_scrape))
       <<0x10, authorize_body::binary>> = IO.iodata_to_binary(encoded_authorize)
-      assert %{"cmd" => "AUTHORIZE", "action_id" => "action-1", "token" => "tok"} =
+      assert %{
+               "cmd" => "AUTHORIZE",
+               "request_id" => "request-1",
+               "action_id" => "request-1",
+               "origin" => "terminal_scrape",
+               "token" => "tok"
+             } =
                Msgpax.unpack!(authorize_body)
 
-      encoded_deny = Protocol.encode_control(Protocol.deny("action-1", "no"))
+      encoded_deny = Protocol.encode_control(Protocol.deny("request-1", "no", origin: :terminal_scrape))
       <<0x10, deny_body::binary>> = IO.iodata_to_binary(encoded_deny)
-      assert %{"cmd" => "DENY", "action_id" => "action-1", "reason" => "no"} =
+      assert %{
+               "cmd" => "DENY",
+               "request_id" => "request-1",
+               "action_id" => "request-1",
+               "origin" => "terminal_scrape",
+               "reason" => "no"
+             } =
                Msgpax.unpack!(deny_body)
     end
   end

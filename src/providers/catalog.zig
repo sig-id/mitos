@@ -5,35 +5,25 @@ const config = @import("../config/types.zig");
 const codex = @import("codex.zig");
 const fake = @import("fake.zig");
 const gemini = @import("gemini.zig");
-const pty = @import("pty.zig");
 const transport = @import("../transport/root.zig");
 
 pub const DefaultAdapters = struct {
     fake_headless: adapters.AgentAdapter = undefined,
     codex_exec: adapters.AgentAdapter = undefined,
-    codex_pty: adapters.AgentAdapter = undefined,
     claude_print: adapters.AgentAdapter = undefined,
-    claude_pty: adapters.AgentAdapter = undefined,
     gemini_headless: adapters.AgentAdapter = undefined,
-    generic_pty: adapters.AgentAdapter = undefined,
-    adapter_ptrs: [7]*adapters.AgentAdapter = undefined,
+    adapter_ptrs: [4]*adapters.AgentAdapter = undefined,
 
     pub fn init(self: *DefaultAdapters) void {
         self.fake_headless = fake.initHeadlessAdapter();
         self.codex_exec = codex.initExecAdapter();
-        self.codex_pty = codex.initPtyAdapter();
         self.claude_print = claude.initPrintAdapter();
-        self.claude_pty = claude.initPtyAdapter();
         self.gemini_headless = gemini.initHeadlessAdapter();
-        self.generic_pty = pty.initAdapter();
         self.adapter_ptrs = .{
             &self.fake_headless,
             &self.codex_exec,
-            &self.codex_pty,
             &self.claude_print,
-            &self.claude_pty,
             &self.gemini_headless,
-            &self.generic_pty,
         };
     }
 
@@ -54,7 +44,7 @@ pub const DefaultAdapters = struct {
     }
 };
 
-test "default adapter catalog registers fake codex and pty adapters" {
+test "default adapter catalog registers headless adapters" {
     var catalog: DefaultAdapters = undefined;
     catalog.init();
     const registry = catalog.registry();
@@ -65,18 +55,10 @@ test "default adapter catalog registers fake codex and pty adapters" {
         &.{.stdio_json},
     );
     defer fake_selection.deinit(std.testing.allocator);
-    const pty_selection = try registry.select(
-        std.testing.allocator,
-        .{ .value = "generic-pty" },
-        &.{.pty},
-    );
-    defer pty_selection.deinit(std.testing.allocator);
-
     try std.testing.expectEqualStrings("fake.headless", fake_selection.adapter.id.value);
-    try std.testing.expectEqualStrings("generic-pty.terminal", pty_selection.adapter.id.value);
 }
 
-test "default adapter catalog selects from parsed provider config" {
+test "default adapter catalog leaves pty to mitos-term and falls back to headless" {
     var catalog: DefaultAdapters = undefined;
     catalog.init();
 
@@ -87,6 +69,6 @@ test "default adapter catalog selects from parsed provider config" {
     const selection = try catalog.selectConfigured(std.testing.allocator, provider);
     defer selection.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualStrings("codex.pty", selection.adapter.id.value);
-    try std.testing.expectEqual(transport.TransportName.pty, selection.transport_name);
+    try std.testing.expectEqualStrings("codex.exec", selection.adapter.id.value);
+    try std.testing.expectEqual(transport.TransportName.stdio_json, selection.transport_name);
 }

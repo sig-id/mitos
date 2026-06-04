@@ -12,8 +12,7 @@ defmodule Mitos.Web.Endpoint do
 
   def child_spec(_opts) do
     # MITOS_HTTP_PORT wins over compile-time config so the dev/prod port can
-    # be set without recompiling. Default 7682 avoids colliding with the
-    # legacy `mitos webpty` Zig server on 7681 while both stacks coexist.
+    # be set without recompiling.
     port =
       case System.get_env("MITOS_HTTP_PORT") do
         nil -> Application.get_env(:mitos, :http_port, 7682)

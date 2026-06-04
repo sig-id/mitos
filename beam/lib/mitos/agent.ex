@@ -62,7 +62,9 @@ defmodule Mitos.Agent do
       rows: opts[:rows],
       idle_ms: opts[:idle_ms],
       env: opts[:env],
-      session_id: opts[:session_id]
+      session_id: opts[:session_id],
+      trace_base_dir: opts[:trace_base_dir],
+      project_id: opts[:project_id]
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end

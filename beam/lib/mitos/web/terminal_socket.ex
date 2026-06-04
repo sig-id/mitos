@@ -76,6 +76,26 @@ defmodule Mitos.Web.TerminalSocket do
         Mitos.Session.signal(state.session_pid, signum)
         {[], state}
 
+      {:ok, %{"type" => "authorize", "action_id" => action_id, "token" => token}}
+      when is_binary(action_id) and is_binary(token) ->
+        Mitos.Session.authorize(state.session_pid, action_id, token)
+        {[], state}
+
+      {:ok, %{"type" => "deny", "action_id" => action_id, "reason" => reason}}
+      when is_binary(action_id) and is_binary(reason) ->
+        Mitos.Session.deny(state.session_pid, action_id, reason)
+        {[], state}
+
+      {:ok, %{"type" => "snapshot"}} ->
+        case Mitos.Session.snapshot(state.session_pid, 2_000) do
+          {:ok, snapshot} ->
+            {[{:text, Jason.encode!(%{type: "snapshot", snapshot: json_safe(snapshot)})}], state}
+
+          {:error, reason} ->
+            event = %{"type" => "ERROR", "kind" => "snapshot", "detail" => inspect(reason)}
+            {[{:text, Jason.encode!(%{type: "event", event: event})}], state}
+        end
+
       _ ->
         {[], state}
     end
@@ -89,10 +109,17 @@ defmodule Mitos.Web.TerminalSocket do
   @impl true
   def websocket_info({:mitos, session_id, payload}, %{session_id: session_id} = state) do
     case payload do
-      {:raw, bytes} -> {[{:binary, bytes}], state}
-      {:event, event} -> {[{:text, Jason.encode!(%{type: "event", event: event})}], state}
-      {:snapshot, snap} -> {[{:text, Jason.encode!(%{type: "snapshot", snapshot: snap})}], state}
-      _ -> {[], state}
+      {:raw, bytes} ->
+        {[{:binary, bytes}], state}
+
+      {:event, event} ->
+        {[{:text, Jason.encode!(%{type: "event", event: json_safe(event)})}], state}
+
+      {:snapshot, snap} ->
+        {[{:text, Jason.encode!(%{type: "snapshot", snapshot: json_safe(snap)})}], state}
+
+      _ ->
+        {[], state}
     end
   end
 
@@ -100,4 +127,24 @@ defmodule Mitos.Web.TerminalSocket do
 
   @impl true
   def terminate(_reason, _req, _state), do: :ok
+
+  defp json_safe(%Msgpax.Bin{data: data}), do: json_safe(data)
+  defp json_safe(%_{} = value), do: inspect(value)
+
+  defp json_safe(value) when is_map(value) do
+    Map.new(value, fn {key, val} -> {to_string(key), json_safe(val)} end)
+  end
+
+  defp json_safe(value) when is_list(value), do: Enum.map(value, &json_safe/1)
+
+  defp json_safe(value) when is_binary(value) do
+    if String.valid?(value) do
+      value
+    else
+      %{"encoding" => "base64", "data" => Base.encode64(value)}
+    end
+  end
+
+  defp json_safe(value) when is_atom(value), do: to_string(value)
+  defp json_safe(value), do: value
 end

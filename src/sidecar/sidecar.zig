@@ -90,10 +90,12 @@ const State = struct {
     selected_transport: transport.TransportName = .pty,
     tier2_fast_path_rules: []const []const u8 = &.{},
     redaction_patterns: []const []const u8 = &.{},
-    next_action_id: u64 = 1,
+    next_producer_request_id: u64 = 1,
     raw_spool_file: ?std.fs.File = null,
     raw_spool_path: ?[]u8 = null,
     raw_spool_offset: u64 = 0,
+    raw_ref_filter: PtyRawRefFilter = .{},
+    prompt_filter: PromptEventFilter = .{},
 
     // Idle detection bookkeeping.
     idle_ms: i64 = default_idle_ms,
@@ -229,12 +231,15 @@ const State = struct {
 
         const offset = self.raw_spool_offset;
         const len: u64 = @intCast(bytes.len);
+        const emit_raw_ref = self.raw_ref_filter.shouldEmit(self.provider, bytes);
         var file = self.raw_spool_file.?;
         file.writeAll(bytes) catch |err| {
             self.emitError("raw_spool", @errorName(err)) catch {};
             return error.IoError;
         };
         self.raw_spool_offset += len;
+
+        if (!emit_raw_ref) return;
 
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = transport.TypedEventName.raw_ref.wireName() } },
@@ -462,6 +467,8 @@ const State = struct {
         self.last_output_ms = std.time.milliTimestamp();
         self.idle_pending = false;
         self.output_seq = 0;
+        self.raw_ref_filter = .{};
+        self.prompt_filter = .{};
 
         const axes = self.selected_transport.axes();
         try self.emitMap(.event, &.{
@@ -659,38 +666,44 @@ const State = struct {
     }
 
     fn handleAuthorize(self: *State, value: msgpack.Value) LoopError!void {
-        const action_id = stringField(value, "action_id") orelse {
-            try self.emitError("protocol", "authorize: missing action_id");
+        const request_id = stringField(value, "request_id") orelse stringField(value, "action_id") orelse {
+            try self.emitError("protocol", "authorize: missing request_id");
             return;
         };
         const token = stringField(value, "token") orelse {
             try self.emitError("protocol", "authorize: missing token");
             return;
         };
+        const origin = stringField(value, "origin") orelse "terminal_scrape";
 
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = "STRUCTURED_OUTPUT" } },
             .{ "kind", .{ .str = "authorization" } },
-            .{ "action_id", .{ .str = action_id } },
+            .{ "request_id", .{ .str = request_id } },
+            .{ "action_id", .{ .str = request_id } },
+            .{ "origin", .{ .str = origin } },
             .{ "decision", .{ .str = "allow" } },
             .{ "token", .{ .str = token } },
         });
     }
 
     fn handleDeny(self: *State, value: msgpack.Value) LoopError!void {
-        const action_id = stringField(value, "action_id") orelse {
-            try self.emitError("protocol", "deny: missing action_id");
+        const request_id = stringField(value, "request_id") orelse stringField(value, "action_id") orelse {
+            try self.emitError("protocol", "deny: missing request_id");
             return;
         };
         const reason = stringField(value, "reason") orelse {
             try self.emitError("protocol", "deny: missing reason");
             return;
         };
+        const origin = stringField(value, "origin") orelse "terminal_scrape";
 
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = "STRUCTURED_OUTPUT" } },
             .{ "kind", .{ .str = "authorization" } },
-            .{ "action_id", .{ .str = action_id } },
+            .{ "request_id", .{ .str = request_id } },
+            .{ "action_id", .{ .str = request_id } },
+            .{ "origin", .{ .str = origin } },
             .{ "decision", .{ .str = "deny" } },
             .{ "reason", .{ .str = reason } },
         });
@@ -903,6 +916,8 @@ const State = struct {
     }
 
     fn emitPromptEvent(self: *State, event: prompt.PromptEvent) LoopError!void {
+        if (!self.prompt_filter.shouldEmit(event)) return;
+
         switch (event) {
             .approval_requested => |approval| {
                 try self.emitMap(.event, &.{
@@ -950,23 +965,38 @@ const State = struct {
         prompt_text: []const u8,
         risk: []const u8,
     ) LoopError!void {
-        if (matchesAnyPattern(prompt_text, self.tier2_fast_path_rules)) return;
+        const fast_path = matchesAnyPattern(prompt_text, self.tier2_fast_path_rules);
 
         var id_buf: [64]u8 = undefined;
-        const action_id = std.fmt.bufPrint(
+        const producer_request_id = std.fmt.bufPrint(
             &id_buf,
-            "action-{d}",
-            .{self.next_action_id},
-        ) catch "action";
-        self.next_action_id += 1;
+            "terminal-scrape-{d}",
+            .{self.next_producer_request_id},
+        ) catch "terminal-scrape";
+        self.next_producer_request_id += 1;
 
-        try self.emitMap(.event, &.{
-            .{ "type", .{ .str = "ACTION_REQUESTED" } },
-            .{ "action_id", .{ .str = action_id } },
-            .{ "action", .{ .str = "terminal_input" } },
-            .{ "risk", .{ .str = risk } },
-            .{ "context", .{ .str = prompt_text } },
-        });
+        if (fast_path) {
+            try self.emitMap(.event, &.{
+                .{ "type", .{ .str = "ACTION_REQUESTED" } },
+                .{ "producer_request_id", .{ .str = producer_request_id } },
+                .{ "origin", .{ .str = "terminal_scrape" } },
+                .{ "action", .{ .str = "terminal_input" } },
+                .{ "risk", .{ .str = risk } },
+                .{ "context", .{ .str = prompt_text } },
+                .{ "auto_decision", .{ .str = "authorize" } },
+                .{ "decided_by", .{ .str = "policy" } },
+                .{ "fast_path", .{ .boolean = true } },
+            });
+        } else {
+            try self.emitMap(.event, &.{
+                .{ "type", .{ .str = "ACTION_REQUESTED" } },
+                .{ "producer_request_id", .{ .str = producer_request_id } },
+                .{ "origin", .{ .str = "terminal_scrape" } },
+                .{ "action", .{ .str = "terminal_input" } },
+                .{ "risk", .{ .str = risk } },
+                .{ "context", .{ .str = prompt_text } },
+            });
+        }
     }
 
     fn emitError(self: *State, kind: []const u8, detail: []const u8) LoopError!void {
@@ -1061,6 +1091,198 @@ const State = struct {
 };
 
 // -- helpers ----------------------------------------------------------------
+
+const fnv64_offset: u64 = 0xcbf29ce484222325;
+const fnv64_prime: u64 = 0x100000001b3;
+
+const PtyRawRefFilter = struct {
+    last_signature: u64 = 0,
+    last_signature_valid: bool = false,
+
+    fn shouldEmit(
+        self: *PtyRawRefFilter,
+        provider: adapters.ProviderId,
+        bytes: []const u8,
+    ) bool {
+        if (usesProviderTuiChrome(provider)) return false;
+
+        const signature = rawSemanticSignature(provider, bytes) orelse return false;
+        if (self.last_signature_valid and self.last_signature == signature) return false;
+
+        self.last_signature = signature;
+        self.last_signature_valid = true;
+        return true;
+    }
+};
+
+const PromptEventFilter = struct {
+    last_signature: u64 = 0,
+    last_signature_valid: bool = false,
+
+    fn shouldEmit(self: *PromptEventFilter, event: prompt.PromptEvent) bool {
+        if (event.kind() == .idle_detected) return false;
+
+        const signature = promptEventSignature(event);
+        if (self.last_signature_valid and self.last_signature == signature) return false;
+
+        self.last_signature = signature;
+        self.last_signature_valid = true;
+        return true;
+    }
+};
+
+fn rawSemanticSignature(provider: adapters.ProviderId, bytes: []const u8) ?u64 {
+    if (!rawRefEligibleProvider(provider)) return null;
+
+    var hash = fnv64_offset;
+    var semantic_chars: usize = 0;
+    var strong_chars: usize = 0;
+    var i: usize = 0;
+
+    while (i < bytes.len) {
+        const b = bytes[i];
+        if (b == 0x1b) {
+            i += skipEscape(bytes[i..]);
+            continue;
+        }
+        if (b < 0x20 or b == 0x7f) {
+            i += 1;
+            continue;
+        }
+        if (b < 0x80) {
+            if (isSemanticAscii(b)) {
+                hashByte(&hash, std.ascii.toLower(b));
+                semantic_chars += 1;
+                if (std.ascii.isAlphanumeric(b)) strong_chars += 1;
+            }
+            i += 1;
+            continue;
+        }
+
+        const width = utf8Width(bytes[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        const codepoint = std.unicode.utf8Decode(bytes[i .. i + width]) catch {
+            i += 1;
+            continue;
+        };
+        if (!isDecorativeCodepoint(codepoint)) {
+            hashByte(&hash, 0xff);
+            for (bytes[i .. i + width]) |part| hashByte(&hash, part);
+            semantic_chars += 1;
+            strong_chars += 1;
+        }
+        i += width;
+    }
+
+    const min_strong: usize = if (usesProviderTuiChrome(provider)) 3 else 1;
+    if (strong_chars < min_strong or semantic_chars < min_strong) return null;
+    return hash;
+}
+
+fn promptEventSignature(event: prompt.PromptEvent) u64 {
+    var hash = fnv64_offset;
+    switch (event) {
+        .approval_requested => |approval| {
+            hashSlice(&hash, "approval_requested");
+            hashSlice(&hash, approval.text);
+            hashSlice(&hash, @tagName(approval.risk));
+        },
+        .question_asked => |question| {
+            hashSlice(&hash, "question_asked");
+            hashSlice(&hash, question.text);
+        },
+        .final_answer_candidate => |text| {
+            hashSlice(&hash, "final_answer_candidate");
+            hashSlice(&hash, text);
+        },
+        .idle_detected => hashSlice(&hash, "idle_detected"),
+        .error_detected => |text| {
+            hashSlice(&hash, "error_detected");
+            hashSlice(&hash, text);
+        },
+    }
+    return hash;
+}
+
+fn skipEscape(bytes: []const u8) usize {
+    if (bytes.len < 2) return bytes.len;
+    switch (bytes[1]) {
+        '[' => {
+            var i: usize = 2;
+            while (i < bytes.len) : (i += 1) {
+                if (bytes[i] >= 0x40 and bytes[i] <= 0x7e) return i + 1;
+            }
+            return bytes.len;
+        },
+        ']', 'P', '_', '^', 'X' => {
+            var i: usize = 2;
+            while (i < bytes.len) : (i += 1) {
+                if (bytes[i] == 0x07) return i + 1;
+                if (bytes[i] == 0x1b and i + 1 < bytes.len and bytes[i + 1] == '\\') return i + 2;
+            }
+            return bytes.len;
+        },
+        '(', ')' => return @min(bytes.len, @as(usize, 3)),
+        else => return 2,
+    }
+}
+
+fn isSemanticAscii(b: u8) bool {
+    if (std.ascii.isAlphanumeric(b)) return true;
+    return switch (b) {
+        '@', '/', '.', '_', ':', '#', '$', '%' => true,
+        else => false,
+    };
+}
+
+fn utf8Width(bytes: []const u8) ?usize {
+    if (bytes.len == 0) return null;
+    const first = bytes[0];
+    const width: usize = if ((first & 0b1110_0000) == 0b1100_0000)
+        2
+    else if ((first & 0b1111_0000) == 0b1110_0000)
+        3
+    else if ((first & 0b1111_1000) == 0b1111_0000)
+        4
+    else
+        return null;
+    if (width > bytes.len) return null;
+    return width;
+}
+
+fn isDecorativeCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x2500 and codepoint <= 0x257f) or // box drawing
+        (codepoint >= 0x2580 and codepoint <= 0x259f) or // block elements
+        (codepoint >= 0x2800 and codepoint <= 0x28ff) or // braille spinners
+        codepoint == 0x2022 or // bullet
+        codepoint == 0x00b7 or // middle dot
+        codepoint == 0x25cf or // black circle
+        codepoint == 0x25cb; // white circle
+}
+
+fn usesProviderTuiChrome(provider: adapters.ProviderId) bool {
+    return std.mem.eql(u8, provider.value, "codex") or
+        std.mem.eql(u8, provider.value, "claude") or
+        std.mem.eql(u8, provider.value, "gemini");
+}
+
+fn rawRefEligibleProvider(provider: adapters.ProviderId) bool {
+    return std.mem.eql(u8, provider.value, "generic-pty") or
+        std.mem.eql(u8, provider.value, "generic") or
+        std.mem.eql(u8, provider.value, "fake");
+}
+
+fn hashSlice(hash: *u64, bytes: []const u8) void {
+    for (bytes) |byte| hashByte(hash, byte);
+    hashByte(hash, 0);
+}
+
+fn hashByte(hash: *u64, byte: u8) void {
+    hash.* ^= byte;
+    hash.* *%= fnv64_prime;
+}
 
 const BoundaryBytes = struct {
     bytes: []const u8,
@@ -1461,6 +1683,46 @@ test "redactPatternsAlloc replaces configured exact patterns" {
 
     try std.testing.expect(unchanged.owned == null);
     try std.testing.expectEqualStrings("nothing sensitive", unchanged.bytes);
+}
+
+test "pty raw ref filter drops provider tui raw refs" {
+    const provider = adapters.ProviderId{ .value = "codex" };
+    const generic = adapters.ProviderId{ .value = "generic-pty" };
+    const fake = adapters.ProviderId{ .value = "fake" };
+    const redraw_noise =
+        "\x1b[39;49m\x1b[K\x1b[2m" ++
+        "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80" ++
+        "\x1b[39m\x1b[49m\x1b[0m\x1b[?25h\x1b[27;3H\x1b[?2026l";
+    try std.testing.expect(rawSemanticSignature(provider, redraw_noise) == null);
+
+    var filter: PtyRawRefFilter = .{};
+    try std.testing.expect(!filter.shouldEmit(provider, "\x1b[39mhello from codex\n"));
+    try std.testing.expect(filter.shouldEmit(generic, "\x1b[39mhello from shell\n"));
+    try std.testing.expect(!filter.shouldEmit(generic, "\x1b[31mhello from shell\x1b[0m\r\n"));
+    try std.testing.expect(filter.shouldEmit(generic, "\x1b[39mreal new output\n"));
+    try std.testing.expect(filter.shouldEmit(fake, "FAKE_FINAL: done\n"));
+}
+
+test "prompt event filter suppresses consecutive duplicate prompts" {
+    var filter: PromptEventFilter = .{};
+    const first: prompt.PromptEvent = .{ .approval_requested = .{
+        .text = "Do you want to proceed?",
+        .risk = .medium,
+    } };
+    const same: prompt.PromptEvent = .{ .approval_requested = .{
+        .text = "Do you want to proceed?",
+        .risk = .medium,
+    } };
+    const changed: prompt.PromptEvent = .{ .approval_requested = .{
+        .text = "Allow this command?",
+        .risk = .medium,
+    } };
+    const idle: prompt.PromptEvent = .idle_detected;
+
+    try std.testing.expect(filter.shouldEmit(first));
+    try std.testing.expect(!filter.shouldEmit(same));
+    try std.testing.expect(filter.shouldEmit(changed));
+    try std.testing.expect(!filter.shouldEmit(idle));
 }
 
 test "parseLaunchSpec accepts provider task and transport order" {

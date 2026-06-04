@@ -112,12 +112,34 @@ defmodule Mitos.Sidecar.Protocol do
 
   def resize(cols, rows), do: %{cmd: "resize", cols: cols, rows: rows}
   def signal(signum), do: %{cmd: "signal", signum: signum}
-  def authorize(action_id, token), do: %{cmd: "AUTHORIZE", action_id: action_id, token: token}
-  def deny(action_id, reason), do: %{cmd: "DENY", action_id: action_id, reason: reason}
+  def authorize(request_id, token, opts \\ []) do
+    %{
+      cmd: "AUTHORIZE",
+      request_id: request_id,
+      action_id: request_id,
+      token: token
+    }
+    |> maybe_put(:origin, origin_value(opts[:origin]))
+  end
+
+  def deny(request_id, reason, opts \\ []) do
+    %{
+      cmd: "DENY",
+      request_id: request_id,
+      action_id: request_id,
+      reason: reason
+    }
+    |> maybe_put(:origin, origin_value(opts[:origin]))
+  end
+
   def snapshot_cmd(_opts \\ []), do: %{cmd: "snapshot"}
   def snapshot_request, do: %{cmd: "SNAPSHOT_REQUEST"}
   def cancel(reason \\ "cancelled"), do: %{cmd: "CANCEL", reason: reason}
   def shutdown(grace_ms \\ 100), do: %{cmd: "shutdown", grace_ms: grace_ms}
+
+  defp origin_value(nil), do: nil
+  defp origin_value(origin) when is_atom(origin), do: Atom.to_string(origin)
+  defp origin_value(origin) when is_binary(origin), do: origin
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

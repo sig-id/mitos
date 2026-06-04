@@ -8,82 +8,9 @@ const report = @import("../report/generator.zig");
 const runtime = @import("types.zig");
 const sandbox = @import("../sandbox/backend.zig");
 const headless = @import("../providers/headless.zig");
-const terminal = @import("../terminal/core.zig");
 const trace_file = @import("../trace/file_store.zig");
 const trace_types = @import("../trace/types.zig");
 const transport_types = @import("../transport/root.zig");
-
-pub const ApprovalHandler = struct {
-    context: *anyopaque,
-    prompt_for_approval: *const fn (*anyopaque, []const u8, ?[]const u8) anyerror![]const u8,
-};
-
-pub const StdioApprovalHandler = struct {
-    stdin: std.fs.File,
-    stdout: std.fs.File,
-    stderr: std.fs.File,
-
-    pub fn init(stdin: std.fs.File, stdout: std.fs.File, stderr: std.fs.File) StdioApprovalHandler {
-        return .{
-            .stdin = stdin,
-            .stdout = stdout,
-            .stderr = stderr,
-        };
-    }
-
-    pub fn handler(self: *StdioApprovalHandler) ApprovalHandler {
-        return .{
-            .context = self,
-            .prompt_for_approval = promptForApproval,
-        };
-    }
-
-    fn promptForApproval(context: *anyopaque, prompt_text: []const u8, risk: ?[]const u8) anyerror![]const u8 {
-        const self: *StdioApprovalHandler = @ptrCast(@alignCast(context));
-
-        try self.stderr.writeAll("\n[Approval Required] ");
-        if (risk) |r| {
-            var buf: [4096]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "({s}) ", .{r});
-            try self.stderr.writeAll(msg);
-        }
-        {
-            var buf: [4096]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "{s}\n", .{prompt_text});
-            try self.stderr.writeAll(msg);
-        }
-        try self.stderr.writeAll("Allow? [y/N/a=allow all/d=deny all/q=quit] ");
-
-        var buffer: [100]u8 = undefined;
-        const n_read = try self.stdin.read(buffer[0..]);
-        const line = buffer[0..n_read];
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-
-        if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "n") or std.mem.eql(u8, trimmed, "N")) {
-            try self.stderr.writeAll("Denied.\n");
-            return "n\n";
-        }
-        if (std.mem.eql(u8, trimmed, "y") or std.mem.eql(u8, trimmed, "Y")) {
-            try self.stderr.writeAll("Allowed.\n");
-            return "y\n";
-        }
-        if (std.mem.eql(u8, trimmed, "a")) {
-            try self.stderr.writeAll("Allowed for this session (will auto-approve similar prompts).\n");
-            return "y\n";
-        }
-        if (std.mem.eql(u8, trimmed, "d")) {
-            try self.stderr.writeAll("Denied for this session (will auto-deny similar prompts).\n");
-            return "n\n";
-        }
-        if (std.mem.eql(u8, trimmed, "q") or std.mem.eql(u8, trimmed, "Q")) {
-            try self.stderr.writeAll("Quitting.\n");
-            return "q\n";
-        }
-
-        try self.stderr.writeAll("Unrecognized response, defaulting to deny.\n");
-        return "n\n";
-    }
-};
 
 pub const LifecycleError = error{
     InvalidTransition,
@@ -202,8 +129,6 @@ pub const AdapterRunOptions = struct {
     sandbox_backend: ?AdapterSandboxOptions = null,
     require_sandbox_execution: bool = false,
     policy_config: policy_engine.PolicyConfig = .{},
-    terminal_core: ?*terminal.TerminalCore = null,
-    approval_handler: ?ApprovalHandler = null,
 };
 
 pub const AdapterSandboxOptions = struct {
@@ -232,9 +157,6 @@ const AdapterEventBridge = struct {
     timestamp_ms: *runtime.TimestampMs,
     trace: *trace_file.FileTrace,
     blocked_by_policy: bool = false,
-    approval_handler: ?ApprovalHandler = null,
-    terminal_core: ?*terminal.TerminalCore = null,
-    pending_response: ?[]const u8 = null,
 
     fn emit(context: *anyopaque, event: adapters.AdapterEvent) anyerror!void {
         const self: *AdapterEventBridge = @ptrCast(@alignCast(context));
@@ -398,7 +320,6 @@ const AdapterEventBridge = struct {
                     .decision = approvals.approvalDecisionName(.allow_once),
                     .decided_by = "policy",
                 } });
-                self.sendResponseIfNeeded("y\n");
             },
             .block => {
                 self.blocked_by_policy = true;
@@ -412,54 +333,14 @@ const AdapterEventBridge = struct {
                     .message = audited.reason,
                     .component = "policy",
                 } });
-                self.sendResponseIfNeeded("n\n");
             },
             .ask => {
-                if (self.approval_handler) |handler| {
-                    const response = try handler.prompt_for_approval(handler.context, prompt_text, risk_name);
-                    defer self.allocator.free(response);
-                    const allowed = std.mem.startsWith(u8, response, "y") or std.mem.startsWith(u8, response, "Y");
-                    const quit = std.mem.startsWith(u8, response, "q") or std.mem.startsWith(u8, response, "Q");
-
-                    const decision: policy.ApprovalDecision = if (allowed) .{ .allow_once = {} } else if (quit) .{ .terminate = {} } else .{ .deny = {} };
-                    try approval_store.recordDecision(approval_id, decision, "user", self.timestamp_ms.*);
-                    try self.emitRuntime(.{ .approval_decision = .{
-                        .approval_id = approval_id.value,
-                        .decision = if (decision == .terminate) "terminate" else approvals.approvalDecisionName(decision),
-                        .decided_by = "user",
-                    } });
-
-                    if (quit) {
-                        try self.emitRuntime(.{ .error_reported = .{
-                            .message = "User requested quit",
-                            .component = "approval",
-                        } });
-                    } else {
-                        self.sendResponseIfNeeded(response);
-                    }
-                } else {
-                    try self.emitRuntime(.{ .error_reported = .{
-                        .message = "Approval requested but no handler available",
-                        .component = "approval",
-                    } });
-                }
+                try self.emitRuntime(.{ .error_reported = .{
+                    .message = "Approval requested in headless adapter runtime; interactive PTY approvals are handled by mitos-term",
+                    .component = "approval",
+                } });
             },
         }
-    }
-
-    fn sendResponseIfNeeded(self: *AdapterEventBridge, response: []const u8) void {
-        if (self.terminal_core) |_| {
-            self.pending_response = response;
-        }
-    }
-
-    fn getPendingResponse(context: *anyopaque) ?[]const u8 {
-        const self: *AdapterEventBridge = @ptrCast(@alignCast(context));
-        return self.pending_response;
-    }
-
-    fn clearPendingResponse(self: *AdapterEventBridge) void {
-        self.pending_response = null;
     }
 };
 
@@ -564,8 +445,6 @@ pub fn runAdapter(
         .run_id = run_id,
         .timestamp_ms = &timestamp_ms,
         .trace = &trace,
-        .approval_handler = options.approval_handler,
-        .terminal_core = options.terminal_core,
     };
 
     const adapter_run = if (sandbox_handle) |handle| sandbox_run: {
@@ -607,10 +486,7 @@ pub fn runAdapter(
                 .context = &bridge,
                 .emit = AdapterEventBridge.emit,
             },
-            .terminal_core = options.terminal_core,
             .started_at_ms = timestamp_ms,
-            .get_pending_response = if (options.approval_handler != null) AdapterEventBridge.getPendingResponse else null,
-            .response_context = if (options.approval_handler != null) &bridge else null,
         }, options.task) catch |err| {
             _ = try fanout.emit(timestamp_ms, .{ .error_reported = .{
                 .message = @errorName(err),
@@ -637,10 +513,7 @@ pub fn runAdapter(
             .context = &bridge,
             .emit = AdapterEventBridge.emit,
         },
-        .terminal_core = options.terminal_core,
         .started_at_ms = timestamp_ms,
-        .get_pending_response = if (options.approval_handler != null) AdapterEventBridge.getPendingResponse else null,
-        .response_context = if (options.approval_handler != null) &bridge else null,
     }, options.task) catch |err| {
         _ = try fanout.emit(timestamp_ms, .{ .error_reported = .{
             .message = @errorName(err),

@@ -90,6 +90,25 @@ defmodule Mitos.Trace do
       trace
   end
 
+  def append_command(%__MODULE__{} = trace, event) when is_map(event) do
+    record = %{
+      "schema_version" => 1,
+      "run_id" => trace.run_id,
+      "timestamp_ms" => System.system_time(:millisecond),
+      "event" => normalize(event)
+    }
+
+    append_jsonl!(trace, "commands.jsonl", record)
+    trace
+  rescue
+    exception ->
+      Logger.warning(
+        "failed to append command trace for #{inspect(trace.run_id)}: #{Exception.message(exception)}"
+      )
+
+      trace
+  end
+
   defp default_base_dir do
     Application.get_env(:mitos, :trace_base_dir) ||
       System.get_env("MITOS_TRACE_DIR") ||
@@ -135,6 +154,36 @@ defmodule Mitos.Trace do
   defp maybe_append_sidecar!(trace, %{"event" => %{"type" => type}} = record)
        when type in ["PROCESS_SPAWNED", "PROCESS_EXITED"] do
     append_jsonl!(trace, "commands.jsonl", record)
+  end
+
+  defp maybe_append_sidecar!(trace, %{"event" => %{"type" => "ACTION_REQUESTED"} = event}) do
+    append_jsonl!(trace, "approvals.jsonl", %{
+      "schema_version" => 1,
+      "run_id" => trace.run_id,
+      "timestamp_ms" => System.system_time(:millisecond),
+      "type" => "approval_requested",
+      "approval_id" => event["request_id"] || event["action_id"],
+      "origin" => event["origin"] || event["source"],
+      "method" => event["method"],
+      "action" => event["action"],
+      "risk" => event["risk"],
+      "context" => event["context"]
+    })
+  end
+
+  defp maybe_append_sidecar!(trace, %{"event" => %{"type" => "AUTHORITY_VERDICT"} = event}) do
+    append_jsonl!(trace, "approvals.jsonl", %{
+      "schema_version" => 1,
+      "run_id" => trace.run_id,
+      "timestamp_ms" => System.system_time(:millisecond),
+      "type" => "approval_decision",
+      "approval_id" => event["request_id"] || event["action_id"],
+      "origin" => event["origin"],
+      "method" => event["method"],
+      "decision" => event["decision"],
+      "reason" => event["reason"],
+      "payload" => event["payload"]
+    })
   end
 
   defp maybe_append_sidecar!(_trace, _record), do: :ok

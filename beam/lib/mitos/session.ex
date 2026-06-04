@@ -30,12 +30,15 @@ defmodule Mitos.Session do
   use GenServer
   require Logger
 
+  alias Mitos.Authority.Request
+  alias Mitos.Authority.Verdict
   alias Mitos.Sidecar.Protocol
 
   # 256 KiB of replayable PTY output per session. Browser tabs that connect
   # late get this much history. Larger than xterm.js's own buffer; the brain
   # can ask for `snapshot` for a structured view.
   @scrollback_cap 256 * 1024
+  @authority_socket_timeout_ms 4_750
 
   defstruct [
     :session_id,
@@ -51,9 +54,14 @@ defmodule Mitos.Session do
     :snapshot_waiter,
     :trace,
     :authority,
+    :project_id,
     backend: :unknown,
     scrollback: <<>>,
-    exited?: false
+    exited?: false,
+    pending: %{},
+    pending_timers: %{},
+    pending_monitors: %{},
+    next_request_id: 1
   ]
 
   # -- public API -----------------------------------------------------------
@@ -84,11 +92,15 @@ defmodule Mitos.Session do
   def signal(server, signum) when is_integer(signum),
     do: GenServer.cast(server, {:signal, signum})
 
+  def resolve(server, request_id, decision, payload \\ %{})
+      when is_binary(request_id) and decision in [:authorize, :deny] and is_map(payload),
+      do: GenServer.cast(server, {:resolve, request_id, decision, payload})
+
   def authorize(server, action_id, token) when is_binary(action_id) and is_binary(token),
-    do: GenServer.cast(server, {:authorize, action_id, token})
+    do: resolve(server, action_id, :authorize, %{"token" => token})
 
   def deny(server, action_id, reason) when is_binary(action_id) and is_binary(reason),
-    do: GenServer.cast(server, {:deny, action_id, reason})
+    do: resolve(server, action_id, :deny, %{"reason" => reason})
 
   @doc """
   Request a structured snapshot. Returns `{:ok, snapshot}` (the parsed
@@ -116,7 +128,8 @@ defmodule Mitos.Session do
       env: opts[:env],
       cols: Keyword.get(opts, :cols, 80),
       rows: Keyword.get(opts, :rows, 24),
-      idle_ms: Keyword.get(opts, :idle_ms, 250)
+      idle_ms: Keyword.get(opts, :idle_ms, 250),
+      project_id: Keyword.get(opts, :project_id, "default")
     }
 
     state = %{state | trace: Mitos.Trace.open!(trace_options(state, opts))}
@@ -192,6 +205,14 @@ defmodule Mitos.Session do
     handle_event(event, state)
   end
 
+  def handle_info({:authority_request_timeout, request_id}, state) do
+    {:noreply, timeout_pending_request(request_id, state)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    {:noreply, drop_pending_monitor(ref, state)}
+  end
+
   def handle_info(_other, state), do: {:noreply, state}
 
   @impl true
@@ -226,14 +247,13 @@ defmodule Mitos.Session do
     {:noreply, state}
   end
 
-  def handle_cast({:authorize, action_id, token}, state) do
-    send_control(state.port, Protocol.authorize(action_id, token))
+  def handle_cast({:authority_request, %Request{} = request}, state) do
+    {state, _request} = register_pending_request(request, state)
     {:noreply, state}
   end
 
-  def handle_cast({:deny, action_id, reason}, state) do
-    send_control(state.port, Protocol.deny(action_id, reason))
-    {:noreply, state}
+  def handle_cast({:resolve, request_id, decision, payload}, state) do
+    {:noreply, resolve_pending_request(%Verdict{id: request_id, decision: decision, payload: payload}, state)}
   end
 
   def handle_cast({:shutdown, grace_ms}, state) do
@@ -268,6 +288,8 @@ defmodule Mitos.Session do
 
   defp send_control(port, command) do
     Port.command(port, Protocol.encode_control(command))
+  rescue
+    ArgumentError -> :ok
   end
 
   defp open_command(%{launch_spec: %{} = launch_spec} = state) do
@@ -309,6 +331,22 @@ defmodule Mitos.Session do
     {:noreply, state}
   end
 
+  defp handle_event(%{"type" => "ACTION_REQUESTED"} = event, state) do
+    {request, event} = request_from_scrape_event(event)
+    {state, request} = register_pending_request(request, state, event)
+
+    state =
+      case auto_decision(event) do
+        nil ->
+          state
+
+        {decision, payload} ->
+          resolve_pending_request(%Verdict{id: request.id, decision: decision, payload: payload}, state)
+      end
+
+    {:noreply, state}
+  end
+
   defp handle_event(%{"type" => "exit"} = event, state) do
     # The sidecar reports the agent's exit *and then* exits itself; we don't
     # have to wait for the Port `:exit_status` to come around. Stopping here
@@ -330,6 +368,392 @@ defmodule Mitos.Session do
     state = trace_event(state, event)
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     {:noreply, state}
+  end
+
+  defp register_pending_request(%Request{} = request, state, event \\ nil) do
+    {request_id, state} = allocate_request_id(state)
+    request = %{request | id: request_id}
+    event = event || event_from_request(request)
+    event = canonical_request_event(event, request)
+
+    state =
+      state
+      |> put_pending(request)
+      |> trace_event(event)
+
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+    {state, request}
+  end
+
+  defp put_pending(state, %Request{id: request_id, origin: :authority_socket, from: from} = request)
+       when not is_nil(from) do
+    {pid, _tag} = from
+    monitor_ref = Process.monitor(pid)
+    timer_ref = Process.send_after(self(), {:authority_request_timeout, request_id}, @authority_socket_timeout_ms)
+
+    %{
+      state
+      | pending: Map.put(state.pending, request_id, request),
+        pending_timers: Map.put(state.pending_timers, request_id, timer_ref),
+        pending_monitors: Map.put(state.pending_monitors, monitor_ref, request_id)
+    }
+  end
+
+  defp put_pending(state, %Request{id: request_id} = request) do
+    %{state | pending: Map.put(state.pending, request_id, request)}
+  end
+
+  defp resolve_pending_request(%Verdict{id: request_id} = verdict, state) do
+    case Map.fetch(state.pending, request_id) do
+      {:ok, request} ->
+        state = cleanup_pending_request(request_id, state)
+        {state, reply_payload} = complete_request(request, verdict, state)
+        event = verdict_event(request, verdict, reply_payload)
+        state = trace_event(state, event)
+        Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+        state
+
+      :error ->
+        state
+    end
+  end
+
+  defp complete_request(%Request{origin: :terminal_scrape} = request, %Verdict{decision: :authorize} = verdict, state) do
+    token = Map.get(verdict.payload, "token", Map.get(verdict.payload, :token, ""))
+    send_control(state.port, Protocol.authorize(request.id, token, origin: request.origin))
+    {state, verdict.payload}
+  end
+
+  defp complete_request(%Request{origin: :terminal_scrape} = request, %Verdict{decision: :deny} = verdict, state) do
+    reason = verdict.reason || Map.get(verdict.payload, "reason", Map.get(verdict.payload, :reason, "denied"))
+    send_control(state.port, Protocol.deny(request.id, reason, origin: request.origin))
+    {state, Map.put(verdict.payload, "reason", reason)}
+  end
+
+  defp complete_request(%Request{origin: :authority_socket} = request, %Verdict{decision: :deny} = verdict, state) do
+    reason = verdict.reason || Map.get(verdict.payload, "reason", Map.get(verdict.payload, :reason, "denied"))
+    reply = %{"ok" => true, "request_id" => request.id, "decision" => "deny", "reason" => reason, "payload" => %{}}
+    GenServer.reply(request.from, reply)
+    {state, reply["payload"]}
+  end
+
+  defp complete_request(%Request{origin: :authority_socket} = request, %Verdict{decision: :authorize} = verdict, state) do
+    {state, payload} = authorized_socket_payload(request, verdict.payload, state)
+
+    reply = %{
+      "ok" => true,
+      "request_id" => request.id,
+      "decision" => "authorize",
+      "payload" => payload
+    }
+
+    GenServer.reply(request.from, reply)
+    {state, payload}
+  rescue
+    exception ->
+      payload = %{"error" => Exception.message(exception)}
+
+      GenServer.reply(request.from, %{
+        "ok" => false,
+        "request_id" => request.id,
+        "error" => "request_failed",
+        "detail" => Exception.message(exception)
+      })
+
+      {state, payload}
+  end
+
+  defp authorized_socket_payload(%Request{method: "approval"}, payload, state), do: {state, payload}
+  defp authorized_socket_payload(%Request{method: "tool_broker"} = request, _payload, state), do: execute_tool_broker(request, state)
+  defp authorized_socket_payload(%Request{method: "memory_fetch"} = request, _payload, state), do: memory_fetch(request, state)
+  defp authorized_socket_payload(%Request{method: "memory_put"} = request, _payload, state), do: memory_put(request, state)
+  defp authorized_socket_payload(%Request{method: "artifact_register"} = request, _payload, state), do: artifact_register(request, state)
+
+  defp timeout_pending_request(request_id, state) do
+    case Map.fetch(state.pending, request_id) do
+      {:ok, %Request{origin: :authority_socket, from: from}} ->
+        GenServer.reply(from, %{"ok" => false, "error" => "timeout", "request_id" => request_id})
+        cleanup_pending_request(request_id, state)
+
+      {:ok, _request} ->
+        state
+
+      :error ->
+        state
+    end
+  end
+
+  defp drop_pending_monitor(ref, state) do
+    case Map.pop(state.pending_monitors, ref) do
+      {nil, _monitors} ->
+        state
+
+      {request_id, monitors} ->
+        state
+        |> Map.put(:pending_monitors, monitors)
+        |> cleanup_pending_request(request_id, demonitor?: false)
+    end
+  end
+
+  defp cleanup_pending_request(request_id, state, opts \\ []) do
+    demonitor? = Keyword.get(opts, :demonitor?, true)
+
+    state =
+      case Map.pop(state.pending_timers, request_id) do
+        {nil, timers} ->
+          %{state | pending_timers: timers}
+
+        {timer_ref, timers} ->
+          Process.cancel_timer(timer_ref)
+          %{state | pending_timers: timers}
+      end
+
+    state =
+      if demonitor? do
+        {monitor_ref, monitors} = pop_monitor_for_request(state.pending_monitors, request_id)
+        if monitor_ref, do: Process.demonitor(monitor_ref, [:flush])
+        %{state | pending_monitors: monitors}
+      else
+        state
+      end
+
+    %{state | pending: Map.delete(state.pending, request_id)}
+  end
+
+  defp pop_monitor_for_request(monitors, request_id) do
+    Enum.reduce_while(monitors, {nil, monitors}, fn {ref, id}, _acc ->
+      if id == request_id do
+        {:halt, {ref, Map.delete(monitors, ref)}}
+      else
+        {:cont, {nil, monitors}}
+      end
+    end)
+  end
+
+  defp allocate_request_id(state) do
+    request_id = "request-#{state.next_request_id}"
+    {request_id, %{state | next_request_id: state.next_request_id + 1}}
+  end
+
+  defp request_from_scrape_event(event) do
+    context = Map.get(event, "context_json", Map.get(event, "context", %{}))
+    origin = origin_atom(Map.get(event, "origin", "terminal_scrape"))
+
+    request = %Request{
+      id: Map.get(event, "request_id", Map.get(event, "action_id")),
+      method: Map.get(event, "method", "approval"),
+      action: Map.get(event, "action", "terminal_input"),
+      context: context,
+      origin: origin,
+      from: nil
+    }
+
+    {request, event}
+  end
+
+  defp event_from_request(%Request{} = request) do
+    %{
+      "type" => "ACTION_REQUESTED",
+      "request_id" => request.id,
+      "action_id" => request.id,
+      "action" => request.action,
+      "context" => context_to_text(request.context),
+      "context_json" => request.context,
+      "origin" => origin_string(request.origin),
+      "source" => origin_string(request.origin),
+      "method" => request.method
+    }
+  end
+
+  defp canonical_request_event(event, %Request{} = request) do
+    producer_request_id = Map.get(event, "producer_request_id", Map.get(event, "request_id", Map.get(event, "action_id")))
+
+    event
+    |> Map.put("request_id", request.id)
+    |> Map.put("action_id", request.id)
+    |> Map.put("origin", origin_string(request.origin))
+    |> Map.put("source", Map.get(event, "source", origin_string(request.origin)))
+    |> Map.put("method", request.method)
+    |> Map.put("action", request.action)
+    |> Map.put("context", context_to_text(request.context))
+    |> Map.put("context_json", request.context)
+    |> maybe_put_event("producer_request_id", producer_request_id)
+  end
+
+  defp verdict_event(%Request{} = request, %Verdict{} = verdict, payload) do
+    %{
+      "type" => "AUTHORITY_VERDICT",
+      "request_id" => request.id,
+      "action_id" => request.id,
+      "origin" => origin_string(request.origin),
+      "method" => request.method,
+      "action" => request.action,
+      "decision" => decision_string(verdict.decision),
+      "payload" => payload
+    }
+    |> maybe_put_event("reason", verdict.reason)
+  end
+
+  defp auto_decision(%{"auto_decision" => decision} = event), do: parse_auto_decision(decision, event)
+  defp auto_decision(%{"decision" => decision, "decided_by" => _} = event), do: parse_auto_decision(decision, event)
+  defp auto_decision(_event), do: nil
+
+  defp parse_auto_decision(decision, event) when decision in ["authorize", "allow", :authorize, :allow] do
+    {:authorize, %{"decided_by" => Map.get(event, "decided_by", "policy"), "fast_path" => Map.get(event, "fast_path", false)}}
+  end
+
+  defp parse_auto_decision(decision, event) when decision in ["deny", "block", :deny, :block] do
+    {:deny, %{"decided_by" => Map.get(event, "decided_by", "policy"), "fast_path" => Map.get(event, "fast_path", false)}}
+  end
+
+  defp parse_auto_decision(_decision, _event), do: nil
+
+  defp origin_atom(:terminal_scrape), do: :terminal_scrape
+  defp origin_atom(:authority_socket), do: :authority_socket
+  defp origin_atom(:codec), do: :codec
+  defp origin_atom("authority_socket"), do: :authority_socket
+  defp origin_atom("codec"), do: :codec
+  defp origin_atom(_), do: :terminal_scrape
+
+  defp origin_string(:terminal_scrape), do: "terminal_scrape"
+  defp origin_string(:authority_socket), do: "authority_socket"
+  defp origin_string(:codec), do: "codec"
+
+  defp decision_string(:authorize), do: "authorize"
+  defp decision_string(:deny), do: "deny"
+
+  defp maybe_put_event(map, _key, nil), do: map
+  defp maybe_put_event(map, _key, ""), do: map
+  defp maybe_put_event(map, key, value), do: Map.put(map, key, value)
+
+  defp context_to_text(context) when is_binary(context), do: context
+  defp context_to_text(context), do: Jason.encode!(context)
+
+  defp execute_tool_broker(%Request{} = request, state) do
+    context = context_map(request.context)
+    cwd = context_get(context, "cwd", state.cwd || File.cwd!())
+
+    {cmd, args, command_text} =
+      case context_get(context, "argv") do
+        [cmd | args] = argv when is_binary(cmd) ->
+          {cmd, Enum.map(args, &to_string/1), Enum.join(argv, " ")}
+
+        _ ->
+          command = context_get(context, "command") || context_get(context, "cmd")
+          if not is_binary(command) or command == "", do: raise(ArgumentError, "tool_broker requires context.command or context.argv")
+          {"/bin/sh", ["-c", command], command}
+      end
+
+    {output, exit_status} = System.cmd(cmd, args, cd: cwd, stderr_to_stdout: true)
+
+    payload = %{
+      "command" => command_text,
+      "cwd" => cwd,
+      "stdout" => output,
+      "stderr" => "",
+      "exit_status" => exit_status
+    }
+
+    state =
+      if state.trace do
+        event =
+          Map.merge(payload, %{
+            "type" => "TOOL_BROKER_COMMAND",
+            "request_id" => request.id,
+            "origin" => origin_string(request.origin)
+          })
+
+        %{state | trace: Mitos.Trace.append_command(state.trace, event)}
+      else
+        state
+      end
+
+    {state, payload}
+  end
+
+  defp memory_fetch(%Request{} = request, state) do
+    context = context_map(request.context)
+    key = memory_key!(context)
+    path = memory_path!(state, key)
+
+    payload =
+      case File.read(path) do
+        {:ok, bytes} -> %{"key" => key, "found" => true, "bytes" => bytes}
+        {:error, :enoent} -> %{"key" => key, "found" => false, "bytes" => nil}
+        {:error, reason} -> raise File.Error, reason: reason, action: "read file", path: path
+      end
+
+    {state, payload}
+  end
+
+  defp memory_put(%Request{} = request, state) do
+    context = context_map(request.context)
+    key = memory_key!(context)
+    bytes = context_get(context, "bytes", context_get(context, "value", ""))
+    if not is_binary(bytes), do: raise(ArgumentError, "memory_put requires string bytes/value")
+
+    path = memory_path!(state, key)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, bytes)
+
+    {state, %{"key" => key, "bytes" => byte_size(bytes)}}
+  end
+
+  defp artifact_register(%Request{} = request, state) do
+    context = context_map(request.context)
+    path = context_get(context, "path") || raise ArgumentError, "artifact_register requires context.path"
+    kind = context_get(context, "kind", "artifact")
+
+    artifact = %{
+      "type" => "ARTIFACT_REGISTERED",
+      "request_id" => request.id,
+      "kind" => kind,
+      "path" => path,
+      "metadata" => context_get(context, "metadata", %{})
+    }
+
+    state = trace_event(state, artifact)
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, artifact}})
+
+    {state, Map.delete(artifact, "type")}
+  end
+
+  defp memory_key!(context) do
+    key = context_get(context, "key") || raise ArgumentError, "memory request requires context.key"
+
+    cond do
+      not is_binary(key) ->
+        raise ArgumentError, "memory key must be a string"
+
+      key == "" or String.contains?(key, ["..", "/", "\\"]) ->
+        raise ArgumentError, "memory key must be a project-local filename"
+
+      true ->
+        key
+    end
+  end
+
+  defp memory_path!(%{trace: %{dir: dir}, project_id: project_id}, key) do
+    safe_project = Regex.replace(~r/[^A-Za-z0-9_.-]/, project_id, "_")
+    base = Path.join([dir, "artifacts", "memory", safe_project])
+    path = Path.expand(Path.join(base, key))
+    base = Path.expand(base)
+
+    if String.starts_with?(path, base <> "/") or path == base do
+      path
+    else
+      raise ArgumentError, "memory key escapes project scope"
+    end
+  end
+
+  defp memory_path!(_state, _key), do: raise(ArgumentError, "memory methods require an open trace")
+
+  defp context_map(%{} = context), do: context
+  defp context_map(context) when is_binary(context), do: %{"text" => context}
+  defp context_map(_context), do: %{}
+
+  defp context_get(context, key, default \\ nil) do
+    Map.get(context, key, Map.get(context, String.to_atom(key), default))
   end
 
   defp trace_options(state, opts) do
@@ -446,7 +870,7 @@ defmodule Mitos.Session do
   defp encode_env(env) when is_map(env), do: encode_env(Map.to_list(env))
 
   # Inherit the small whitelist plus force a known-good TERM/COLORTERM so
-  # agents emit ANSI color (matches the webpty fix in src/web/webpty.zig).
+  # providers emit ANSI color consistently under mitos-term.
   defp default_env do
     base =
       for key <- @inherit_env_keys,

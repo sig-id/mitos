@@ -15,7 +15,6 @@ pub const sandbox = @import("sandbox/backend.zig");
 pub const terminal = @import("terminal/core.zig");
 pub const trace = @import("trace/mod.zig");
 pub const transport = @import("transport/root.zig");
-pub const web = @import("web/root.zig");
 pub const workspace = @import("workspace/worktree.zig");
 
 pub const terminal_ghostty = @import("terminal/ghostty.zig");

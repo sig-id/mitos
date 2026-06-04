@@ -2,7 +2,6 @@ const std = @import("std");
 const adapter_detection = @import("../adapters/detection.zig");
 const adapters = @import("../adapters/types.zig");
 const headless = @import("headless.zig");
-const pty_provider = @import("pty.zig");
 const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "claude" };
@@ -10,10 +9,8 @@ pub const print_adapter_id = adapters.AdapterId{ .value = "claude.print" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "claude.pty" };
 
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const pty_supported_transports = [_]transport.TransportName{.pty};
 const unavailable_warnings = [_][]const u8{"claude binary was not found on PATH"};
 const unsupported_warnings = [_][]const u8{"claude does not advertise --print stream-json support"};
-const no_pty_warnings = [_][]const u8{"claude does not advertise interactive PTY support"};
 
 pub fn initPrintAdapter() adapters.AgentAdapter {
     return .{
@@ -28,20 +25,6 @@ pub fn initPrintAdapter() adapters.AgentAdapter {
         },
         .detect = detectPrint,
         .start = startPrint,
-    };
-}
-
-pub fn initPtyAdapter() adapters.AgentAdapter {
-    return .{
-        .id = pty_adapter_id,
-        .provider = provider_id,
-        .capabilities = .{
-            .supports_interactive_pty = true,
-            .supports_streaming_events = true,
-            .supports_model_selection = true,
-        },
-        .detect = detectPty,
-        .start = startPty,
     };
 }
 
@@ -130,52 +113,6 @@ fn detectPrint(
     };
 }
 
-fn detectPty(
-    _: *adapters.AgentAdapter,
-    allocator: std.mem.Allocator,
-) anyerror!adapters.AdapterDetection {
-    if (!try adapter_detection.executableAvailable(allocator, "claude")) {
-        return .{
-            .available = false,
-            .supported_transports = &pty_supported_transports,
-            .warnings = &unavailable_warnings,
-        };
-    }
-
-    const supports_interactive = try adapter_detection.commandOutputContains(
-        allocator,
-        &.{ "claude", "--help" },
-        "--no-session-persistence",
-    );
-
-    if (!supports_interactive) {
-        return .{
-            .available = false,
-            .binary = "claude",
-            .auth_status = .unknown,
-            .supported_transports = &pty_supported_transports,
-            .warnings = &no_pty_warnings,
-        };
-    }
-
-    const version = adapter_detection.commandOutputTrimmedAlloc(
-        allocator,
-        &.{ "claude", "--version" },
-    ) catch null;
-
-    return .{
-        .available = true,
-        .binary = "claude",
-        .version = version,
-        .owns_version = version != null,
-        .auth_status = try adapter_detection.authStatusFromEnv(
-            allocator,
-            &.{"ANTHROPIC_API_KEY"},
-        ),
-        .supported_transports = &pty_supported_transports,
-    };
-}
-
 fn startPrint(
     self: *adapters.AgentAdapter,
     context: adapters.AdapterContext,
@@ -213,22 +150,6 @@ fn startPrint(
         .status = result.status(),
         .started_at_ms = context.started_at_ms,
     };
-}
-
-fn startPty(
-    self: *adapters.AgentAdapter,
-    context: adapters.AdapterContext,
-    task: adapters.Task,
-) anyerror!adapters.AdapterRun {
-    const cwd = context.workspace_host_path;
-    const command = try buildPtyCommand(context.allocator, task, cwd);
-    defer command.deinit(context.allocator);
-
-    return try pty_provider.runCommand(self, context, .{
-        .argv = command.argv,
-        .cwd = command.cwd,
-        .env = context.env,
-    });
 }
 
 test "claude print command construction is deterministic" {
@@ -305,12 +226,4 @@ test "claude pty command construction is deterministic" {
     try std.testing.expectEqualStrings("--", command.argv[1]);
     try std.testing.expectEqualStrings("Explain the code", command.argv[2]);
     try std.testing.expectEqualStrings("/workspace", command.cwd);
-}
-
-test "claude pty adapter advertises interactive support" {
-    var adapter = initPtyAdapter();
-
-    try std.testing.expectEqualStrings("claude.pty", adapter.id.value);
-    try std.testing.expect(adapter.capabilities.supportsTransport(.pty));
-    try std.testing.expect(!adapter.capabilities.supportsTransport(.stdio_json));
 }

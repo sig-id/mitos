@@ -5,7 +5,6 @@ pub const ProcessTerm = core.ProcessTerm;
 pub const Pty = core.Pty;
 pub const PtyError = core.PtyError;
 pub const PtySize = core.PtySize;
-pub const runner = @import("runner.zig");
 pub const unix = @import("unix.zig");
 pub const windows = @import("windows.zig");
 
