@@ -96,6 +96,8 @@ const State = struct {
     raw_spool_offset: u64 = 0,
     raw_ref_filter: PtyRawRefFilter = .{},
     prompt_filter: PromptEventFilter = .{},
+    title_filter: TitleEventFilter = .{},
+    terminal_output_filter: TerminalOutputFilter = .{},
 
     // Idle detection bookkeeping.
     idle_ms: i64 = default_idle_ms,
@@ -469,6 +471,8 @@ const State = struct {
         self.output_seq = 0;
         self.raw_ref_filter = .{};
         self.prompt_filter = .{};
+        self.title_filter = .{};
+        self.terminal_output_filter = .{};
 
         const axes = self.selected_transport.axes();
         try self.emitMap(.event, &.{
@@ -807,6 +811,7 @@ const State = struct {
         var session = self.session orelse return;
         const term_status = session.wait();
         self.session = null;
+        try self.emitTerminalOutputFromCurrentScreen();
         switch (term_status) {
             .exited => |code| try self.emitMap(.event, &.{
                 .{ "type", .{ .str = "PROCESS_EXITED" } },
@@ -847,6 +852,8 @@ const State = struct {
     }
 
     fn emitTitleEvent(self: *State, title: []const u8) LoopError!void {
+        if (!self.title_filter.shouldEmit(self.provider, title)) return;
+
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = "title" } },
             .{ "text", .{ .str = title } },
@@ -891,6 +898,8 @@ const State = struct {
         for (events) |event| {
             try self.emitPromptEvent(event);
         }
+
+        try self.emitTerminalOutputFromText(visible);
     }
 
     fn emitPromptsFromText(self: *State, text: []const u8) LoopError!void {
@@ -1004,6 +1013,34 @@ const State = struct {
             .{ "type", .{ .str = transport.TypedEventName.error_reported.wireName() } },
             .{ "kind", .{ .str = kind } },
             .{ "detail", .{ .str = detail } },
+        });
+    }
+
+    fn emitTerminalOutputFromCurrentScreen(self: *State) LoopError!void {
+        var t = &(self.terminal orelse return);
+        var core = t.asCore();
+        const visible = core.visible_text(&core, self.allocator) catch |err| {
+            try self.emitError("terminal_output", @errorName(err));
+            return;
+        };
+        defer self.allocator.free(visible);
+
+        try self.emitTerminalOutputFromText(visible);
+    }
+
+    fn emitTerminalOutputFromText(self: *State, rendered_text: []const u8) LoopError!void {
+        const output = terminalOutputTextAlloc(self.allocator, self.provider, rendered_text) catch return error.OutOfMemory;
+        defer self.allocator.free(output);
+        if (output.len == 0) return;
+
+        const redacted = redactPatternsAlloc(self.allocator, output, self.redaction_patterns) catch return error.OutOfMemory;
+        defer redacted.deinit(self.allocator);
+        if (!self.terminal_output_filter.shouldEmit(redacted.bytes)) return;
+
+        try self.emitMap(.event, &.{
+            .{ "type", .{ .str = transport.TypedEventName.terminal_output.wireName() } },
+            .{ "text", .{ .str = redacted.bytes } },
+            .{ "provider", .{ .str = self.provider.value } },
         });
     }
 
@@ -1131,6 +1168,40 @@ const PromptEventFilter = struct {
     }
 };
 
+const TitleEventFilter = struct {
+    last_signature: u64 = 0,
+    last_signature_valid: bool = false,
+
+    fn shouldEmit(
+        self: *TitleEventFilter,
+        provider: adapters.ProviderId,
+        title: []const u8,
+    ) bool {
+        if (usesProviderTuiChrome(provider)) return false;
+
+        const signature = titleSignature(title) orelse return false;
+        if (self.last_signature_valid and self.last_signature == signature) return false;
+
+        self.last_signature = signature;
+        self.last_signature_valid = true;
+        return true;
+    }
+};
+
+const TerminalOutputFilter = struct {
+    last_signature: u64 = 0,
+    last_signature_valid: bool = false,
+
+    fn shouldEmit(self: *TerminalOutputFilter, text: []const u8) bool {
+        const signature = semanticTextSignature(text) orelse return false;
+        if (self.last_signature_valid and self.last_signature == signature) return false;
+
+        self.last_signature = signature;
+        self.last_signature_valid = true;
+        return true;
+    }
+};
+
 fn rawSemanticSignature(provider: adapters.ProviderId, bytes: []const u8) ?u64 {
     if (!rawRefEligibleProvider(provider)) return null;
 
@@ -1178,6 +1249,218 @@ fn rawSemanticSignature(provider: adapters.ProviderId, bytes: []const u8) ?u64 {
 
     const min_strong: usize = if (usesProviderTuiChrome(provider)) 3 else 1;
     if (strong_chars < min_strong or semantic_chars < min_strong) return null;
+    return hash;
+}
+
+fn terminalOutputTextAlloc(
+    allocator: std.mem.Allocator,
+    provider: adapters.ProviderId,
+    rendered_text: []const u8,
+) ![]u8 {
+    if (!usesProviderTuiChrome(provider)) return allocator.dupe(u8, "");
+
+    var fallback: std.ArrayList(u8) = .empty;
+    defer fallback.deinit(allocator);
+    var bullets: std.ArrayList(u8) = .empty;
+    defer bullets.deinit(allocator);
+
+    var lines = std.mem.splitScalar(u8, rendered_text, '\n');
+    while (lines.next()) |raw_line| {
+        const clean = try cleanTerminalLineAlloc(allocator, raw_line);
+        defer allocator.free(clean);
+        if (clean.len == 0 or isTerminalChromeLine(clean)) continue;
+
+        if (terminalBulletText(clean)) |bullet_text| {
+            const trimmed = stripTrailingOrdinal(std.mem.trim(u8, bullet_text, " \t\r\n"));
+            if (trimmed.len > 0 and !isTerminalChromeLine(trimmed)) {
+                try appendOutputLine(allocator, &bullets, trimmed);
+            }
+        }
+
+        try appendOutputLine(allocator, &fallback, clean);
+    }
+
+    if (bullets.items.len > 0) return bullets.toOwnedSlice(allocator);
+    return fallback.toOwnedSlice(allocator);
+}
+
+fn cleanTerminalLineAlloc(allocator: std.mem.Allocator, raw_line: []const u8) ![]u8 {
+    const status_index = std.mem.indexOf(u8, raw_line, "›") orelse raw_line.len;
+    const line = raw_line[0..status_index];
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    var pending_space = false;
+    var i: usize = 0;
+
+    while (i < line.len) {
+        const b = line[i];
+        if (b < 0x20 or b == 0x7f) {
+            i += 1;
+            continue;
+        }
+        if (b < 0x80) {
+            if (std.ascii.isWhitespace(b)) {
+                pending_space = out.items.len > 0;
+            } else {
+                if (pending_space) try out.append(allocator, ' ');
+                pending_space = false;
+                try out.append(allocator, b);
+            }
+            i += 1;
+            continue;
+        }
+
+        const width = utf8Width(line[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        const codepoint = std.unicode.utf8Decode(line[i .. i + width]) catch {
+            i += 1;
+            continue;
+        };
+        if (isTerminalFrameCodepoint(codepoint)) {
+            pending_space = out.items.len > 0;
+        } else {
+            if (pending_space) try out.append(allocator, ' ');
+            pending_space = false;
+            try out.appendSlice(allocator, line[i .. i + width]);
+        }
+        i += width;
+    }
+
+    const trimmed = std.mem.trim(u8, out.items, " \t\r\n");
+    return try allocator.dupe(u8, trimmed);
+}
+
+fn appendOutputLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), line: []const u8) !void {
+    if (out.items.len > 0) try out.append(allocator, '\n');
+    try out.appendSlice(allocator, line);
+}
+
+fn terminalBulletText(line: []const u8) ?[]const u8 {
+    const bullet_index = std.mem.indexOf(u8, line, "•") orelse return null;
+    var start = bullet_index + "•".len;
+    while (start < line.len and (line[start] == ' ' or line[start] == '\t')) : (start += 1) {}
+    if (start >= line.len) return null;
+    return line[start..];
+}
+
+fn stripTrailingOrdinal(text: []const u8) []const u8 {
+    var end = text.len;
+    while (end > 0 and std.ascii.isWhitespace(text[end - 1])) : (end -= 1) {}
+    var digits_start = end;
+    while (digits_start > 0 and std.ascii.isDigit(text[digits_start - 1])) : (digits_start -= 1) {}
+    if (digits_start == end) return text[0..end];
+    if (digits_start == 0 or !std.ascii.isWhitespace(text[digits_start - 1])) return text[0..end];
+    return std.mem.trimRight(u8, text[0 .. digits_start - 1], " \t\r\n");
+}
+
+fn isTerminalChromeLine(line: []const u8) bool {
+    if (!containsAlnum(line)) return true;
+    return containsAny(line, &.{
+        "OpenAI Codex",
+        "model:",
+        "directory:",
+        "Tip:",
+        "Context ",
+        "% used",
+        "gpt-",
+        "/model to change",
+        "esc to interrupt",
+        "Booting MCP",
+        "MCP startup",
+        "Working",
+        "Thinking",
+        "loading",
+        "connected",
+        "transport:",
+        "Mitos Runtime",
+        "bubblewrap",
+        "sandbox prerequisites",
+    });
+}
+
+fn containsAlnum(text: []const u8) bool {
+    for (text) |byte| {
+        if (byte < 0x80 and std.ascii.isAlphanumeric(byte)) return true;
+    }
+    return false;
+}
+
+fn containsAny(text: []const u8, needles: []const []const u8) bool {
+    for (needles) |needle| {
+        if (std.mem.indexOf(u8, text, needle) != null) return true;
+    }
+    return false;
+}
+
+fn semanticTextSignature(text: []const u8) ?u64 {
+    var hash = fnv64_offset;
+    var strong_chars: usize = 0;
+    for (text) |byte| {
+        if (byte < 0x80 and std.ascii.isWhitespace(byte)) {
+            hashByte(&hash, ' ');
+        } else {
+            hashByte(&hash, byte);
+            if (byte < 0x80 and std.ascii.isAlphanumeric(byte)) strong_chars += 1;
+            if (byte >= 0x80) strong_chars += 1;
+        }
+    }
+    if (strong_chars == 0) return null;
+    return hash;
+}
+
+fn titleSignature(title: []const u8) ?u64 {
+    var hash = fnv64_offset;
+    var strong_chars: usize = 0;
+    var i: usize = 0;
+    var seen_strong = false;
+
+    while (i < title.len) {
+        const b = title[i];
+        if (b == 0x1b) {
+            i += skipEscape(title[i..]);
+            continue;
+        }
+        if (b < 0x20 or b == 0x7f) {
+            i += 1;
+            continue;
+        }
+        if (b < 0x80) {
+            if (!seen_strong and isLeadingTitleNoise(b)) {
+                i += 1;
+                continue;
+            }
+            if (isSemanticAscii(b)) {
+                hashByte(&hash, std.ascii.toLower(b));
+                if (std.ascii.isAlphanumeric(b)) {
+                    strong_chars += 1;
+                    seen_strong = true;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        const width = utf8Width(title[i..]) orelse {
+            i += 1;
+            continue;
+        };
+        const codepoint = std.unicode.utf8Decode(title[i .. i + width]) catch {
+            i += 1;
+            continue;
+        };
+        if (!isDecorativeCodepoint(codepoint)) {
+            hashByte(&hash, 0xff);
+            for (title[i .. i + width]) |part| hashByte(&hash, part);
+            strong_chars += 1;
+            seen_strong = true;
+        }
+        i += width;
+    }
+
+    if (strong_chars == 0) return null;
     return hash;
 }
 
@@ -1237,6 +1520,13 @@ fn isSemanticAscii(b: u8) bool {
     };
 }
 
+fn isLeadingTitleNoise(b: u8) bool {
+    return switch (b) {
+        ' ', '\t', ':', '.', '-', '_', '|', '/', '\\' => true,
+        else => false,
+    };
+}
+
 fn utf8Width(bytes: []const u8) ?usize {
     if (bytes.len == 0) return null;
     const first = bytes[0];
@@ -1260,6 +1550,11 @@ fn isDecorativeCodepoint(codepoint: u21) bool {
         codepoint == 0x00b7 or // middle dot
         codepoint == 0x25cf or // black circle
         codepoint == 0x25cb; // white circle
+}
+
+fn isTerminalFrameCodepoint(codepoint: u21) bool {
+    return (codepoint >= 0x2500 and codepoint <= 0x257f) or // box drawing
+        (codepoint >= 0x2580 and codepoint <= 0x259f); // block elements
 }
 
 fn usesProviderTuiChrome(provider: adapters.ProviderId) bool {
@@ -1723,6 +2018,60 @@ test "prompt event filter suppresses consecutive duplicate prompts" {
     try std.testing.expect(!filter.shouldEmit(same));
     try std.testing.expect(filter.shouldEmit(changed));
     try std.testing.expect(!filter.shouldEmit(idle));
+}
+
+test "title event filter suppresses provider tui title spam" {
+    const codex = adapters.ProviderId{ .value = "codex" };
+    const generic = adapters.ProviderId{ .value = "generic-pty" };
+
+    var filter: TitleEventFilter = .{};
+    try std.testing.expect(!filter.shouldEmit(codex, "mitos"));
+    try std.testing.expect(!filter.shouldEmit(codex, ": mitos"));
+    try std.testing.expect(filter.shouldEmit(generic, "mitos"));
+    try std.testing.expect(!filter.shouldEmit(generic, ": mitos"));
+    try std.testing.expect(!filter.shouldEmit(generic, "::. mitos"));
+    try std.testing.expect(filter.shouldEmit(generic, "mitos run"));
+}
+
+test "terminal output extraction keeps codex answer from rendered status line" {
+    const output = try terminalOutputTextAlloc(
+        std.testing.allocator,
+        .{ .value = "codex" },
+        "MM • Hello. 6 › Explain this codebase gpt-5.5 xhigh · /media/data/proj/mitos/beam · Context 6% used",
+    );
+    defer std.testing.allocator.free(output);
+
+    try std.testing.expectEqualStrings("Hello.", output);
+}
+
+test "terminal output extraction suppresses provider progress chrome" {
+    const output = try terminalOutputTextAlloc(
+        std.testing.allocator,
+        .{ .value = "codex" },
+        "• Working 5 Working\nBooting MCP server: codex_apps(0s • esc to interrupt)\n",
+    );
+    defer std.testing.allocator.free(output);
+
+    try std.testing.expectEqualStrings("", output);
+}
+
+test "terminal output extraction is disabled for generic raw sessions" {
+    const output = try terminalOutputTextAlloc(
+        std.testing.allocator,
+        .{ .value = "generic-pty" },
+        "mitos OK\n",
+    );
+    defer std.testing.allocator.free(output);
+
+    try std.testing.expectEqualStrings("", output);
+}
+
+test "terminal output filter suppresses duplicate semantic text" {
+    var filter: TerminalOutputFilter = .{};
+
+    try std.testing.expect(filter.shouldEmit("Hello."));
+    try std.testing.expect(!filter.shouldEmit("Hello."));
+    try std.testing.expect(filter.shouldEmit("Different."));
 }
 
 test "parseLaunchSpec accepts provider task and transport order" {

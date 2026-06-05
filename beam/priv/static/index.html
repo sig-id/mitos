@@ -871,7 +871,7 @@
       if (type === "ERROR") return "error";
       if (type === "ACTION_REQUESTED" || type === "PROMPT_DETECTED") return "action";
       if (type === "RAW_REF") return "raw";
-      if (type === "STRUCTURED_OUTPUT" || type === "FINAL_OUTPUT" || type === "SNAPSHOT") return "output";
+      if (type === "STRUCTURED_OUTPUT" || type === "FINAL_OUTPUT" || type === "SNAPSHOT" || type === "TERMINAL_OUTPUT") return "output";
       return "run";
     }
 
@@ -893,6 +893,8 @@
         case "STRUCTURED_OUTPUT":
           return `${event.kind || event.stream || "structured"} ${compactJson(event.bytes || event.text || "")}`;
         case "FINAL_OUTPUT":
+          return event.text || "";
+        case "TERMINAL_OUTPUT":
           return event.text || "";
         case "SNAPSHOT":
           return `seq=${event.seq || 0} ${event.cols || "?"}x${event.rows || "?"}`;
