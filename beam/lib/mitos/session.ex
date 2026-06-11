@@ -22,6 +22,7 @@ defmodule Mitos.Session do
       {:mitos, session_id, {:raw, bytes}}        # opaque PTY bytes
       {:mitos, session_id, {:event, %{...}}}     # typed engine events
       {:mitos, session_id, {:prompt, event}}     # semantic prompt events
+      {:mitos, session_id, {:agent_log, %{...}}} # provider session-log turns
       {:mitos, session_id, {:snapshot, %{...}}}  # on-demand grid snapshot
 
   New subscribers get a `{:mitos, session_id, {:replay, bytes}}` on attach to
@@ -85,6 +86,26 @@ defmodule Mitos.Session do
 
   def write_stdin(server, bytes) when is_binary(bytes),
     do: GenServer.cast(server, {:write_stdin, bytes})
+
+  @steer_interactions [:approve, :deny, :answer, :prompt, :interrupt, :select_option]
+
+  @doc """
+  Steer the interactive agent without knowing its keymap: the sidecar
+  translates the interaction into the byte sequence the provider's TUI
+  expects. `:answer`/`:prompt` take `text:`, `:select_option` takes `option:`.
+
+      Mitos.Session.steer(pid, :approve)
+      Mitos.Session.steer(pid, :prompt, text: "now run the tests")
+  """
+  def steer(server, interaction, opts \\ [])
+      when interaction in @steer_interactions and is_list(opts),
+      do: GenServer.cast(server, {:steer, interaction, opts})
+
+  @doc "Reply to a question the agent asked through its input box."
+  def answer(server, text) when is_binary(text), do: steer(server, :answer, text: text)
+
+  @doc "Send a new instruction to the agent's input box."
+  def prompt(server, text) when is_binary(text), do: steer(server, :prompt, text: text)
 
   def resize(server, cols, rows) when is_integer(cols) and is_integer(rows),
     do: GenServer.cast(server, {:resize, cols, rows})
@@ -237,6 +258,11 @@ defmodule Mitos.Session do
     {:noreply, state}
   end
 
+  def handle_cast({:steer, interaction, opts}, state) do
+    send_control(state.port, Protocol.steer(interaction, opts))
+    {:noreply, state}
+  end
+
   def handle_cast({:resize, cols, rows}, state) do
     send_control(state.port, Protocol.resize(cols, rows))
     {:noreply, %{state | cols: cols, rows: rows}}
@@ -328,6 +354,17 @@ defmodule Mitos.Session do
       Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:prompt, prompt}})
     end
 
+    {:noreply, state}
+  end
+
+  # Ground-truth progress extracted from the provider's own session log
+  # (e.g. claude's JSONL transcript). Broadcast on a dedicated channel as
+  # well, so brains can follow agent turns without filtering the event
+  # firehose or parsing terminal output.
+  defp handle_event(%{"type" => "AGENT_LOG"} = event, state) do
+    state = trace_event(state, event)
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:agent_log, event}})
     {:noreply, state}
   end
 

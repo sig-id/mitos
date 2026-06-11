@@ -1,7 +1,8 @@
 # PRODUCT.md — Mitos: AI-Native Agent Operating System
 
-Status: draft v0.2
-Date: 2026-06-04
+Status: draft v0.3
+Date: 2026-06-11 (v0.3: first commercial application — the Gentix facilitator,
+§2.2, §5.5; see `07_GENTIX_FACILITATOR.md`)
 Name: **mitos** (earlier working name: "Agent Terminal Runtime")
 
 What it is: **an AI-native agent operating system** — a deterministic runtime
@@ -64,6 +65,21 @@ At a product level, mitos is six cooperating layers (full architecture in
 `libghostty` gives mitos a strong terminal codec, but the durable value is the
 orchestration, sandboxing, approval policy, authority plane, tracing, and
 transport abstraction around it.
+
+### 2.2 First commercial application: the Gentix facilitator
+
+The first hosted product built on this runtime is the **Gentix facilitator**
+(`07_GENTIX_FACILITATOR.md`): a service that packages a seller's process
+(skills, pipelines, private data) as a paid, metered endpoint, **executed by a
+full agent harness inside a mitos sandbox** — "Pickaxe for agent harnesses":
+it sells completed agent jobs, not prompt-wrapped chat.
+
+This is why the runtime's shape matters commercially: autonomous harness
+execution of an untrusted seller payload against a paying stranger's input
+requires the sandbox (Nucleus), the policy engine (seller-set limits per
+call), and the evidence pipeline (the buyer's proof page). The facilitator
+does not change mitos's positioning as an AI-native agent operating system;
+it is the application that monetizes it.
 
 ---
 
@@ -154,6 +170,14 @@ transport/provider abstraction, secrets and network controls.
 Wants to run agents on issues, PRs, docs, and maintenance while preserving a
 decision trace. Value: repeatable runs, shareable sanitized traces, Git-native
 artifacts, agent-generated patch review.
+
+### 5.5 Capability seller (via the Gentix facilitator)
+Has a monetizable agentic process — skill files, a structured pipeline, a
+private dataset — and no infrastructure to sell metered access to it. Reaches
+mitos through the facilitator (`07_GENTIX_FACILITATOR.md`), not the CLI.
+Value: their recipe stays server-side in a sandboxed harness workload; buyers
+pay per completed job and receive artifacts plus a proof page; policy caps
+(token budget, wall-clock, action set) bound their per-call COGS.
 
 ---
 
@@ -661,6 +685,9 @@ image.
 - `03_NUCLEUS_INTEGRATION.md` — sandbox launch/event (enforcement) contract.
 - `04_IMPLEMENTATION_PLAN.md` — original Zig workstreams.
 - `05_LAYERING.md` — the orchestrator ↔ engine seam, policy tiers, control protocol.
+- `07_GENTIX_FACILITATOR.md` — the hosted capability service built on mitos
+  ("Pickaxe for agent harnesses"): positioning, execution/delivery model,
+  revenue model, gap analysis.
 - Ghostty: https://github.com/ghostty-org/ghostty · `libghostty`:
   https://ghostty.org/docs/about · VT docs: https://ghostty.org/docs/vt
 - Ghostling minimal `libghostty` terminal:

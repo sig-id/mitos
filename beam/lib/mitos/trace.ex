@@ -26,10 +26,21 @@ defmodule Mitos.Trace do
     test_results.jsonl
   )
 
+  @doc """
+  Base directory under which `.runs/` lives. Resolution order: app config
+  `:trace_base_dir`, `MITOS_TRACE_DIR`, then the current working directory.
+  Shared by the trace writer and the read side (`Mitos.Runs`).
+  """
+  def base_dir do
+    Application.get_env(:mitos, :trace_base_dir) ||
+      System.get_env("MITOS_TRACE_DIR") ||
+      File.cwd!()
+  end
+
   @doc "Open or initialize a trace directory for a run."
   def open!(opts) do
     run_id = Keyword.fetch!(opts, :run_id)
-    base_dir = Keyword.get_lazy(opts, :base_dir, &default_base_dir/0)
+    base_dir = Keyword.get_lazy(opts, :base_dir, &base_dir/0)
     dir = Path.join([base_dir, ".runs", run_id])
 
     File.mkdir_p!(dir)
@@ -107,12 +118,6 @@ defmodule Mitos.Trace do
       )
 
       trace
-  end
-
-  defp default_base_dir do
-    Application.get_env(:mitos, :trace_base_dir) ||
-      System.get_env("MITOS_TRACE_DIR") ||
-      File.cwd!()
   end
 
   defp write_manifest!(dir, opts) do

@@ -82,6 +82,60 @@ defmodule Mitos.SessionTest do
     refute events =~ "mitos OK"
   end
 
+  test "steers a pty session with semantic interactions", %{binary: binary} do
+    session_id = "steer-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("steer-trace")
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    Mitos.PubSub.subscribe(session_id)
+
+    {:ok, %{pid: pid}} =
+      Mitos.Orchestrator.start_session(
+        session_id: session_id,
+        sidecar_path: binary,
+        trace_base_dir: trace_base_dir,
+        # A one-line read/echo loop body: steering a :prompt through the
+        # generic keymap must arrive as "hello\r" on the PTY.
+        argv: ["/bin/sh", "-c", "read line; printf 'got %s\\n' \"$line\""],
+        cols: 80,
+        rows: 24,
+        idle_ms: 50
+      )
+
+    on_exit(fn ->
+      try do
+        Mitos.Orchestrator.stop_session(session_id)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    assert_receive {:mitos, ^session_id, {:event, %{"type" => "opened"}}}, 5_000
+
+    Mitos.Session.steer(pid, :prompt, text: "hello")
+
+    assert_receive {:mitos, ^session_id,
+                    {:event, %{"type" => "STEER_SENT", "interaction" => "prompt"}}},
+                   5_000
+
+    assert collect_raw_until(session_id, "", "got hello", 5_000) =~ "got hello"
+  end
+
+  defp collect_raw_until(session_id, acc, needle, deadline_ms) do
+    if acc =~ needle do
+      acc
+    else
+      receive do
+        {:mitos, ^session_id, {:raw, bytes}} ->
+          collect_raw_until(session_id, acc <> bytes, needle, deadline_ms)
+
+        {:mitos, ^session_id, _other} ->
+          collect_raw_until(session_id, acc, needle, deadline_ms)
+      after
+        deadline_ms -> acc
+      end
+    end
+  end
+
   defp assert_eventually(deadline_ms, fun) do
     deadline = System.monotonic_time(:millisecond) + deadline_ms
 

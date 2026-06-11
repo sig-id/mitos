@@ -94,6 +94,25 @@ defmodule Mitos.Sidecar.ProtocolTest do
       assert decoded["launch_spec"]["authority"]["token"] == "tok"
     end
 
+    test "steer carries semantic interactions, never raw key bytes" do
+      <<0x10, approve::binary>> =
+        IO.iodata_to_binary(Protocol.encode_control(Protocol.steer(:approve)))
+
+      assert %{"cmd" => "steer", "interaction" => "approve"} = Msgpax.unpack!(approve)
+
+      <<0x10, answer::binary>> =
+        IO.iodata_to_binary(Protocol.encode_control(Protocol.steer(:answer, text: "use port 8080")))
+
+      assert %{"cmd" => "steer", "interaction" => "answer", "text" => "use port 8080"} =
+               Msgpax.unpack!(answer)
+
+      <<0x10, select::binary>> =
+        IO.iodata_to_binary(Protocol.encode_control(Protocol.steer(:select_option, option: 2)))
+
+      assert %{"cmd" => "steer", "interaction" => "select_option", "option" => 2} =
+               Msgpax.unpack!(select)
+    end
+
     test "authorize and deny use control protocol vocabulary" do
       encoded_authorize = Protocol.encode_control(Protocol.authorize("request-1", "tok", origin: :terminal_scrape))
       <<0x10, authorize_body::binary>> = IO.iodata_to_binary(encoded_authorize)

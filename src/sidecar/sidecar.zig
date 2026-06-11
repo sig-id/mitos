@@ -15,8 +15,10 @@ const pty_core = @import("../pty/core.zig");
 const pty_unix = @import("../pty/unix.zig");
 const adapters = @import("../adapters/types.zig");
 const prompt = @import("../prompt/root.zig");
+const claude_log = @import("../providers/claude_log.zig");
 const headless = @import("../providers/headless.zig");
 const provider_launch = @import("../providers/launch.zig");
+const steer = @import("../steer/root.zig");
 const terminal = @import("../terminal/core.zig");
 const ghostty = @import("../terminal/ghostty.zig");
 const transport = @import("../transport/root.zig");
@@ -30,6 +32,11 @@ const pty_read_buffer_bytes: usize = 32 * 1024;
 /// Default idle threshold (ms). After this many milliseconds of PTY silence,
 /// we emit one `idle` EVENT. Configurable via the `open` command.
 const default_idle_ms: i64 = 250;
+
+/// How often the agent session log (claude's JSONL transcript) is polled
+/// while a watcher is active. The log is the ground-truth progress channel
+/// for providers that write one; the PTY remains display/control only.
+const agent_log_poll_ms: i64 = 200;
 
 const protocol_version: u32 = transport.protocol_version;
 
@@ -99,6 +106,18 @@ const State = struct {
     title_filter: TitleEventFilter = .{},
     terminal_output_filter: TerminalOutputFilter = .{},
 
+    // Steering: semantic interactions (approve/deny/answer/prompt/...) are
+    // translated to provider-specific key sequences and written to the PTY.
+    steering: steer.SteeringAdapter = steer.keymaps.generic,
+
+    // Ground-truth progress extraction from the provider's own session log
+    // (claude only for now). `agent_final_text` tracks the latest assistant
+    // text so PROCESS_EXITED can be paired with a log-derived FINAL_OUTPUT
+    // instead of a screen scrape.
+    agent_log: ?claude_log.SessionLogWatcher = null,
+    agent_log_last_poll_ms: i64 = 0,
+    agent_final_text: ?[]u8 = null,
+
     // Idle detection bookkeeping.
     idle_ms: i64 = default_idle_ms,
     last_output_ms: i64 = 0,
@@ -125,6 +144,10 @@ const State = struct {
         }
         if (self.terminal) |*t| t.deinit();
         self.terminal = null;
+        if (self.agent_log) |*watcher| watcher.deinit();
+        self.agent_log = null;
+        if (self.agent_final_text) |text| self.allocator.free(text);
+        self.agent_final_text = null;
         if (self.raw_spool_file) |file| file.close();
         self.raw_spool_file = null;
         if (self.raw_spool_path) |path| self.allocator.free(path);
@@ -170,19 +193,27 @@ const State = struct {
             }
 
             try self.maybeEmitIdle();
+            try self.pumpAgentLog(false);
         }
     }
 
     fn computePollTimeoutMs(self: *State) i32 {
         if (self.session == null) return -1; // block until stdin speaks
+        const now = std.time.milliTimestamp();
+
+        var timeout: i64 = -1;
         if (self.idle_pending) {
-            const now = std.time.milliTimestamp();
-            const elapsed = now - self.last_output_ms;
-            const remaining = self.idle_ms - elapsed;
-            if (remaining <= 0) return 0;
-            return @intCast(@min(remaining, std.math.maxInt(i32)));
+            timeout = @max(0, self.idle_ms - (now - self.last_output_ms));
         }
-        return -1;
+        // An active session-log watcher needs periodic wakeups even when the
+        // PTY is silent: the agent writes its transcript out-of-band.
+        if (self.agent_log != null) {
+            const until_log_poll = @max(0, self.agent_log_last_poll_ms + agent_log_poll_ms - now);
+            timeout = if (timeout < 0) until_log_poll else @min(timeout, until_log_poll);
+        }
+
+        if (timeout < 0) return -1;
+        return @intCast(@min(timeout, std.math.maxInt(i32)));
     }
 
     fn maybeEmitIdle(self: *State) LoopError!void {
@@ -335,6 +366,7 @@ const State = struct {
         if (std.ascii.eqlIgnoreCase(cmd, "signal")) return self.handleSignal(value);
         if (std.ascii.eqlIgnoreCase(cmd, "authorize")) return self.handleAuthorize(value);
         if (std.ascii.eqlIgnoreCase(cmd, "deny")) return self.handleDeny(value);
+        if (std.ascii.eqlIgnoreCase(cmd, "steer")) return self.handleSteer(value);
         if (std.mem.eql(u8, cmd, "SNAPSHOT_REQUEST") or std.mem.eql(u8, cmd, "snapshot")) return self.handleSnapshot(value);
         if (std.ascii.eqlIgnoreCase(cmd, "cancel")) return self.handleCancel();
         if (std.mem.eql(u8, cmd, "encode_key")) return self.handleEncodeKey(value, arena);
@@ -473,6 +505,13 @@ const State = struct {
         self.prompt_filter = .{};
         self.title_filter = .{};
         self.terminal_output_filter = .{};
+        self.steering = steer.forProvider(self.provider);
+        self.agent_log_last_poll_ms = 0;
+        if (self.agent_final_text) |old| {
+            self.allocator.free(old);
+            self.agent_final_text = null;
+        }
+        self.startAgentLogWatcher(cwd_opt, env_list);
 
         const axes = self.selected_transport.axes();
         try self.emitMap(.event, &.{
@@ -502,7 +541,7 @@ const State = struct {
 
         if (initial_input) |input| {
             if (input.len > 0) {
-                _ = self.session.?.pty.write(input) catch |err| {
+                self.session.?.pty.writeAll(input) catch |err| {
                     try self.emitError("pty_write", @errorName(err));
                     return;
                 };
@@ -623,7 +662,7 @@ const State = struct {
                 return;
             },
         };
-        _ = session.pty.write(bytes) catch |err| {
+        session.pty.writeAll(bytes) catch |err| {
             try self.emitError("pty_write", @errorName(err));
         };
     }
@@ -710,6 +749,132 @@ const State = struct {
             .{ "origin", .{ .str = origin } },
             .{ "decision", .{ .str = "deny" } },
             .{ "reason", .{ .str = reason } },
+        });
+    }
+
+    /// `steer` realizes a semantic interaction against the agent's TUI:
+    /// {cmd: "steer", interaction: "approve"|"deny"|"answer"|"prompt"|
+    ///  "interrupt"|"select_option", text?: str, option?: uint}
+    /// The provider keymap chosen at `open` decides the byte sequence, so the
+    /// brain never has to know which keys a given provider's dialogs expect.
+    fn handleSteer(self: *State, value: msgpack.Value) LoopError!void {
+        var session = &(self.session orelse {
+            try self.emitError("state", "no session");
+            return;
+        });
+        const name = stringField(value, "interaction") orelse {
+            try self.emitError("protocol", "steer: missing interaction");
+            return;
+        };
+        const text = stringField(value, "text") orelse "";
+        const option: ?u64 = if (value.mapGet("option")) |v| v.asUint() else null;
+
+        const interaction = steer.parseInteraction(name, text, option) orelse {
+            try self.emitError("steer", "unknown interaction");
+            return;
+        };
+        const bytes = self.steering.encode(interaction, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                try self.emitError("steer", @errorName(err));
+                return;
+            },
+        };
+        defer self.allocator.free(bytes);
+
+        session.pty.writeAll(bytes) catch |err| {
+            try self.emitError("pty_write", @errorName(err));
+            return;
+        };
+
+        try self.emitMap(.event, &.{
+            .{ "type", .{ .str = "STEER_SENT" } },
+            .{ "interaction", .{ .str = name } },
+            .{ "provider", .{ .str = self.provider.value } },
+            .{ "bytes", .{ .uint = bytes.len } },
+        });
+    }
+
+    fn startAgentLogWatcher(self: *State, cwd_opt: ?[]const u8, env: []const []const u8) void {
+        if (!std.mem.eql(u8, self.provider.value, "claude")) return;
+        if (self.agent_log != null) return;
+
+        var config_buf: ?[]u8 = null;
+        defer if (config_buf) |buf| self.allocator.free(buf);
+        const config_dir = envValue(env, "CLAUDE_CONFIG_DIR") orelse blk: {
+            const home = envValue(env, "HOME") orelse {
+                self.emitError("agent_log", "no CLAUDE_CONFIG_DIR or HOME in session env") catch {};
+                return;
+            };
+            config_buf = std.fs.path.join(
+                self.allocator,
+                &.{ home, claude_log.default_config_dir_name },
+            ) catch return;
+            break :blk config_buf.?;
+        };
+
+        // Claude keys its project log dir by the agent's absolute cwd.
+        const cwd = cwd_opt orelse ".";
+        const abs_cwd = std.fs.cwd().realpathAlloc(self.allocator, cwd) catch null;
+        defer if (abs_cwd) |path| self.allocator.free(path);
+
+        self.agent_log = claude_log.SessionLogWatcher.init(
+            self.allocator,
+            config_dir,
+            abs_cwd orelse cwd,
+            std.time.timestamp(),
+        ) catch |err| {
+            self.emitError("agent_log", @errorName(err)) catch {};
+            return;
+        };
+
+        self.emitMap(.event, &.{
+            .{ "type", .{ .str = "AGENT_LOG_WATCH" } },
+            .{ "source", .{ .str = "claude_session_log" } },
+            .{ "dir", .{ .str = self.agent_log.?.project_dir } },
+        }) catch {};
+    }
+
+    /// Tail the agent's session log and forward parsed turns as AGENT_LOG
+    /// events. This — not the rendered screen — is the progress channel for
+    /// providers that write a transcript.
+    fn pumpAgentLog(self: *State, force: bool) LoopError!void {
+        if (self.agent_log == null) return;
+        const now = std.time.milliTimestamp();
+        if (!force and now - self.agent_log_last_poll_ms < agent_log_poll_ms) return;
+        self.agent_log_last_poll_ms = now;
+
+        const watcher = &self.agent_log.?;
+        const events = watcher.poll(self.allocator) catch |err| {
+            self.emitError("agent_log", @errorName(err)) catch {};
+            return;
+        };
+        defer claude_log.freeEvents(self.allocator, events);
+
+        for (events) |event| {
+            try self.emitAgentLogEvent(event);
+            if (event.kind == .assistant_text) {
+                const copy = self.allocator.dupe(u8, event.text) catch return error.OutOfMemory;
+                if (self.agent_final_text) |old| self.allocator.free(old);
+                self.agent_final_text = copy;
+            }
+        }
+    }
+
+    fn emitAgentLogEvent(self: *State, event: claude_log.LogEvent) LoopError!void {
+        const path = if (self.agent_log) |*watcher|
+            (watcher.sessionPath() orelse "")
+        else
+            "";
+
+        try self.emitMap(.event, &.{
+            .{ "type", .{ .str = "AGENT_LOG" } },
+            .{ "source", .{ .str = "claude_session_log" } },
+            .{ "kind", .{ .str = @tagName(event.kind) } },
+            .{ "tool", .{ .str = event.tool_name orelse "" } },
+            .{ "text", .{ .str = event.text } },
+            .{ "is_error", .{ .boolean = event.is_error } },
+            .{ "path", .{ .str = path } },
         });
     }
 
@@ -812,6 +977,18 @@ const State = struct {
         const term_status = session.wait();
         self.session = null;
         try self.emitTerminalOutputFromCurrentScreen();
+        // Drain the session log one last time so the agent's actual final
+        // message (from its own transcript) wins over any screen scrape.
+        self.pumpAgentLog(true) catch {};
+        if (self.agent_final_text) |text| {
+            if (text.len > 0) {
+                try self.emitMap(.event, &.{
+                    .{ "type", .{ .str = "FINAL_OUTPUT" } },
+                    .{ "text", .{ .str = text } },
+                    .{ "origin", .{ .str = "agent_log" } },
+                });
+            }
+        }
         switch (term_status) {
             .exited => |code| try self.emitMap(.event, &.{
                 .{ "type", .{ .str = "PROCESS_EXITED" } },
@@ -1908,6 +2085,18 @@ fn stringField(value: msgpack.Value, key: []const u8) ?[]const u8 {
     return if (field == .str) field.str else null;
 }
 
+fn envValue(env: []const []const u8, key: []const u8) ?[]const u8 {
+    for (env) |entry| {
+        if (entry.len > key.len and
+            entry[key.len] == '=' and
+            std.mem.startsWith(u8, entry, key))
+        {
+            return entry[key.len + 1 ..];
+        }
+    }
+    return null;
+}
+
 fn matchesAnyPattern(text: []const u8, patterns: []const []const u8) bool {
     for (patterns) |pattern| {
         if (pattern.len == 0) continue;
@@ -2116,6 +2305,13 @@ test "parseLaunchSpec accepts provider task and transport order" {
     try std.testing.expectEqualStrings("/tmp/authority.sock", spec.authority.socket_path.?);
     try std.testing.expectEqualStrings("tok", spec.authority.token.?);
     try std.testing.expect(matchesAnyPattern("Run tests? [y/N]", spec.policy.tier2_fast_path_rules));
+}
+
+test "envValue finds exact KEY=VALUE entries only" {
+    const env = [_][]const u8{ "HOMEBREW=no", "HOME=/home/dev", "CLAUDE_CONFIG_DIR=/cfg" };
+    try std.testing.expectEqualStrings("/home/dev", envValue(&env, "HOME").?);
+    try std.testing.expectEqualStrings("/cfg", envValue(&env, "CLAUDE_CONFIG_DIR").?);
+    try std.testing.expect(envValue(&env, "PATH") == null);
 }
 
 test "parseSpecialKey resolves arrow keys" {

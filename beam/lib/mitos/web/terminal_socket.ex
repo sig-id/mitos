@@ -24,6 +24,17 @@ defmodule Mitos.Web.TerminalSocket do
 
   require Logger
 
+  @steer_interactions %{
+    "approve" => :approve,
+    "deny" => :deny,
+    "reject" => :deny,
+    "answer" => :answer,
+    "prompt" => :prompt,
+    "interrupt" => :interrupt,
+    "select_option" => :select_option,
+    "select" => :select_option
+  }
+
   @impl true
   def init(req, _state) do
     session_id = :cowboy_req.binding(:session_id, req)
@@ -86,6 +97,16 @@ defmodule Mitos.Web.TerminalSocket do
         Mitos.Session.deny(state.session_pid, action_id, reason)
         {[], state}
 
+      {:ok, %{"type" => "steer", "interaction" => interaction} = msg}
+      when is_map_key(@steer_interactions, interaction) ->
+        opts =
+          []
+          |> steer_opt(:text, msg["text"])
+          |> steer_opt(:option, msg["option"])
+
+        Mitos.Session.steer(state.session_pid, @steer_interactions[interaction], opts)
+        {[], state}
+
       {:ok, %{"type" => "snapshot"}} ->
         case Mitos.Session.snapshot(state.session_pid, 2_000) do
           {:ok, snapshot} ->
@@ -127,6 +148,9 @@ defmodule Mitos.Web.TerminalSocket do
 
   @impl true
   def terminate(_reason, _req, _state), do: :ok
+
+  defp steer_opt(opts, _key, nil), do: opts
+  defp steer_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp json_safe(%Msgpax.Bin{data: data}), do: json_safe(data)
   defp json_safe(%_{} = value), do: inspect(value)

@@ -90,7 +90,31 @@ pub const UnixPty = struct {
     }
 
     pub fn write(self: *UnixPty, bytes: []const u8) core.PtyError!usize {
-        return std.posix.write(self.master_fd, bytes) catch return error.WriteFailed;
+        return std.posix.write(self.master_fd, bytes) catch |err| switch (err) {
+            error.WouldBlock => return error.WouldBlock,
+            else => return error.WriteFailed,
+        };
+    }
+
+    /// Write the whole buffer, retrying short writes and EAGAIN — the master
+    /// side is opened non-blocking, so a burst (e.g. a long steering prompt)
+    /// can otherwise be silently truncated. Bounded so a wedged child cannot
+    /// hang the control loop forever.
+    pub fn writeAll(self: *UnixPty, bytes: []const u8) core.PtyError!void {
+        var offset: usize = 0;
+        var retries: usize = 0;
+        while (offset < bytes.len) {
+            const n = self.write(bytes[offset..]) catch |err| switch (err) {
+                error.WouldBlock => {
+                    retries += 1;
+                    if (retries > max_write_retries) return error.WriteFailed;
+                    std.Thread.sleep(std.time.ns_per_ms);
+                    continue;
+                },
+                else => return err,
+            };
+            offset += n;
+        }
     }
 
     pub fn resize(self: *UnixPty, size: core.PtySize) core.PtyError!void {
@@ -126,6 +150,10 @@ pub const UnixPty = struct {
         }
     }
 };
+
+/// ~2s worst case at 1ms per retry; well past any realistic kernel PTY
+/// buffer drain, far short of "hung forever".
+const max_write_retries: usize = 2000;
 
 pub const SpawnConfig = struct {
     argv: []const []const u8,

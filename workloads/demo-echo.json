@@ -1,0 +1,11 @@
+// Demo workload: runs the deterministic fake provider, which echoes the
+// rendered task back as its final answer. Used for smoke-testing the
+// Gentix -> mitos execution loop without any model API keys.
+{
+  "provider": "fake",
+  "template": "{{objective}}",
+  "transport_order": ["stdio-json"],
+  "timeout_ms": 30000,
+  "title": "Demo echo",
+  "description": "Deterministic echo workload for end-to-end loop testing."
+}

@@ -33,13 +33,16 @@ pub fn buildPrintCommand(
     task: adapters.Task,
     cwd: []const u8,
 ) !headless.HeadlessCommand {
-    const argv = try allocator.alloc([]const u8, 6);
+    // `--print --output-format stream-json` requires `--verbose` on current
+    // claude CLI releases; without it the binary exits with a usage error.
+    const argv = try allocator.alloc([]const u8, 7);
     argv[0] = "claude";
     argv[1] = "--print";
     argv[2] = "--output-format";
     argv[3] = "stream-json";
-    argv[4] = "--no-session-persistence";
-    argv[5] = task.text;
+    argv[4] = "--verbose";
+    argv[5] = "--no-session-persistence";
+    argv[6] = task.text;
 
     return .{
         .argv = argv,
@@ -164,8 +167,9 @@ test "claude print command construction is deterministic" {
     try std.testing.expectEqualStrings("--print", command.argv[1]);
     try std.testing.expectEqualStrings("--output-format", command.argv[2]);
     try std.testing.expectEqualStrings("stream-json", command.argv[3]);
-    try std.testing.expectEqualStrings("--no-session-persistence", command.argv[4]);
-    try std.testing.expectEqualStrings("Summarize this repository", command.argv[5]);
+    try std.testing.expectEqualStrings("--verbose", command.argv[4]);
+    try std.testing.expectEqualStrings("--no-session-persistence", command.argv[5]);
+    try std.testing.expectEqualStrings("Summarize this repository", command.argv[6]);
     try std.testing.expectEqualStrings("/workspace", command.cwd);
 }
 
@@ -182,7 +186,7 @@ test "claude print adapter start runs configured provider binary" {
     defer fake_bin.deinit();
     try fake_bin.writeExecutable("claude",
         \\#!/bin/sh
-        \\if [ "$1" = "--print" ] && [ "$2" = "--output-format" ] && [ "$3" = "stream-json" ] && [ "$4" = "--no-session-persistence" ]; then
+        \\if [ "$1" = "--print" ] && [ "$2" = "--output-format" ] && [ "$3" = "stream-json" ] && [ "$4" = "--verbose" ] && [ "$5" = "--no-session-persistence" ]; then
         \\  printf '{"result":"claude fake done"}\n'
         \\  exit 0
         \\fi

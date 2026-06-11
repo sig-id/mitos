@@ -110,6 +110,21 @@ defmodule Mitos.Sidecar.Protocol do
   def input(bytes) when is_binary(bytes),
     do: %{cmd: "INPUT", bytes: %Msgpax.Bin{data: bytes}}
 
+  @doc """
+  Steer the interactive agent semantically. The sidecar owns the
+  provider-specific keymap (which keys approve a claude permission dialog,
+  which reject a codex one, ...), so callers express intent only:
+
+      Protocol.steer(:approve)
+      Protocol.steer(:answer, text: "use port 8080")
+      Protocol.steer(:select_option, option: 2)
+  """
+  def steer(interaction, opts \\ []) when is_atom(interaction) or is_binary(interaction) do
+    %{cmd: "steer", interaction: to_string(interaction)}
+    |> maybe_put(:text, opts[:text])
+    |> maybe_put(:option, opts[:option])
+  end
+
   def resize(cols, rows), do: %{cmd: "resize", cols: cols, rows: rows}
   def signal(signum), do: %{cmd: "signal", signum: signum}
   def authorize(request_id, token, opts \\ []) do
