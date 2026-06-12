@@ -38,8 +38,7 @@ dev: build
     echo "────────────────────────────────────────────────────────────────"
     MITOS_HTTP_PORT={{port}} exec iex -S mix
 
-# Build everything and serve the proof-of-concept run viewer (poc/) on the
-# headless control plane.
+# Build everything and serve the poc run viewer (poc/) on a headless control plane.
 poc: build
     #!/usr/bin/env bash
     set -euo pipefail
