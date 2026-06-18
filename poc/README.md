@@ -4,8 +4,8 @@ The current proof-of-concept web surface for the mitos daemon, served at `/`
 by `Mitos.Web.Router` (resolution: app config `:webapp_dir`,
 `MITOS_WEBAPP_DIR`, then this directory).
 
-It follows the product surfaces in `spec/01_PRODUCT.md` §7.2 (run viewer) and
-§9.4 (approval UX), and `spec/07_GENTIX_FACILITATOR.md` §6 (workloads /
+It follows the product surfaces in `spec/02_PRODUCT.md` §7.2 (run viewer) and
+§9.4 (approval UX), and `spec/08_FACILITATOR.md` §6 (workloads /
 proof page):
 
 - `#/runs` — run lifecycle list over `GET /runs` (live sessions merged with

@@ -4,8 +4,8 @@ LLM task runner for automated code analysis and generation.
 
 ## Docs
 
-- [Product](spec/01_PRODUCT.md): mitos as an AI-native agent operating system.
-- [Gentix Facilitator](spec/07_GENTIX_FACILITATOR.md): the hosted capability
+- [Product](spec/02_PRODUCT.md): mitos as an AI-native agent operating system.
+- [Gentix Facilitator](spec/08_FACILITATOR.md): the hosted capability
   service built on mitos — "Pickaxe for agent harnesses": sellers' processes
   executed by full agent harnesses in sandboxes, sold as metered completed
   jobs with proof pages. Business model, MVP scope, and gap analysis
