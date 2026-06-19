@@ -5,7 +5,7 @@ Status: draft v0.2 · Date: 2026-06-18
 Conforms to `01_ARCHITECTURE` (the constitution). This doc owns the **cross-run
 knowledge service**: OS-owned, multi-tenant, two-track memory with write-time
 contradiction-supersession. It is the substrate hook named in `01 §3` (SUBSTRATE:
-"memory (§06)") and in the Decision/Effect contract via the `memory_written`
+"memory (§07)") and in the Decision/Effect contract via the `memory_written`
 Effect event (`01 §8.2`).
 
 RFC 2119 keywords are normative.
@@ -97,9 +97,9 @@ CapabilityStats {                         # = fold(events where scope matches)
   pass_rate      : f32     # (PASS+SKIP)/runs    — cf. CW pass_rate
   fix_rate       : f32     # cf. CW fix_rate
   fail_rate      : f32
-  avg_iterations : f32     # cf. CW avg_iterations (loop-manager iters, 03)
+  avg_iterations : f32     # cf. CW avg_iterations (loop-manager iters, 04)
   wall_ms        : { p50, p95 }
-  usd            : { avg, p95 }   # from budget_charged Effect events (01 §8.2; 07)
+  usd            : { avg, p95 }   # from budget_charged Effect events (01 §8.2; 08)
   tokens         : { avg, p95 }
   verifier       : { avg_score, tier_pass_rate }   # tiered/checkpoint eval (04)
   first_seen, updated_at : iso8601
@@ -273,7 +273,7 @@ populates the **per-model skill-adaptation seam** that `03` defines
            └──────────────┬────────────────┘
                           ▼
               KNOWLEDGE SERVICE  (store · rank · supersede · attribute)
-                          │  distill  (self-improver pass; uses verifier signal, 03)
+                          │  distill  (self-improver pass; uses verifier signal, 04)
                           ▼
             per-model skill-adaptation candidates  ──►  SEAM (03): base ⊕ per_model_adapt(model)
                           │

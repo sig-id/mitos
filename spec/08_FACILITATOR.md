@@ -86,7 +86,7 @@ per run R, over events[0..end]:
                   ├ flat:    fixed_usd
                   └ metered: base + Σ unit_price[k] × units[k]   (k ∈ {token,egress,tool,artifact,ms})
 
-  compute_cost  = compute_ms × rate(trust=T2)     # Gentix infra cost (µVM, 04)
+  compute_cost  = compute_ms × rate(trust=T2)     # Gentix infra cost (µVM, 05)
   platform_take = max(take_floor, take_rate × buyer_charge)     # take_rate ∈ [0.10, 0.15]
   seller_net    = buyer_charge − platform_take − compute_surcharge
 
@@ -122,9 +122,9 @@ SELLER tenant                         BUYER tenant
         │                                                             │
         ▼   run R executes in BUYER's isolation context              ▼
   ┌──────────────────────────────────────────────────────────────────┐
-  │ T2: remote µVM (E2B/Daytona) · broker-only egress, deny-all-else  │  01 §6, 04
+  │ T2: remote µVM (E2B/Daytona) · broker-only egress, deny-all-else  │  01 §6, 05
   │   inject (hermetic): image + RO data + buyer workspace            │  01 §8.5
-  │   per-tenant memory namespace (07) — hermetic by default          │  00 princ. 8
+  │   per-tenant memory namespace (07) — hermetic by default          │  01 princ. 8
   └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -212,13 +212,13 @@ buyer ──repeat + X-PAYMENT (USDC transfer proof)──►  endpoint
 ## 6. Seller onboarding — recipe → metered endpoint
 
 ```
-1 author      skill.md + tools + data  ──build──►  OCI image (SKILL+TOOLS) + RO data snapshot   (01 §5, §8.3; 02)
+1 author      skill.md + tools + data  ──build──►  OCI image (SKILL+TOOLS) + RO data snapshot   (01 §5, §8.3; 03)
 2 manifest     trust_tier=T2 · resources · egress_policy[{dest,credential,requires_approval}]
-               · result{schema, evidence[]}                                                     (01 §8.3; 02)
+               · result{schema, evidence[]}                                                     (01 §8.3; 03)
 3 keys         register provider keys → broker vault, scoped (seller_id, dest)                   (§4; 01 §8.5)
 4 price+payout declare pricing (flat | metered, §2.2) + USDC payout address                      (§5)
-5 validate     policy-compile (05) + dry-run in T2 + result-schema check                         (04; 03)
-6 publish      Gentix-compliant metered endpoint: /capabilities/{id}/runs (x402, §5)             (this §; 05 dispatch)
+5 validate     policy-compile (05) + dry-run in T2 + result-schema check                         (05; 04)
+6 publish      Gentix-compliant metered endpoint: /capabilities/{id}/runs (x402, §5)             (this §; 06 dispatch)
 ```
 
 - Onboarding reuses the capability authoring + manifest path (`03`) and the
@@ -239,7 +239,7 @@ result, artifacts}`. On top of it, Gentix renders a **proof/evidence page** from
 the run's event-log excerpt — *this page is the product differentiator.*
 
 ```
-DELIVERY = { workspace diff, RESULT (01 §8.3 result.schema), registered artifacts }   ← 04 harvest
+DELIVERY = { workspace diff, RESULT (01 §8.3 result.schema), registered artifacts }   ← 05 harvest
 PROOF    = render( events[capability_started .. capability_finished] ):
              timeline · tools_brokered · egress crossings (dest only) · token totals
              · budget_charged · artifacts manifest · run wall-time · log-hash anchor

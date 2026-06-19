@@ -165,10 +165,10 @@ one at launch and MAY switch it mid-step.
 ```
 manifest.harnesses: [claude-code, codex, gemini-cli]   # capability declares compat
         │
-        ▼ (launch policy, 04)
+        ▼ (launch policy, 05)
    mitos injects ONE  ──► harness adapter (01 §8.6) ──► normalized events
         │                  launch/events/steer/result/hermeticity/capabilities
-        ▼ (loop-manager, 03)
+        ▼ (loop-manager, 04)
    switch mid-step on escalation: switch → {model, effort, harness}   (Decision, 01 §8.1)
 ```
 
@@ -207,7 +207,7 @@ worktree setup, environment prep, and validation gates.
           env/dirs setup                     │        validation gate (build/lint/tests)
           pre-flight validation gate         │        artifact registration, env teardown
         ─────────────────────────────────────┘
-                       ▼ harness loop (agentic, 03 loop-manager) ▲
+                       ▼ harness loop (agentic, 04 loop-manager) ▲
 ```
 
 Hook contract:

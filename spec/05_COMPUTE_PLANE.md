@@ -386,6 +386,6 @@ hermetic harness adapter (§6, superseding PTY screen-scrape), and snapshot/harv
 
 **Cross-refs:** capability manifest, harness adapter, MCP-as-tool → `03_CAPABILITY`;
 orchestrator/loop-manager, Decision/Effect schema, resume/replay → `04_CONTROL_PLANE`;
-approval surfacing, services/triggers → `06_SCHEDULING`; `/ctx` context slices →
+approval surfacing, services/triggers → `06_WORK_POOL`; `/ctx` context slices →
 `07_MEMORY`; metering off the egress/effect log, multi-tenancy → `08_FACILITATOR`;
 build sequencing → `09_IMPLEMENTATION_PLAN`.

@@ -77,21 +77,23 @@ model's **effects** inspectable, bounded, replayable, recoverable, and billable.
 ## 3. Layer stack
 
 ```
-TRIGGERS (det.)        cron · webhook · external signal · manual · CI        [services, §05]
-  └─► DISPATCH (det.)  route trigger → pipeline  (cheap classifier, no LLM)
+TRIGGERS / SOURCES (det.)  cron · webhook · event · manual · connector(GitHub/kanban) · run-emitted   [§06]
+  └─► WORK POOL (det.)     durable Tasks in pools, each with a discipline (fifo|priority|deadline|agent-pick…)
+  │                        + a dependency graph (incl. invoke/subtasks); a platform service drains it   [§06, §8.7]
+  └─► DISPATCH (det.)  select pipeline  (cheap classifier, no LLM)
        └─► ORCHESTRATOR AGENT ── Decision events ──► EVENT LOG (det., canonical, append-only)
        │   reads live run state; advance / insert / retry / switch / skip /
        │   request_approval / escalate / finish / abort.  The pipeline is ENFORCED here,
-       │   not pre-declared. (§03)
+       │   not pre-declared. (§04)
        └─► STEP RUNTIME (per capability)   entry/exit contract + deterministic hooks
             └─► LOOP-MANAGER (det. FSM; model only on escalation)
-            │   continue · compact-context · switch model/effort/harness · escalate · done  (§03)
+            │   continue · compact-context · switch model/effort/harness · escalate · done  (§04)
             └─► HARNESS (injected, agnostic)   Claude Code | Codex | Gemini | OpenCode
-                 └─► CAPABILITY in a sandbox (§04):
+                 └─► CAPABILITY in a sandbox (§05):
                       image[SKILL+TOOLS] + DATA[RO snapshot] + workspace[input]
                       ① inject (hermetic)   ② observe/steer (mitos-driven)   ③ egress→BROKER
-SUBSTRATE (det., BEAM): event log/trace · memory (§06) · egress broker + policy (§04) ·
-                        scheduling (§05) · budgets/metering (§07) · multi-tenancy/keys (§07)
+SUBSTRATE (det., BEAM): event log/trace · memory (§07) · egress broker + policy (§05) ·
+                        work pool + scheduling (§06) · budgets/metering (§08) · multi-tenancy/keys (§08)
 ```
 
 Determinism where the decision space is small (the loop-manager is a coded FSM);
@@ -193,7 +195,8 @@ EffectEvent {
   run_id, seq, ts,
   type      : capability_started | capability_finished | tool_brokered
             | egress_allowed | egress_denied | artifact_registered | commit
-            | approval_requested | approval_resolved | memory_written | budget_charged | ...
+            | approval_requested | approval_resolved | memory_written | budget_charged
+            | task_enqueued | task_blocked | task_done | invoke_requested | subtask_returned | ...
   caused_by : seq                   # the DecisionEvent that led here (causality)
   ref       : object                # ids / paths
   payload   : object
@@ -264,6 +267,32 @@ capabilities  : { structured_output, mcp_tools?, sessions?, effort_levels, ... }
 This supersedes the old PTY/`claude_log` screen-scraping path: structured
 observation is re-specced per harness generation; PTY is a fallback codec.
 
+### 8.7 Task (work-pool unit — elaborated in `06`)
+
+```
+Task {
+  id          : string
+  tenant      : { org, project }            # multi-tenant scoping
+  source      : human | trigger:<id> | connector:<name> | run:<run_id> | purchase:<id> | invoke:<parent>
+  pool        : string                       # which pool (container + discipline) — `06` §2
+  priority    : int                          # within-pool ordering (+ aging); honored by the discipline
+  status      : queued | blocked | scheduled | running | done | failed | parked | cancelled
+  deps        : [Dep]                         # typed edges (relation/payload/strength/guard) — `06` §4; cross-pool
+  pipeline    : pipeline_ref | null           # explicit recipe, or null → dispatch selects
+  payload     : { intent, workspace?, inputs, constraints, success_criteria }  # workspace optional: repo|dataset|none
+  budget      : { tokens, usd, wall_ms }
+  runs        : [run_id]                      # 0..N executions (retry/resume/branch)
+  provenance  : { created_by, depth, parent_task? }   # depth bounds agent-emitted + invoked work
+  invoke      : { parent_task, return_to } | null     # set on a subtask: where its result is injected (`06` §5)
+  external    : { connector, ref } | null     # e.g. GitHub issue # — for bidi sync
+  ts          : { created, ready_at, updated }
+}
+```
+
+The pool is a `fold` over Task-lifecycle Effect events; `task.status` (queue) is distinct
+from `run.status` (execution). Pools + disciplines, the dependency graph, invoke/subtasks,
+sources/connectors, and the drainer are specified in `06`.
+
 ---
 
 ## 9. Glossary
@@ -279,8 +308,14 @@ observation is re-specced per harness generation; PTY is a fallback codec.
 - **Broker** — the egress credential broker; the outbound authority point (§8.5).
 - **Hermetic** — a run carries only what mitos injected; no harness cross-run state.
 - **Trust tier (T0/T1/T2)** — isolation/egress posture selector (§6).
-- **Target / Preset** — service-composition units in the scheduling layer (§05).
+- **Target / Preset** — service-composition units in the work pool plane (§06).
 - **Service** — a systemd-like runtime unit (trigger + lifecycle); may invoke a pipeline.
+- **Task** — a durable unit of intent in the work pool (status, priority, deps, provenance, payload); 0..N Runs execute it. Human backlog, GitHub issues, trigger events, agent follow-ups, invoked subtasks, and paid jobs are all Tasks. (`06`, §8.7)
+- **Run** — one execution of a pipeline against a Task, recorded as events; a Task may have several (retry/resume/branch).
+- **Work pool / Pool** — the durable container of Tasks. A *pool* names only the container; **how a Task is picked is a separate, pluggable `discipline`** — a pool is *not* a queue (FIFO is one discipline). (`06` §2)
+- **Discipline** — how the drainer selects the next Task from a pool: `fifo | lifo | priority | weighted-fair | deadline | agent-pick | custom`. (`06` §2)
+- **Subtask** — a child Task a capability spawns mid-run via the governed `invoke` affordance; its result returns to the parent (which parks). A full sandboxed/metered Task — unlike an opaque harness sub-agent. (`06` §5)
+- **Connector** — an optional adapter syncing an external tracker (kanban-md, GitHub/Linear) to the work pool; the pool is the source of truth and assumes no git repo. (`06` §6)
 
 ---
 
@@ -309,7 +344,7 @@ observation is re-specced per harness generation; PTY is a fallback codec.
 | `03_CAPABILITY` | The capability: pillars, per-model skill seam, manifest, hooks, result+evidence, authoring |
 | `04_CONTROL_PLANE` | Orchestrator + loop-manager, Decision/Effect schema, resume/replay, pipeline-in-markdown, verify+distill |
 | `05_COMPUTE_PLANE` | SandboxProvider, trust tiers, providers, authority boundary (inject/broker/harvest), hermeticity |
-| `06_SCHEDULING` | Service runtime (kept) + management layer (targets/presets/conflicts) + triggers |
+| `06_WORK_POOL` | **Work pool plane**: Tasks, pools + disciplines, dependency graph, invoke/subtasks + service runtime (kept) + composition (targets/presets/conflicts) + triggers |
 | `07_MEMORY` | Two-track memory, retrieval/injection, contradiction-supersession forgetting |
 | `08_FACILITATOR` | Gentix: capability=monetizable unit, metering off the log, multi-tenancy, take-rate |
 | `09_IMPLEMENTATION_PLAN` | Phased build on BEAM+Zig, reuse map, sequencing |

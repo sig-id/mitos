@@ -27,6 +27,12 @@ state(t) = fold(events[0..t])                # no separately-stored run state ex
 resume   = replay events to the last committed Effect, then re-invoke orchestrator
 ```
 
+A **run** is one execution of a pipeline against a **Task** dequeued from the work pool
+(`06`; canonical Task shape `01` §8.7). A Task may produce several runs over its life
+(retry / resume / branch); `run.status` (execution) is distinct from `task.status` (queue).
+A run may also **park** awaiting an `invoke`'d subtask's result (`06` §5), resuming when
+the subtask returns.
+
 There is no authored finite-state machine (contrast chief-wiggum's pipeline of
 `steps` with `on_result`/`jump`/`max` — a hand-written graph). The pipeline is
 *enforced* by reasoning over the live log, never *pre-declared* as transitions.

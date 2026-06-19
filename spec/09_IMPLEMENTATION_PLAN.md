@@ -8,7 +8,7 @@ owned by `01` §8 and elaborated in `03`–`08`. Three through-lines govern ever
 decision below:
 
 1. **BEAM owns control; Zig is a local engine.** Per `01` §7, all orchestration,
-   the log, the broker, scheduling, memory, tenancy, and remote-provider clients
+   the log, the broker, the work pool, memory, tenancy, and remote-provider clients
    live on BEAM. Zig keeps only local transports, the terminal codec, the raw
    spool, and local sandbox launch. The two half-built control planes collapse to
    one — on BEAM.
@@ -81,7 +81,7 @@ its hard dependency and exit criterion.
 | **P2 Compute-plane local** | `SandboxProvider` behaviour live; Nucleus + Docker providers; egress credential broker; hermeticity; harvest | P1 | a capability runs in Nucleus, deny-all egress, secret brokered, diff+result harvested |
 | **P3 Capability model** | manifest, image build, RO DATA mount, harness adapter contract (`01` §8.6), deterministic hooks, soft result+evidence | P2 | manifest→image→run→`{result, evidence}`; ≥2 harnesses injectable |
 | **P4 Remote providers** | E2B + Daytona provider clients (HTTP/WS); broker-only egress for **T2**; RO data snapshots | P2, P3 | untrusted capability on buyer data in remote µVM; deny-all-else holds |
-| **P5 Scheduling** | service runtime (kept) + management layer (targets/presets/conflicts/derived view) + triggers | P1, P3 | a service triggers a pipeline; conflicts resolved deterministically |
+| **P5 Work Pool** | pools + disciplines + Task dependency graph + invoke/subtasks + service runtime (kept) + composition (targets/presets/conflicts/derived view) + triggers | P1, P3 | a service triggers a pipeline; deps + conflicts resolved deterministically; an invoke returns a subtask result |
 | **P6 Memory + self-improvement** | two-track knowledge service; contradiction-supersession forgetting; verify→distill loop | P1, P3 | memory written via Effect; retrieval injected; verified runs distill |
 | **P7 Facilitator** | multi-tenancy/orgs/keys; key custody at broker; metering off the log; x402/USDC settlement; proof pages | P3, P4, P7-tenancy | a stranger pays; capability fulfills; metered+settled+proof |
 
@@ -134,7 +134,7 @@ its hard dependency and exit criterion.
         ▼            \________________
  P4 Remote (E2B/Daytona, T2)          \
         │                              ▼
-        │                         P5 Scheduling (services · targets/presets)
+        │                         P5 Work Pool (pools/disciplines · deps · invoke · services · targets)
         ▼
  P7 Facilitator ── tenancy/keys · broker custody · metering(log) · x402/USDC · proof pages
    (needs P3 capability + P4 isolation + P1 log + P2 broker)
@@ -168,7 +168,7 @@ skips three entirely.
   evidence. Reuse `Mitos.Workload` + `/workloads/:id/execute` as the literal
   request surface, swapping its internals onto P1–P3.
 
-**Out of MVP:** P4 remote/T2 µVM, P5 scheduling, P6 memory/self-improvement,
+**Out of MVP:** P4 remote/T2 µVM, P5 work pool (deps/disciplines/invoke/services), P6 memory/self-improvement,
 multi-step branching pipelines, full multi-tenant org model, image build pipeline,
 second+ harness, snapshot-based mid-run resume.
 
@@ -216,6 +216,6 @@ These thread every phase; build their seams in P0/P1, fill incrementally.
 
 **Sequencing summary:** collapse to one plane → make the log real and crash-safe →
 build the sandbox boundary and broker → package the capability that flows through
-it → then widen (remote, scheduling, memory) and monetize (facilitator). The MVP
+it → then widen (remote, work pool, memory) and monetize (facilitator). The MVP
 borrows one thin thread from P1/P2/P3/P7 and the existing `Workload` surface to
 reach the product gate before any of those phases are complete.
