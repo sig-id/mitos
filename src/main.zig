@@ -148,127 +148,20 @@ fn runCommand(
     defer if (loaded_config) |*loaded| loaded.deinit();
     const project_config = if (loaded_config) |loaded| loaded.value else null;
     const configured_provider = configuredProvider(project_config, provider);
-    const effective_project_config = if (configured_provider != null) project_config else null;
 
-    const transport_order = transportOrder(provider, options.transport_name, configured_provider);
+    const configured_order = transportOrder(provider, options.transport_name, configured_provider);
+    const transport_order = stdioTransportOrder(configured_order) orelse {
+        try stderr.print("error: no stdio-json transport is configured for provider '{s}'\n", .{provider});
+        try stderr.writeAll("Run 'mitos providers' to see supported providers.\n");
+        return 2;
+    };
     if (transport_order.len == 0) {
         try stderr.print("error: no transport is configured for provider '{s}'\n", .{provider});
         try stderr.writeAll("Run 'mitos providers' to see supported providers.\n");
         return 2;
     }
 
-    var catalog: mitos.providers.catalog.DefaultAdapters = undefined;
-    catalog.init();
-    const registry = catalog.registry();
-    const skip_host_detection = if (effective_project_config) |cfg|
-        cfg.sandbox.backend == .nucleus
-    else
-        false;
-    const selection = (if (skip_host_detection)
-        registry.selectByNameNoDetect(provider, transport_order)
-    else
-        registry.selectByName(allocator, provider, transport_order)) catch |err| {
-        try stderr.print("error: could not select transport for provider '{s}': {s}\n", .{
-            provider,
-            @errorName(err),
-        });
-        if (skip_host_detection) {
-            try stderr.writeAll("Check the configured provider transport_order in .agent-runtime.yaml.\n");
-        } else {
-            try stderr.writeAll("Provider CLIs must be installed and authenticated on PATH.\n");
-        }
-        return 1;
-    };
-    defer selection.deinit(allocator);
-
     const run_id_value = try mitos.runtime.RunId.init(run_id);
-    var absolute_workspace: ?[]u8 = null;
-    defer if (absolute_workspace) |path| allocator.free(path);
-    const workspace_root = if (effective_project_config != null) blk: {
-        absolute_workspace = try std.fs.cwd().realpathAlloc(allocator, options.workspace);
-        break :blk absolute_workspace.?;
-    } else options.workspace;
-
-    var prepared_workspace: ?mitos.workspace.PreparedWorkspace = null;
-    defer if (prepared_workspace) |*prepared| prepared.deinit(allocator);
-
-    const workspace_host_path = if (effective_project_config) |cfg| blk: {
-        if (cfg.workspace.mode == .git_worktree) {
-            prepared_workspace = try mitos.workspace.prepareGitWorktree(
-                allocator,
-                workspace_root,
-                run_id_value,
-                cfg.workspace,
-            );
-            break :blk prepared_workspace.?.plan.host_path;
-        }
-        break :blk workspace_root;
-    } else workspace_root;
-
-    var owned_policy_config: ?mitos.policy.engine.OwnedPolicyConfig = null;
-    defer if (owned_policy_config) |*owned| owned.deinit();
-    const runtime_policy = if (effective_project_config) |cfg| blk: {
-        owned_policy_config = try mitos.policy.engine.fromProjectPolicy(allocator, cfg.policy);
-        break :blk owned_policy_config.?.config;
-    } else mitos.policy.engine.PolicyConfig{};
-
-    var provider_command: ?mitos.providers.headless.HeadlessCommand = null;
-    defer if (provider_command) |command| command.deinit(allocator);
-    var nucleus_cli: mitos.nucleus.NucleusCliTransport = .{ .allocator = allocator };
-    var nucleus_backend: mitos.nucleus.NucleusBackend = undefined;
-    var use_nucleus = false;
-    defer if (use_nucleus) nucleus_backend.deinit();
-    var sandbox_mounts: [3]mitos.sandbox.MountSpec = undefined;
-    var sandbox_launch: mitos.sandbox.SandboxLaunchConfig = undefined;
-    var sandbox_options: ?mitos.runtime.orchestrator.AdapterSandboxOptions = null;
-    const workspace_container_path: ?[]const u8 = if (effective_project_config) |cfg| blk: {
-        if (cfg.sandbox.backend != .nucleus) break :blk null;
-        provider_command = try buildProviderCommand(
-            allocator,
-            selection.adapter.id.value,
-            .{ .text = task_text },
-            cfg.sandbox.workdir,
-        );
-        sandbox_mounts = .{
-            .{
-                .host_path = workspace_host_path,
-                .container_path = cfg.workspace.container_mount,
-                .access = .read_write_execute,
-            },
-            .{
-                .container_path = cfg.sandbox.home,
-                .access = .read_write,
-                .type = .tmpfs,
-            },
-            .{
-                .host_path = workspace_root,
-                .container_path = "/context",
-                .access = .read_only,
-                .optional = true,
-            },
-        };
-        sandbox_launch = .{
-            .run_id = run_id_value,
-            .backend = .nucleus,
-            .mode = cfg.sandbox.mode,
-            .runtime = cfg.sandbox.runtime,
-            .command = .{
-                .argv = provider_command.?.argv,
-                .cwd = cfg.sandbox.workdir,
-            },
-            .mounts = &sandbox_mounts,
-            .resources = cfg.sandbox.resources,
-            .network = cfg.sandbox.network,
-            .toolchain_rootfs = cfg.sandbox.toolchain_rootfs,
-        };
-        nucleus_backend = mitos.nucleus.NucleusBackend.init(allocator, nucleus_cli.transport());
-        use_nucleus = true;
-        sandbox_options = .{
-            .backend = &nucleus_backend.backend,
-            .launch = sandbox_launch,
-        };
-        break :blk cfg.workspace.container_mount;
-    } else null;
 
     var env_vars: std.ArrayList(mitos.adapters.EnvVar) = .empty;
     for (options.env) |env_str| {
@@ -288,40 +181,122 @@ fn runCommand(
         env_vars.deinit(allocator);
     }
 
-    const result = mitos.runtime.orchestrator.runAdapter(allocator, std.fs.cwd(), selection.adapter, .{
-        .task = .{ .text = task_text },
-        .run_id = run_id,
-        .workspace_host_path = workspace_host_path,
-        .workspace_container_path = workspace_container_path,
-        .policy_config = runtime_policy,
-        .sandbox_backend = sandbox_options,
-        .require_sandbox_execution = use_nucleus,
-        .env = env_vars.items,
+    const resolved = mitos.providers.launch.resolve(allocator, .{
+        .provider = provider,
+        .task = task_text,
+        .transport_order = transport_order,
+        .cwd = options.workspace,
     }) catch |err| {
+        try stderr.print("error: could not resolve stdio-json launch for provider '{s}': {s}\n", .{
+            provider,
+            @errorName(err),
+        });
+        return 1;
+    };
+    defer resolved.deinit(allocator);
+
+    const started_at_ms = std.time.milliTimestamp();
+    var trace = try mitos.trace.file_store.FileTrace.create(allocator, std.fs.cwd(), run_id_value, .{
+        .created_at_ms = started_at_ms,
+        .provider = provider,
+        .task = task_text,
+    });
+    defer trace.deinit();
+
+    _ = try trace.appendEvent(started_at_ms, .{ .run_created = .{ .task = task_text, .provider = provider } });
+    _ = try trace.appendEvent(started_at_ms, .{ .run_state_changed = .{
+        .from = .created,
+        .to = .starting_adapter,
+        .reason = "stdio-json launch resolved",
+    } });
+    _ = try trace.appendEvent(started_at_ms, .{ .adapter_started = .{
+        .provider = resolved.provider.value,
+        .adapter = resolved.adapter.value,
+        .mode = resolved.transport_name.name(),
+    } });
+    _ = try trace.appendEvent(started_at_ms, .{ .run_state_changed = .{
+        .from = .starting_adapter,
+        .to = .running,
+        .reason = "provider command spawned",
+    } });
+    _ = try trace.appendEvent(started_at_ms, .{ .process_spawned = .{
+        .argv = resolved.argv,
+        .cwd = resolved.cwd orelse options.workspace,
+        .pid = null,
+    } });
+
+    const command: mitos.providers.headless.HeadlessCommand = .{
+        .argv = resolved.argv,
+        .cwd = resolved.cwd orelse options.workspace,
+        .environment = env_vars.items,
+    };
+
+    const result = mitos.providers.headless.execute(allocator, command, .{}) catch |err| {
+        const failed_at_ms = std.time.milliTimestamp();
+        _ = try trace.appendEvent(failed_at_ms, .{ .error_reported = .{
+            .message = @errorName(err),
+            .component = "stdio-json",
+        } });
+        _ = try trace.appendEvent(failed_at_ms, .{ .run_state_changed = .{
+            .from = .running,
+            .to = .failed,
+            .reason = "provider command failed to launch",
+        } });
+        _ = try mitos.report.generate(allocator, trace.run_dir, mitos.redaction.Redactor{});
         try stderr.print("error: run failed before artifacts were finalized: {s}\n", .{@errorName(err)});
         return 1;
     };
     defer result.deinit(allocator);
 
-    persistWorkspaceArtifacts(
-        allocator,
-        result.relative_path,
-        workspace_host_path,
-        &prepared_workspace,
-        mitos.redaction.Redactor{},
-    ) catch |err| {
-        try stderr.print("warning: workspace artifacts were not finalized: {s}\n", .{@errorName(err)});
-    };
+    if (result.stdout.len > 0) {
+        _ = try trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
+            .stream = .stdout,
+            .bytes = result.stdout,
+        } });
+    }
+    if (result.stderr.len > 0) {
+        _ = try trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
+            .stream = .stderr,
+            .bytes = result.stderr,
+        } });
+    }
 
-    try stdout.print("run_id: {s}\n", .{result.run_id.value});
+    const finished_at_ms = std.time.milliTimestamp();
+    _ = try trace.appendEvent(finished_at_ms, .{ .process_exited = .{
+        .pid = null,
+        .exit_code = result.exit_code,
+        .signal = result.signal,
+    } });
+
+    const final_output = try mitos.providers.headless.extractFinalOutputAlloc(allocator, result.stdout);
+    defer allocator.free(final_output);
+    _ = try trace.writeArtifact(.final_output, final_output);
+    if (final_output.len > 0) {
+        _ = try trace.appendEvent(finished_at_ms, .{ .final_output = .{ .text = final_output } });
+    }
+
+    const adapter_status = result.status();
+    const final_state: mitos.runtime.RunState = if (adapter_status == .completed) .completed else .failed;
+    _ = try trace.appendEvent(finished_at_ms, .{ .run_state_changed = .{
+        .from = .running,
+        .to = final_state,
+        .reason = if (final_state == .completed) "stdio-json provider completed" else "stdio-json provider failed",
+    } });
+
+    _ = try mitos.report.generate(allocator, trace.run_dir, mitos.redaction.Redactor{});
+
+    const relative_path = try std.fs.path.join(allocator, &.{ ".runs", run_id });
+    defer allocator.free(relative_path);
+
+    try stdout.print("run_id: {s}\n", .{run_id_value.value});
     try stdout.print("provider: {s}\n", .{provider});
-    try stdout.print("adapter: {s}\n", .{selection.adapter.id.value});
-    try stdout.print("adapter_status: {s}\n", .{@tagName(result.adapter_status)});
-    try stdout.print("final_state: {s}\n", .{@tagName(result.final_state)});
-    try stdout.print("artifacts: {s}\n", .{result.relative_path});
-    try stdout.print("report: {s}/{s}\n", .{ result.relative_path, result.report_path });
+    try stdout.print("adapter: {s}\n", .{resolved.adapter.value});
+    try stdout.print("adapter_status: {s}\n", .{@tagName(adapter_status)});
+    try stdout.print("final_state: {s}\n", .{@tagName(final_state)});
+    try stdout.print("artifacts: {s}\n", .{relative_path});
+    try stdout.print("report: {s}/{s}\n", .{ relative_path, mitos.trace.defaultArtifactPath(.report) });
 
-    return if (result.final_state == .completed) 0 else 1;
+    return if (final_state == .completed) 0 else 1;
 }
 
 fn parseRunOptions(args: []const []const u8, stderr: anytype) !RunOptions {
@@ -461,6 +436,13 @@ fn transportOrder(
     return &no_transports;
 }
 
+fn stdioTransportOrder(order: []const TransportName) ?[]const TransportName {
+    for (order) |transport_name| {
+        if (transport_name == .stdio_json) return &[_]TransportName{.stdio_json};
+    }
+    return null;
+}
+
 fn configuredProvider(
     project_config: ?mitos.config.ProjectConfig,
     provider: []const u8,
@@ -477,84 +459,6 @@ fn loadProjectConfigIfPresent(allocator: std.mem.Allocator) !?mitos.config.Loade
         error.FileNotFound => null,
         else => err,
     };
-}
-
-fn buildProviderCommand(
-    allocator: std.mem.Allocator,
-    adapter_id: []const u8,
-    task: mitos.adapters.Task,
-    cwd: []const u8,
-) !mitos.providers.headless.HeadlessCommand {
-    if (std.mem.eql(u8, adapter_id, "codex.exec")) {
-        return mitos.providers.codex.buildExecCommand(allocator, task, cwd);
-    }
-    if (std.mem.eql(u8, adapter_id, "claude.print")) {
-        return mitos.providers.claude.buildPrintCommand(allocator, task, cwd);
-    }
-    if (std.mem.eql(u8, adapter_id, "gemini.headless")) {
-        return mitos.providers.gemini.buildHeadlessCommand(allocator, task, cwd);
-    }
-    return error.UnsupportedSandboxAdapter;
-}
-
-fn persistWorkspaceArtifacts(
-    allocator: std.mem.Allocator,
-    run_relative_path: []const u8,
-    workspace_path: []const u8,
-    prepared_workspace: *?mitos.workspace.PreparedWorkspace,
-    redactor: mitos.redaction.Redactor,
-) !void {
-    var run_dir = try std.fs.cwd().openDir(run_relative_path, .{});
-    defer run_dir.close();
-
-    const snapshot = if (prepared_workspace.*) |*prepared|
-        try mitos.workspace.finalizeGitWorktree(allocator, prepared, true)
-    else
-        try mitos.workspace.captureWorkspaceSnapshot(allocator, workspace_path);
-    defer snapshot.deinit(allocator);
-
-    const redacted_diff = try redactor.redactAlloc(allocator, .report, snapshot.diff_patch);
-    defer allocator.free(redacted_diff);
-    try run_dir.writeFile(.{
-        .sub_path = mitos.trace.defaultArtifactPath(.diff_patch),
-        .data = redacted_diff,
-    });
-
-    const files_json = try renderChangedFilesJson(allocator, snapshot.changed_files);
-    defer allocator.free(files_json);
-    const redacted_files = try redactor.redactAlloc(allocator, .report, files_json);
-    defer allocator.free(redacted_files);
-    try run_dir.writeFile(.{
-        .sub_path = mitos.trace.defaultArtifactPath(.files_changed),
-        .data = redacted_files,
-    });
-
-    _ = try mitos.report.generate(allocator, run_dir, redactor);
-}
-
-fn renderChangedFilesJson(
-    allocator: std.mem.Allocator,
-    changes: []const mitos.workspace.FileChange,
-) ![]u8 {
-    var out: std.io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-
-    var json: std.json.Stringify = .{
-        .writer = &out.writer,
-        .options = .{ .whitespace = .indent_2 },
-    };
-    try json.beginArray();
-    for (changes) |change| {
-        try json.beginObject();
-        try json.objectField("status");
-        try json.write(change.status);
-        try json.objectField("path");
-        try json.write(change.path);
-        try json.endObject();
-    }
-    try json.endArray();
-    try out.writer.writeByte('\n');
-    return out.toOwnedSlice();
 }
 
 fn printVersion(writer: anytype) !void {

@@ -1,7 +1,7 @@
 //! mitos-term: the per-session sidecar.
 //!
 //! Owns one PTY + one libghostty-vt parser, communicates with the BEAM
-//! orchestrator over stdin/stdout using the framing in `protocol.zig`. The
+//! control plane over stdin/stdout using the framing in `protocol.zig`. The
 //! display path (RAW frames) is opaque byte forwarding; the structured paths
 //! (CONTROL/EVENT/SNAPSHOT) use MessagePack so the brain can reason about them.
 //!
@@ -15,7 +15,6 @@ const pty_core = @import("../pty/core.zig");
 const pty_unix = @import("../pty/unix.zig");
 const adapters = @import("../adapters/types.zig");
 const prompt = @import("../prompt/root.zig");
-const claude_log = @import("../providers/claude_log.zig");
 const headless = @import("../providers/headless.zig");
 const provider_launch = @import("../providers/launch.zig");
 const steer = @import("../steer/root.zig");
@@ -32,11 +31,6 @@ const pty_read_buffer_bytes: usize = 32 * 1024;
 /// Default idle threshold (ms). After this many milliseconds of PTY silence,
 /// we emit one `idle` EVENT. Configurable via the `open` command.
 const default_idle_ms: i64 = 250;
-
-/// How often the agent session log (claude's JSONL transcript) is polled
-/// while a watcher is active. The log is the ground-truth progress channel
-/// for providers that write one; the PTY remains display/control only.
-const agent_log_poll_ms: i64 = 200;
 
 const protocol_version: u32 = transport.protocol_version;
 
@@ -110,14 +104,6 @@ const State = struct {
     // translated to provider-specific key sequences and written to the PTY.
     steering: steer.SteeringAdapter = steer.keymaps.generic,
 
-    // Ground-truth progress extraction from the provider's own session log
-    // (claude only for now). `agent_final_text` tracks the latest assistant
-    // text so PROCESS_EXITED can be paired with a log-derived FINAL_OUTPUT
-    // instead of a screen scrape.
-    agent_log: ?claude_log.SessionLogWatcher = null,
-    agent_log_last_poll_ms: i64 = 0,
-    agent_final_text: ?[]u8 = null,
-
     // Idle detection bookkeeping.
     idle_ms: i64 = default_idle_ms,
     last_output_ms: i64 = 0,
@@ -144,10 +130,6 @@ const State = struct {
         }
         if (self.terminal) |*t| t.deinit();
         self.terminal = null;
-        if (self.agent_log) |*watcher| watcher.deinit();
-        self.agent_log = null;
-        if (self.agent_final_text) |text| self.allocator.free(text);
-        self.agent_final_text = null;
         if (self.raw_spool_file) |file| file.close();
         self.raw_spool_file = null;
         if (self.raw_spool_path) |path| self.allocator.free(path);
@@ -193,7 +175,6 @@ const State = struct {
             }
 
             try self.maybeEmitIdle();
-            try self.pumpAgentLog(false);
         }
     }
 
@@ -205,13 +186,6 @@ const State = struct {
         if (self.idle_pending) {
             timeout = @max(0, self.idle_ms - (now - self.last_output_ms));
         }
-        // An active session-log watcher needs periodic wakeups even when the
-        // PTY is silent: the agent writes its transcript out-of-band.
-        if (self.agent_log != null) {
-            const until_log_poll = @max(0, self.agent_log_last_poll_ms + agent_log_poll_ms - now);
-            timeout = if (timeout < 0) until_log_poll else @min(timeout, until_log_poll);
-        }
-
         if (timeout < 0) return -1;
         return @intCast(@min(timeout, std.math.maxInt(i32)));
     }
@@ -226,7 +200,7 @@ const State = struct {
     }
 
     fn pumpPty(self: *State) LoopError!void {
-        var session = &(self.session orelse return);
+        const session = if (self.session) |*s| s else return;
         var buf: [pty_read_buffer_bytes]u8 = undefined;
         // Drain everything available; PTY master is O_NONBLOCK.
         while (true) {
@@ -306,8 +280,8 @@ const State = struct {
     }
 
     fn feedTerminal(self: *State, bytes: []const u8) void {
-        if (self.terminal == null) return;
-        var core = self.terminal.?.asCore();
+        const managed_terminal = if (self.terminal) |*t| t else return;
+        var core = managed_terminal.asCore();
         const effects = core.write_from_pty(&core, bytes, self.allocator) catch return;
         defer effects.deinit(self.allocator);
         for (effects.items) |effect| switch (effect) {
@@ -477,7 +451,8 @@ const State = struct {
             try self.emitError("terminal", @errorName(err));
             return;
         };
-        errdefer managed.deinit();
+        var managed_owned = true;
+        errdefer if (managed_owned) managed.deinit();
         self.backend = switch (managed) {
             .native => .native,
             .compat => .compat,
@@ -495,6 +470,7 @@ const State = struct {
         };
 
         self.terminal = managed;
+        managed_owned = false;
         self.session = session;
         self.cols = cols;
         self.rows = rows;
@@ -506,12 +482,6 @@ const State = struct {
         self.title_filter = .{};
         self.terminal_output_filter = .{};
         self.steering = steer.forProvider(self.provider);
-        self.agent_log_last_poll_ms = 0;
-        if (self.agent_final_text) |old| {
-            self.allocator.free(old);
-            self.agent_final_text = null;
-        }
-        self.startAgentLogWatcher(cwd_opt, env_list);
 
         const axes = self.selected_transport.axes();
         try self.emitMap(.event, &.{
@@ -541,7 +511,12 @@ const State = struct {
 
         if (initial_input) |input| {
             if (input.len > 0) {
-                self.session.?.pty.writeAll(input) catch |err| {
+                const session_ref = if (self.session) |*s| s else {
+                    try self.emitError("state", "no session");
+                    return;
+                };
+
+                session_ref.pty.writeAll(input) catch |err| {
                     try self.emitError("pty_write", @errorName(err));
                     return;
                 };
@@ -646,10 +621,10 @@ const State = struct {
     }
 
     fn handleWriteStdin(self: *State, value: msgpack.Value) LoopError!void {
-        var session = &(self.session orelse {
+        const session = if (self.session) |*s| s else {
             try self.emitError("state", "no session");
             return;
-        });
+        };
         const bytes_value = value.mapGet("bytes") orelse {
             try self.emitError("protocol", "write_stdin: missing bytes");
             return;
@@ -668,10 +643,10 @@ const State = struct {
     }
 
     fn handleResize(self: *State, value: msgpack.Value) LoopError!void {
-        var session = &(self.session orelse {
+        const session = if (self.session) |*s| s else {
             try self.emitError("state", "no session");
             return;
-        });
+        };
         const cols: u16 = if (value.mapGet("cols")) |v| @intCast(v.asUint() orelse self.cols) else self.cols;
         const rows: u16 = if (value.mapGet("rows")) |v| @intCast(v.asUint() orelse self.rows) else self.rows;
         if (cols == 0 or rows == 0) return;
@@ -688,10 +663,10 @@ const State = struct {
     }
 
     fn handleSignal(self: *State, value: msgpack.Value) LoopError!void {
-        var session = &(self.session orelse {
+        const session = if (self.session) |*s| s else {
             try self.emitError("state", "no session");
             return;
-        });
+        };
         const sig: u8 = if (value.mapGet("signum")) |v| @intCast(v.asUint() orelse 15) else 15;
         session.kill(sig) catch |err| {
             try self.emitError("signal", @errorName(err));
@@ -699,10 +674,10 @@ const State = struct {
     }
 
     fn handleCancel(self: *State) LoopError!void {
-        var session = &(self.session orelse {
+        const session = if (self.session) |*s| s else {
             try self.emitError("state", "no session");
             return;
-        });
+        };
         session.kill(15) catch |err| {
             try self.emitError("cancel", @errorName(err));
         };
@@ -758,10 +733,10 @@ const State = struct {
     /// The provider keymap chosen at `open` decides the byte sequence, so the
     /// brain never has to know which keys a given provider's dialogs expect.
     fn handleSteer(self: *State, value: msgpack.Value) LoopError!void {
-        var session = &(self.session orelse {
+        const session = if (self.session) |*s| s else {
             try self.emitError("state", "no session");
             return;
-        });
+        };
         const name = stringField(value, "interaction") orelse {
             try self.emitError("protocol", "steer: missing interaction");
             return;
@@ -795,96 +770,13 @@ const State = struct {
         });
     }
 
-    fn startAgentLogWatcher(self: *State, cwd_opt: ?[]const u8, env: []const []const u8) void {
-        if (!std.mem.eql(u8, self.provider.value, "claude")) return;
-        if (self.agent_log != null) return;
-
-        var config_buf: ?[]u8 = null;
-        defer if (config_buf) |buf| self.allocator.free(buf);
-        const config_dir = envValue(env, "CLAUDE_CONFIG_DIR") orelse blk: {
-            const home = envValue(env, "HOME") orelse {
-                self.emitError("agent_log", "no CLAUDE_CONFIG_DIR or HOME in session env") catch {};
-                return;
-            };
-            config_buf = std.fs.path.join(
-                self.allocator,
-                &.{ home, claude_log.default_config_dir_name },
-            ) catch return;
-            break :blk config_buf.?;
-        };
-
-        // Claude keys its project log dir by the agent's absolute cwd.
-        const cwd = cwd_opt orelse ".";
-        const abs_cwd = std.fs.cwd().realpathAlloc(self.allocator, cwd) catch null;
-        defer if (abs_cwd) |path| self.allocator.free(path);
-
-        self.agent_log = claude_log.SessionLogWatcher.init(
-            self.allocator,
-            config_dir,
-            abs_cwd orelse cwd,
-            std.time.timestamp(),
-        ) catch |err| {
-            self.emitError("agent_log", @errorName(err)) catch {};
-            return;
-        };
-
-        self.emitMap(.event, &.{
-            .{ "type", .{ .str = "AGENT_LOG_WATCH" } },
-            .{ "source", .{ .str = "claude_session_log" } },
-            .{ "dir", .{ .str = self.agent_log.?.project_dir } },
-        }) catch {};
-    }
-
-    /// Tail the agent's session log and forward parsed turns as AGENT_LOG
-    /// events. This — not the rendered screen — is the progress channel for
-    /// providers that write a transcript.
-    fn pumpAgentLog(self: *State, force: bool) LoopError!void {
-        if (self.agent_log == null) return;
-        const now = std.time.milliTimestamp();
-        if (!force and now - self.agent_log_last_poll_ms < agent_log_poll_ms) return;
-        self.agent_log_last_poll_ms = now;
-
-        const watcher = &self.agent_log.?;
-        const events = watcher.poll(self.allocator) catch |err| {
-            self.emitError("agent_log", @errorName(err)) catch {};
-            return;
-        };
-        defer claude_log.freeEvents(self.allocator, events);
-
-        for (events) |event| {
-            try self.emitAgentLogEvent(event);
-            if (event.kind == .assistant_text) {
-                const copy = self.allocator.dupe(u8, event.text) catch return error.OutOfMemory;
-                if (self.agent_final_text) |old| self.allocator.free(old);
-                self.agent_final_text = copy;
-            }
-        }
-    }
-
-    fn emitAgentLogEvent(self: *State, event: claude_log.LogEvent) LoopError!void {
-        const path = if (self.agent_log) |*watcher|
-            (watcher.sessionPath() orelse "")
-        else
-            "";
-
-        try self.emitMap(.event, &.{
-            .{ "type", .{ .str = "AGENT_LOG" } },
-            .{ "source", .{ .str = "claude_session_log" } },
-            .{ "kind", .{ .str = @tagName(event.kind) } },
-            .{ "tool", .{ .str = event.tool_name orelse "" } },
-            .{ "text", .{ .str = event.text } },
-            .{ "is_error", .{ .boolean = event.is_error } },
-            .{ "path", .{ .str = path } },
-        });
-    }
-
     fn handleSnapshot(self: *State, value: msgpack.Value) LoopError!void {
         _ = value; // mode/lines reserved for scrollback support; visible-only for v1
-        var t = &(self.terminal orelse {
+        const managed_terminal = if (self.terminal) |*t| t else {
             try self.emitError("state", "no terminal");
             return;
-        });
-        var core = t.asCore();
+        };
+        var core = managed_terminal.asCore();
         const snap = core.snapshot(&core, self.allocator) catch |err| {
             try self.emitError("snapshot", @errorName(err));
             return;
@@ -896,11 +788,11 @@ const State = struct {
 
     fn handleEncodeKey(self: *State, value: msgpack.Value, arena: std.mem.Allocator) LoopError!void {
         _ = arena;
-        var t = &(self.terminal orelse {
+        const managed_terminal = if (self.terminal) |*t| t else {
             try self.emitError("state", "no terminal");
             return;
-        });
-        var core = t.asCore();
+        };
+        var core = managed_terminal.asCore();
 
         const input: terminal.KeyInput = blk: {
             if (value.mapGet("text")) |text_v| {
@@ -977,18 +869,6 @@ const State = struct {
         const term_status = session.wait();
         self.session = null;
         try self.emitTerminalOutputFromCurrentScreen();
-        // Drain the session log one last time so the agent's actual final
-        // message (from its own transcript) wins over any screen scrape.
-        self.pumpAgentLog(true) catch {};
-        if (self.agent_final_text) |text| {
-            if (text.len > 0) {
-                try self.emitMap(.event, &.{
-                    .{ "type", .{ .str = "FINAL_OUTPUT" } },
-                    .{ "text", .{ .str = text } },
-                    .{ "origin", .{ .str = "agent_log" } },
-                });
-            }
-        }
         switch (term_status) {
             .exited => |code| try self.emitMap(.event, &.{
                 .{ "type", .{ .str = "PROCESS_EXITED" } },
@@ -1046,8 +926,8 @@ const State = struct {
     }
 
     fn detectPromptsOnIdle(self: *State) LoopError!void {
-        var t = &(self.terminal orelse return);
-        var core = t.asCore();
+        const managed_terminal = if (self.terminal) |*t| t else return;
+        var core = managed_terminal.asCore();
         const visible = core.visible_text(&core, self.allocator) catch |err| {
             try self.emitError("prompt", @errorName(err));
             return;
@@ -1194,8 +1074,8 @@ const State = struct {
     }
 
     fn emitTerminalOutputFromCurrentScreen(self: *State) LoopError!void {
-        var t = &(self.terminal orelse return);
-        var core = t.asCore();
+        const managed_terminal = if (self.terminal) |*t| t else return;
+        var core = managed_terminal.asCore();
         const visible = core.visible_text(&core, self.allocator) catch |err| {
             try self.emitError("terminal_output", @errorName(err));
             return;

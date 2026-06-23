@@ -11,7 +11,7 @@ defmodule Mitos.Session do
 
   Public API (call from any process):
 
-      {:ok, pid} = Mitos.Orchestrator.start_session(opts)
+      {:ok, pid} = Mitos.SessionSupervisor.start_session(opts)
       Mitos.Session.write_stdin(pid, "ls\\n")
       Mitos.Session.resize(pid, 100, 30)
       {:ok, snap} = Mitos.Session.snapshot(pid)
@@ -22,7 +22,6 @@ defmodule Mitos.Session do
       {:mitos, session_id, {:raw, bytes}}        # opaque PTY bytes
       {:mitos, session_id, {:event, %{...}}}     # typed engine events
       {:mitos, session_id, {:prompt, event}}     # semantic prompt events
-      {:mitos, session_id, {:agent_log, %{...}}} # provider session-log turns
       {:mitos, session_id, {:snapshot, %{...}}}  # on-demand grid snapshot
 
   New subscribers get a `{:mitos, session_id, {:replay, bytes}}` on attach to
@@ -54,9 +53,15 @@ defmodule Mitos.Session do
     :idle_ms,
     :snapshot_waiter,
     :trace,
+    :schema_root,
+    :opening_decision_seq,
+    :latest_final_output,
+    :pre_hook_results,
+    :post_hook_results,
     :authority,
     :project_id,
     backend: :unknown,
+    token_usage_entries: [],
     scrollback: <<>>,
     exited?: false,
     pending: %{},
@@ -130,6 +135,9 @@ defmodule Mitos.Session do
   """
   def snapshot(server, timeout \\ 5_000), do: GenServer.call(server, :snapshot, timeout)
 
+  @doc "Harvest workspace diff, RESULT, and registered artifacts for a session."
+  def harvest(server, timeout \\ 5_000), do: GenServer.call(server, :harvest, timeout)
+
   def shutdown(server, grace_ms \\ 100), do: GenServer.cast(server, {:shutdown, grace_ms})
 
   def session_id(server), do: GenServer.call(server, :session_id)
@@ -150,10 +158,17 @@ defmodule Mitos.Session do
       cols: Keyword.get(opts, :cols, 80),
       rows: Keyword.get(opts, :rows, 24),
       idle_ms: Keyword.get(opts, :idle_ms, 250),
+      trace: opts[:trace],
+      schema_root: opts[:schema_root],
+      opening_decision_seq: opts[:opening_decision_seq],
       project_id: Keyword.get(opts, :project_id, "default")
     }
 
-    state = %{state | trace: Mitos.Trace.open!(trace_options(state, opts))}
+    state =
+      if state.trace,
+        do: state,
+        else: %{state | trace: Mitos.Trace.open!(trace_options(state, opts))}
+
     state = maybe_start_authority(state, opts)
 
     {:ok, state, {:continue, :open_port}}
@@ -161,6 +176,17 @@ defmodule Mitos.Session do
 
   @impl true
   def handle_continue(:open_port, state) do
+    {state, pre_hook_results} = run_hooks(state, "pre")
+    state = %{state | pre_hook_results: pre_hook_results}
+
+    if Mitos.Hooks.blocked?(pre_hook_results) do
+      block_pre_launch(state, pre_hook_results)
+    else
+      open_sidecar(state)
+    end
+  end
+
+  defp open_sidecar(state) do
     port =
       Port.open(
         {:spawn_executable, state.sidecar_path},
@@ -230,6 +256,10 @@ defmodule Mitos.Session do
     {:noreply, timeout_pending_request(request_id, state)}
   end
 
+  def handle_info({:subrun_timeout, parent_task_id, child_task_id}, state) do
+    {:noreply, timeout_pending_subrun(parent_task_id, child_task_id, state)}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     {:noreply, drop_pending_monitor(ref, state)}
   end
@@ -250,6 +280,11 @@ defmodule Mitos.Session do
       _ ->
         {:reply, {:error, :snapshot_in_flight}, state}
     end
+  end
+
+  def handle_call(:harvest, _from, state) do
+    {state, harvest} = harvest_state(state)
+    {:reply, {:ok, harvest}, state}
   end
 
   @impl true
@@ -274,12 +309,17 @@ defmodule Mitos.Session do
   end
 
   def handle_cast({:authority_request, %Request{} = request}, state) do
-    {state, _request} = register_pending_request(request, state)
+    {state, request} = register_pending_request(request, state)
+    state = maybe_apply_broker_policy(request, state)
     {:noreply, state}
   end
 
   def handle_cast({:resolve, request_id, decision, payload}, state) do
-    {:noreply, resolve_pending_request(%Verdict{id: request_id, decision: decision, payload: payload}, state)}
+    {:noreply,
+     resolve_pending_request(
+       %Verdict{id: request_id, decision: decision, payload: payload},
+       state
+     )}
   end
 
   def handle_cast({:shutdown, grace_ms}, state) do
@@ -289,6 +329,8 @@ defmodule Mitos.Session do
 
   @impl true
   def terminate(_reason, state) do
+    Mitos.KeyVault.revoke_run(state.session_id)
+
     if state.authority do
       try do
         Mitos.Authority.stop(state.authority)
@@ -357,17 +399,6 @@ defmodule Mitos.Session do
     {:noreply, state}
   end
 
-  # Ground-truth progress extracted from the provider's own session log
-  # (e.g. claude's JSONL transcript). Broadcast on a dedicated channel as
-  # well, so brains can follow agent turns without filtering the event
-  # firehose or parsing terminal output.
-  defp handle_event(%{"type" => "AGENT_LOG"} = event, state) do
-    state = trace_event(state, event)
-    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
-    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:agent_log, event}})
-    {:noreply, state}
-  end
-
   defp handle_event(%{"type" => "ACTION_REQUESTED"} = event, state) do
     {request, event} = request_from_scrape_event(event)
     {state, request} = register_pending_request(request, state, event)
@@ -378,25 +409,104 @@ defmodule Mitos.Session do
           state
 
         {decision, payload} ->
-          resolve_pending_request(%Verdict{id: request.id, decision: decision, payload: payload}, state)
+          resolve_pending_request(
+            %Verdict{id: request.id, decision: decision, payload: payload},
+            state
+          )
       end
 
     {:noreply, state}
   end
 
-  defp handle_event(%{"type" => "exit"} = event, state) do
+  defp handle_event(%{"type" => "RUN_STARTED"} = event, state) do
+    state =
+      state
+      |> trace_event(event)
+      |> trace_effect("capability_started", %{
+        "ref" => %{
+          "provider" => event["provider"],
+          "adapter" => event["adapter"],
+          "transport" => event["transport"]
+        },
+        "payload" =>
+          %{
+            "harness" => event["adapter"],
+            "transport" => event["transport"]
+          }
+          |> put_present(
+            "resolved_skill",
+            resolved_skill_effect(launch_value(state.launch_spec, "resolved_skill"))
+          )
+      })
+      |> lease_credentials()
+
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+    {:noreply, state}
+  end
+
+  defp handle_event(%{"type" => "FINAL_OUTPUT", "text" => text} = event, state)
+       when is_binary(text) do
+    state = trace_event(state, event)
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+    {:noreply, %{state | latest_final_output: text}}
+  end
+
+  defp handle_event(%{"type" => "STRUCTURED_OUTPUT"} = event, state) do
+    source_sequence = trace_sequence(state)
+
+    state =
+      state
+      |> trace_event(event)
+      |> collect_structured_token_usage(event, source_sequence)
+
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+    {:noreply, state}
+  end
+
+  defp handle_event(%{"type" => type} = event, state) when type in ["exit", "PROCESS_EXITED"] do
     # The sidecar reports the agent's exit *and then* exits itself; we don't
     # have to wait for the Port `:exit_status` to come around. Stopping here
     # keeps the Session lifetime tight against the agent process lifetime.
-    state = trace_event(state, event)
+    {state, post_hook_results} = run_hooks(state, "post")
+    state = maybe_trace_post_hook_verification(state, post_hook_results)
+    {state, harvest} = harvest_state(state)
+    verification = hook_verification(post_hook_results)
+
+    state =
+      state
+      |> trace_event(event)
+      |> flush_token_usage()
+      |> trace_effect("capability_finished", %{
+        "ref" => %{"result" => harvest.result["path"] || "RESULT"},
+        "payload" => %{
+          "status" => exit_status(event),
+          "exit_code" => event["code"],
+          "signal" => event["signal"],
+          "final_output" => state.latest_final_output,
+          "harvest" => Mitos.Harvest.effect_payload(harvest),
+          "result" => harvest.result,
+          "verification" => verification,
+          "hooks" => %{
+            "pre" => Enum.map(state.pre_hook_results || [], &Mitos.Hooks.effect_payload/1),
+            "post" => Enum.map(post_hook_results, &Mitos.Hooks.effect_payload/1)
+          }
+        }
+      })
+      |> revoke_credentials()
+
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     state = reply_snapshot(state, {:error, :exited})
-    {:stop, :normal, %{state | exited?: true}}
+    {:stop, :normal, %{state | post_hook_results: post_hook_results, exited?: true}}
   end
 
   defp handle_event(%{"type" => type} = event, state) when type in ["ERROR", "error"] do
     Logger.warning("mitos session #{inspect(state.session_id)} sidecar error: #{inspect(event)}")
-    state = trace_event(state, event)
+
+    state =
+      state
+      |> trace_event(event)
+      |> maybe_trace_launch_failure(event)
+
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     {:noreply, state}
   end
@@ -417,16 +527,26 @@ defmodule Mitos.Session do
       state
       |> put_pending(request)
       |> trace_event(event)
+      |> maybe_trace_authority_request_effect(request)
 
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
     {state, request}
   end
 
-  defp put_pending(state, %Request{id: request_id, origin: :authority_socket, from: from} = request)
+  defp put_pending(
+         state,
+         %Request{id: request_id, origin: :authority_socket, from: from} = request
+       )
        when not is_nil(from) do
     {pid, _tag} = from
     monitor_ref = Process.monitor(pid)
-    timer_ref = Process.send_after(self(), {:authority_request_timeout, request_id}, @authority_socket_timeout_ms)
+
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:authority_request_timeout, request_id},
+        @authority_socket_timeout_ms
+      )
 
     %{
       state
@@ -447,6 +567,7 @@ defmodule Mitos.Session do
         {state, reply_payload} = complete_request(request, verdict, state)
         event = verdict_event(request, verdict, reply_payload)
         state = trace_event(state, event)
+        state = maybe_trace_authority_verdict_effect(state, request, verdict, reply_payload)
         Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
         state
 
@@ -455,26 +576,66 @@ defmodule Mitos.Session do
     end
   end
 
-  defp complete_request(%Request{origin: :terminal_scrape} = request, %Verdict{decision: :authorize} = verdict, state) do
+  defp complete_request(
+         %Request{origin: :terminal_scrape} = request,
+         %Verdict{decision: :authorize} = verdict,
+         state
+       ) do
     token = Map.get(verdict.payload, "token", Map.get(verdict.payload, :token, ""))
     send_control(state.port, Protocol.authorize(request.id, token, origin: request.origin))
     {state, verdict.payload}
   end
 
-  defp complete_request(%Request{origin: :terminal_scrape} = request, %Verdict{decision: :deny} = verdict, state) do
-    reason = verdict.reason || Map.get(verdict.payload, "reason", Map.get(verdict.payload, :reason, "denied"))
+  defp complete_request(
+         %Request{origin: :terminal_scrape} = request,
+         %Verdict{decision: :deny} = verdict,
+         state
+       ) do
+    reason =
+      verdict.reason ||
+        Map.get(verdict.payload, "reason", Map.get(verdict.payload, :reason, "denied"))
+
     send_control(state.port, Protocol.deny(request.id, reason, origin: request.origin))
     {state, Map.put(verdict.payload, "reason", reason)}
   end
 
-  defp complete_request(%Request{origin: :authority_socket} = request, %Verdict{decision: :deny} = verdict, state) do
-    reason = verdict.reason || Map.get(verdict.payload, "reason", Map.get(verdict.payload, :reason, "denied"))
-    reply = %{"ok" => true, "request_id" => request.id, "decision" => "deny", "reason" => reason, "payload" => %{}}
+  defp complete_request(
+         %Request{origin: :authority_socket} = request,
+         %Verdict{decision: :deny} = verdict,
+         state
+       ) do
+    reason =
+      verdict.reason ||
+        Map.get(verdict.payload, "reason", Map.get(verdict.payload, :reason, "denied"))
+
+    reply = %{
+      "ok" => true,
+      "request_id" => request.id,
+      "decision" => "deny",
+      "reason" => reason,
+      "payload" => %{}
+    }
+
+    state =
+      if request.method == "tool_broker" do
+        trace_effect(state, "egress_denied", %{
+          "ref" => egress_ref(request),
+          "payload" => %{"reason" => reason}
+        })
+      else
+        state
+      end
+
     GenServer.reply(request.from, reply)
+
     {state, reply["payload"]}
   end
 
-  defp complete_request(%Request{origin: :authority_socket} = request, %Verdict{decision: :authorize} = verdict, state) do
+  defp complete_request(
+         %Request{origin: :authority_socket} = request,
+         %Verdict{decision: :authorize} = verdict,
+         state
+       ) do
     {state, payload} = authorized_socket_payload(request, verdict.payload, state)
 
     reply = %{
@@ -500,17 +661,42 @@ defmodule Mitos.Session do
       {state, payload}
   end
 
-  defp authorized_socket_payload(%Request{method: "approval"}, payload, state), do: {state, payload}
-  defp authorized_socket_payload(%Request{method: "tool_broker"} = request, _payload, state), do: execute_tool_broker(request, state)
-  defp authorized_socket_payload(%Request{method: "memory_fetch"} = request, _payload, state), do: memory_fetch(request, state)
-  defp authorized_socket_payload(%Request{method: "memory_put"} = request, _payload, state), do: memory_put(request, state)
-  defp authorized_socket_payload(%Request{method: "artifact_register"} = request, _payload, state), do: artifact_register(request, state)
+  defp authorized_socket_payload(%Request{method: "approval"}, payload, state),
+    do: {state, payload}
+
+  defp authorized_socket_payload(%Request{method: "tool_broker"} = request, payload, state),
+    do: execute_tool_broker(%{request | context: merge_context(request.context, payload)}, state)
+
+  defp authorized_socket_payload(%Request{method: "memory_fetch"} = request, _payload, state),
+    do: memory_fetch(request, state)
+
+  defp authorized_socket_payload(%Request{method: "memory_put"} = request, _payload, state),
+    do: memory_put(request, state)
+
+  defp authorized_socket_payload(%Request{method: "subrun_spawn"} = request, _payload, state),
+    do: subrun_spawn(request, state)
+
+  defp authorized_socket_payload(%Request{method: "subtask_return"} = request, _payload, state),
+    do: subtask_return(request, state)
+
+  defp authorized_socket_payload(%Request{method: "task_emit"} = request, _payload, state),
+    do: task_emit(request, state)
+
+  defp authorized_socket_payload(
+         %Request{method: "artifact_register"} = request,
+         _payload,
+         state
+       ),
+       do: artifact_register(request, state)
 
   defp timeout_pending_request(request_id, state) do
     case Map.fetch(state.pending, request_id) do
-      {:ok, %Request{origin: :authority_socket, from: from}} ->
+      {:ok, %Request{origin: :authority_socket, from: from} = request} ->
         GenServer.reply(from, %{"ok" => false, "error" => "timeout", "request_id" => request_id})
-        cleanup_pending_request(request_id, state)
+
+        state
+        |> trace_authority_timeout_effects(request)
+        |> cleanup_pending_request(request_id)
 
       {:ok, _request} ->
         state
@@ -518,6 +704,40 @@ defmodule Mitos.Session do
       :error ->
         state
     end
+  end
+
+  defp timeout_pending_subrun(_parent_task_id, _child_task_id, %{trace: nil} = state), do: state
+
+  defp timeout_pending_subrun(parent_task_id, child_task_id, state) do
+    events =
+      state.trace.run_id
+      |> Mitos.Trace.read_events(base_dir: trace_base_dir(state.trace))
+
+    pool = Mitos.WorkPool.fold_events(events)
+    invocation = get_in(pool, ["invocations", "#{parent_task_id}->#{child_task_id}"])
+
+    if invocation && invocation["status"] == "requested" do
+      trace =
+        Mitos.WorkPool.append_subtask_timeout(
+          state.trace,
+          parent_task_id,
+          child_task_id,
+          caused_by: state.opening_decision_seq || 0,
+          timeout_ms: invocation["timeout_ms"]
+        )
+
+      %{state | trace: trace}
+    else
+      state
+    end
+  end
+
+  defp trace_base_dir(%Mitos.Trace{dir: dir}) do
+    dir
+    |> Path.dirname()
+    |> Path.dirname()
+  rescue
+    _ -> Mitos.Trace.base_dir()
   end
 
   defp drop_pending_monitor(ref, state) do
@@ -603,7 +823,12 @@ defmodule Mitos.Session do
   end
 
   defp canonical_request_event(event, %Request{} = request) do
-    producer_request_id = Map.get(event, "producer_request_id", Map.get(event, "request_id", Map.get(event, "action_id")))
+    producer_request_id =
+      Map.get(
+        event,
+        "producer_request_id",
+        Map.get(event, "request_id", Map.get(event, "action_id"))
+      )
 
     event
     |> Map.put("request_id", request.id)
@@ -631,16 +856,29 @@ defmodule Mitos.Session do
     |> maybe_put_event("reason", verdict.reason)
   end
 
-  defp auto_decision(%{"auto_decision" => decision} = event), do: parse_auto_decision(decision, event)
-  defp auto_decision(%{"decision" => decision, "decided_by" => _} = event), do: parse_auto_decision(decision, event)
+  defp auto_decision(%{"auto_decision" => decision} = event),
+    do: parse_auto_decision(decision, event)
+
+  defp auto_decision(%{"decision" => decision, "decided_by" => _} = event),
+    do: parse_auto_decision(decision, event)
+
   defp auto_decision(_event), do: nil
 
-  defp parse_auto_decision(decision, event) when decision in ["authorize", "allow", :authorize, :allow] do
-    {:authorize, %{"decided_by" => Map.get(event, "decided_by", "policy"), "fast_path" => Map.get(event, "fast_path", false)}}
+  defp parse_auto_decision(decision, event)
+       when decision in ["authorize", "allow", :authorize, :allow] do
+    {:authorize,
+     %{
+       "decided_by" => Map.get(event, "decided_by", "policy"),
+       "fast_path" => Map.get(event, "fast_path", false)
+     }}
   end
 
   defp parse_auto_decision(decision, event) when decision in ["deny", "block", :deny, :block] do
-    {:deny, %{"decided_by" => Map.get(event, "decided_by", "policy"), "fast_path" => Map.get(event, "fast_path", false)}}
+    {:deny,
+     %{
+       "decided_by" => Map.get(event, "decided_by", "policy"),
+       "fast_path" => Map.get(event, "fast_path", false)
+     }}
   end
 
   defp parse_auto_decision(_decision, _event), do: nil
@@ -677,9 +915,24 @@ defmodule Mitos.Session do
 
         _ ->
           command = context_get(context, "command") || context_get(context, "cmd")
-          if not is_binary(command) or command == "", do: raise(ArgumentError, "tool_broker requires context.command or context.argv")
+
+          if not is_binary(command) or command == "",
+            do: raise(ArgumentError, "tool_broker requires context.command or context.argv")
+
           {"/bin/sh", ["-c", command], command}
       end
+
+    egress_ref = egress_ref(request)
+
+    state =
+      trace_effect(state, "egress_attempted", %{
+        "ref" => egress_ref,
+        "payload" => %{
+          "command" => command_text,
+          "cwd" => cwd,
+          "origin" => origin_string(request.origin)
+        }
+      })
 
     {output, exit_status} = System.cmd(cmd, args, cd: cwd, stderr_to_stdout: true)
 
@@ -704,6 +957,34 @@ defmodule Mitos.Session do
       else
         state
       end
+
+    state =
+      state
+      |> trace_effect("egress_allowed", %{
+        "ref" => egress_ref,
+        "payload" => %{
+          "status" => exit_status,
+          "stdout_bytes" => byte_size(output),
+          "stderr_bytes" => 0
+        }
+      })
+      |> trace_effect("egress_completed", %{
+        "ref" => egress_ref,
+        "payload" => %{
+          "status" => exit_status,
+          "stdout_bytes" => byte_size(output),
+          "stderr_bytes" => 0
+        }
+      })
+      |> trace_effect("tool_brokered", %{
+        "ref" => %{"request_id" => request.id, "method" => request.method},
+        "payload" => %{
+          "command" => command_text,
+          "cwd" => cwd,
+          "exit_status" => exit_status,
+          "stdout_bytes" => byte_size(output)
+        }
+      })
 
     {state, payload}
   end
@@ -733,12 +1014,24 @@ defmodule Mitos.Session do
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, bytes)
 
-    {state, %{"key" => key, "bytes" => byte_size(bytes)}}
+    payload = %{"key" => key, "bytes" => byte_size(bytes)}
+
+    state =
+      trace_effect(state, "memory_written", %{
+        "ref" => %{"request_id" => request.id, "key" => key},
+        "payload" => payload
+      })
+
+    {state, payload}
   end
 
   defp artifact_register(%Request{} = request, state) do
     context = context_map(request.context)
-    path = context_get(context, "path") || raise ArgumentError, "artifact_register requires context.path"
+
+    path =
+      context_get(context, "path") ||
+        raise ArgumentError, "artifact_register requires context.path"
+
     kind = context_get(context, "kind", "artifact")
 
     artifact = %{
@@ -749,14 +1042,236 @@ defmodule Mitos.Session do
       "metadata" => context_get(context, "metadata", %{})
     }
 
-    state = trace_event(state, artifact)
+    state =
+      state
+      |> trace_event(artifact)
+      |> trace_effect("artifact_registered", %{
+        "ref" => Map.put(Map.delete(artifact, "type"), "request_id", request.id),
+        "payload" => %{}
+      })
+
     Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, artifact}})
 
     {state, Map.delete(artifact, "type")}
   end
 
+  defp subrun_spawn(%Request{}, %{trace: nil}) do
+    raise ArgumentError, "subrun_spawn requires an open trace"
+  end
+
+  defp subrun_spawn(%Request{} = request, state) do
+    context = context_map(request.context)
+    parent_task_id = subrun_parent_task_id(context, state)
+    child_task = subrun_child_task(context, state, request)
+    return_to = subrun_return_to(request, context, state)
+    timeout_ms = optional_integer(context_get(context, "timeout_ms"))
+
+    {trace, admitted_child_task, admission} =
+      Mitos.WorkPool.append_invoke(
+        state.trace,
+        parent_task_id,
+        child_task,
+        caused_by: state.opening_decision_seq || 0,
+        return_to: return_to,
+        timeout_ms: timeout_ms,
+        max_depth: optional_integer(context_get(context, "max_depth")) || 3,
+        budget_cap: context_get(context, "budget_cap", %{}),
+        dedupe_key: context_get(context, "dedupe_key"),
+        allowed_capabilities:
+          context_get(context, "allowed_capabilities") ||
+            context_get(context, "allowlist") ||
+            context_get(context, "policy_allowlist")
+      )
+
+    if admitted_child_task && is_integer(timeout_ms) && timeout_ms > 0 do
+      Process.send_after(self(), {:subrun_timeout, parent_task_id, child_task["id"]}, timeout_ms)
+    end
+
+    {%{state | trace: trace},
+     %{
+       "parent_task_id" => parent_task_id,
+       "child_task_id" => child_task["id"],
+       "pool" => child_task["pool"],
+       "status" => if(admitted_child_task, do: "queued", else: admission["status"]),
+       "return_to" => return_to,
+       "admission" => admission
+     }}
+  end
+
+  defp task_emit(%Request{}, %{trace: nil}) do
+    raise ArgumentError, "task_emit requires an open trace"
+  end
+
+  defp task_emit(%Request{} = request, state) do
+    context = context_map(request.context)
+    parent_task_id = subrun_parent_task_id(context, state)
+    task = subrun_child_task(context, state, request)
+
+    {trace, emitted_task} =
+      Mitos.WorkPool.append_emitted_task(
+        state.trace,
+        parent_task_id,
+        task,
+        caused_by: state.opening_decision_seq || 0,
+        emitted_by: "authority:#{request.id || "task_emit"}",
+        max_depth: optional_integer(context_get(context, "max_depth")) || 3,
+        budget_cap: context_get(context, "budget_cap", %{}),
+        dedupe_key: context_get(context, "dedupe_key")
+      )
+
+    reply =
+      if emitted_task do
+        %{
+          "parent_task_id" => parent_task_id,
+          "task_id" => emitted_task["id"],
+          "pool" => emitted_task["pool"],
+          "status" => "queued"
+        }
+      else
+        %{
+          "parent_task_id" => parent_task_id,
+          "task_id" => task["id"],
+          "status" => "not_enqueued"
+        }
+      end
+
+    {%{state | trace: trace}, reply}
+  end
+
+  defp subrun_parent_task_id(context, state) do
+    context
+    |> context_get(
+      "parent_task_id",
+      context_get(context, "parent_task", "run:#{state.session_id}")
+    )
+    |> required_task_string!("subrun_spawn requires context.parent_task_id")
+  end
+
+  defp subrun_child_task(context, state, request) do
+    raw_task = context_get(context, "task", context_get(context, "task_spec", %{}))
+    task_attrs = subrun_task_attrs(raw_task)
+    task_payload = context_map(context_get(task_attrs, "payload", %{}))
+
+    payload =
+      task_payload
+      |> put_present(
+        "capability_ref",
+        context_get(context, "capability_ref", context_get(context, "capability"))
+      )
+      |> put_present("inputs", context_get(context, "inputs"))
+      |> put_present("args", context_get(context, "args"))
+
+    task_attrs
+    |> Map.put("id", subrun_child_task_id(context, task_attrs, request))
+    |> Map.put("pool", optional_task_string(context_get(context, "pool"), "calls"))
+    |> Map.put("tenant", subrun_tenant(context, state))
+    |> Map.put("payload", payload)
+    |> put_present("priority", optional_integer(context_get(context, "priority")))
+    |> put_present("budget", context_get(context, "budget", context_get(task_attrs, "budget")))
+    |> put_present("deps", context_get(context, "deps", context_get(task_attrs, "deps")))
+    |> put_present(
+      "pipeline",
+      context_get(context, "pipeline", context_get(task_attrs, "pipeline"))
+    )
+    |> put_present(
+      "external",
+      context_get(context, "external", context_get(task_attrs, "external"))
+    )
+  end
+
+  defp subrun_task_attrs(%{} = attrs), do: stringify_keys(attrs)
+
+  defp subrun_task_attrs(task) when is_binary(task) do
+    %{"payload" => %{"intent" => task}}
+  end
+
+  defp subrun_task_attrs(_task), do: %{}
+
+  defp subrun_child_task_id(context, task_attrs, request) do
+    context
+    |> context_get(
+      "child_task_id",
+      context_get(task_attrs, "id", "subrun:#{request.id || System.unique_integer([:positive])}")
+    )
+    |> required_task_string!("subrun_spawn requires a child task id")
+  end
+
+  defp subrun_tenant(context, state) do
+    case context_get(context, "tenant") do
+      %{} = tenant ->
+        stringify_keys(tenant)
+
+      _ ->
+        %{
+          "org" => (state.trace && state.trace.org_id) || "default",
+          "project" => (state.trace && state.trace.project_id) || state.project_id || "default"
+        }
+    end
+  end
+
+  defp subrun_return_to(%Request{} = request, context, state) do
+    case context_get(context, "return_to") do
+      %{} = return_to ->
+        stringify_keys(return_to)
+
+      nil ->
+        %{
+          "channel" => "authority_socket",
+          "request_id" => request.id,
+          "run_id" => state.session_id
+        }
+
+      value ->
+        %{"channel" => to_string(value), "request_id" => request.id, "run_id" => state.session_id}
+    end
+  end
+
+  defp subtask_return(%Request{}, %{trace: nil}) do
+    raise ArgumentError, "subtask_return requires an open trace"
+  end
+
+  defp subtask_return(%Request{} = request, state) do
+    context = context_map(request.context)
+
+    parent_task_id =
+      context
+      |> context_get("parent_task_id", context_get(context, "parent_task"))
+      |> required_task_string!("subtask_return requires context.parent_task_id")
+
+    child_task_id =
+      context
+      |> context_get("child_task_id", context_get(context, "child_task"))
+      |> required_task_string!("subtask_return requires context.child_task_id")
+
+    result = context_get(context, "result", context_get(context, "payload", %{}))
+
+    caused_by = state.opening_decision_seq || 0
+
+    trace =
+      state.trace
+      |> Mitos.WorkPool.append_status(child_task_id, :done,
+        caused_by: caused_by,
+        result: result
+      )
+      |> Mitos.WorkPool.append_subtask_return(
+        parent_task_id,
+        child_task_id,
+        result,
+        caused_by: caused_by
+      )
+
+    {%{state | trace: trace},
+     %{
+       "parent_task_id" => parent_task_id,
+       "child_task_id" => child_task_id,
+       "status" => "returned",
+       "result" => result
+     }}
+  end
+
   defp memory_key!(context) do
-    key = context_get(context, "key") || raise ArgumentError, "memory request requires context.key"
+    key =
+      context_get(context, "key") || raise ArgumentError, "memory request requires context.key"
 
     cond do
       not is_binary(key) ->
@@ -783,7 +1298,8 @@ defmodule Mitos.Session do
     end
   end
 
-  defp memory_path!(_state, _key), do: raise(ArgumentError, "memory methods require an open trace")
+  defp memory_path!(_state, _key),
+    do: raise(ArgumentError, "memory methods require an open trace")
 
   defp context_map(%{} = context), do: context
   defp context_map(context) when is_binary(context), do: %{"text" => context}
@@ -793,12 +1309,242 @@ defmodule Mitos.Session do
     Map.get(context, key, Map.get(context, String.to_atom(key), default))
   end
 
+  defp stringify_keys(%{} = map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, _key, ""), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  defp required_task_string!(nil, message), do: raise(ArgumentError, message)
+  defp required_task_string!("", message), do: raise(ArgumentError, message)
+  defp required_task_string!(value, _message) when is_binary(value), do: value
+  defp required_task_string!(value, _message), do: to_string(value)
+
+  defp optional_task_string(nil, default), do: default
+  defp optional_task_string("", default), do: default
+  defp optional_task_string(value, _default) when is_binary(value), do: value
+  defp optional_task_string(value, _default), do: to_string(value)
+
+  defp optional_integer(nil), do: nil
+  defp optional_integer(value) when is_integer(value), do: value
+
+  defp optional_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _ -> nil
+    end
+  end
+
+  defp optional_integer(_value), do: nil
+
+  defp egress_ref(%Request{} = request) do
+    context = context_map(request.context)
+
+    %{
+      "request_id" => request.id,
+      "method" => request.method,
+      "dest" =>
+        context_get(context, "dest", context_get(context, "destination", "local:tool_broker")),
+      "credential_id" =>
+        context_get(context, "credential_id", context_get(context, "credential")),
+      "seller_id" => context_get(context, "seller_id"),
+      "policy_rule" => context_get(context, "policy_rule"),
+      "nonce" => context_get(context, "nonce")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+    |> Map.new()
+  end
+
+  defp merge_context(context, payload) when is_map(payload),
+    do: Map.merge(context_map(context), context_map(payload))
+
+  defp merge_context(context, _payload), do: context_map(context)
+
+  defp maybe_apply_broker_policy(
+         %Request{origin: :authority_socket, method: "tool_broker"} = request,
+         state
+       ) do
+    case configured_egress_policy(state.launch_spec) do
+      :unset ->
+        resolve_broker_policy(request, [], state)
+
+      policy when is_list(policy) ->
+        resolve_broker_policy(request, policy, state)
+    end
+  end
+
+  defp maybe_apply_broker_policy(_request, state), do: state
+
+  defp resolve_broker_policy(%Request{} = request, policy, state) do
+    dest = request_dest(request)
+
+    case Enum.find(policy, &policy_matches_dest?(&1, dest)) do
+      nil ->
+        resolve_pending_request(
+          %Verdict{
+            id: request.id,
+            decision: :deny,
+            payload: %{"reason" => "egress policy denied", "dest" => dest}
+          },
+          state
+        )
+
+      rule ->
+        authorize_broker_rule(request, rule, dest, state)
+    end
+  end
+
+  defp authorize_broker_rule(%Request{} = request, rule, dest, state) do
+    cond do
+      truthy?(context_get(rule, "requires_approval", false)) ->
+        case policy_payload(rule, dest, state) do
+          {:ok, payload} ->
+            enrich_pending_broker_request(request, payload, state)
+
+          {:error, reason} ->
+            resolve_pending_request(
+              %Verdict{
+                id: request.id,
+                decision: :deny,
+                payload: %{"reason" => reason, "dest" => dest}
+              },
+              state
+            )
+        end
+
+      true ->
+        case policy_payload(rule, dest, state) do
+          {:ok, payload} ->
+            resolve_pending_request(
+              %Verdict{
+                id: request.id,
+                decision: :authorize,
+                payload: payload
+              },
+              state
+            )
+
+          {:error, reason} ->
+            resolve_pending_request(
+              %Verdict{
+                id: request.id,
+                decision: :deny,
+                payload: %{"reason" => reason, "dest" => dest}
+              },
+              state
+            )
+        end
+    end
+  end
+
+  defp enrich_pending_broker_request(%Request{id: request_id}, payload, state)
+       when is_map(payload) do
+    case Map.fetch(state.pending, request_id) do
+      {:ok, %Request{} = request} ->
+        request = %{request | context: merge_context(request.context, payload)}
+        %{state | pending: Map.put(state.pending, request_id, request)}
+
+      :error ->
+        state
+    end
+  end
+
+  defp request_dest(%Request{} = request) do
+    context = context_map(request.context)
+    context_get(context, "dest", context_get(context, "destination", "local:tool_broker"))
+  end
+
+  defp policy_matches_dest?(rule, dest) when is_map(rule) do
+    rule_dest = context_get(rule, "dest", context_get(rule, "destination"))
+    rule_dest in [dest, "*"]
+  end
+
+  defp policy_matches_dest?(_rule, _dest), do: false
+
+  defp policy_payload(rule, dest, state) do
+    seller_id = launch_seller_id(state.launch_spec)
+
+    payload =
+      %{
+        "dest" => dest,
+        "credential_id" => context_get(rule, "credential_id", context_get(rule, "credential")),
+        "seller_id" => seller_id,
+        "policy_rule" => context_get(rule, "id", context_get(rule, "dest"))
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Map.new()
+
+    case Mitos.KeyVault.resolve(payload["credential_id"], dest,
+           seller_id: seller_id,
+           run_id: state.session_id
+         ) do
+      {:ok, nil} -> {:ok, payload}
+      {:ok, credential_ref} -> {:ok, Map.put(payload, "credential_ref", credential_ref)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp launch_seller_id(%{} = launch_spec) do
+    Map.get(launch_spec, :seller_id, Map.get(launch_spec, "seller_id"))
+  end
+
+  defp launch_seller_id(_launch_spec), do: nil
+
+  defp launch_value(%{} = launch_spec, key) do
+    Map.get(launch_spec, key, Map.get(launch_spec, String.to_atom(key)))
+  end
+
+  defp launch_value(_launch_spec, _key), do: nil
+
+  defp resolved_skill_effect(%{} = resolved_skill) do
+    Map.take(resolved_skill, ["path", "source", "sha256"])
+  end
+
+  defp resolved_skill_effect(_resolved_skill), do: nil
+
+  defp lease_credentials(state) do
+    _ = Mitos.KeyVault.lease_run(state.session_id, state.launch_spec || %{})
+    state
+  end
+
+  defp revoke_credentials(state) do
+    _ = Mitos.KeyVault.revoke_run(state.session_id)
+    state
+  end
+
+  defp configured_egress_policy(%{} = launch_spec) do
+    top_level_policy =
+      Map.get(launch_spec, :egress_policy, Map.get(launch_spec, "egress_policy", :unset))
+
+    case top_level_policy do
+      :unset ->
+        launch_spec
+        |> Map.get(:policy, Map.get(launch_spec, "policy", %{}))
+        |> nested_egress_policy()
+
+      policy ->
+        policy
+    end
+  end
+
+  defp configured_egress_policy(_launch_spec), do: :unset
+
+  defp nested_egress_policy(%{} = policy),
+    do: Map.get(policy, :egress_policy, Map.get(policy, "egress_policy", :unset))
+
+  defp nested_egress_policy(_policy), do: :unset
+
+  defp truthy?(value), do: value in [true, "true", 1, "1"]
+
   defp trace_options(state, opts) do
     [
       run_id: state.session_id,
       launch_spec: state.launch_spec
     ]
     |> maybe_put_option(:base_dir, Keyword.get(opts, :trace_base_dir))
+    |> maybe_put_option(:project_id, Keyword.get(opts, :project_id))
   end
 
   defp maybe_put_option(opts, _key, nil), do: opts
@@ -836,6 +1582,391 @@ defmodule Mitos.Session do
   defp trace_event(state, event) do
     %{state | trace: Mitos.Trace.append_event(state.trace, event)}
   end
+
+  defp run_hooks(state, phase) do
+    results =
+      Mitos.Hooks.run(phase, state.launch_spec,
+        cwd: state.cwd || File.cwd!(),
+        env: state.env
+      )
+
+    state = Enum.reduce(results, state, &trace_hook_result(&2, &1))
+    {state, results}
+  end
+
+  defp trace_hook_result(state, result) do
+    state
+    |> trace_effect("hook_executed", %{
+      "ref" => %{"phase" => result["phase"], "name" => result["name"]},
+      "payload" => Mitos.Hooks.effect_payload(result)
+    })
+    |> maybe_trace_commit_hook(result)
+  end
+
+  defp maybe_trace_commit_hook(state, %{"name" => "commit", "success?" => true} = result) do
+    trace_effect(state, "commit", %{
+      "ref" =>
+        %{
+          "hook" => result["name"],
+          "sha" => git_output(state.cwd, ["rev-parse", "HEAD"])
+        }
+        |> reject_blank_values(),
+      "payload" => %{
+        "phase" => result["phase"],
+        "files" =>
+          git_lines(state.cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])
+      }
+    })
+  end
+
+  defp maybe_trace_commit_hook(state, _result), do: state
+
+  defp block_pre_launch(state, pre_hook_results) do
+    failed = Mitos.Hooks.failed(pre_hook_results)
+
+    event = %{
+      "type" => "HOOK_BLOCKED",
+      "phase" => "pre",
+      "failed_hooks" => Enum.map(failed, & &1["name"])
+    }
+
+    state =
+      state
+      |> trace_event(event)
+      |> trace_effect("capability_finished", %{
+        "ref" => %{"error" => "pre_hook_blocked"},
+        "payload" => %{
+          "status" => "failed",
+          "reason" => "pre_hook_blocked",
+          "hooks" => %{
+            "pre" => Enum.map(pre_hook_results, &Mitos.Hooks.effect_payload/1),
+            "post" => []
+          },
+          "verification" => %{
+            "verified" => false,
+            "failed_hooks" => Enum.map(failed, & &1["name"])
+          }
+        }
+      })
+
+    Mitos.PubSub.broadcast(state.session_id, {:mitos, state.session_id, {:event, event}})
+    {:stop, :normal, %{state | exited?: true}}
+  end
+
+  defp maybe_trace_post_hook_verification(state, post_hook_results) do
+    failed = Mitos.Hooks.failed(post_hook_results)
+
+    if Mitos.Hooks.blocked?(post_hook_results) do
+      trace_effect(state, "verification_recorded", %{
+        "ref" => %{"phase" => "post", "tier" => "deterministic_hook"},
+        "payload" => %{
+          "tier" => "deterministic_hook",
+          "verdict" => "unverified",
+          "failed_hooks" => Enum.map(failed, & &1["name"])
+        }
+      })
+    else
+      state
+    end
+  end
+
+  defp hook_verification(post_hook_results) do
+    failed = Mitos.Hooks.failed(post_hook_results)
+
+    %{
+      "verified" => not Mitos.Hooks.blocked?(post_hook_results),
+      "failed_hooks" => Enum.map(failed, & &1["name"])
+    }
+  end
+
+  defp harvest_state(state) do
+    {:ok, harvest} =
+      Mitos.Harvest.collect(%{
+        cwd: state.cwd,
+        trace_dir: trace_dir(state),
+        schema_root: state.schema_root,
+        launch_spec: state.launch_spec || %{}
+      })
+
+    {state, harvest}
+  end
+
+  defp trace_dir(%{trace: %{dir: dir}}), do: dir
+  defp trace_dir(_state), do: nil
+
+  defp git_lines(cwd, args) do
+    cwd
+    |> git_output(args)
+    |> case do
+      nil -> []
+      output -> output |> String.split("\n", trim: true) |> Enum.reject(&(&1 == ""))
+    end
+  end
+
+  defp git_output(cwd, args) when is_binary(cwd) do
+    case System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) do
+      {output, 0} -> String.trim(output)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp git_output(_cwd, _args), do: nil
+
+  defp reject_blank_values(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+    |> Map.new()
+  end
+
+  defp trace_effect(%{opening_decision_seq: nil} = state, _type, _attrs), do: state
+  defp trace_effect(%{trace: nil} = state, _type, _attrs), do: state
+
+  defp trace_effect(state, type, attrs) do
+    attrs =
+      attrs
+      |> Map.put("type", type)
+      |> Map.put("caused_by", state.opening_decision_seq)
+
+    %{state | trace: Mitos.Trace.append_effect(state.trace, attrs)}
+  end
+
+  defp collect_structured_token_usage(state, %{"bytes" => raw_bytes} = event, source_sequence) do
+    case structured_bytes(raw_bytes) do
+      bytes when is_binary(bytes) ->
+        entries =
+          bytes
+          |> token_usage_events_from_jsonl()
+          |> Enum.map(fn usage_event ->
+            {token_usage_ref(usage_event, event, source_sequence),
+             token_usage_payload(usage_event)}
+          end)
+
+        %{state | token_usage_entries: state.token_usage_entries ++ entries}
+
+      nil ->
+        state
+    end
+  end
+
+  defp collect_structured_token_usage(state, _event, _source_sequence), do: state
+
+  defp flush_token_usage(%{token_usage_entries: []} = state), do: state
+
+  defp flush_token_usage(state) do
+    state
+    |> trace_effect("budget_charged", %{
+      "ref" => aggregate_token_usage_ref(state.token_usage_entries),
+      "payload" => aggregate_token_usage_payload(state.token_usage_entries)
+    })
+    |> then(&%{&1 | token_usage_entries: []})
+  end
+
+  defp structured_bytes(%Msgpax.Bin{data: bytes}) when is_binary(bytes), do: bytes
+  defp structured_bytes(bytes) when is_binary(bytes), do: bytes
+  defp structured_bytes(_bytes), do: nil
+
+  defp token_usage_events_from_jsonl(bytes) do
+    bytes
+    |> String.split(["\n", "\r"], trim: true)
+    |> Enum.flat_map(fn line ->
+      case Jason.decode(line) do
+        {:ok, %{} = event} ->
+          event = stringify(event)
+
+          if String.downcase(to_string(event["type"] || "")) == "token_usage" do
+            [event]
+          else
+            []
+          end
+
+        _other ->
+          []
+      end
+    end)
+  end
+
+  defp token_usage_ref(usage_event, source_event, source_sequence) do
+    %{
+      "source_sequence" => source_sequence,
+      "source_type" => source_event["type"],
+      "stream" => source_event["stream"],
+      "provider" => usage_event["provider"],
+      "model" => usage_event["model"]
+    }
+    |> reject_blank_values()
+  end
+
+  defp token_usage_payload(event) do
+    usage =
+      case event["payload"] do
+        %{} = payload -> stringify(payload)
+        _other -> event
+      end
+
+    input_tokens = numeric(usage["input_tokens"] || usage["prompt_tokens"])
+    output_tokens = numeric(usage["output_tokens"] || usage["completion_tokens"])
+    cached_tokens = numeric(usage["cached_tokens"] || usage["cache_read_tokens"])
+
+    tokens =
+      numeric(
+        usage["tokens"] ||
+          usage["total_tokens"] ||
+          input_tokens + output_tokens + cached_tokens
+      )
+
+    %{
+      "billing_basis" => "provider_token_usage",
+      "tokens" => tokens,
+      "input_tokens" => input_tokens,
+      "output_tokens" => output_tokens,
+      "cached_tokens" => cached_tokens,
+      "usd" => numeric(usage["usd"] || usage["cost_usd"] || map_value(usage["cost"], "usd")),
+      "wall_ms" => numeric(usage["wall_ms"])
+    }
+  end
+
+  defp aggregate_token_usage_ref(usage_entries) do
+    refs = Enum.map(usage_entries, fn {ref, _payload} -> ref end)
+
+    %{
+      "source_type" => common_ref(refs, "source_type") || "STRUCTURED_OUTPUT",
+      "source_sequences" => Enum.flat_map(refs, &List.wrap(&1["source_sequence"])),
+      "stream" => common_ref(refs, "stream"),
+      "provider" => common_ref(refs, "provider"),
+      "model" => common_ref(refs, "model")
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+    |> Map.new()
+  end
+
+  defp aggregate_token_usage_payload(usage_entries) do
+    payloads = Enum.map(usage_entries, fn {_ref, payload} -> payload end)
+
+    %{
+      "billing_basis" => "provider_token_usage",
+      "tokens" => sum_payload(payloads, "tokens"),
+      "input_tokens" => sum_payload(payloads, "input_tokens"),
+      "output_tokens" => sum_payload(payloads, "output_tokens"),
+      "cached_tokens" => sum_payload(payloads, "cached_tokens"),
+      "usd" => sum_payload(payloads, "usd"),
+      "wall_ms" => sum_payload(payloads, "wall_ms")
+    }
+  end
+
+  defp common_ref(refs, key) do
+    values =
+      refs
+      |> Enum.map(& &1[key])
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.uniq()
+
+    case values do
+      [value] -> value
+      _ -> nil
+    end
+  end
+
+  defp sum_payload(payloads, key), do: Enum.sum(Enum.map(payloads, &numeric(&1[key])))
+
+  defp trace_sequence(%{trace: %{seq: seq}}) when is_integer(seq), do: seq
+  defp trace_sequence(_state), do: nil
+
+  defp stringify(%{} = map),
+    do: Map.new(map, fn {key, value} -> {to_string(key), stringify(value)} end)
+
+  defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)
+  defp stringify(value), do: value
+
+  defp map_value(%{} = map, key), do: Map.get(map, key, Map.get(map, String.to_atom(key)))
+  defp map_value(_map, _key), do: nil
+
+  defp numeric(value) when is_integer(value) or is_float(value), do: value
+
+  defp numeric(value) when is_binary(value) do
+    case Float.parse(value) do
+      {number, ""} -> number
+      _ -> 0
+    end
+  end
+
+  defp numeric(_value), do: 0
+
+  defp trace_authority_timeout_effects(state, %Request{origin: :authority_socket} = request) do
+    state =
+      trace_effect(state, "approval_resolved", %{
+        "ref" => %{"request_id" => request.id, "method" => request.method},
+        "payload" => %{
+          "decision" => "deny",
+          "reason" => "timeout",
+          "result" => %{"error" => "timeout"}
+        }
+      })
+
+    if request.method == "tool_broker" do
+      trace_effect(state, "egress_denied", %{
+        "ref" => egress_ref(request),
+        "payload" => %{"reason" => "approval timeout"}
+      })
+    else
+      state
+    end
+  end
+
+  defp trace_authority_timeout_effects(state, _request), do: state
+
+  defp maybe_trace_launch_failure(state, %{"kind" => "launch"} = event) do
+    state
+    |> trace_effect("capability_finished", %{
+      "ref" => %{"error" => event["kind"]},
+      "payload" => %{
+        "status" => "failed",
+        "detail" => event["detail"]
+      }
+    })
+    |> revoke_credentials()
+  end
+
+  defp maybe_trace_launch_failure(state, _event), do: state
+
+  defp maybe_trace_authority_request_effect(
+         state,
+         %Request{origin: :authority_socket} = request
+       ) do
+    trace_effect(state, "approval_requested", %{
+      "ref" => %{"request_id" => request.id, "method" => request.method},
+      "payload" => %{
+        "action" => request.action,
+        "context" => request.context
+      }
+    })
+  end
+
+  defp maybe_trace_authority_request_effect(state, _request), do: state
+
+  defp maybe_trace_authority_verdict_effect(
+         state,
+         %Request{origin: :authority_socket} = request,
+         %Verdict{} = verdict,
+         payload
+       ) do
+    trace_effect(state, "approval_resolved", %{
+      "ref" => %{"request_id" => request.id, "method" => request.method},
+      "payload" => %{
+        "decision" => decision_string(verdict.decision),
+        "reason" => verdict.reason,
+        "result" => payload
+      }
+    })
+  end
+
+  defp maybe_trace_authority_verdict_effect(state, _request, _verdict, _payload), do: state
+
+  defp exit_status(%{"code" => 0}), do: "completed"
+  defp exit_status(%{"code" => code}) when is_integer(code), do: "failed"
+  defp exit_status(%{"signal" => signal}) when is_integer(signal), do: "failed"
+  defp exit_status(_event), do: "interrupted"
 
   defp trace_snapshot(%{trace: nil} = state, _snapshot), do: state
 

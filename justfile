@@ -1,7 +1,7 @@
 # Mitos development workflows.
 #
 #   just dev          build engine + sidecar, start the control plane with IEx
-#   just poc          build everything, serve the poc run viewer headless
+#   just poc          build everything, serve the web console headless
 #   just demo-agent   start a claude PTY agent (server must be running)
 #   just steer …      steer a running session semantically over HTTP
 
@@ -14,8 +14,12 @@ default:
 build:
     zig build
 
+# Build the Svelte operations console served by the BEAM router.
+web-build:
+    cd web && bun run build
+
 # Run both test suites (Zig + Elixir, integration included).
-test: build
+test: build web-build
     zig build test --summary all
     cd beam && mix test --include integration
 
@@ -23,14 +27,14 @@ test: build
 # Mitos.PubSub.subscribe("agent-123"); flush()
 #
 # Build everything and start the BEAM control plane (HTTP + WS + IEx).
-dev: build
+dev: build web-build
     #!/usr/bin/env bash
     set -euo pipefail
     cd beam
     [ -d deps ] || mix deps.get
     echo "────────────────────────────────────────────────────────────────"
     echo " mitos dev — http://localhost:{{port}}"
-    echo "   run viewer : http://localhost:{{port}}/   (runs, approvals, workloads; WS at /ws/<session-id>)"
+    echo "   web console: http://localhost:{{port}}/   (runs, workflows, work pool; WS at /ws/<session-id>)"
     echo "   start agent: just demo-agent"
     echo "   steer      : just steer <session-id> approve"
     echo "                just steer <session-id> prompt 'do option 2 instead'"
@@ -38,22 +42,22 @@ dev: build
     echo "────────────────────────────────────────────────────────────────"
     MITOS_HTTP_PORT={{port}} exec iex -S mix
 
-# Build everything and serve the poc run viewer (poc/) on a headless control plane.
-poc: build
+# Build everything and serve the Svelte web console on a headless control plane.
+poc: build web-build
     #!/usr/bin/env bash
     set -euo pipefail
     cd beam
     [ -d deps ] || mix deps.get
     echo "────────────────────────────────────────────────────────────────"
-    echo " mitos poc viewer — http://localhost:{{port}}/"
+    echo " mitos web console — http://localhost:{{port}}/"
     echo "   runs / evidence : http://localhost:{{port}}/#/runs"
-    echo "   launch a run    : http://localhost:{{port}}/#/new"
-    echo "   workloads       : http://localhost:{{port}}/#/workloads"
+    echo "   workflows       : http://localhost:{{port}}/#/workflows"
+    echo "   work pool       : http://localhost:{{port}}/#/work-pool"
     echo "────────────────────────────────────────────────────────────────"
     MITOS_HTTP_PORT={{port}} exec mix run --no-halt
 
 # Headless variant of `dev` (no IEx shell), e.g. for running under a watcher.
-serve: build
+serve: build web-build
     #!/usr/bin/env bash
     set -euo pipefail
     cd beam

@@ -6,7 +6,7 @@ defmodule Mitos.WebappTest do
   setup do
     tmp = Path.join(System.tmp_dir!(), "mitos-webapp-#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(tmp, "assets"))
-    File.write!(Path.join(tmp, "index.html"), "<html>viewer</html>")
+    File.write!(Path.join(tmp, "index.html"), "<html>console</html>")
     File.write!(Path.join([tmp, "assets", "app.js"]), "// js")
     File.write!(Path.join(tmp, "secret.txt"), "not an asset")
     previous = Application.get_env(:mitos, :webapp_dir)
@@ -25,11 +25,11 @@ defmodule Mitos.WebappTest do
     :ok
   end
 
-  test "GET / serves the viewer index with no-cache" do
+  test "GET / serves the operations console index with no-cache" do
     conn = conn(:get, "/") |> Mitos.Web.Router.call([])
 
     assert conn.status == 200
-    assert conn.resp_body == "<html>viewer</html>"
+    assert conn.resp_body == "<html>console</html>"
     assert Plug.Conn.get_resp_header(conn, "cache-control") == ["no-cache"]
   end
 

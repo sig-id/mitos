@@ -22,7 +22,7 @@ defmodule Mitos.SessionTest do
     Mitos.PubSub.subscribe(session_id)
 
     {:ok, %{pid: pid}} =
-      Mitos.Orchestrator.start_session(
+      Mitos.SessionSupervisor.start_session(
         session_id: session_id,
         sidecar_path: binary,
         trace_base_dir: trace_base_dir,
@@ -36,7 +36,7 @@ defmodule Mitos.SessionTest do
 
     on_exit(fn ->
       try do
-        Mitos.Orchestrator.stop_session(session_id)
+        Mitos.SessionSupervisor.stop_session(session_id)
       catch
         :exit, _ -> :ok
       end
@@ -64,7 +64,8 @@ defmodule Mitos.SessionTest do
     assert is_binary(path) and path =~ "/tmp/mitos-terminal-"
 
     # 4) Child exits → exit event surfaces to us.
-    assert_receive {:mitos, ^session_id, {:event, %{"type" => "exit"} = exit_evt}}, 5_000
+    %{"type" => exit_type} = exit_evt = receive_exit_event(session_id, 5_000)
+    assert exit_type in ["exit", "PROCESS_EXITED"]
     assert is_integer(exit_evt["code"]) or is_integer(exit_evt["signal"])
 
     # The Session itself stops normally after the sidecar exits. Poll for it
@@ -89,7 +90,7 @@ defmodule Mitos.SessionTest do
     Mitos.PubSub.subscribe(session_id)
 
     {:ok, %{pid: pid}} =
-      Mitos.Orchestrator.start_session(
+      Mitos.SessionSupervisor.start_session(
         session_id: session_id,
         sidecar_path: binary,
         trace_base_dir: trace_base_dir,
@@ -103,7 +104,7 @@ defmodule Mitos.SessionTest do
 
     on_exit(fn ->
       try do
-        Mitos.Orchestrator.stop_session(session_id)
+        Mitos.SessionSupervisor.stop_session(session_id)
       catch
         :exit, _ -> :ok
       end
@@ -133,6 +134,19 @@ defmodule Mitos.SessionTest do
       after
         deadline_ms -> acc
       end
+    end
+  end
+
+  defp receive_exit_event(session_id, deadline_ms) do
+    receive do
+      {:mitos, ^session_id, {:event, %{"type" => type} = event}}
+      when type in ["exit", "PROCESS_EXITED"] ->
+        event
+
+      {:mitos, ^session_id, _other} ->
+        receive_exit_event(session_id, deadline_ms)
+    after
+      deadline_ms -> flunk("did not receive terminal exit event")
     end
   end
 

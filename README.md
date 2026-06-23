@@ -75,7 +75,9 @@ curl -X POST http://127.0.0.1:7682/agents \
   -d '{"provider":"fake","task":"hello","transport_order":["stdio-json","pty"]}'
 ```
 
-The browser terminal UI is served at `http://127.0.0.1:7682/`.
+The Svelte operations console is served at `http://127.0.0.1:7682/`.
+It loads its static build from `web/dist`; rebuild it with
+`cd web && bun run build` after frontend changes.
 
 ## Artifacts
 

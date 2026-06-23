@@ -103,6 +103,73 @@ defmodule Mitos.RunsTest do
       assert [%{"status" => "interrupted"}] = Runs.list()
     end
 
+    test "canonical Decision and Effect tails derive status", %{base_dir: base_dir} do
+      write_run!(base_dir, "run-finish",
+        created_at_ms: 300,
+        events: [
+          %{"kind" => "decision", "type" => "finish", "seq" => 0}
+        ]
+      )
+
+      write_run!(base_dir, "run-abort",
+        created_at_ms: 200,
+        events: [
+          %{"kind" => "decision", "type" => "abort", "seq" => 0}
+        ]
+      )
+
+      write_run!(base_dir, "run-cap",
+        created_at_ms: 100,
+        events: [
+          %{"kind" => "effect", "type" => "capability_finished", "seq" => 1, "caused_by" => 0}
+        ]
+      )
+
+      write_run!(base_dir, "run-cap-failed",
+        created_at_ms: 50,
+        events: [
+          %{
+            "kind" => "effect",
+            "type" => "capability_finished",
+            "seq" => 1,
+            "caused_by" => 0,
+            "payload" => %{"status" => "failed"}
+          }
+        ]
+      )
+
+      assert [finish, abort, cap, cap_failed] = Runs.list()
+      assert finish["status"] == "completed"
+      assert abort["status"] == "failed"
+      assert cap["status"] == "completed"
+      assert cap_failed["status"] == "failed"
+    end
+
+    test "post-finish proof effects do not override completed status", %{base_dir: base_dir} do
+      write_run!(base_dir, "run-proofed",
+        events: [
+          %{"kind" => "effect", "type" => "capability_started", "seq" => 1, "caused_by" => 0},
+          %{
+            "kind" => "effect",
+            "type" => "capability_finished",
+            "seq" => 2,
+            "caused_by" => 0,
+            "payload" => %{"status" => "completed"}
+          },
+          %{
+            "kind" => "effect",
+            "type" => "budget_charged",
+            "seq" => 3,
+            "caused_by" => 0,
+            "payload" => %{"amount_usdc" => "0.25"}
+          }
+        ]
+      )
+
+      assert [%{"status" => "completed"}] = Runs.list()
+      assert {:ok, %{"status" => "completed"}} = Runs.fetch("run-proofed")
+    end
+
     test "a run with no events at all is empty", %{base_dir: base_dir} do
       write_run!(base_dir, "run-blank")
 
@@ -131,6 +198,88 @@ defmodule Mitos.RunsTest do
       assert [%{"approval_id" => "a1"}] = run["approvals"]
     end
 
+    test "proof endpoint returns buyer-safe proof without debug events", %{base_dir: base_dir} do
+      write_run!(base_dir, "run-proof",
+        events: [
+          %{
+            "kind" => "decision",
+            "run_id" => "run-proof",
+            "seq" => 0,
+            "ts" => "2026-06-22T10:00:00.000Z",
+            "actor" => "orchestrator",
+            "type" => "advance",
+            "params" => %{"prompt" => "seller recipe"},
+            "rationale" => "secret rationale"
+          },
+          %{
+            "kind" => "effect",
+            "run_id" => "run-proof",
+            "seq" => 1,
+            "ts" => "2026-06-22T10:00:01.000Z",
+            "type" => "capability_started",
+            "caused_by" => 0,
+            "ref" => %{"adapter" => "secret-harness"},
+            "payload" => %{"harness" => "secret-harness"}
+          },
+          %{
+            "kind" => "effect",
+            "run_id" => "run-proof",
+            "seq" => 2,
+            "ts" => "2026-06-22T10:00:02.000Z",
+            "type" => "egress_allowed",
+            "caused_by" => 0,
+            "ref" => %{
+              "dest" => "api.example.test",
+              "credential_id" => "cred-secret",
+              "policy_rule" => "seller-private-policy"
+            },
+            "payload" => %{}
+          },
+          %{
+            "kind" => "effect",
+            "run_id" => "run-proof",
+            "seq" => 3,
+            "ts" => "2026-06-22T10:00:03.000Z",
+            "type" => "capability_finished",
+            "caused_by" => 0,
+            "ref" => %{"result" => "RESULT"},
+            "payload" => %{"status" => "completed", "result" => %{"signal" => "ship"}}
+          }
+        ]
+      )
+
+      conn = conn(:get, "/runs/run-proof/proof") |> Mitos.Web.Router.call([])
+      assert conn.status == 200
+
+      body = Jason.decode!(conn.resp_body)
+      assert body["run_id"] == "run-proof"
+      assert body["metering"]["egress_allowed_units"] == 1
+      assert [%{"dest" => "api.example.test"}] = body["egress_crossings"]
+      refute Map.has_key?(body, "events")
+      refute inspect(body) =~ "secret rationale"
+      refute inspect(body) =~ "seller recipe"
+      refute inspect(body) =~ "secret-harness"
+      refute inspect(body) =~ "cred-secret"
+      refute inspect(body) =~ "seller-private-policy"
+
+      page = conn(:get, "/runs/run-proof/proof.html") |> Mitos.Web.Router.call([])
+      assert page.status == 200
+
+      assert Enum.any?(page.resp_headers, fn {key, value} ->
+               key == "content-type" and value =~ "text/html"
+             end)
+
+      assert page.resp_body =~ "Run Proof"
+      assert page.resp_body =~ "api.example.test"
+      assert page.resp_body =~ "ship"
+      assert page.resp_body =~ "Effect Log Hash"
+      refute page.resp_body =~ "secret rationale"
+      refute page.resp_body =~ "seller recipe"
+      refute page.resp_body =~ "secret-harness"
+      refute page.resp_body =~ "cred-secret"
+      refute page.resp_body =~ "seller-private-policy"
+    end
+
     test "rejects unknown and unsafe ids" do
       assert {:error, :not_found} = Runs.fetch("nope")
       assert {:error, :not_found} = Runs.fetch("../../etc")
@@ -145,7 +294,9 @@ defmodule Mitos.RunsTest do
       conn = conn(:get, "/runs") |> Mitos.Web.Router.call([])
 
       assert conn.status == 200
-      assert %{"runs" => [%{"run_id" => "run-http", "status" => "completed"}]} = Jason.decode!(conn.resp_body)
+
+      assert %{"runs" => [%{"run_id" => "run-http", "status" => "completed"}]} =
+               Jason.decode!(conn.resp_body)
     end
 
     test "GET /runs/:id returns detail and 404s on unknown id", %{base_dir: base_dir} do

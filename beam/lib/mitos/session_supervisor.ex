@@ -1,11 +1,14 @@
-defmodule Mitos.Orchestrator do
+defmodule Mitos.SessionSupervisor do
   @moduledoc """
-  DynamicSupervisor for `Mitos.Session` children. Multi-agent orchestration
-  composes here: fanning a task across agents, gating one on another's
-  snapshot, broadcasting a kill — all ordinary OTP message-passing against
-  the sessions this supervisor owns.
+  DynamicSupervisor for sandbox-provider session children.
+
+  This supervisor owns local engine sessions; higher-level orchestration is a
+  separate control-plane concern. The current implementation starts the local
+  sidecar provider, which wraps `Mitos.Session`.
   """
   use DynamicSupervisor
+
+  @default_provider Mitos.SandboxProvider.LocalSidecar
 
   def start_link(_init_arg \\ nil) do
     DynamicSupervisor.start_link(__MODULE__, nil, name: __MODULE__)
@@ -15,21 +18,23 @@ defmodule Mitos.Orchestrator do
   def init(_), do: DynamicSupervisor.init(strategy: :one_for_one)
 
   @doc """
-  Start a new session.
+  Start a new provider-backed session.
 
   Required:
-    * `:launch_spec` — provider/task/transport order for agent runs, or
-    * `:argv` — legacy raw command for compatibility sessions
+    * `:launch_spec` - provider/task/transport order for agent runs, or
+    * `:argv` - legacy raw command for compatibility sessions
 
   Optional:
     * `:session_id` (default: random UUID-ish string)
+    * `:sandbox_provider` (default: `Mitos.SandboxProvider.LocalSidecar`)
     * `:cwd`, `:env` (list of {k,v} or map)
     * `:cols`, `:rows`
     * `:idle_ms`
-    * `:sidecar_path` — overrides `Application.get_env(:mitos, :sidecar_path)`
+    * `:sidecar_path` - overrides `Application.get_env(:mitos, :sidecar_path)`
   """
   def start_session(opts) do
     session_id = Keyword.get(opts, :session_id, random_id())
+    provider = Keyword.get(opts, :sandbox_provider, @default_provider)
     sidecar_path = Keyword.get_lazy(opts, :sidecar_path, &default_sidecar_path/0)
 
     opts =
@@ -37,10 +42,15 @@ defmodule Mitos.Orchestrator do
       |> Keyword.put(:session_id, session_id)
       |> Keyword.put(:sidecar_path, sidecar_path)
 
-    case DynamicSupervisor.start_child(__MODULE__, {Mitos.Session, opts}) do
-      {:ok, pid} -> {:ok, %{pid: pid, session_id: session_id}}
-      {:error, {:already_started, pid}} -> {:ok, %{pid: pid, session_id: session_id}}
-      other -> other
+    case DynamicSupervisor.start_child(__MODULE__, provider.child_spec(opts)) do
+      {:ok, pid} ->
+        {:ok, %{pid: pid, session_id: session_id, sandbox_provider: provider}}
+
+      {:error, {:already_started, pid}} ->
+        {:ok, %{pid: pid, session_id: session_id, sandbox_provider: provider}}
+
+      other ->
+        other
     end
   end
 
@@ -58,7 +68,7 @@ defmodule Mitos.Orchestrator do
 
   defp default_sidecar_path do
     # Resolve to <repo>/zig-out/bin/mitos-term: this file lives at
-    # <repo>/beam/lib/mitos/orchestrator.ex so we walk up three directories.
+    # <repo>/beam/lib/mitos/session_supervisor.ex so we walk up three directories.
     Application.get_env(:mitos, :sidecar_path) ||
       System.get_env("MITOS_TERM_BIN") ||
       Path.expand("../../../zig-out/bin/mitos-term", __DIR__)

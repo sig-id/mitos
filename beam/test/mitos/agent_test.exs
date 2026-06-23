@@ -15,6 +15,8 @@ defmodule Mitos.AgentTest do
 
   test "fake agent run: launch spec → session → engine prompt event" do
     session_id = "agent-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-trace")
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
     Mitos.PubSub.subscribe(session_id)
 
     {:ok, run} =
@@ -26,12 +28,13 @@ defmodule Mitos.AgentTest do
         rows: 24,
         # Short idle so the watcher snapshots while the fake stand-in is still
         # alive (its script sleeps 0.3s after printing the final marker).
-        idle_ms: 40
+        idle_ms: 40,
+        trace_base_dir: trace_base_dir
       )
 
     on_exit(fn ->
       try do
-        Mitos.Orchestrator.stop_session(session_id)
+        Mitos.SessionSupervisor.stop_session(session_id)
       catch
         :exit, _ -> :ok
       end
@@ -58,6 +61,68 @@ defmodule Mitos.AgentTest do
 
     # The engine's vt-screen codec emits semantic prompt events directly.
     assert_receive {:mitos, ^session_id, {:prompt, {:final_answer_candidate, "hello"}}}, 5_000
+
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+    assert [%{"kind" => "decision", "seq" => decision_seq, "type" => "advance"} | _] = events
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_started",
+               "caused_by" => ^decision_seq
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "caused_by" => ^decision_seq,
+               "payload" => %{
+                 "status" => "completed",
+                 "final_output" => "FAKE_FINAL: hello",
+                 "result" => %{"signal" => "unknown", "synthetic" => true}
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+
+    assert Mitos.Trace.fold_events(events)["pending_decisions"] == []
+  end
+
+  test "refuses launch when the decision budget exceeds remaining budget" do
+    session_id = "agent-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-budget-abort")
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+
+    assert {:error, {:budget_exceeded, abort}} =
+             Mitos.Agent.start(
+               provider: "fake",
+               task: "should not launch",
+               session_id: session_id,
+               trace_base_dir: trace_base_dir,
+               budget: %{
+                 "tokens" => 0,
+                 "usd" => "2.00",
+                 "wall_ms" => 0,
+                 "remaining" => %{"usd" => "1.00"}
+               }
+             )
+
+    assert abort["type"] == "abort"
+    assert abort["params"]["cause"] == "budget"
+
+    assert Mitos.Trace.read_events(session_id, base_dir: trace_base_dir) == [abort]
+    assert Registry.lookup(Mitos.SessionRegistry, session_id) == []
   end
 
   test "unknown provider is reported by the engine, not a BEAM registry" do
@@ -69,7 +134,7 @@ defmodule Mitos.AgentTest do
 
     on_exit(fn ->
       try do
-        Mitos.Orchestrator.stop_session(session_id)
+        Mitos.SessionSupervisor.stop_session(session_id)
       catch
         :exit, _ -> :ok
       end
@@ -87,6 +152,249 @@ defmodule Mitos.AgentTest do
                    5_000
   end
 
+  test "generic agent finish effect is emitted from harvested RESULT and workspace diff" do
+    session_id = "agent-harvest-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-harvest-trace")
+    workspace = unique_tmp_dir("agent-harvest-workspace")
+    binary = Path.expand("../../../zig-out/bin/mitos-term", __DIR__)
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+
+    File.mkdir_p!(workspace)
+    git!(workspace, ["init"])
+    git!(workspace, ["config", "user.email", "test@example.invalid"])
+    git!(workspace, ["config", "user.name", "Mitos Test"])
+    File.write!(Path.join(workspace, "tracked.txt"), "base\n")
+    git!(workspace, ["add", "tracked.txt"])
+    git!(workspace, ["commit", "-m", "base"])
+
+    result_json =
+      Jason.encode!(%{
+        signal: "ship",
+        confidence: 0.8,
+        summary: "harvested",
+        evidence: []
+      })
+
+    {:ok, _run} =
+      Mitos.Agent.start(
+        provider: "generic",
+        task: "",
+        session_id: session_id,
+        transport_order: ["pty"],
+        argv: [
+          "/bin/sh",
+          "-c",
+          "printf 'changed\\n' > tracked.txt; printf '%s' #{sh_quote(result_json)} > RESULT"
+        ],
+        cwd: workspace,
+        sidecar_path: binary,
+        idle_ms: 30,
+        trace_base_dir: trace_base_dir,
+        result: %{path: "RESULT"}
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "payload" => %{
+                 "status" => "completed",
+                 "result" => %{"signal" => "ship", "summary" => "harvested", "path" => "RESULT"},
+                 "harvest" => %{
+                   "diff" => %{"files_changed" => ["RESULT", "tracked.txt"]},
+                   "result" => %{"signal" => "ship"}
+                 }
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+
+    run_dir = Path.join([trace_base_dir, ".runs", session_id])
+    assert File.read!(Path.join(run_dir, "diff.patch")) =~ "+changed"
+
+    assert Jason.decode!(File.read!(Path.join(run_dir, "files_changed.json"))) == [
+             "RESULT",
+             "tracked.txt"
+           ]
+  end
+
+  test "pre hooks run before the generic harness starts" do
+    session_id = "agent-pre-hook-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-pre-hook-trace")
+    workspace = unique_tmp_dir("agent-pre-hook-workspace")
+    binary = Path.expand("../../../zig-out/bin/mitos-term", __DIR__)
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+    File.mkdir_p!(workspace)
+
+    {:ok, _run} =
+      Mitos.Agent.start(
+        provider: "generic",
+        task: "",
+        session_id: session_id,
+        transport_order: ["pty"],
+        argv: [
+          "/bin/sh",
+          "-c",
+          "test -f pre.txt && printf '{\"signal\":\"ship\",\"summary\":\"pre-ok\"}' > RESULT"
+        ],
+        cwd: workspace,
+        sidecar_path: binary,
+        idle_ms: 30,
+        trace_base_dir: trace_base_dir,
+        result: %{path: "RESULT"},
+        hooks: %{
+          pre: [
+            %{
+              name: "prepare",
+              run: ["/bin/sh", "-c", "printf prepared > pre.txt"],
+              on_fail: "block"
+            }
+          ]
+        }
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+    assert File.read!(Path.join(workspace, "pre.txt")) == "prepared"
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+    pre_hook_seq = effect_seq!(events, "hook_executed", %{"phase" => "pre", "name" => "prepare"})
+    started_seq = effect_seq!(events, "capability_started")
+    assert pre_hook_seq < started_seq
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "payload" => %{"result" => %{"signal" => "ship", "summary" => "pre-ok"}}
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  test "blocking pre hook stops before harness launch" do
+    session_id = "agent-pre-block-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-pre-block-trace")
+    workspace = unique_tmp_dir("agent-pre-block-workspace")
+    binary = Path.expand("../../../zig-out/bin/mitos-term", __DIR__)
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+    File.mkdir_p!(workspace)
+
+    {:ok, _run} =
+      Mitos.Agent.start(
+        provider: "generic",
+        task: "",
+        session_id: session_id,
+        transport_order: ["pty"],
+        argv: ["/bin/sh", "-c", "printf should-not-run > ran.txt"],
+        cwd: workspace,
+        sidecar_path: binary,
+        idle_ms: 30,
+        trace_base_dir: trace_base_dir,
+        hooks: %{pre: [%{name: "gate", run: ["/bin/sh", "-c", "exit 7"], on_fail: "block"}]}
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+    refute File.exists?(Path.join(workspace, "ran.txt"))
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+    refute Enum.any?(events, &(get_in(&1, ["event", "type"]) == "RUN_STARTED"))
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "payload" => %{
+                 "status" => "failed",
+                 "reason" => "pre_hook_blocked",
+                 "verification" => %{"verified" => false, "failed_hooks" => ["gate"]}
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  test "blocking post hook marks harvest unverified but preserves result" do
+    session_id = "agent-post-block-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-post-block-trace")
+    workspace = unique_tmp_dir("agent-post-block-workspace")
+    binary = Path.expand("../../../zig-out/bin/mitos-term", __DIR__)
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+    File.mkdir_p!(workspace)
+
+    {:ok, _run} =
+      Mitos.Agent.start(
+        provider: "generic",
+        task: "",
+        session_id: session_id,
+        transport_order: ["pty"],
+        argv: ["/bin/sh", "-c", "printf '{\"signal\":\"ship\",\"summary\":\"done\"}' > RESULT"],
+        cwd: workspace,
+        sidecar_path: binary,
+        idle_ms: 30,
+        trace_base_dir: trace_base_dir,
+        result: %{path: "RESULT"},
+        hooks: %{post: [%{name: "gate", run: ["/bin/sh", "-c", "exit 9"], on_fail: "block"}]}
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "verification_recorded",
+               "payload" => %{
+                 "tier" => "deterministic_hook",
+                 "verdict" => "unverified",
+                 "failed_hooks" => ["gate"]
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "payload" => %{
+                 "status" => "completed",
+                 "result" => %{"signal" => "ship", "summary" => "done"},
+                 "verification" => %{"verified" => false, "failed_hooks" => ["gate"]}
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
   test "approval prompts bubble up as action requests" do
     session_id = "agent-" <> Integer.to_string(System.unique_integer([:positive]))
     Mitos.PubSub.subscribe(session_id)
@@ -101,7 +409,7 @@ defmodule Mitos.AgentTest do
 
     on_exit(fn ->
       try do
-        Mitos.Orchestrator.stop_session(session_id)
+        Mitos.SessionSupervisor.stop_session(session_id)
       catch
         :exit, _ -> :ok
       end
@@ -215,7 +523,7 @@ defmodule Mitos.AgentTest do
 
   defp stop_session(session_id) do
     try do
-      Mitos.Orchestrator.stop_session(session_id)
+      Mitos.SessionSupervisor.stop_session(session_id)
     catch
       :exit, _ -> :ok
     end
@@ -243,5 +551,32 @@ defmodule Mitos.AgentTest do
 
   defp unique_tmp_dir(prefix) do
     Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{System.unique_integer([:positive])}")
+  end
+
+  defp git!(cwd, args) do
+    case System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, status} -> flunk("git #{Enum.join(args, " ")} failed with #{status}: #{output}")
+    end
+  end
+
+  defp sh_quote(value) do
+    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+  end
+
+  defp effect_seq!(events, type, ref_match \\ %{}) do
+    case Enum.find(events, fn
+           %{"kind" => "effect", "type" => ^type, "ref" => ref} ->
+             Enum.all?(ref_match, fn {key, value} -> ref[key] == value end)
+
+           %{"kind" => "effect", "type" => ^type} ->
+             map_size(ref_match) == 0
+
+           _ ->
+             false
+         end) do
+      %{"seq" => seq} -> seq
+      nil -> flunk("missing effect #{type} #{inspect(ref_match)}")
+    end
   end
 end

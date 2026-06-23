@@ -213,7 +213,7 @@ pub fn resolveStdioJson(
         const argv = try allocator.alloc([]const u8, 5);
         argv[0] = "/bin/sh";
         argv[1] = "-c";
-        argv[2] = "printf 'FAKE_FINAL: %s\\n' \"$1\"";
+        argv[2] = "case \"$1\" in *\"token usage\"*) printf '%s\\n' '{\"type\":\"token_usage\",\"provider\":\"fake\",\"model\":\"fake-local\",\"input_tokens\":7,\"output_tokens\":3,\"usd\":0.11,\"wall_ms\":125}';; esac; printf 'FAKE_FINAL: %s\\n' \"$1\"";
         argv[3] = "mitos-fake-provider";
         argv[4] = spec.task;
         return .{ .argv = argv, .cwd = cwd };

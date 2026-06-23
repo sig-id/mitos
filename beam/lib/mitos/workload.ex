@@ -38,6 +38,11 @@ defmodule Mitos.Workload do
     :cwd,
     :title,
     :description,
+    :package_root,
+    :capability,
+    :pricing,
+    :seller_id,
+    :payout_address,
     transport_order: ["stdio-json", "pty"],
     env: %{},
     env_passthrough: [],
@@ -91,7 +96,7 @@ defmodule Mitos.Workload do
 
         with {:ok, raw} <- read_file(path),
              {:ok, json} <- decode_json(json_source(raw)),
-             {:ok, workload} <- from_json(id, json) do
+             {:ok, workload} <- from_json(id, json, package_root: Path.dirname(path)) do
           {:ok, workload}
         end
     end
@@ -100,37 +105,52 @@ defmodule Mitos.Workload do
   def fetch(_id), do: {:error, :not_found}
 
   @doc "Build a workload struct from decoded JSON, applying defaults."
-  def from_json(id, %{} = json) do
+  def from_json(id, json, opts \\ [])
+
+  def from_json(id, %{} = json, opts) do
     provider = json["provider"]
     template = json["template"]
 
-    cond do
-      not is_binary(provider) or provider == "" ->
-        {:error, {:invalid_workload, "provider is required"}}
+    with :ok <- require_string(provider, "provider"),
+         :ok <- require_string(template, "template"),
+         {:ok, pricing} <- pricing_from_json(json["pricing"] || json["price"]),
+         {:ok, payout_address} <- payout_address_from_json(json, pricing),
+         {:ok, capability} <- capability_from_json(id, json, pricing),
+         :ok <- capability_accepts_provider(capability, provider) do
+      defaults = %__MODULE__{id: id, provider: provider, template: template}
 
-      not is_binary(template) or template == "" ->
-        {:error, {:invalid_workload, "template is required"}}
+      {:ok,
+       %__MODULE__{
+         defaults
+         | cwd: string_or(json["cwd"], defaults.cwd),
+           title: string_or(json["title"], defaults.title),
+           description: string_or(json["description"], defaults.description),
+           package_root: Keyword.get(opts, :package_root),
+           capability: capability,
+           pricing: pricing,
+           seller_id: seller_id(json),
+           payout_address: payout_address,
+           transport_order: string_list_or(json["transport_order"], defaults.transport_order),
+           env: map_or(json["env"], defaults.env),
+           env_passthrough: string_list_or(json["env_passthrough"], defaults.env_passthrough),
+           timeout_ms: positive_int_or(json["timeout_ms"], defaults.timeout_ms),
+           idle_ms: positive_int_or(json["idle_ms"], defaults.idle_ms),
+           approvals: approvals_or(json["approvals"], defaults.approvals)
+       }}
+    else
+      {:error, {:invalid_capability, detail}} ->
+        {:error, {:invalid_workload, "invalid capability manifest: #{detail}"}}
 
-      true ->
-        defaults = %__MODULE__{id: id, provider: provider, template: template}
+      {:error, {:invalid_pricing, detail}} ->
+        {:error, {:invalid_workload, "invalid pricing: #{detail}"}}
 
-        {:ok,
-         %__MODULE__{
-           defaults
-           | cwd: string_or(json["cwd"], defaults.cwd),
-             title: string_or(json["title"], defaults.title),
-             description: string_or(json["description"], defaults.description),
-             transport_order: string_list_or(json["transport_order"], defaults.transport_order),
-             env: map_or(json["env"], defaults.env),
-             env_passthrough: string_list_or(json["env_passthrough"], defaults.env_passthrough),
-             timeout_ms: positive_int_or(json["timeout_ms"], defaults.timeout_ms),
-             idle_ms: positive_int_or(json["idle_ms"], defaults.idle_ms),
-             approvals: approvals_or(json["approvals"], defaults.approvals)
-         }}
+      {:error, reason} ->
+        {:error, {:invalid_workload, reason}}
     end
   end
 
-  def from_json(_id, _json), do: {:error, {:invalid_workload, "definition must be a JSON object"}}
+  def from_json(_id, _json, _opts),
+    do: {:error, {:invalid_workload, "definition must be a JSON object"}}
 
   @doc """
   Render the template with bindings. Every `{{placeholder}}` must have a
@@ -175,9 +195,8 @@ defmodule Mitos.Workload do
 
   @doc "Listing view with secrets and run mechanics stripped."
   def public_view(%__MODULE__{} = workload) do
-    %{
+    view = %{
       "id" => workload.id,
-      "provider" => workload.provider,
       "title" => workload.title,
       "description" => workload.description,
       "placeholders" =>
@@ -187,13 +206,62 @@ defmodule Mitos.Workload do
         |> Enum.uniq(),
       "timeout_ms" => workload.timeout_ms
     }
+
+    if workload.capability do
+      Map.put(view, "capability", Mitos.Capability.public_view(workload.capability))
+    else
+      view
+    end
+    |> maybe_put("pricing", public_pricing(workload.pricing))
+  end
+
+  defp require_string(value, _field) when is_binary(value) and value != "", do: :ok
+  defp require_string(_value, field), do: {:error, "#{field} is required"}
+
+  defp capability_from_json(id, json, pricing) do
+    case json["capability_manifest"] || json["capability"] do
+      nil when is_nil(pricing) ->
+        {:ok, nil}
+
+      nil ->
+        {:error, {:invalid_capability, "paid publication requires a capability manifest"}}
+
+      %{} = manifest ->
+        id
+        |> published_manifest(manifest, pricing)
+        |> then(&Mitos.Capability.from_json(id, &1))
+
+      _ ->
+        {:error, {:invalid_capability, "capability must be an object"}}
+    end
+  end
+
+  defp published_manifest(_id, %{} = manifest, nil), do: manifest
+
+  defp published_manifest(_id, %{} = manifest, _pricing) do
+    Map.put(manifest, "trust_tier", "T2")
+  end
+
+  defp capability_accepts_provider(nil, _provider), do: :ok
+
+  defp capability_accepts_provider(%Mitos.Capability{} = capability, provider) do
+    if Mitos.Capability.compatible_harness?(capability, provider) do
+      :ok
+    else
+      {:error, "provider #{inspect(provider)} is not declared in capability.harnesses"}
+    end
   end
 
   defp read_file(path) do
     case File.read(path) do
-      {:ok, raw} -> {:ok, raw}
-      {:error, :enoent} -> {:error, :not_found}
-      {:error, reason} -> {:error, {:invalid_workload, "unreadable definition: #{inspect(reason)}"}}
+      {:ok, raw} ->
+        {:ok, raw}
+
+      {:error, :enoent} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, {:invalid_workload, "unreadable definition: #{inspect(reason)}"}}
     end
   end
 
@@ -218,6 +286,145 @@ defmodule Mitos.Workload do
 
   defp map_or(%{} = value, _default), do: value
   defp map_or(_value, default), do: default
+
+  defp pricing_from_json(nil), do: {:ok, nil}
+
+  defp pricing_from_json(%{} = pricing) do
+    type = pricing["type"] || "flat"
+    take_rate_bps = positive_int_or(pricing["take_rate_bps"], 1500)
+    take_floor = pricing["take_floor_usdc"]
+    compute_surcharge = pricing["compute_surcharge_usdc"] || "0"
+
+    with {:ok, pricing_fields} <- pricing_fields(type, pricing),
+         {:ok, take_rate_bps} <- take_rate_bps_from_json(take_rate_bps),
+         {:ok, take_floor} <- required_pricing_field(take_floor, "take_floor_usdc is required"),
+         {:ok, _floor} <- positive_amount_micros(take_floor, "take_floor_usdc must be positive"),
+         {:ok, _compute_surcharge} <- Mitos.Settlement.amount_micros(compute_surcharge) do
+      {:ok,
+       Map.merge(pricing_fields, %{
+         "currency" => "USDC",
+         "take_rate_bps" => take_rate_bps,
+         "take_floor_usdc" => to_string(take_floor),
+         "compute_surcharge_usdc" => to_string(compute_surcharge)
+       })}
+    else
+      {:error, reason} -> {:error, {:invalid_pricing, to_string(reason)}}
+    end
+  end
+
+  defp pricing_from_json(_pricing), do: {:error, {:invalid_pricing, "pricing must be an object"}}
+
+  defp required_pricing_field(value, _message) when is_binary(value) and value != "",
+    do: {:ok, value}
+
+  defp required_pricing_field(value, _message) when is_integer(value) or is_float(value),
+    do: {:ok, value}
+
+  defp required_pricing_field(_value, message), do: {:error, message}
+
+  defp take_rate_bps_from_json(take_rate_bps) when take_rate_bps in 1000..1500,
+    do: {:ok, take_rate_bps}
+
+  defp take_rate_bps_from_json(_take_rate_bps),
+    do: {:error, "take_rate_bps must be between 1000 and 1500"}
+
+  defp positive_amount_micros(value, message) do
+    case Mitos.Settlement.amount_micros(value) do
+      {:ok, micros} when micros > 0 -> {:ok, micros}
+      {:ok, _zero} -> {:error, message}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp pricing_fields("flat", pricing) do
+    amount = pricing["amount_usdc"] || pricing["amount"]
+
+    with {:ok, _amount} <- positive_amount_micros(amount, "amount_usdc must be positive") do
+      {:ok, %{"type" => "flat", "amount_usdc" => to_string(amount)}}
+    end
+  end
+
+  defp pricing_fields("metered", pricing) do
+    amount = pricing["amount_usdc"] || pricing["ceiling_usdc"] || pricing["amount"]
+    base = pricing["base_usdc"] || "0"
+
+    unit_prices =
+      pricing["unit_prices_usdc"]
+      |> Kernel.||(pricing["unit_prices"])
+      |> map_or(%{})
+      |> stringify_values()
+
+    with {:ok, _amount} <- positive_amount_micros(amount, "amount_usdc must be positive"),
+         {:ok, _base} <- Mitos.Settlement.amount_micros(base),
+         :ok <- validate_unit_prices(unit_prices) do
+      {:ok,
+       %{
+         "type" => "metered",
+         "amount_usdc" => to_string(amount),
+         "base_usdc" => to_string(base),
+         "unit_prices_usdc" => stringify_values(unit_prices)
+       }}
+    end
+  end
+
+  defp pricing_fields(_type, _pricing), do: {:error, "pricing type must be flat or metered"}
+
+  defp validate_unit_prices(unit_prices) do
+    valid_units = ~w(token egress tool artifact ms)
+
+    cond do
+      unit_prices == %{} ->
+        {:error, "metered pricing requires unit_prices_usdc"}
+
+      Enum.any?(Map.keys(unit_prices), &(&1 not in valid_units)) ->
+        {:error, "metered pricing unit must be one of token, egress, tool, artifact, ms"}
+
+      true ->
+        unit_prices
+        |> Map.values()
+        |> Enum.reduce_while(:ok, fn value, :ok ->
+          case Mitos.Settlement.amount_micros(value) do
+            {:ok, _micros} -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+    end
+  end
+
+  defp stringify_values(%{} = map),
+    do: Map.new(map, fn {key, value} -> {to_string(key), to_string(value)} end)
+
+  defp payout_address_from_json(_json, nil), do: {:ok, nil}
+
+  defp payout_address_from_json(json, %{} = _pricing) do
+    case payout_address(json) do
+      nil -> {:error, {:invalid_pricing, "paid publication requires payout_address"}}
+      payout_address -> {:ok, payout_address}
+    end
+  end
+
+  defp payout_address(json) do
+    pricing = json["pricing"] || json["price"] || %{}
+    string_or(json["payout_address"] || pricing["payout_address"], nil)
+  end
+
+  defp seller_id(json) do
+    pricing = json["pricing"] || json["price"] || %{}
+
+    string_or(
+      json["seller_id"] || json["seller"] || pricing["seller_id"] || pricing["seller"],
+      nil
+    )
+  end
+
+  defp public_pricing(nil), do: nil
+
+  defp public_pricing(%{} = pricing) do
+    Map.take(pricing, ["type", "amount_usdc", "currency"])
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp string_list_or(value, _default) when is_list(value) do
     case Enum.filter(value, &is_binary/1) do

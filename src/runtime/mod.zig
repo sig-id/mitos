@@ -26,7 +26,6 @@ pub const StreamName = types.StreamName;
 pub const TerminalEffectRef = types.TerminalEffectRef;
 pub const TextEvent = types.TextEvent;
 pub const TimestampMs = types.TimestampMs;
-pub const orchestrator = @import("orchestrator.zig");
 
 test {
     std.testing.refAllDecls(@This());

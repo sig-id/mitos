@@ -25,7 +25,7 @@ defmodule Mitos.Authority do
     tokens: %{}
   ]
 
-  @request_methods ~w(tool_broker approval artifact_register memory_fetch memory_put subrun_spawn)
+  @request_methods ~w(tool_broker approval artifact_register memory_fetch memory_put subrun_spawn subtask_return task_emit)
   @socket_timeout_ms 5_000
   @default_token_ttl_ms 60 * 60 * 1_000
 
@@ -34,7 +34,10 @@ defmodule Mitos.Authority do
   end
 
   def launch_spec(server), do: GenServer.call(server, :launch_spec)
-  def attenuate_token(server, parent_token, opts \\ []), do: GenServer.call(server, {:attenuate_token, parent_token, opts})
+
+  def attenuate_token(server, parent_token, opts \\ []),
+    do: GenServer.call(server, {:attenuate_token, parent_token, opts})
+
   def stop(server), do: GenServer.stop(server, :normal)
 
   @impl true
@@ -125,29 +128,26 @@ defmodule Mitos.Authority do
     with :ok <- known_method(method),
          {:ok, scope} <- verify_token(token, state),
          :ok <- token_allows_method(scope, method) do
-      if method == "subrun_spawn" do
-        {:reply, %{"ok" => false, "error" => "not_implemented", "method" => method}}
-      else
-        GenServer.cast(
-          state.session,
-          {:authority_request,
-           %Request{
-             method: method,
-             action: Map.get(request, "action", method),
-             context: normalize_context(Map.get(request, "context", %{})),
-             origin: :authority_socket,
-             from: from
-           }}
-        )
+      GenServer.cast(
+        state.session,
+        {:authority_request,
+         %Request{
+           method: method,
+           action: Map.get(request, "action", method),
+           context: normalize_context(Map.get(request, "context", %{})),
+           origin: :authority_socket,
+           from: from
+         }}
+      )
 
-        :noreply
-      end
+      :noreply
     else
       {:error, error} -> {:reply, %{"ok" => false, "error" => error}}
     end
   end
 
-  defp handle_request(_request, _from, _state), do: {:reply, %{"ok" => false, "error" => "missing_token"}}
+  defp handle_request(_request, _from, _state),
+    do: {:reply, %{"ok" => false, "error" => "missing_token"}}
 
   defp accept_loop(listen_socket, owner) do
     case :gen_tcp.accept(listen_socket) do
