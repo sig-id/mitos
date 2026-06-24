@@ -5,8 +5,11 @@ const headless = @import("headless.zig");
 const transport = @import("../transport/root.zig");
 
 pub const provider_id = adapters.ProviderId{ .value = "claude" };
+pub const claudecode_provider_id = adapters.ProviderId{ .value = "claudecode" };
 pub const print_adapter_id = adapters.AdapterId{ .value = "claude.print" };
+pub const claudecode_print_adapter_id = adapters.AdapterId{ .value = "claudecode.print" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "claude.pty" };
+pub const claudecode_pty_adapter_id = adapters.AdapterId{ .value = "claudecode.pty" };
 
 const supported_transports = [_]transport.TransportName{.stdio_json};
 const unavailable_warnings = [_][]const u8{"claude binary was not found on PATH"};
@@ -28,6 +31,13 @@ pub fn initPrintAdapter() adapters.AgentAdapter {
     };
 }
 
+pub fn initClaudeCodePrintAdapter() adapters.AgentAdapter {
+    var adapter = initPrintAdapter();
+    adapter.id = claudecode_print_adapter_id;
+    adapter.provider = claudecode_provider_id;
+    return adapter;
+}
+
 pub fn buildPrintCommand(
     allocator: std.mem.Allocator,
     task: adapters.Task,
@@ -35,14 +45,15 @@ pub fn buildPrintCommand(
 ) !headless.HeadlessCommand {
     // `--print --output-format stream-json` requires `--verbose` on current
     // claude CLI releases; without it the binary exits with a usage error.
-    const argv = try allocator.alloc([]const u8, 7);
+    const argv = try allocator.alloc([]const u8, 8);
     argv[0] = "claude";
     argv[1] = "--print";
     argv[2] = "--output-format";
     argv[3] = "stream-json";
     argv[4] = "--verbose";
     argv[5] = "--no-session-persistence";
-    argv[6] = task.text;
+    argv[6] = "--bare";
+    argv[7] = task.text;
 
     return .{
         .argv = argv,
@@ -78,36 +89,11 @@ fn detectPrint(
         };
     }
 
-    const supports_headless = try adapter_detection.commandOutputContains(
-        allocator,
-        &.{ "claude", "--help" },
-        "--output-format",
-    ) and try adapter_detection.commandOutputContains(
-        allocator,
-        &.{ "claude", "--help" },
-        "--print",
-    );
-
-    if (!supports_headless) {
-        return .{
-            .available = false,
-            .binary = "claude",
-            .auth_status = .unknown,
-            .supported_transports = &supported_transports,
-            .warnings = &unsupported_warnings,
-        };
-    }
-
-    const version = adapter_detection.commandOutputTrimmedAlloc(
-        allocator,
-        &.{ "claude", "--version" },
-    ) catch null;
-
     return .{
         .available = true,
         .binary = "claude",
-        .version = version,
-        .owns_version = version != null,
+        .version = null,
+        .owns_version = false,
         .auth_status = try adapter_detection.authStatusFromEnv(
             allocator,
             &.{"ANTHROPIC_API_KEY"},
@@ -127,7 +113,7 @@ fn startPrint(
     defer command.deinit(context.allocator);
 
     try headless.emitLaunchPlan(context.event_sink, self.provider.value, self.id.value);
-    const result = try headless.executeAndEmit(context.allocator, command, context.event_sink, .{});
+    const result = try headless.executeAndEmitForProvider(context.allocator, command, context.event_sink, .{}, self.provider);
     defer result.deinit(context.allocator);
     try headless.emitDetectedPrompts(
         context.allocator,
@@ -169,7 +155,8 @@ test "claude print command construction is deterministic" {
     try std.testing.expectEqualStrings("stream-json", command.argv[3]);
     try std.testing.expectEqualStrings("--verbose", command.argv[4]);
     try std.testing.expectEqualStrings("--no-session-persistence", command.argv[5]);
-    try std.testing.expectEqualStrings("Summarize this repository", command.argv[6]);
+    try std.testing.expectEqualStrings("--bare", command.argv[6]);
+    try std.testing.expectEqualStrings("Summarize this repository", command.argv[7]);
     try std.testing.expectEqualStrings("/workspace", command.cwd);
 }
 
@@ -186,7 +173,7 @@ test "claude print adapter start runs configured provider binary" {
     defer fake_bin.deinit();
     try fake_bin.writeExecutable("claude",
         \\#!/bin/sh
-        \\if [ "$1" = "--print" ] && [ "$2" = "--output-format" ] && [ "$3" = "stream-json" ] && [ "$4" = "--verbose" ] && [ "$5" = "--no-session-persistence" ]; then
+        \\if [ "$1" = "--print" ] && [ "$2" = "--output-format" ] && [ "$3" = "stream-json" ] && [ "$4" = "--verbose" ] && [ "$5" = "--no-session-persistence" ] && [ "$6" = "--bare" ]; then
         \\  printf '{"result":"claude fake done"}\n'
         \\  exit 0
         \\fi

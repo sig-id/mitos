@@ -53,6 +53,7 @@ defmodule Mitos.Agent do
       |> maybe_put(:result, opts[:result])
       |> maybe_put(:authority, opts[:authority])
       |> maybe_put(:knowledge, opts[:knowledge])
+      |> maybe_put(:capability_runtime, opts[:capability_runtime])
 
     with {:ok, trace, opening_decision_seq} <-
            append_opening_decision(session_id, launch_spec, opts),
@@ -121,7 +122,8 @@ defmodule Mitos.Agent do
              }
              |> maybe_put(:capability_ref, Map.get(launch_spec, :capability_ref))
              |> maybe_put(:seller_id, Map.get(launch_spec, :seller_id))
-             |> maybe_put(:trust_tier, Map.get(launch_spec, :trust_tier)),
+             |> maybe_put(:trust_tier, Map.get(launch_spec, :trust_tier))
+             |> maybe_put(:capability_runtime, Map.get(launch_spec, :capability_runtime)),
            inputs_hash: inputs_hash(launch_spec),
            rationale: "Launch #{launch_spec.provider} through the local engine",
            budget:
@@ -163,7 +165,8 @@ defmodule Mitos.Agent do
         :policy,
         :egress_policy,
         :result,
-        :knowledge
+        :knowledge,
+        :capability_runtime
       ])
       |> canonical_json()
 

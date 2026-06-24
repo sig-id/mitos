@@ -31,6 +31,19 @@ defmodule Mitos.Workload do
   """
 
   @enforce_keys [:id, :provider, :template]
+  @secret_env_fragments ~w(
+    API_KEY
+    AUTHORIZATION
+    BEARER
+    CLIENT_SECRET
+    CREDENTIAL
+    PASSWORD
+    PASSWD
+    PRIVATE_KEY
+    REFRESH_TOKEN
+    SECRET
+    TOKEN
+  )
   defstruct [
     :id,
     :provider,
@@ -115,8 +128,9 @@ defmodule Mitos.Workload do
          :ok <- require_string(template, "template"),
          {:ok, pricing} <- pricing_from_json(json["pricing"] || json["price"]),
          {:ok, payout_address} <- payout_address_from_json(json, pricing),
-         {:ok, capability} <- capability_from_json(id, json, pricing),
-         :ok <- capability_accepts_provider(capability, provider) do
+         {:ok, capability} <- capability_from_json(id, json, pricing, opts),
+         :ok <- capability_accepts_provider(capability, provider),
+         :ok <- capability_env_policy(capability, json) do
       defaults = %__MODULE__{id: id, provider: provider, template: template}
 
       {:ok,
@@ -218,7 +232,7 @@ defmodule Mitos.Workload do
   defp require_string(value, _field) when is_binary(value) and value != "", do: :ok
   defp require_string(_value, field), do: {:error, "#{field} is required"}
 
-  defp capability_from_json(id, json, pricing) do
+  defp capability_from_json(id, json, pricing, opts) do
     case json["capability_manifest"] || json["capability"] do
       nil when is_nil(pricing) ->
         {:ok, nil}
@@ -229,7 +243,7 @@ defmodule Mitos.Workload do
       %{} = manifest ->
         id
         |> published_manifest(manifest, pricing)
-        |> then(&Mitos.Capability.from_json(id, &1))
+        |> then(&Mitos.Capability.from_json(id, &1, package_root: Keyword.get(opts, :package_root)))
 
       _ ->
         {:error, {:invalid_capability, "capability must be an object"}}
@@ -250,6 +264,35 @@ defmodule Mitos.Workload do
     else
       {:error, "provider #{inspect(provider)} is not declared in capability.harnesses"}
     end
+  end
+
+  defp capability_env_policy(nil, _json), do: :ok
+
+  defp capability_env_policy(%Mitos.Capability{}, %{} = json) do
+    env = map_or(json["env"], %{})
+    passthrough = string_list_or(json["env_passthrough"], [])
+
+    cond do
+      passthrough != [] ->
+        {:error, "capability workloads must not use env_passthrough"}
+
+      secret_key = secret_env_key(env) ->
+        {:error, "capability env must not contain secret-like key #{secret_key}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp secret_env_key(%{} = env) do
+    env
+    |> Map.keys()
+    |> Enum.find(&secret_env_key?/1)
+  end
+
+  defp secret_env_key?(key) do
+    key = key |> to_string() |> String.upcase()
+    Enum.any?(@secret_env_fragments, &String.contains?(key, &1))
   end
 
   defp read_file(path) do

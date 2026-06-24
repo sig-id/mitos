@@ -333,6 +333,70 @@ defmodule Mitos.AgentTest do
            end)
   end
 
+  test "non-blocking pre hook failures do not stop harness launch" do
+    session_id = "agent-pre-warn-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-pre-warn-trace")
+    workspace = unique_tmp_dir("agent-pre-warn-workspace")
+    binary = Path.expand("../../../zig-out/bin/mitos-term", __DIR__)
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+    File.mkdir_p!(workspace)
+
+    {:ok, _run} =
+      Mitos.Agent.start(
+        provider: "generic",
+        task: "",
+        session_id: session_id,
+        transport_order: ["pty"],
+        argv: [
+          "/bin/sh",
+          "-c",
+          "test -f prepared.txt && printf '{\"signal\":\"ship\",\"summary\":\"warn-ok\"}' > RESULT"
+        ],
+        cwd: workspace,
+        sidecar_path: binary,
+        idle_ms: 30,
+        trace_base_dir: trace_base_dir,
+        result: %{path: "RESULT"},
+        hooks: %{
+          pre: [
+            %{name: "warn-gate", run: ["/bin/sh", "-c", "exit 5"], on_fail: "warn"},
+            %{name: "skip-gate", run: ["/bin/sh", "-c", "exit 6"], on_fail: "skip"},
+            %{
+              name: "prepare",
+              run: ["/bin/sh", "-c", "printf prepared > prepared.txt"],
+              on_fail: "block"
+            }
+          ]
+        }
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+    refute Enum.any?(events, &(get_in(&1, ["event", "type"]) == "HOOK_BLOCKED"))
+    assert File.read!(Path.join(workspace, "prepared.txt")) == "prepared"
+
+    assert_hook_blocked?(events, "pre", "warn-gate", false)
+    assert_hook_blocked?(events, "pre", "skip-gate", false)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "payload" => %{
+                 "status" => "completed",
+                 "result" => %{"signal" => "ship", "summary" => "warn-ok"}
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
   test "blocking post hook marks harvest unverified but preserves result" do
     session_id = "agent-post-block-" <> Integer.to_string(System.unique_integer([:positive]))
     trace_base_dir = unique_tmp_dir("agent-post-block-trace")
@@ -386,6 +450,54 @@ defmodule Mitos.AgentTest do
                  "status" => "completed",
                  "result" => %{"signal" => "ship", "summary" => "done"},
                  "verification" => %{"verified" => false, "failed_hooks" => ["gate"]}
+               }
+             } ->
+               true
+
+             _ ->
+               false
+           end)
+  end
+
+  test "non-blocking post hook failures preserve verified harvest" do
+    session_id = "agent-post-warn-" <> Integer.to_string(System.unique_integer([:positive]))
+    trace_base_dir = unique_tmp_dir("agent-post-warn-trace")
+    workspace = unique_tmp_dir("agent-post-warn-workspace")
+    binary = Path.expand("../../../zig-out/bin/mitos-term", __DIR__)
+    on_exit(fn -> File.rm_rf!(trace_base_dir) end)
+    on_exit(fn -> File.rm_rf!(workspace) end)
+    File.mkdir_p!(workspace)
+
+    {:ok, _run} =
+      Mitos.Agent.start(
+        provider: "generic",
+        task: "",
+        session_id: session_id,
+        transport_order: ["pty"],
+        argv: ["/bin/sh", "-c", "printf '{\"signal\":\"ship\",\"summary\":\"done\"}' > RESULT"],
+        cwd: workspace,
+        sidecar_path: binary,
+        idle_ms: 30,
+        trace_base_dir: trace_base_dir,
+        result: %{path: "RESULT"},
+        hooks: %{post: [%{name: "warn-gate", run: ["/bin/sh", "-c", "exit 9"], on_fail: "warn"}]}
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+    assert_eventually(1_000, fn -> Registry.lookup(Mitos.SessionRegistry, session_id) == [] end)
+
+    events = Mitos.Trace.read_events(session_id, base_dir: trace_base_dir)
+    refute Enum.any?(events, &(Map.get(&1, "type") == "verification_recorded"))
+    assert_hook_blocked?(events, "post", "warn-gate", false)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "capability_finished",
+               "payload" => %{
+                 "status" => "completed",
+                 "result" => %{"signal" => "ship", "summary" => "done"},
+                 "verification" => %{"verified" => true, "failed_hooks" => ["warn-gate"]}
                }
              } ->
                true
@@ -578,5 +690,20 @@ defmodule Mitos.AgentTest do
       %{"seq" => seq} -> seq
       nil -> flunk("missing effect #{type} #{inspect(ref_match)}")
     end
+  end
+
+  defp assert_hook_blocked?(events, phase, name, blocked?) do
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "hook_executed",
+               "ref" => %{"phase" => ^phase, "name" => ^name},
+               "payload" => %{"blocked?" => ^blocked?}
+             } ->
+               true
+
+             _ ->
+               false
+           end)
   end
 end

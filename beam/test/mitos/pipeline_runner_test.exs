@@ -17,7 +17,7 @@ defmodule Mitos.PipelineRunnerTest do
     on_exit(fn ->
       restore_env(:trace_base_dir, previous_trace_base_dir)
       restore_env(:workloads_dir, previous_workloads_dir)
-      File.rm_rf!(base_dir)
+      writable_rm_rf(base_dir)
       File.rm_rf!(workloads_dir)
     end)
 
@@ -135,6 +135,30 @@ defmodule Mitos.PipelineRunnerTest do
 
   defp unique_tmp_dir(prefix) do
     Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{System.unique_integer([:positive])}")
+  end
+
+  defp writable_rm_rf(path) do
+    make_tree_writable(path)
+    File.rm_rf(path)
+  end
+
+  defp make_tree_writable(path) do
+    cond do
+      File.dir?(path) ->
+        File.chmod(path, 0o755)
+
+        path
+        |> File.ls!()
+        |> Enum.each(fn entry -> make_tree_writable(Path.join(path, entry)) end)
+
+        File.chmod(path, 0o755)
+
+      File.exists?(path) ->
+        File.chmod(path, 0o644)
+
+      true ->
+        :ok
+    end
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:mitos, key)

@@ -1,5 +1,6 @@
 const std = @import("std");
 const adapters = @import("../adapters/types.zig");
+const normalize = @import("normalize.zig");
 const prompt = @import("../prompt/root.zig");
 
 pub const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
@@ -110,6 +111,16 @@ pub fn executeAndEmit(
     sink: ?adapters.AdapterEventSink,
     options: ExecuteOptions,
 ) !HeadlessResult {
+    return executeAndEmitForProvider(allocator, command, sink, options, null);
+}
+
+pub fn executeAndEmitForProvider(
+    allocator: std.mem.Allocator,
+    command: HeadlessCommand,
+    sink: ?adapters.AdapterEventSink,
+    options: ExecuteOptions,
+    provider: ?adapters.ProviderId,
+) !HeadlessResult {
     if (sink) |event_sink| {
         try event_sink.emit(event_sink.context, .{ .process_spawned = .{
             .argv = command.argv,
@@ -124,6 +135,9 @@ pub fn executeAndEmit(
         if (result.stdout.len > 0) {
             try event_sink.emit(event_sink.context, .{ .stdout = result.stdout });
             try emitStructuredJsonl(allocator, event_sink, result.stdout);
+            if (provider) |provider_id| {
+                try emitNormalizedJsonl(allocator, event_sink, provider_id, result.stdout);
+            }
         }
         if (result.stderr.len > 0) {
             try event_sink.emit(event_sink.context, .{ .stderr = result.stderr });
@@ -165,6 +179,15 @@ pub fn emitStructuredJsonl(
 
         try sink.emit(sink.context, .{ .structured = line });
     }
+}
+
+pub fn emitNormalizedJsonl(
+    allocator: std.mem.Allocator,
+    sink: adapters.AdapterEventSink,
+    provider: adapters.ProviderId,
+    bytes: []const u8,
+) !void {
+    try normalize.emitNormalizedJsonl(allocator, sink, provider, bytes);
 }
 
 pub fn emitDetectedPrompts(
@@ -243,6 +266,10 @@ pub fn extractFinalOutputAlloc(
 
     if (last_candidate) |candidate| {
         last_candidate = null;
+        return candidate;
+    }
+
+    if (try normalize.extractFinalOutputAlloc(allocator, stdout)) |candidate| {
         return candidate;
     }
 

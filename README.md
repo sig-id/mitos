@@ -4,7 +4,15 @@ LLM task runner for automated code analysis and generation.
 
 ## Docs
 
+- [Architecture](spec/01_ARCHITECTURE.md): the constitution — vocabulary,
+  layers, control model, canonical contracts. Read this first; it owns the
+  spec map for all other docs.
 - [Product](spec/02_PRODUCT.md): mitos as an AI-native agent operating system.
+- [Frontend](spec/11_FRONTEND.md): the product surface — how mitos is
+  represented and feels. App ⊃ pipeline ⊃ capability; three surfaces
+  (Run & Watch · Build & Test · Fleet); CLI-first dev, web-first operate.
+- [I/O Plane](spec/10_IO_PLANE.md): connectors in (chat/email/calendar/
+  webhook/web), sinks out (notify/deliver/reply/web) — the input/output layer.
 - [Gentix Facilitator](spec/08_FACILITATOR.md): the hosted capability
   service built on mitos — "Pickaxe for agent harnesses": sellers' processes
   executed by full agent harnesses in sandboxes, sold as metered completed
@@ -50,8 +58,10 @@ mix test
 
 # Run with real providers (headless only)
 ./zig-out/bin/mitos run --provider codex --task "Fix failing tests"
-./zig-out/bin/mitos run --provider claude --task "Summarize this repo"
+./zig-out/bin/mitos run --provider claudecode --task "Summarize this repo"
 ./zig-out/bin/mitos run --provider gemini --task "Review this code"
+./zig-out/bin/mitos run --provider opencode --task "Explain this repo"
+./zig-out/bin/mitos run --provider pi --task "List risky files"
 ```
 
 ### BEAM Control Plane

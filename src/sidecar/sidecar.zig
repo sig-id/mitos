@@ -563,6 +563,18 @@ const State = struct {
                 .{ "stream", .{ .str = "stdout" } },
                 .{ "bytes", .{ .bin = result.stdout } },
             });
+            var sink_context = SidecarAdapterSink{
+                .state = self,
+                .skip_token_usage = stdoutHasCanonicalTokenUsage(result.stdout),
+            };
+            headless.emitNormalizedJsonl(
+                self.allocator,
+                sink_context.sink(),
+                self.provider,
+                result.stdout,
+            ) catch |err| {
+                try self.emitError("codec", @errorName(err));
+            };
         }
         if (result.stderr.len > 0) {
             try self.emitMap(.event, &.{
@@ -1184,10 +1196,53 @@ const State = struct {
     }
 };
 
+const SidecarAdapterSink = struct {
+    state: *State,
+    skip_token_usage: bool = false,
+
+    fn sink(self: *SidecarAdapterSink) adapters.AdapterEventSink {
+        return .{ .context = self, .emit = emit };
+    }
+
+    fn emit(context: *anyopaque, event: adapters.AdapterEvent) anyerror!void {
+        const self: *SidecarAdapterSink = @ptrCast(@alignCast(context));
+        switch (event) {
+            .structured => |bytes| {
+                if (self.skip_token_usage and isNormalizedTokenUsage(bytes)) return;
+                try self.state.emitMap(.event, &.{
+                    .{ "type", .{ .str = transport.TypedEventName.structured_output.wireName() } },
+                    .{ "stream", .{ .str = "normalized" } },
+                    .{ "bytes", .{ .bin = bytes } },
+                });
+            },
+            else => {},
+        }
+    }
+};
+
 // -- helpers ----------------------------------------------------------------
 
 const fnv64_offset: u64 = 0xcbf29ce484222325;
 const fnv64_prime: u64 = 0x100000001b3;
+
+fn stdoutHasCanonicalTokenUsage(bytes: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0) continue;
+        if (isCanonicalTokenUsageJson(line)) return true;
+    }
+    return false;
+}
+
+fn isCanonicalTokenUsageJson(line: []const u8) bool {
+    return std.mem.indexOf(u8, line, "\"type\"") != null and
+        std.mem.indexOf(u8, line, "\"token_usage\"") != null;
+}
+
+fn isNormalizedTokenUsage(bytes: []const u8) bool {
+    return isCanonicalTokenUsageJson(bytes);
+}
 
 const PtyRawRefFilter = struct {
     last_signature: u64 = 0,
@@ -1429,6 +1484,11 @@ fn isTerminalChromeLine(line: []const u8) bool {
         "MCP startup",
         "Working",
         "Thinking",
+        "OpenCode",
+        "opencode",
+        "Pi",
+        "steering",
+        "follow-up",
         "loading",
         "connected",
         "transport:",
@@ -1617,7 +1677,10 @@ fn isTerminalFrameCodepoint(codepoint: u21) bool {
 fn usesProviderTuiChrome(provider: adapters.ProviderId) bool {
     return std.mem.eql(u8, provider.value, "codex") or
         std.mem.eql(u8, provider.value, "claude") or
-        std.mem.eql(u8, provider.value, "gemini");
+        std.mem.eql(u8, provider.value, "claudecode") or
+        std.mem.eql(u8, provider.value, "gemini") or
+        std.mem.eql(u8, provider.value, "opencode") or
+        std.mem.eql(u8, provider.value, "pi");
 }
 
 fn rawRefEligibleProvider(provider: adapters.ProviderId) bool {

@@ -29,6 +29,7 @@ defmodule Mitos.Capability do
   @trust_tiers ~w(T0 T1 T2)
   @hook_phases ~w(pre post)
   @hook_on_fail ~w(block warn skip)
+  @skill_anchors ~w(skill:role skill:rules skill:procedure skill:success)
   @manifest_keys ~w(
     data
     egress_policy
@@ -84,8 +85,10 @@ defmodule Mitos.Capability do
           digest: String.t()
         }
 
-  @spec from_json(String.t(), map()) :: {:ok, t()} | {:error, term()}
-  def from_json(id, %{} = json) when is_binary(id) do
+  @spec from_json(String.t(), map(), keyword()) :: {:ok, t()} | {:error, term()}
+  def from_json(id, json, opts \\ [])
+
+  def from_json(id, %{} = json, opts) when is_binary(id) and is_list(opts) do
     name = string_or(field(json, "name"), id)
     harnesses = string_list(field(json, "harnesses"))
     trust_tier = string_or(field(json, "trust_tier"), "T1")
@@ -143,7 +146,7 @@ defmodule Mitos.Capability do
 
       true ->
         manifest = normalize_manifest(json)
-        digest = "sha256:" <> digest_manifest(manifest)
+        digest = "sha256:" <> digest_manifest(identity_material(manifest, opts))
 
         {:ok,
          %__MODULE__{
@@ -166,7 +169,8 @@ defmodule Mitos.Capability do
     end
   end
 
-  def from_json(_id, _json), do: {:error, {:invalid_capability, "manifest must be an object"}}
+  def from_json(_id, _json, _opts),
+    do: {:error, {:invalid_capability, "manifest must be an object"}}
 
   @doc "Return fields that should flow into a LaunchSpec."
   def launch_fields(%__MODULE__{} = capability) do
@@ -212,7 +216,8 @@ defmodule Mitos.Capability do
   def resolve_skill(base_skill, overlays \\ [])
 
   def resolve_skill(base_skill, overlays) when is_binary(base_skill) do
-    with {:ok, directives} <- adapt_directives(overlays),
+    with :ok <- validate_base_skill_anchors(base_skill),
+         {:ok, directives} <- adapt_directives(overlays),
          {:ok, body} <- apply_adapt_directives(base_skill, directives) do
       {:ok, %{"body" => body, "sha256" => "sha256:" <> digest_bytes(body)}}
     end
@@ -468,6 +473,19 @@ defmodule Mitos.Capability do
     end)
   end
 
+  defp validate_base_skill_anchors(base_skill) do
+    missing =
+      Enum.reject(@skill_anchors, fn anchor ->
+        String.contains?(base_skill, "<!-- @" <> anchor <> " -->")
+      end)
+
+    if missing == [] do
+      :ok
+    else
+      {:error, {:missing_skill_anchors, missing}}
+    end
+  end
+
   defp parse_adapt_overlay(overlay) when is_binary(overlay) do
     overlay
     |> String.split("\n")
@@ -634,6 +652,150 @@ defmodule Mitos.Capability do
     }
   end
 
+  defp identity_material(manifest, opts) do
+    package_root = Keyword.get(opts, :package_root)
+
+    if is_binary(package_root) and package_root != "" do
+      %{
+        "image_digest" => image_digest(manifest["image"]),
+        "data_snapshot_ref" => data_snapshot_ref(manifest["data"]),
+        "data_sha256" => data_content_digest(manifest["data"], package_root),
+        "skill_sha256" => package_content_digest(package_root, manifest["skill"]),
+        "tools_manifest_sha256" => tools_manifest_digest(manifest["tools"], package_root),
+        "manifest" => manifest
+      }
+      |> reject_blank_values()
+    else
+      manifest
+    end
+  end
+
+  defp image_digest(image) when is_binary(image) and image != "" do
+    case String.split(image, "@", parts: 2) do
+      [_ref, digest] -> digest
+      _other -> image
+    end
+  end
+
+  defp image_digest(_image), do: nil
+
+  defp data_snapshot_ref(%{} = data) do
+    field(data, "snapshot") || field(data, "volume")
+  end
+
+  defp data_snapshot_ref(_data), do: nil
+
+  defp data_content_digest(%{} = data, package_root) do
+    source = field(data, "path") || field(data, "bind")
+    package_content_digest(package_root, source)
+  end
+
+  defp data_content_digest(_data, _package_root), do: nil
+
+  defp tools_manifest_digest(tools, package_root) when is_list(tools) do
+    tools
+    |> Enum.map(fn
+      %{} = tool ->
+        tool
+        |> normalize()
+        |> maybe_put_exec_digest(package_root)
+
+      other ->
+        other
+    end)
+    |> canonical_json()
+    |> digest_bytes()
+  end
+
+  defp tools_manifest_digest(_tools, _package_root), do: nil
+
+  defp maybe_put_exec_digest(%{"exec" => exec} = tool, package_root) when is_binary(exec) do
+    Map.put(tool, "exec_sha256", package_content_digest(package_root, exec))
+  end
+
+  defp maybe_put_exec_digest(tool, _package_root), do: tool
+
+  defp package_content_digest(_package_root, value) when value in [nil, ""], do: nil
+
+  defp package_content_digest(package_root, path)
+       when is_binary(package_root) and is_binary(path) do
+    case package_path(package_root, path) do
+      {:ok, absolute_path} -> content_digest(absolute_path)
+      {:error, reason} -> %{"unavailable" => inspect(reason)}
+    end
+  end
+
+  defp package_content_digest(_package_root, _path), do: nil
+
+  defp content_digest(path) do
+    cond do
+      File.regular?(path) ->
+        case File.read(path) do
+          {:ok, bytes} -> "sha256:" <> digest_bytes(bytes)
+          {:error, reason} -> %{"unavailable" => inspect(reason)}
+        end
+
+      File.dir?(path) ->
+        path
+        |> content_tree_entries(path)
+        |> canonical_json()
+        |> digest_bytes()
+        |> then(&("sha256:" <> &1))
+
+      true ->
+        %{"unavailable" => ":missing"}
+    end
+  end
+
+  defp content_tree_entries(root, path) do
+    case File.ls(path) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort()
+        |> Enum.flat_map(fn entry ->
+          child = Path.join(path, entry)
+          relative = Path.relative_to(child, root)
+
+          cond do
+            File.regular?(child) ->
+              case File.read(child) do
+                {:ok, bytes} ->
+                  [%{"path" => relative, "sha256" => "sha256:" <> digest_bytes(bytes)}]
+
+                {:error, reason} ->
+                  [%{"path" => relative, "unavailable" => inspect(reason)}]
+              end
+
+            File.dir?(child) ->
+              content_tree_entries(root, child)
+
+            true ->
+              []
+          end
+        end)
+
+      {:error, reason} ->
+        [%{"path" => Path.relative_to(path, root), "unavailable" => inspect(reason)}]
+    end
+  end
+
+  defp package_path(package_root, path) do
+    root = Path.expand(package_root)
+
+    expanded =
+      if Path.type(path) == :absolute do
+        Path.expand(path)
+      else
+        Path.expand(path, root)
+      end
+
+    if expanded == root or String.starts_with?(expanded, root <> "/") do
+      {:ok, expanded}
+    else
+      {:error, :path_escape}
+    end
+  end
+
   defp hooks_or(%{} = hooks, _default) do
     Map.new(@hook_phases, fn phase ->
       {phase, map_list(field(hooks, phase, []))}
@@ -706,6 +868,12 @@ defmodule Mitos.Capability do
   end
 
   defp canonical_json(value), do: Jason.encode!(value)
+
+  defp reject_blank_values(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> blank?(value) end)
+    |> Map.new()
+  end
 
   defp blank?(nil), do: true
   defp blank?(value) when is_map(value), do: map_size(value) == 0

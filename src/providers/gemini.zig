@@ -135,7 +135,7 @@ fn startHeadless(
     defer command.deinit(context.allocator);
 
     try headless.emitLaunchPlan(context.event_sink, self.provider.value, self.id.value);
-    const result = try headless.executeAndEmit(context.allocator, command, context.event_sink, .{});
+    const result = try headless.executeAndEmitForProvider(context.allocator, command, context.event_sink, .{}, self.provider);
     defer result.deinit(context.allocator);
     try headless.emitDetectedPrompts(
         context.allocator,

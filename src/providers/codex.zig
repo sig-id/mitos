@@ -32,13 +32,20 @@ pub fn buildExecCommand(
     task: adapters.Task,
     cwd: []const u8,
 ) !headless.HeadlessCommand {
-    const argv = try allocator.alloc([]const u8, 6);
+    const argv = try allocator.alloc([]const u8, 13);
     argv[0] = "codex";
     argv[1] = "exec";
     argv[2] = "--json";
     argv[3] = "--color";
     argv[4] = "never";
-    argv[5] = task.text;
+    argv[5] = "--ephemeral";
+    argv[6] = "--ignore-user-config";
+    argv[7] = "--ignore-rules";
+    argv[8] = "--skip-git-repo-check";
+    argv[9] = "--cd";
+    argv[10] = cwd;
+    argv[11] = "--";
+    argv[12] = task.text;
 
     return .{
         .argv = argv,
@@ -120,7 +127,7 @@ fn startExec(
     defer command.deinit(context.allocator);
 
     try headless.emitLaunchPlan(context.event_sink, self.provider.value, self.id.value);
-    const result = try headless.executeAndEmit(context.allocator, command, context.event_sink, .{});
+    const result = try headless.executeAndEmitForProvider(context.allocator, command, context.event_sink, .{}, self.provider);
     defer result.deinit(context.allocator);
     try headless.emitDetectedPrompts(
         context.allocator,
@@ -161,7 +168,14 @@ test "codex exec command construction is deterministic" {
     try std.testing.expectEqualStrings("--json", command.argv[2]);
     try std.testing.expectEqualStrings("--color", command.argv[3]);
     try std.testing.expectEqualStrings("never", command.argv[4]);
-    try std.testing.expectEqualStrings("Explain the failing test", command.argv[5]);
+    try std.testing.expectEqualStrings("--ephemeral", command.argv[5]);
+    try std.testing.expectEqualStrings("--ignore-user-config", command.argv[6]);
+    try std.testing.expectEqualStrings("--ignore-rules", command.argv[7]);
+    try std.testing.expectEqualStrings("--skip-git-repo-check", command.argv[8]);
+    try std.testing.expectEqualStrings("--cd", command.argv[9]);
+    try std.testing.expectEqualStrings("/workspace", command.argv[10]);
+    try std.testing.expectEqualStrings("--", command.argv[11]);
+    try std.testing.expectEqualStrings("Explain the failing test", command.argv[12]);
     try std.testing.expectEqualStrings("/workspace", command.cwd);
 }
 
@@ -193,7 +207,7 @@ test "codex exec adapter start runs configured provider binary" {
     defer fake_bin.deinit();
     try fake_bin.writeExecutable("codex",
         \\#!/bin/sh
-        \\if [ "$1" = "exec" ] && [ "$2" = "--json" ] && [ "$3" = "--color" ] && [ "$4" = "never" ]; then
+        \\if [ "$1" = "exec" ] && [ "$2" = "--json" ] && [ "$3" = "--color" ] && [ "$4" = "never" ] && [ "$5" = "--ephemeral" ]; then
         \\  printf 'Run npm install? [y/N]\n'
         \\  printf '{"final_output":"codex fake done"}\n'
         \\  exit 0

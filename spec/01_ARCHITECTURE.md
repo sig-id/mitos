@@ -315,7 +315,10 @@ sources/connectors, and the drainer are specified in `06`.
 - **Work pool / Pool** — the durable container of Tasks. A *pool* names only the container; **how a Task is picked is a separate, pluggable `discipline`** — a pool is *not* a queue (FIFO is one discipline). (`06` §2)
 - **Discipline** — how the drainer selects the next Task from a pool: `fifo | lifo | priority | weighted-fair | deadline | agent-pick | custom`. (`06` §2)
 - **Subtask** — a child Task a capability spawns mid-run via the governed `invoke` affordance; its result returns to the parent (which parks). A full sandboxed/metered Task — unlike an opaque harness sub-agent. (`06` §5)
-- **Connector** — an optional adapter syncing an external tracker (kanban-md, GitHub/Linear) to the work pool; the pool is the source of truth and assumes no git repo. (`06` §6)
+- **Agentic application** — the shipping unit: a bundle of one or more *pipelines* + the *capabilities* they reference + an app manifest (entry pipelines, I/O bindings, service defaults), packaged as OCI. A user **runs a pipeline**, never a bare capability. (`11` §2)
+- **Connector** — a platform-level **ingress** adapter that normalizes an external signal (chat/email/calendar/webhook/event, the dev trackers kanban-md/GitHub/Linear, or the web app) into a Task/trigger; the pool is the source of truth. (`06` §6, generalized in `10` §3)
+- **Sink** — a control-plane **egress** adapter that delivers a run's outcome (notify/deliver/reply/web) after harvest, reading the event log + artifacts. NOT the in-sandbox egress broker (`05` §5.3). (`10` §5)
+- **I/O plane** — the layer that gives mitos a world-facing input/output: connectors in, sinks out, the web app as one of each. (`10`)
 
 ---
 
@@ -348,3 +351,5 @@ sources/connectors, and the drainer are specified in `06`.
 | `07_MEMORY` | Two-track memory, retrieval/injection, contradiction-supersession forgetting |
 | `08_FACILITATOR` | Gentix: capability=monetizable unit, metering off the log, multi-tenancy, take-rate |
 | `09_IMPLEMENTATION_PLAN` | Phased build on BEAM+Zig, reuse map, sequencing |
+| `10_IO_PLANE` | **I/O plane**: connectors (ingress: chat/email/calendar/webhook/event/web), sinks (egress: notify/deliver/reply/web), application I/O bindings; distinct from the in-sandbox broker (`05`) |
+| `11_FRONTEND` | **Frontend product spec**: app⊃pipeline⊃capability hierarchy, three surfaces (Run & Watch two-zoom · Build & Test · Fleet), CLI/web primacy, packaging lifecycle |

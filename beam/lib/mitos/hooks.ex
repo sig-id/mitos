@@ -74,7 +74,7 @@ defmodule Mitos.Hooks do
       "stdout" => stdout,
       "error" => error,
       "duration_ms" => max(finished_at - started_at, 0),
-      "blocked?" => not success? and on_fail in ["block", "skip"]
+      "blocked?" => not success? and on_fail == "block"
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()

@@ -37,9 +37,28 @@ defmodule Mitos.TestRemoteMicrovmProvider do
   def snapshot(_session), do: :unsupported
 
   @impl true
+  def harvest(%{launch_spec: %{task: task}}) when is_binary(task) do
+    if String.contains?(task, "harvest failure") do
+      {:error, :harvest_failed}
+    else
+      {:ok,
+       %{
+         diff: %{"path" => "diff.patch", "sha256" => "sha256:remote-diff", "empty?" => true},
+         result: remote_result(%{task: task}),
+         artifacts: remote_artifacts(%{task: task})
+       }}
+    end
+  end
+
+  @impl true
   def harvest(%{harvest: harvest}), do: {:ok, harvest}
 
   @impl true
+  def stop(%{launch_spec: launch_spec}) do
+    send(self(), {:test_remote_microvm_stopped, launch_spec.run_id})
+    :ok
+  end
+
   def stop(_session), do: :ok
 
   @impl true
@@ -237,6 +256,7 @@ defmodule Mitos.WorkloadTest do
       write_workload!(dir, "cap", %{
         provider: "fake",
         template: "{{objective}}",
+        env: %{MODE: "dry-run"},
         capability: %{
           name: "demo-capability",
           version: "0.1.0",
@@ -255,6 +275,73 @@ defmodule Mitos.WorkloadTest do
       assert workload.capability.name == "demo-capability"
       assert workload.capability.trust_tier == "T1"
       assert workload.capability.result == %{"path" => "RESULT", "evidence" => ["report.md"]}
+      assert workload.env == %{"MODE" => "dry-run"}
+    end
+
+    test "loads capability identity from package pillar content", %{dir: dir} do
+      File.mkdir_p!(Path.join(dir, "tools"))
+      File.mkdir_p!(Path.join(dir, "data"))
+      File.write!(Path.join(dir, "skill.md"), "skill v1\n")
+      File.write!(Path.join([dir, "tools", "extract.py"]), "print('tool v1')\n")
+      File.write!(Path.join([dir, "data", "ref.txt"]), "data v1\n")
+
+      write_workload!(dir, "cap-content-id", %{
+        provider: "fake",
+        template: "{{objective}}",
+        capability: %{
+          name: "content-id",
+          harnesses: ["fake"],
+          skill: "skill.md",
+          data: %{path: "data", mount: "/data", ro: true},
+          tools: [
+            %{
+              name: "extract",
+              exec: "tools/extract.py",
+              input: %{},
+              output: %{},
+              deterministic: true
+            }
+          ]
+        }
+      })
+
+      assert {:ok, first} = Workload.fetch("cap-content-id")
+
+      File.write!(Path.join(dir, "skill.md"), "skill v2\n")
+
+      assert {:ok, changed} = Workload.fetch("cap-content-id")
+      refute changed.capability.id == first.capability.id
+    end
+
+    test "rejects capability workloads that would inject secrets through env", %{dir: dir} do
+      write_workload!(dir, "cap-env-passthrough", %{
+        provider: "fake",
+        template: "{{objective}}",
+        env_passthrough: ["ANTHROPIC_API_KEY"],
+        capability: %{
+          name: "cap-env-passthrough",
+          harnesses: ["fake"],
+          trust_tier: "T1"
+        }
+      })
+
+      assert {:error, {:invalid_workload, "capability workloads must not use env_passthrough"}} =
+               Workload.fetch("cap-env-passthrough")
+
+      write_workload!(dir, "cap-secret-env", %{
+        provider: "fake",
+        template: "{{objective}}",
+        env: %{API_KEY: "must-not-enter-sandbox"},
+        capability: %{
+          name: "cap-secret-env",
+          harnesses: ["fake"],
+          trust_tier: "T1"
+        }
+      })
+
+      assert {:error,
+              {:invalid_workload, "capability env must not contain secret-like key API_KEY"}} =
+               Workload.fetch("cap-secret-env")
     end
 
     test "loads flat paid endpoint pricing", %{dir: dir} do
@@ -738,7 +825,7 @@ defmodule Mitos.WorkloadTest do
           Application.delete_env(:mitos, :trace_base_dir)
         end
 
-        File.rm_rf!(trace_base_dir)
+        writable_rm_rf!(trace_base_dir)
       end)
 
       write_workload!(dir, "usage-local", %{
@@ -787,6 +874,263 @@ defmodule Mitos.WorkloadTest do
                "usd" => 0.11,
                "wall_ms" => 125
              }
+    end
+
+    test "local capability runs with materialized skill tools and data pillars", %{dir: dir} do
+      previous_trace_base_dir = Application.get_env(:mitos, :trace_base_dir)
+      trace_base_dir = unique_tmp_dir("local-capability-runtime-trace")
+      Application.put_env(:mitos, :trace_base_dir, trace_base_dir)
+
+      on_exit(fn ->
+        if previous_trace_base_dir do
+          Application.put_env(:mitos, :trace_base_dir, previous_trace_base_dir)
+        else
+          Application.delete_env(:mitos, :trace_base_dir)
+        end
+
+        writable_rm_rf!(trace_base_dir)
+      end)
+
+      File.mkdir_p!(Path.join(dir, "tools"))
+      File.mkdir_p!(Path.join(dir, "data"))
+
+      File.write!(Path.join(dir, "skill.md"), """
+      <!-- @skill:role -->
+      Local pillar checker.
+      <!-- @skill:rules -->
+      Base local rule.
+      <!-- @skill:procedure -->
+      Read data and write RESULT through the tool.
+      <!-- @skill:success -->
+      RESULT and report.md exist.
+      """)
+
+      tool_path = Path.join([dir, "tools", "write_result.py"])
+
+      File.write!(tool_path, """
+      #!/usr/bin/env python3
+      import json
+      import os
+      import pathlib
+
+      skill = pathlib.Path(os.environ["MITOS_RESOLVED_SKILL"]).read_text()
+      data = pathlib.Path(os.environ["MITOS_DATA_DIR"]) / "ref.txt"
+      data_write_denied = False
+      try:
+          (pathlib.Path(os.environ["MITOS_DATA_DIR"]) / "mutate.txt").write_text("bad")
+      except OSError:
+          data_write_denied = True
+      report = pathlib.Path("report.md")
+      report.write_text(
+          "skill_has_overlay=%s\\ndata=%s\\ndata_write_denied=%s\\n"
+          % ("Overlay local rule." in skill, data.read_text().strip(), data_write_denied)
+      )
+      pathlib.Path("RESULT").write_text(json.dumps({
+          "signal": "ship",
+          "confidence": 1.0,
+          "summary": report.read_text().strip(),
+          "evidence": [{"kind": "report", "path": "report.md"}],
+      }))
+      """)
+
+      File.chmod!(tool_path, 0o755)
+      File.write!(Path.join([dir, "data", "ref.txt"]), "reference-corpus\n")
+
+      write_workload!(dir, "local-pillars", %{
+        provider: "fake",
+        template: "use three pillars for {{objective}}",
+        transport_order: ["stdio-json"],
+        timeout_ms: 30_000,
+        capability: %{
+          name: "local-pillars",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          skill: "skill.md",
+          skill_adapt: %{
+            fake: "@adapt append skill:rules Overlay local rule."
+          },
+          data: %{path: "data", mount: "/data", ro: true},
+          tools: [
+            %{
+              name: "write_result",
+              exec: "tools/write_result.py",
+              input: %{},
+              output: %{},
+              deterministic: true,
+              side_effects: ["workspace_write", "data_read"]
+            }
+          ],
+          result: %{path: "RESULT", evidence: ["report.md"]},
+          hooks: %{
+            post: [
+              %{name: "write-result", run: ["/bin/sh", "-c", "write_result.py"], on_fail: "block"}
+            ]
+          }
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("local-pillars")
+
+      assert {:ok, result} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "backend smoke"})
+
+      events = Mitos.Trace.read_events(result.run_id, base_dir: trace_base_dir)
+      runtime_root = Path.join([trace_base_dir, ".runs", result.run_id, "runtime"])
+
+      assert File.read!(Path.join([runtime_root, "skill", "resolved.md"])) =~
+               "Overlay local rule."
+
+      assert File.exists?(Path.join([runtime_root, "tools", "write_result.py"]))
+      assert File.read!(Path.join([runtime_root, "data", "ref.txt"])) == "reference-corpus\n"
+      refute File.exists?(Path.join([runtime_root, "data", "mutate.txt"]))
+
+      assert %{"items" => [%{"runtime_exec" => runtime_exec}]} =
+               Jason.decode!(File.read!(Path.join([runtime_root, "tools", "tools.json"])))
+
+      assert runtime_exec == Path.join([runtime_root, "tools", "write_result.py"])
+      assert read_only?(Path.join([runtime_root, "skill"]))
+      assert read_only?(Path.join([runtime_root, "tools"]))
+      assert read_only?(Path.join([runtime_root, "data"]))
+
+      assert Enum.any?(events, fn
+               %{
+                 "kind" => "effect",
+                 "type" => "hook_executed",
+                 "ref" => %{"phase" => "post", "name" => "write-result"},
+                 "payload" => %{"success?" => true}
+               } ->
+                 true
+
+               _ ->
+                 false
+             end)
+
+      assert Enum.any?(events, fn
+               %{
+                 "kind" => "effect",
+                 "type" => "capability_finished",
+                 "payload" => %{
+                   "result" => %{
+                     "signal" => "ship",
+                     "summary" =>
+                       "skill_has_overlay=True\ndata=reference-corpus\ndata_write_denied=True"
+                   },
+                   "harvest" => %{"result" => %{"evidence" => evidence}}
+                 }
+               } ->
+                 Enum.any?(evidence, &(&1["path"] == "report.md" and is_binary(&1["sha256"])))
+
+               _ ->
+                 false
+             end)
+
+      assert Enum.any?(events, fn
+               %{
+                 "kind" => "decision",
+                 "params" => %{
+                   "capability_runtime" => %{
+                     "workspace" => workspace,
+                     "skill" => %{"sha256" => "sha256:" <> _}
+                   }
+                 }
+               }
+               when is_binary(workspace) ->
+                 String.starts_with?(workspace, runtime_root)
+
+               _ ->
+                 false
+             end)
+    end
+
+    test "local capability fails closed when declared skill file is missing", %{dir: dir} do
+      write_workload!(dir, "missing-skill-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "missing-skill-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          skill: "missing.md",
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("missing-skill-local")
+
+      assert {:error, {:runtime_prepare_failed, {:skill_unavailable, "missing.md", :enoent}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+    end
+
+    test "local capability fails closed when declared skill lacks required anchors", %{dir: dir} do
+      File.write!(Path.join(dir, "skill.md"), """
+      <!-- @skill:role -->
+      Base role.
+      <!-- @skill:rules -->
+      Base rule.
+      """)
+
+      write_workload!(dir, "invalid-skill-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "invalid-skill-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          skill: "skill.md",
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("invalid-skill-local")
+
+      assert {:error,
+              {:runtime_prepare_failed,
+               {:skill_resolution_failed, "skill.md",
+                {:missing_skill_anchors, ["skill:procedure", "skill:success"]}}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+    end
+
+    test "local capability fails closed when declared data source is unavailable", %{dir: dir} do
+      write_workload!(dir, "missing-data-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "missing-data-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          data: %{path: "missing-data", mount: "/data", ro: true},
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("missing-data-local")
+
+      assert {:error, {:runtime_prepare_failed, {:data_unavailable, "missing-data", :missing}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+    end
+
+    test "local capability refuses data path escapes before launch", %{dir: dir} do
+      write_workload!(dir, "data-escape-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "data-escape-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          data: %{path: "../outside-data", mount: "/data", ro: true},
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("data-escape-local")
+
+      assert {:error,
+              {:runtime_prepare_failed, {:data_unavailable, "../outside-data", :path_escape}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
     end
 
     test "paid capability endpoint refuses local execution when no T2 provider is configured", %{
@@ -1054,10 +1398,12 @@ defmodule Mitos.WorkloadTest do
         })
 
       assert conn.status == 422
-      assert_receive {:test_remote_microvm_env, nil}
+      refute_receive {:test_remote_microvm_env, _}
+      refute_receive {:test_remote_microvm_launch_spec, _}
 
       body = Jason.decode!(conn.resp_body)
       assert body["status"] == "failed"
+      assert body["dry_run"] == nil
 
       assert Enum.any?(body["checks"], fn
                %{
@@ -1362,8 +1708,7 @@ defmodule Mitos.WorkloadTest do
         template: "{{objective}}",
         seller_id: "seller-a",
         cwd: workspace,
-        env: %{"API_KEY" => "must-not-enter-t2"},
-        env_passthrough: ["HOST_SECRET"],
+        env: %{"MODE" => "must-not-enter-t2"},
         timeout_ms: 30_000,
         pricing: %{
           type: "flat",
@@ -1540,6 +1885,105 @@ defmodule Mitos.WorkloadTest do
                "project" => "buyer-project",
                "actor" => "buyer-user"
              }
+    end
+
+    test "paid T2 capability endpoint fails before provider start when egress credential is missing",
+         %{dir: dir} do
+      previous_providers = Application.get_env(:mitos, :sandbox_providers)
+      previous_vault = Application.get_env(:mitos, :key_vault)
+      previous_leases = Application.get_env(:mitos, :key_vault_leases)
+
+      Application.put_env(:mitos, :sandbox_providers, [Mitos.TestRemoteMicrovmProvider])
+      Application.delete_env(:mitos, :key_vault)
+      Application.delete_env(:mitos, :key_vault_leases)
+
+      on_exit(fn ->
+        if previous_providers do
+          Application.put_env(:mitos, :sandbox_providers, previous_providers)
+        else
+          Application.delete_env(:mitos, :sandbox_providers)
+        end
+
+        if previous_vault do
+          Application.put_env(:mitos, :key_vault, previous_vault)
+        else
+          Application.delete_env(:mitos, :key_vault)
+        end
+
+        if previous_leases do
+          Application.put_env(:mitos, :key_vault_leases, previous_leases)
+        else
+          Application.delete_env(:mitos, :key_vault_leases)
+        end
+      end)
+
+      write_workload!(dir, "paid-remote-missing-key", %{
+        provider: "fake",
+        template: "{{objective}}",
+        seller_id: "seller-a",
+        timeout_ms: 30_000,
+        pricing: %{
+          type: "flat",
+          amount_usdc: "2.50",
+          take_rate_bps: 1500,
+          take_floor_usdc: "0.01",
+          payout_address: "usdc:seller:demo"
+        },
+        capability: %{
+          name: "paid-missing-key-demo",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          egress_policy: [
+            %{id: "provider-api", dest: "api.provider.test", credential_id: "provider-key"}
+          ],
+          result: %{path: "RESULT"}
+        }
+      })
+
+      request = %{
+        schema_id: "gentix.provider_execution_request",
+        schema_version: 1,
+        tenant: %{org: "buyer-org", project: "buyer-project", actor: "buyer-user"},
+        buyer_workspace: %{
+          snapshot: "snap://buyer/input-designs",
+          mount: "/workspace",
+          ro: true,
+          sha256: "sha256:buyer-inputs"
+        },
+        task: %{objective: "paid remote missing key job"},
+        request: %{}
+      }
+
+      quote_conn = post_json("/capabilities/paid-remote-missing-key/runs", request)
+      assert quote_conn.status == 402
+      quote = Jason.decode!(quote_conn.resp_body)
+
+      payment =
+        Jason.encode!(%{
+          quote_id: quote["quote_id"],
+          amount_usdc: "2.50",
+          currency: "USDC",
+          pay_to: quote["pay_to"],
+          status: "settled",
+          settlement_tx: "usdc-tx-missing-key"
+        })
+
+      paid_conn =
+        post_json("/capabilities/paid-remote-missing-key/runs", request, [
+          {"x-payment", payment}
+        ])
+
+      assert paid_conn.status == 502
+      refute_receive {:test_remote_microvm_env, _}
+      refute_receive {:test_remote_microvm_launch_spec, _}
+
+      body = Jason.decode!(paid_conn.resp_body)
+      assert body["error"] == "agent launch failed"
+      assert body["detail"] =~ "credential_lease_failed"
+      assert body["detail"] =~ "provider-key"
+      assert body["detail"] =~ "api.provider.test"
+      assert body["settlement"]["status"] == "refund_due"
+      assert Application.get_env(:mitos, :key_vault_leases, %{})[body["run_id"]] in [nil, []]
     end
 
     test "paid capability endpoint rejects buyer tenant matching seller tenant", %{dir: dir} do
@@ -1849,6 +2293,68 @@ defmodule Mitos.WorkloadTest do
 
       assert {:ok, run} = Mitos.Runs.fetch(body["run_id"])
       assert run["proof"]["delivery"]["result"] == nil
+    end
+
+    test "remote session cleanup runs when harvest fails after start", %{dir: dir} do
+      previous_providers = Application.get_env(:mitos, :sandbox_providers)
+      previous_leases = Application.get_env(:mitos, :key_vault_leases)
+
+      Application.put_env(:mitos, :sandbox_providers, [Mitos.TestRemoteMicrovmProvider])
+      Application.delete_env(:mitos, :key_vault_leases)
+
+      on_exit(fn ->
+        if previous_providers do
+          Application.put_env(:mitos, :sandbox_providers, previous_providers)
+        else
+          Application.delete_env(:mitos, :sandbox_providers)
+        end
+
+        if previous_leases do
+          Application.put_env(:mitos, :key_vault_leases, previous_leases)
+        else
+          Application.delete_env(:mitos, :key_vault_leases)
+        end
+      end)
+
+      write_workload!(dir, "remote-harvest-fail", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "remote-harvest-fail-demo",
+          harnesses: ["fake"],
+          trust_tier: "T2",
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("remote-harvest-fail")
+
+      assert {:error, {:launch_failed, run_id, :harvest_failed}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "harvest failure job"})
+
+      assert_receive {:test_remote_microvm_env, nil}
+      assert_receive {:test_remote_microvm_launch_spec, %{run_id: ^run_id}}
+      assert_receive {:test_remote_microvm_stopped, ^run_id}
+
+      refute Map.has_key?(Application.get_env(:mitos, :key_vault_leases, %{}), run_id)
+
+      assert {:ok, run} = Mitos.Runs.fetch(run_id)
+      pool = Mitos.WorkPool.fold_events(run["events"])
+      [task] = Map.values(pool["tasks"])
+      assert task["status"] == "failed"
+
+      assert Enum.any?(run["events"], fn
+               %{
+                 "kind" => "effect",
+                 "type" => "task_failed",
+                 "payload" => %{"reason" => reason}
+               } ->
+                 reason =~ ":harvest_failed"
+
+               _ ->
+                 false
+             end)
     end
 
     test "remote token usage is folded into canonical budget charges", %{dir: dir} do
@@ -2176,6 +2682,60 @@ defmodule Mitos.WorkloadTest do
       refute inspect(proof) =~ "Overlay rule"
     end
 
+    test "remote capability fails before provider start when declared skill overlay is invalid",
+         %{
+           dir: dir
+         } do
+      previous_providers = Application.get_env(:mitos, :sandbox_providers)
+      Application.put_env(:mitos, :sandbox_providers, [Mitos.TestRemoteMicrovmProvider])
+
+      on_exit(fn ->
+        if previous_providers do
+          Application.put_env(:mitos, :sandbox_providers, previous_providers)
+        else
+          Application.delete_env(:mitos, :sandbox_providers)
+        end
+      end)
+
+      File.write!(Path.join(dir, "skill.md"), """
+      <!-- @skill:role -->
+      Base role.
+      <!-- @skill:rules -->
+      Base rule.
+      <!-- @skill:procedure -->
+      Step one.
+      <!-- @skill:success -->
+      Ship evidence.
+      """)
+
+      write_workload!(dir, "invalid-skill-remote", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "invalid-skill-remote",
+          harnesses: ["fake"],
+          trust_tier: "T2",
+          skill: "skill.md",
+          skill_adapt: %{
+            fake: "@adapt append skill:missing Overlay rule."
+          },
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("invalid-skill-remote")
+
+      assert {:error,
+              {:launch_failed, run_id,
+               {:skill_resolution_failed, "skill.md", {:adapt_anchor_not_found, "skill:missing"}}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+
+      assert String.starts_with?(run_id, "wl-")
+      refute_receive {:test_remote_microvm_env, _}
+      refute_receive {:test_remote_microvm_launch_spec, _}
+    end
+
     test "missing bindings yield 422", %{dir: dir} do
       write_workload!(dir, "needs-input", %{provider: "fake", template: "{{custom_field}}"})
 
@@ -2213,6 +2773,34 @@ defmodule Mitos.WorkloadTest do
 
   defp unique_tmp_dir(prefix) do
     Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{System.unique_integer([:positive])}")
+  end
+
+  defp read_only?(path) do
+    match?({:ok, %{mode: mode}} when Bitwise.band(mode, 0o222) == 0, File.stat(path))
+  end
+
+  defp writable_rm_rf!(path) do
+    make_tree_writable(path)
+    File.rm_rf(path)
+  end
+
+  defp make_tree_writable(path) do
+    cond do
+      File.dir?(path) ->
+        File.chmod(path, 0o755)
+
+        path
+        |> File.ls!()
+        |> Enum.each(fn entry -> make_tree_writable(Path.join(path, entry)) end)
+
+        File.chmod(path, 0o755)
+
+      File.exists?(path) ->
+        File.chmod(path, 0o644)
+
+      true ->
+        :ok
+    end
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:mitos, key)

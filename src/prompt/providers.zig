@@ -35,6 +35,11 @@ const claude_rules = ProviderPromptRules{
     },
 };
 
+const claudecode_rules = ProviderPromptRules{
+    .provider = .{ .value = "claudecode" },
+    .rules = claude_rules.rules,
+};
+
 const gemini_rules = ProviderPromptRules{
     .provider = .{ .value = "gemini" },
     .rules = .{
@@ -44,11 +49,32 @@ const gemini_rules = ProviderPromptRules{
     },
 };
 
+const opencode_rules = ProviderPromptRules{
+    .provider = .{ .value = "opencode" },
+    .rules = .{
+        .final_markers = &.{ "Final answer:", "Response:", "Done." },
+        .approval_markers = &.{ "Allow command?", "Proceed?", "? [y/N]", "permission" },
+        .error_markers = &.{ "OpenCode error:", "Error:", "error:" },
+    },
+};
+
+const pi_rules = ProviderPromptRules{
+    .provider = .{ .value = "pi" },
+    .rules = .{
+        .final_markers = &.{ "Final answer:", "Response:", "Done." },
+        .approval_markers = &.{ "Allow command?", "Proceed?", "? [y/N]", "approve" },
+        .error_markers = &.{ "Pi error:", "Error:", "error:" },
+    },
+};
+
 pub fn rulesForProvider(provider: adapters.ProviderId) detectors.DetectorRules {
     if (providerEql(provider, fake_rules.provider)) return fake_rules.rules;
     if (providerEql(provider, codex_rules.provider)) return codex_rules.rules;
     if (providerEql(provider, claude_rules.provider)) return claude_rules.rules;
+    if (providerEql(provider, claudecode_rules.provider)) return claudecode_rules.rules;
     if (providerEql(provider, gemini_rules.provider)) return gemini_rules.rules;
+    if (providerEql(provider, opencode_rules.provider)) return opencode_rules.rules;
+    if (providerEql(provider, pi_rules.provider)) return pi_rules.rules;
     return .{};
 }
 

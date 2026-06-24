@@ -45,6 +45,7 @@ defmodule Mitos.Workload.Runner do
 
     with :ok <- publishable?(workload),
          {:ok, _provider} <- Mitos.SandboxPolicy.select_workload_provider(workload),
+         :ok <- publication_preflight(workload),
          {:ok, result} <- execute(workload, bindings, validation_opts) do
       proof = Mitos.Proof.build(result.run_id)
       validation = publication_validation(workload, result, proof)
@@ -89,10 +90,11 @@ defmodule Mitos.Workload.Runner do
   end
 
   defp run(workload, task, Mitos.SandboxProvider.LocalSidecar, opts, task_context) do
+    run_opts = opts
     session_id = "wl-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
     Mitos.PubSub.subscribe(session_id)
 
-    opts =
+    agent_opts =
       [
         provider: workload.provider,
         task: task,
@@ -100,19 +102,97 @@ defmodule Mitos.Workload.Runner do
         transport_order: workload.transport_order,
         idle_ms: workload.idle_ms
       ]
-      |> maybe(:knowledge, knowledge_slice(workload, task, opts))
+      |> maybe(:knowledge, knowledge_slice(workload, task, run_opts))
       |> maybe(:env, sandbox_env(workload))
       |> maybe(:cwd, workload.cwd)
       |> maybe(:schema_root, workload.package_root)
       |> maybe(:seller_id, workload.seller_id)
-      |> maybe(:budget, Keyword.get(opts, :budget))
+      |> maybe(:budget, Keyword.get(run_opts, :budget))
       |> with_capability(workload.capability)
-      |> with_resolved_skill(workload, opts)
-      |> with_trace_tenant(Keyword.get(opts, :tenant))
+      |> with_trace_tenant(Keyword.get(run_opts, :tenant))
+      |> maybe(:trace_base_dir, Keyword.get(run_opts, :trace_base_dir))
 
+    with {:ok, agent_opts} <- with_resolved_skill(agent_opts, workload, run_opts),
+         {:ok, agent_opts} <-
+           Mitos.CapabilityRuntime.prepare_agent_options(workload, agent_opts, run_opts) do
+      start_local_agent(workload, task_context, session_id, agent_opts)
+    else
+      {:error, {:skill_unavailable, _skill, _reason} = reason} ->
+        task_trace = start_task_trace(session_id, task_context, 0, agent_opts)
+        result = {:error, {:runtime_prepare_failed, reason}}
+        finish_task_trace(task_trace, task_context, result)
+        result
+
+      {:error, {:skill_resolution_failed, _skill, _reason} = reason} ->
+        task_trace = start_task_trace(session_id, task_context, 0, agent_opts)
+        result = {:error, {:runtime_prepare_failed, reason}}
+        finish_task_trace(task_trace, task_context, result)
+        result
+
+      {:error, reason} ->
+        task_trace = start_task_trace(session_id, task_context, 0, agent_opts)
+        result = {:error, {:runtime_prepare_failed, reason}}
+        finish_task_trace(task_trace, task_context, result)
+        result
+    end
+  end
+
+  defp run(workload, task, provider, opts, task_context) when is_atom(provider) do
+    session_id = "wl-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+
+    with {:ok, launch_spec} <- launch_spec(workload, task, session_id, opts) do
+      case open_remote_trace(session_id, launch_spec, opts) do
+        {:ok, trace, decision_seq} ->
+          trace = start_task_trace(trace, task_context, decision_seq)
+
+          case start_remote_session(provider, launch_spec, workload, session_id) do
+            {:ok, session} ->
+              case run_remote_session(
+                     provider,
+                     session,
+                     trace,
+                     decision_seq,
+                     launch_spec,
+                     workload.package_root,
+                     session_id
+                   ) do
+                {:ok, trace, result} ->
+                  finish_task_trace(trace, task_context, result)
+                  result
+
+                {:error, trace, reason} ->
+                  result = {:error, {:launch_failed, session_id, reason}}
+                  finish_task_trace(trace, task_context, result)
+                  result
+              end
+
+            {:error, reason} ->
+              _ = Mitos.KeyVault.revoke_run(session_id)
+              result = {:error, {:launch_failed, session_id, reason}}
+              finish_task_trace(trace, task_context, result)
+              result
+          end
+
+        {:error, reason} ->
+          remote_trace_open_error(session_id, reason)
+      end
+    else
+      {:error, reason} ->
+        _ = Mitos.KeyVault.revoke_run(session_id)
+        {:error, {:launch_failed, session_id, reason}}
+    end
+  end
+
+  defp remote_trace_open_error(_session_id, {:budget_exceeded, _abort} = reason),
+    do: {:error, reason}
+
+  defp remote_trace_open_error(session_id, reason),
+    do: {:error, {:launch_failed, session_id, reason}}
+
+  defp start_local_agent(workload, task_context, session_id, opts) do
     case Mitos.Agent.start(opts) do
       {:ok, agent_run} ->
-        task_trace = start_task_trace(session_id, task_context, 0)
+        task_trace = start_task_trace(session_id, task_context, 0, opts)
         deadline = System.monotonic_time(:millisecond) + workload.timeout_ms
         acc = %{raw: [], final: nil, candidate: nil, errors: []}
         result = collect(agent_run, workload, acc, deadline)
@@ -123,43 +203,62 @@ defmodule Mitos.Workload.Runner do
         {:error, reason}
 
       {:error, reason} ->
-        task_trace = start_task_trace(session_id, task_context, 0)
+        task_trace = start_task_trace(session_id, task_context, 0, opts)
         result = {:error, {:launch_failed, reason}}
         finish_task_trace(task_trace, task_context, result)
         result
     end
   end
 
-  defp run(workload, task, provider, opts, task_context) when is_atom(provider) do
-    session_id = "wl-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
-    launch_spec = launch_spec(workload, task, session_id, opts)
-
-    case open_remote_trace(session_id, launch_spec, opts) do
-      {:ok, trace, decision_seq} ->
-        trace = start_task_trace(trace, task_context, decision_seq)
-
-        with {:ok, handle} <- provider.prepare(launch_spec),
-             {:ok, session} <- provider.start(handle, [], sandbox_env(workload)),
-             {trace, acc} <- collect_remote(provider.stream(session), trace, decision_seq),
-             {:ok, harvest} <- provider.harvest(session) do
-          harvest = validate_remote_harvest(harvest, launch_spec, workload.package_root)
-          trace = trace_remote_finish(trace, decision_seq, acc, harvest)
-          _ = provider.stop(session)
-          _ = Mitos.KeyVault.revoke_run(session_id)
-          result = finish_remote(acc, harvest, session_id)
-          finish_task_trace(trace, task_context, result)
-          result
-        else
-          {:error, reason} ->
-            _ = Mitos.KeyVault.revoke_run(session_id)
-            result = {:error, {:launch_failed, session_id, reason}}
-            finish_task_trace(trace, task_context, result)
-            result
-        end
-
+  defp start_remote_session(provider, launch_spec, workload, session_id) do
+    with {:ok, handle} <- provider.prepare(launch_spec),
+         {:ok, session} <- provider.start(handle, [], sandbox_env(workload)) do
+      {:ok, session}
+    else
       {:error, reason} ->
+        _ = Mitos.KeyVault.revoke_run(session_id)
         {:error, reason}
     end
+  end
+
+  defp run_remote_session(
+         provider,
+         session,
+         trace,
+         decision_seq,
+         launch_spec,
+         schema_root,
+         session_id
+       ) do
+    try do
+      with {trace, acc} <- collect_remote(provider.stream(session), trace, decision_seq),
+           {:ok, harvest} <- provider.harvest(session) do
+        harvest = validate_remote_harvest(harvest, launch_spec, schema_root)
+        trace = trace_remote_finish(trace, decision_seq, acc, harvest)
+        {:ok, trace, finish_remote(acc, harvest, session_id)}
+      else
+        {:error, reason} -> {:error, trace, reason}
+      end
+    rescue
+      exception -> {:error, trace, Exception.message(exception)}
+    catch
+      kind, reason -> {:error, trace, {kind, reason}}
+    after
+      stop_remote_session(provider, session)
+      _ = Mitos.KeyVault.revoke_run(session_id)
+    end
+  end
+
+  defp stop_remote_session(provider, session) do
+    provider.stop(session)
+  rescue
+    exception ->
+      Logger.warning("remote sandbox stop failed: #{Exception.message(exception)}")
+      {:error, exception}
+  catch
+    kind, reason ->
+      Logger.warning("remote sandbox stop failed: #{inspect({kind, reason})}")
+      {:error, {kind, reason}}
   end
 
   defp collect(agent_run, workload, acc, deadline) do
@@ -385,8 +484,10 @@ defmodule Mitos.Workload.Runner do
     }
   end
 
-  defp start_task_trace(session_id, task_context, caused_by) when is_binary(session_id) do
+  defp start_task_trace(session_id, task_context, caused_by, opts)
+       when is_binary(session_id) do
     [run_id: session_id]
+    |> maybe(:base_dir, Keyword.get(opts, :trace_base_dir))
     |> Mitos.Trace.open!()
     |> start_task_trace(task_context, caused_by)
   end
@@ -472,18 +573,49 @@ defmodule Mitos.Workload.Runner do
     }
   end
 
+  defp publication_preflight(%Workload{} = workload) do
+    case key_binding_check(workload) do
+      %{"status" => "passed"} ->
+        :ok
+
+      %{} = key_binding ->
+        checks = [
+          policy_compile_check(workload),
+          key_binding,
+          %{"name" => "dry_run", "status" => "skipped", "detail" => "preflight failed"}
+        ]
+
+        {:error,
+         {:publication_validation_failed,
+          %{
+            "schema_id" => "gentix.capability_publication_validation",
+            "schema_version" => 1,
+            "workload_id" => workload.id,
+            "capability_ref" => workload.capability && workload.capability.id,
+            "status" => validation_status(checks),
+            "checks" => checks,
+            "dry_run" => nil,
+            "evidence" => %{}
+          }}}
+    end
+  end
+
   defp publication_checks(workload, result, harvested_result, artifacts) do
     [
-      %{
-        "name" => "policy_compile",
-        "status" => "passed",
-        "detail" => "selected sandbox provider satisfies #{workload.capability.trust_tier}"
-      },
+      policy_compile_check(workload),
       key_binding_check(workload),
       dry_run_check(result),
       result_schema_check(workload, harvested_result),
       evidence_check(workload, harvested_result, artifacts)
     ]
+  end
+
+  defp policy_compile_check(workload) do
+    %{
+      "name" => "policy_compile",
+      "status" => "passed",
+      "detail" => "selected sandbox provider satisfies #{workload.capability.trust_tier}"
+    }
   end
 
   defp key_binding_check(%Workload{capability: capability, seller_id: seller_id}) do
@@ -750,31 +882,47 @@ defmodule Mitos.Workload.Runner do
               )
           })
 
-        _ = Mitos.KeyVault.lease_run(session_id, launch_spec)
+        case lease_remote_credentials(session_id, launch_spec) do
+          {:ok, _leases} ->
+            {:ok, trace, decision_seq}
 
-        {:ok, trace, decision_seq}
+          {:error, reason} ->
+            _ = Mitos.KeyVault.revoke_run(session_id)
+            {:error, reason}
+        end
 
       {:abort, _trace, abort} ->
         {:error, {:budget_exceeded, abort}}
     end
   end
 
+  defp lease_remote_credentials(session_id, %{trust_tier: "T2"} = launch_spec),
+    do: Mitos.KeyVault.lease_run_strict(session_id, launch_spec)
+
+  defp lease_remote_credentials(session_id, launch_spec),
+    do: Mitos.KeyVault.lease_run(session_id, launch_spec)
+
   defp launch_spec(workload, task, session_id, opts) do
-    [
-      version: 1,
-      run_id: session_id,
-      provider: workload.provider,
-      task: task,
-      transport_order: workload.transport_order
-    ]
-    |> maybe(:knowledge, knowledge_slice(workload, task, opts))
-    |> maybe(:workspace, Keyword.get(opts, :workspace))
-    |> maybe(:cwd, launch_cwd(workload))
-    |> maybe(:seller_id, workload.seller_id)
-    |> with_capability(workload.capability)
-    |> with_resolved_skill(workload, opts)
-    |> Map.new()
-    |> with_launch_posture()
+    launch_fields =
+      [
+        version: 1,
+        run_id: session_id,
+        provider: workload.provider,
+        task: task,
+        transport_order: workload.transport_order
+      ]
+      |> maybe(:knowledge, knowledge_slice(workload, task, opts))
+      |> maybe(:workspace, Keyword.get(opts, :workspace))
+      |> maybe(:cwd, launch_cwd(workload))
+      |> maybe(:seller_id, workload.seller_id)
+      |> with_capability(workload.capability)
+
+    with {:ok, launch_fields} <- with_resolved_skill(launch_fields, workload, opts) do
+      {:ok,
+       launch_fields
+       |> Map.new()
+       |> with_launch_posture()}
+    end
   end
 
   defp knowledge_slice(workload, task, opts) do
@@ -969,12 +1117,13 @@ defmodule Mitos.Workload.Runner do
     |> Enum.reduce(opts, fn {key, value}, acc -> Keyword.put(acc, key, value) end)
   end
 
-  defp with_resolved_skill(opts, %Workload{capability: nil}, _run_opts), do: opts
+  defp with_resolved_skill(opts, %Workload{capability: nil}, _run_opts), do: {:ok, opts}
 
   defp with_resolved_skill(opts, %Workload{} = workload, run_opts) do
     case resolve_workload_skill(workload, run_opts) do
-      nil -> opts
-      resolved_skill -> Keyword.put(opts, :resolved_skill, resolved_skill)
+      {:ok, nil} -> {:ok, opts}
+      {:ok, resolved_skill} -> {:ok, Keyword.put(opts, :resolved_skill, resolved_skill)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -983,19 +1132,38 @@ defmodule Mitos.Workload.Runner do
          opts
        )
        when is_binary(skill) and skill != "" do
-    with {:ok, path} <- package_file(workload.package_root, skill),
-         {:ok, base_skill} <- File.read(path),
-         {:ok, resolved} <-
-           Mitos.Capability.resolve_skill(base_skill, selected_skill_overlays(workload, opts)) do
-      resolved
-      |> Map.put("path", "/skill/resolved.md")
-      |> Map.put("source", skill)
-    else
-      _unavailable -> nil
+    with {:ok, path} <- skill_source_path(workload, skill),
+         {:ok, base_skill} <- read_skill_source(skill, path),
+         {:ok, resolved} <- resolve_skill_body(workload, opts, skill, base_skill) do
+      {:ok,
+       resolved
+       |> Map.put("path", "/skill/resolved.md")
+       |> Map.put("source", skill)}
     end
   end
 
-  defp resolve_workload_skill(_workload, _opts), do: nil
+  defp resolve_workload_skill(_workload, _opts), do: {:ok, nil}
+
+  defp skill_source_path(%Workload{} = workload, skill) do
+    case package_file(workload.package_root, skill) do
+      {:ok, path} -> {:ok, path}
+      {:error, reason} -> {:error, {:skill_unavailable, skill, reason}}
+    end
+  end
+
+  defp read_skill_source(skill, path) do
+    case File.read(path) do
+      {:ok, body} -> {:ok, body}
+      {:error, reason} -> {:error, {:skill_unavailable, skill, reason}}
+    end
+  end
+
+  defp resolve_skill_body(workload, opts, skill, base_skill) do
+    case Mitos.Capability.resolve_skill(base_skill, selected_skill_overlays(workload, opts)) do
+      {:ok, resolved} -> {:ok, resolved}
+      {:error, reason} -> {:error, {:skill_resolution_failed, skill, reason}}
+    end
+  end
 
   defp package_file(package_root, path) when is_binary(package_root) and is_binary(path) do
     expanded =

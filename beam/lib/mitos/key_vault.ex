@@ -85,6 +85,27 @@ defmodule Mitos.KeyVault do
 
   def lease_run(_run_id, _launch_spec), do: {:ok, []}
 
+  @doc """
+  Grant run-scoped leases and fail if any declared credentialed egress rule
+  cannot be bound.
+
+  This is the launch-admission path for capability runs: unlike `lease_run/2`,
+  it does not silently drop unavailable credentials.
+  """
+  def lease_run_strict(run_id, launch_spec) when is_binary(run_id) and is_map(launch_spec) do
+    launch_spec = normalize(launch_spec)
+    seller_id = seller_id(launch_spec)
+    failures = lease_failures(egress_policy(launch_spec), seller_id)
+
+    if failures == [] do
+      lease_run(run_id, launch_spec)
+    else
+      {:error, {:credential_lease_failed, failures}}
+    end
+  end
+
+  def lease_run_strict(_run_id, _launch_spec), do: {:error, {:credential_lease_failed, []}}
+
   @doc "Revoke every credential lease for a run."
   def revoke_run(run_id) when is_binary(run_id) do
     Application.put_env(:mitos, :key_vault_leases, Map.delete(leases(), run_id))
@@ -134,6 +155,70 @@ defmodule Mitos.KeyVault do
   end
 
   def resolve(_credential_id, _dest, _opts), do: {:error, "credential unavailable"}
+
+  @doc """
+  Resolve a credential for one run using only the active run lease.
+
+  The broker-facing path should prefer this over caller-supplied seller ids:
+  the run lease was created from the launch spec and carries the scoped seller
+  identity needed to resolve the credential without exposing secret material.
+  """
+  def resolve_run(run_id, credential_id, dest)
+      when is_binary(run_id) and is_binary(credential_id) and is_binary(dest) do
+    case Enum.find(leases(run_id), &lease_matches?(&1, credential_id, dest)) do
+      %{} = lease ->
+        with {:ok, %{} = credential_ref} <-
+               resolve(credential_id, dest, seller_id: lease["seller_id"], run_id: run_id) do
+          {:ok, apply_lease_policy(credential_ref, lease)}
+        end
+
+      nil ->
+        {:error, "credential lease unavailable"}
+    end
+  end
+
+  def resolve_run(_run_id, _credential_id, _dest), do: {:error, "credential lease unavailable"}
+
+  @doc false
+  def resolve_run_attachment(run_id, credential_id, dest)
+      when is_binary(run_id) and is_binary(credential_id) and is_binary(dest) do
+    case Enum.find(leases(run_id), &lease_matches?(&1, credential_id, dest)) do
+      %{"requires_approval" => true} ->
+        {:error, "approval required"}
+
+      %{} = lease ->
+        seller_id = lease["seller_id"]
+
+        with {:ok, %{} = credential} <- fetch_credential(vault(), credential_id, seller_id),
+             true <- destination_allowed?(credential, dest),
+             {:ok, header_name, header_value} <- credential_header(credential) do
+          credential_ref =
+            %{
+              "credential_id" => credential_id,
+              "credential_type" => field(credential, "type", "opaque"),
+              "dest" => dest
+            }
+            |> put_optional("seller_id", field(credential, "seller_id"))
+
+          {:ok,
+           %{
+             "credential" => credential_ref,
+             "headers" => [{header_name, header_value}],
+             "redaction_values" => credential_redaction_values(credential, header_value)
+           }}
+        else
+          false -> {:error, "credential destination mismatch"}
+          :not_found -> {:error, "credential unavailable"}
+          {:error, reason} -> {:error, reason}
+        end
+
+      nil ->
+        {:error, "credential lease unavailable"}
+    end
+  end
+
+  def resolve_run_attachment(_run_id, _credential_id, _dest),
+    do: {:error, "credential lease unavailable"}
 
   defp put_credential(vault, seller_id, credential_id, credential) do
     Map.update(vault, seller_id, %{"credentials" => %{credential_id => credential}}, fn
@@ -283,13 +368,67 @@ defmodule Mitos.KeyVault do
     with credential_id when is_binary(credential_id) and credential_id != "" <- credential_id,
          dest when is_binary(dest) and dest != "" and dest != "*" <- dest,
          {:ok, %{} = ref} <- resolve(credential_id, dest, seller_id: seller_id) do
-      [Map.take(ref, ["credential_id", "credential_type", "dest", "seller_id"])]
+      lease =
+        ref
+        |> Map.take(["credential_id", "credential_type", "dest", "seller_id"])
+        |> apply_rule_policy(rule)
+
+      [lease]
     else
       _ -> []
     end
   end
 
   defp lease_ref(_rule, _seller_id), do: []
+
+  defp lease_failures(policy, seller_id) when is_list(policy) do
+    policy
+    |> Enum.filter(&is_map/1)
+    |> Enum.flat_map(&lease_failure(&1, seller_id))
+  end
+
+  defp lease_failures(_policy, _seller_id), do: []
+
+  defp lease_failure(rule, seller_id) do
+    credential_id = field(rule, "credential_id") || field(rule, "credential")
+    dest = field(rule, "dest") || field(rule, "destination")
+
+    cond do
+      credential_id in [nil, ""] ->
+        []
+
+      seller_id in [nil, ""] ->
+        [
+          lease_failure_ref(
+            rule,
+            dest,
+            credential_id,
+            "seller_id is required for credential lease"
+          )
+        ]
+
+      not is_binary(dest) or dest == "" or dest == "*" ->
+        [lease_failure_ref(rule, dest, credential_id, "explicit destination is required")]
+
+      true ->
+        case resolve(credential_id, dest, seller_id: seller_id) do
+          {:ok, %{} = _ref} -> []
+          {:ok, nil} -> []
+          {:error, reason} -> [lease_failure_ref(rule, dest, credential_id, reason)]
+        end
+    end
+  end
+
+  defp lease_failure_ref(rule, dest, credential_id, reason) do
+    %{
+      "rule" => field(rule, "id"),
+      "dest" => dest,
+      "credential_id" => credential_id,
+      "reason" => reason
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
 
   defp lease_active?(opts, credential_ref) do
     case run_id(opts) do
@@ -308,6 +447,68 @@ defmodule Mitos.KeyVault do
     lease["credential_id"] == credential_ref["credential_id"] and
       lease["dest"] == credential_ref["dest"] and
       Map.get(lease, "seller_id") == Map.get(credential_ref, "seller_id")
+  end
+
+  defp apply_rule_policy(ref, rule) do
+    if truthy?(field(rule, "requires_approval", false)) do
+      Map.put(ref, "requires_approval", true)
+    else
+      ref
+    end
+  end
+
+  defp apply_lease_policy(credential_ref, %{"requires_approval" => true}) do
+    Map.put(credential_ref, "requires_approval", true)
+  end
+
+  defp apply_lease_policy(credential_ref, _lease), do: credential_ref
+
+  defp lease_matches?(lease, credential_id, dest) do
+    lease["credential_id"] == credential_id and lease["dest"] == dest
+  end
+
+  defp credential_header(%{} = credential) do
+    type = field(credential, "type", "opaque")
+    secret = field(credential, "secret")
+
+    cond do
+      not is_binary(secret) or secret == "" ->
+        {:error, "credential secret unavailable"}
+
+      type == "bearer" ->
+        {:ok, "authorization", "Bearer " <> secret}
+
+      type == "header" ->
+        case clean_header_name(field(credential, "header")) do
+          nil -> {:error, "credential header is required"}
+          header -> {:ok, header, secret}
+        end
+
+      type == "basic" ->
+        case clean_string(field(credential, "username")) do
+          nil ->
+            {:error, "credential username is required"}
+
+          username ->
+            token = Base.encode64(username <> ":" <> secret)
+            {:ok, "authorization", "Basic " <> token}
+        end
+
+      type == "opaque" and is_binary(field(credential, "header")) ->
+        case clean_header_name(field(credential, "header")) do
+          nil -> {:error, "credential header is required"}
+          header -> {:ok, header, secret}
+        end
+
+      true ->
+        {:error, "credential type #{type} cannot be attached by the HTTP broker"}
+    end
+  end
+
+  defp credential_redaction_values(%{} = credential, header_value) do
+    [field(credential, "secret"), header_value]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
   end
 
   defp destination_allowed?(credential, dest) do
@@ -330,6 +531,12 @@ defmodule Mitos.KeyVault do
   end
 
   defp field(%{} = map, key, default \\ nil), do: Map.get(map, key, default)
+
+  defp truthy?(true), do: true
+  defp truthy?(1), do: true
+  defp truthy?("true"), do: true
+  defp truthy?("1"), do: true
+  defp truthy?(_value), do: false
 
   defp seller_id(opts) when is_binary(opts), do: opts
 
@@ -377,6 +584,20 @@ defmodule Mitos.KeyVault do
   end
 
   defp clean_string(_value), do: nil
+
+  defp clean_header_name(value) do
+    value
+    |> clean_string()
+    |> case do
+      nil ->
+        nil
+
+      header ->
+        if String.match?(header, ~r/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/) do
+          String.downcase(header)
+        end
+    end
+  end
 
   defp normalize(%{} = map),
     do: Map.new(map, fn {key, value} -> {to_string(key), normalize(value)} end)

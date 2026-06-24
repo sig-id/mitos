@@ -14,6 +14,7 @@ pub const parseInteraction = types.parseInteraction;
 /// the generic y/n line-protocol keymap so steering never goes unanswered.
 pub fn forProvider(provider: adapters.ProviderId) SteeringAdapter {
     if (std.mem.eql(u8, provider.value, "claude")) return keymaps.claude;
+    if (std.mem.eql(u8, provider.value, "claudecode")) return keymaps.claude;
     if (std.mem.eql(u8, provider.value, "codex")) return keymaps.codex;
     if (std.mem.eql(u8, provider.value, "gemini")) return keymaps.gemini;
     return keymaps.generic;
@@ -21,6 +22,7 @@ pub fn forProvider(provider: adapters.ProviderId) SteeringAdapter {
 
 test "provider lookup returns dedicated keymaps with generic fallback" {
     try std.testing.expectEqualStrings("claude", forProvider(.{ .value = "claude" }).provider.value);
+    try std.testing.expectEqualStrings("claude", forProvider(.{ .value = "claudecode" }).provider.value);
     try std.testing.expectEqualStrings("codex", forProvider(.{ .value = "codex" }).provider.value);
     try std.testing.expectEqualStrings("gemini", forProvider(.{ .value = "gemini" }).provider.value);
     try std.testing.expectEqualStrings("generic-pty", forProvider(.{ .value = "fake" }).provider.value);

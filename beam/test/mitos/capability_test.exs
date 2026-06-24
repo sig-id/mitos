@@ -65,6 +65,81 @@ defmodule Mitos.CapabilityTest do
     refute Map.has_key?(Mitos.Capability.public_view(capability), "harnesses")
   end
 
+  test "package-aware identity changes when pillar content changes" do
+    package_root =
+      Path.join(System.tmp_dir!(), "mitos-capability-id-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(Path.join(package_root, "tools"))
+    File.mkdir_p!(Path.join(package_root, "data"))
+
+    on_exit(fn -> File.rm_rf!(package_root) end)
+
+    skill_path = Path.join(package_root, "skill.md")
+    tool_path = Path.join([package_root, "tools", "extract.py"])
+    data_path = Path.join([package_root, "data", "ref.txt"])
+
+    File.write!(skill_path, "role v1\n")
+    File.write!(tool_path, "print('tool v1')\n")
+    File.write!(data_path, "data v1\n")
+
+    manifest = %{
+      "name" => "content-addressed",
+      "harnesses" => ["fake"],
+      "skill" => "skill.md",
+      "data" => %{"path" => "data", "mount" => "/data", "ro" => true},
+      "tools" => [
+        %{
+          "name" => "extract",
+          "exec" => "tools/extract.py",
+          "input" => %{},
+          "output" => %{},
+          "deterministic" => true
+        }
+      ]
+    }
+
+    assert {:ok, first} =
+             Mitos.Capability.from_json("content-addressed", manifest,
+               package_root: package_root
+             )
+
+    assert {:ok, same} =
+             Mitos.Capability.from_json("content-addressed", manifest,
+               package_root: package_root
+             )
+
+    assert same.id == first.id
+
+    File.write!(skill_path, "role v2\n")
+
+    assert {:ok, changed_skill} =
+             Mitos.Capability.from_json("content-addressed", manifest,
+               package_root: package_root
+             )
+
+    refute changed_skill.id == first.id
+
+    File.write!(skill_path, "role v1\n")
+    File.write!(tool_path, "print('tool v2')\n")
+
+    assert {:ok, changed_tool} =
+             Mitos.Capability.from_json("content-addressed", manifest,
+               package_root: package_root
+             )
+
+    refute changed_tool.id == first.id
+
+    File.write!(tool_path, "print('tool v1')\n")
+    File.write!(data_path, "data v2\n")
+
+    assert {:ok, changed_data} =
+             Mitos.Capability.from_json("content-addressed", manifest,
+               package_root: package_root
+             )
+
+    refute changed_data.id == first.id
+  end
+
   test "resolves per-model skill adaptation overlays deterministically" do
     base = """
     <!-- @skill:role -->
@@ -113,6 +188,17 @@ defmodule Mitos.CapabilityTest do
              Mitos.Capability.resolve_skill(base, [
                "@adapt append skill:missing unreachable"
              ])
+
+    assert {:error, {:missing_skill_anchors, ["skill:procedure", "skill:success"]}} =
+             Mitos.Capability.resolve_skill(
+               """
+               <!-- @skill:role -->
+               Base role.
+               <!-- @skill:rules -->
+               Base rule.
+               """,
+               []
+             )
   end
 
   test "accepts combined tool schemas" do

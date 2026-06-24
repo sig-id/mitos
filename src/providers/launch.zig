@@ -6,6 +6,8 @@ const codex = @import("codex.zig");
 const fake = @import("fake.zig");
 const gemini = @import("gemini.zig");
 const headless = @import("headless.zig");
+const opencode = @import("opencode.zig");
+const pi = @import("pi.zig");
 
 pub const ResolveError = error{
     ProviderNotRegistered,
@@ -102,11 +104,11 @@ fn resolveProviderPty(
         };
     }
 
-    if (std.mem.eql(u8, spec.provider, "claude")) {
+    if (isClaudeProvider(spec.provider)) {
         const command = try claude.buildPtyCommand(allocator, task, cwd);
         return .{
-            .provider = claude.provider_id,
-            .adapter = claude.pty_adapter_id,
+            .provider = if (std.mem.eql(u8, spec.provider, "claude")) claude.provider_id else claude.claudecode_provider_id,
+            .adapter = if (std.mem.eql(u8, spec.provider, "claude")) claude.pty_adapter_id else claude.claudecode_pty_adapter_id,
             .transport_name = .pty,
             .argv = command.argv,
             .cwd = command.cwd,
@@ -134,6 +136,28 @@ fn resolveProviderPty(
             .cwd = command.cwd,
             .initial_input = command.initial_input,
             .owns_initial_input = true,
+        };
+    }
+
+    if (std.mem.eql(u8, spec.provider, "opencode")) {
+        const command = try opencode.buildPtyCommand(allocator, task, cwd);
+        return .{
+            .provider = opencode.provider_id,
+            .adapter = opencode.pty_adapter_id,
+            .transport_name = .pty,
+            .argv = command.argv,
+            .cwd = command.cwd,
+        };
+    }
+
+    if (std.mem.eql(u8, spec.provider, "pi")) {
+        const command = try pi.buildPtyCommand(allocator, task, cwd);
+        return .{
+            .provider = pi.provider_id,
+            .adapter = pi.pty_adapter_id,
+            .transport_name = .pty,
+            .argv = command.argv,
+            .cwd = command.cwd,
         };
     }
 
@@ -171,10 +195,10 @@ fn resolveProviderStdioJson(
             .cwd = command.cwd,
         };
     }
-    if (std.mem.eql(u8, spec.provider, "claude")) {
+    if (isClaudeProvider(spec.provider)) {
         return .{
-            .provider = claude.provider_id,
-            .adapter = claude.print_adapter_id,
+            .provider = if (std.mem.eql(u8, spec.provider, "claude")) claude.provider_id else claude.claudecode_provider_id,
+            .adapter = if (std.mem.eql(u8, spec.provider, "claude")) claude.print_adapter_id else claude.claudecode_print_adapter_id,
             .transport_name = .stdio_json,
             .argv = command.argv,
             .cwd = command.cwd,
@@ -193,6 +217,24 @@ fn resolveProviderStdioJson(
         return .{
             .provider = gemini.provider_id,
             .adapter = gemini.headless_adapter_id,
+            .transport_name = .stdio_json,
+            .argv = command.argv,
+            .cwd = command.cwd,
+        };
+    }
+    if (std.mem.eql(u8, spec.provider, "opencode")) {
+        return .{
+            .provider = opencode.provider_id,
+            .adapter = opencode.run_adapter_id,
+            .transport_name = .stdio_json,
+            .argv = command.argv,
+            .cwd = command.cwd,
+        };
+    }
+    if (std.mem.eql(u8, spec.provider, "pi")) {
+        return .{
+            .provider = pi.provider_id,
+            .adapter = pi.json_adapter_id,
             .transport_name = .stdio_json,
             .argv = command.argv,
             .cwd = command.cwd,
@@ -219,7 +261,7 @@ pub fn resolveStdioJson(
         return .{ .argv = argv, .cwd = cwd };
     }
 
-    if (std.mem.eql(u8, spec.provider, "claude")) {
+    if (isClaudeProvider(spec.provider)) {
         return try claude.buildPrintCommand(allocator, task, cwd);
     }
 
@@ -231,7 +273,21 @@ pub fn resolveStdioJson(
         return try gemini.buildHeadlessCommand(allocator, task, cwd);
     }
 
+    if (std.mem.eql(u8, spec.provider, "opencode")) {
+        return try opencode.buildRunCommand(allocator, task, cwd);
+    }
+
+    if (std.mem.eql(u8, spec.provider, "pi")) {
+        return try pi.buildJsonCommand(allocator, task, cwd);
+    }
+
     return error.TransportUnavailable;
+}
+
+fn isClaudeProvider(provider: []const u8) bool {
+    return std.mem.eql(u8, provider, "claude") or
+        std.mem.eql(u8, provider, "claudecode") or
+        std.mem.eql(u8, provider, "claude-code");
 }
 
 test "resolves fake pty launch without BEAM provider knowledge" {
@@ -277,4 +333,46 @@ test "resolve honors stdio-json before pty" {
 
     try std.testing.expectEqual(transport.TransportName.stdio_json, resolved.transport_name);
     try std.testing.expectEqualStrings("fake.headless", resolved.adapter.value);
+}
+
+test "resolves claudecode alias to claude print compatibility layer" {
+    const spec: transport.LaunchSpec = .{
+        .provider = "claudecode",
+        .task = "hello",
+        .transport_order = &.{.stdio_json},
+        .cwd = "/workspace",
+    };
+    const resolved = try resolve(std.testing.allocator, spec);
+    defer resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("claudecode", resolved.provider.value);
+    try std.testing.expectEqualStrings("claudecode.print", resolved.adapter.value);
+    try std.testing.expectEqualStrings("claude", resolved.argv[0]);
+    try std.testing.expectEqualStrings("--bare", resolved.argv[6]);
+}
+
+test "resolves opencode and pi stdio-json compatibility layers" {
+    const opencode_resolved = try resolve(std.testing.allocator, .{
+        .provider = "opencode",
+        .task = "hello",
+        .transport_order = &.{.stdio_json},
+        .cwd = "/workspace",
+    });
+    defer opencode_resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("opencode.run", opencode_resolved.adapter.value);
+    try std.testing.expectEqualStrings("opencode", opencode_resolved.argv[0]);
+    try std.testing.expectEqualStrings("run", opencode_resolved.argv[2]);
+
+    const pi_resolved = try resolve(std.testing.allocator, .{
+        .provider = "pi",
+        .task = "hello",
+        .transport_order = &.{.stdio_json},
+        .cwd = "/workspace",
+    });
+    defer pi_resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("pi.json", pi_resolved.adapter.value);
+    try std.testing.expectEqualStrings("pi", pi_resolved.argv[0]);
+    try std.testing.expectEqualStrings("json", pi_resolved.argv[2]);
 }

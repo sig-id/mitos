@@ -2,9 +2,10 @@ defmodule Mitos.SandboxProvider do
   @moduledoc """
   Behaviour for compute-plane session providers.
 
-  Providers materialize a runnable sandbox/session for a launch spec and expose
-  it as an OTP child. P0 only wires the local sidecar implementation; Nucleus,
-  Docker, and remote microVM providers fill this seam in later phases.
+  Providers materialize a runnable sandbox/session for a launch spec. The local
+  sidecar implementation wraps the current engine process path for T0/T1 runs;
+  the remote microVM implementation is the HTTP client seam used by T2-capable
+  provider services.
   """
 
   @type launch_spec :: map()

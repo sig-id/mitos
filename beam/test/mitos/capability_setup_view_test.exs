@@ -42,14 +42,7 @@ defmodule Mitos.CapabilitySetupViewTest do
       template: "Do {{objective}}",
       title: "Ready wrapper",
       env: %{"INLINE_SECRET" => "stored-secret-value"},
-      env_passthrough: ["MITOS_SETUP_READY_SECRET"],
-      capability: %{
-        name: "ready",
-        harnesses: ["fake"],
-        trust_tier: "T1",
-        skill: "skill:ready",
-        result: %{"schema" => "result.v1"}
-      }
+      env_passthrough: ["MITOS_SETUP_READY_SECRET"]
     })
 
     view = Mitos.CapabilitySetupView.all()
@@ -67,6 +60,7 @@ defmodule Mitos.CapabilitySetupViewTest do
     assert capability["runtime"]["provider"] == "fake"
     assert capability["runtime"]["transport_order"] == ["stdio-json", "pty"]
     assert capability["capability"]["harnesses"] == ["fake"]
+    assert capability["capability"]["published"] == false
     assert capability["setup"]["can_run"] == true
     assert capability["setup"]["status"] == "ready"
     assert capability["env"]["stored_keys"] == ["INLINE_SECRET"]
@@ -80,7 +74,6 @@ defmodule Mitos.CapabilitySetupViewTest do
            ]
 
     assert Enum.any?(capability["files"], &(&1["kind"] == "workload_definition"))
-    assert Enum.any?(capability["files"], &(&1["kind"] == "skill"))
 
     encoded = Jason.encode!(view)
     refute encoded =~ "stored-secret-value"
@@ -183,7 +176,6 @@ defmodule Mitos.CapabilitySetupViewTest do
       timeout_ms: 45_000,
       approvals: "deny",
       transport_order: ["stdio-json"],
-      env_passthrough: ["MITOS_SETUP_MISSING_SECRET"],
       capability: %{
         name: "ui-wrapper",
         harnesses: ["fake"],
@@ -202,8 +194,8 @@ defmodule Mitos.CapabilitySetupViewTest do
     assert created["runtime"]["provider"] == "fake"
     assert created["runtime"]["cwd"] == "."
     assert created["runtime"]["transport_order"] == ["stdio-json"]
-    assert created["setup"]["status"] == "needs_env"
-    assert created["env"]["missing_passthrough"] == ["MITOS_SETUP_MISSING_SECRET"]
+    assert created["setup"]["status"] == "ready"
+    assert created["env"]["missing_passthrough"] == []
     assert created["capability"]["harnesses"] == ["fake"]
 
     persisted =
@@ -212,7 +204,7 @@ defmodule Mitos.CapabilitySetupViewTest do
       |> File.read!()
       |> Jason.decode!()
 
-    assert persisted["env_passthrough"] == ["MITOS_SETUP_MISSING_SECRET"]
+    refute Map.has_key?(persisted, "env_passthrough")
     assert persisted["capability"]["skill"] == "skill:ui-wrapper"
     assert persisted["capability"]["result"] == %{"schema" => "result.v1"}
   end
@@ -224,8 +216,7 @@ defmodule Mitos.CapabilitySetupViewTest do
       provider: "fake",
       template: "{{objective}}",
       title: "Stored env",
-      env: %{"INLINE_SECRET" => "stored-secret-value"},
-      env_passthrough: ["MITOS_SETUP_READY_SECRET"]
+      env: %{"INLINE_CONFIG" => "stored-secret-value"}
     })
 
     conn =
@@ -237,7 +228,6 @@ defmodule Mitos.CapabilitySetupViewTest do
         timeout_ms: 60_000,
         approvals: "deny",
         transport_order: ["stdio-json"],
-        env_passthrough: ["MITOS_SETUP_READY_SECRET"],
         capability: %{name: "stored-env", harnesses: ["fake"], trust_tier: "T1"}
       })
       |> Mitos.Web.Router.call([])
@@ -247,7 +237,7 @@ defmodule Mitos.CapabilitySetupViewTest do
     updated = body["capability"]
 
     assert updated["title"] == "Updated stored env"
-    assert updated["env"]["stored_keys"] == ["INLINE_SECRET"]
+    assert updated["env"]["stored_keys"] == ["INLINE_CONFIG"]
     assert updated["setup"]["status"] == "ready"
 
     persisted =
@@ -256,7 +246,7 @@ defmodule Mitos.CapabilitySetupViewTest do
       |> File.read!()
       |> Jason.decode!()
 
-    assert persisted["env"] == %{"INLINE_SECRET" => "stored-secret-value"}
+    assert persisted["env"] == %{"INLINE_CONFIG" => "stored-secret-value"}
 
     encoded = Jason.encode!(body)
     refute encoded =~ "stored-secret-value"

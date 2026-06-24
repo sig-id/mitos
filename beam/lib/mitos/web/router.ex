@@ -15,6 +15,8 @@ defmodule Mitos.Web.Router do
   """
   use Plug.Router
 
+  @broker_http_timeout_ms 5_000
+
   plug(:match)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:dispatch)
@@ -244,8 +246,8 @@ defmodule Mitos.Web.Router do
   end
 
   # POST /capabilities/setup — create a workload-backed runtime wrapper from
-  # the UI. Host env keys may be referenced, but secret values stay outside the
-  # browser/API response.
+  # the UI. Legacy non-capability wrappers may reference host env keys; published
+  # capability wrappers keep secrets at the broker boundary.
   post "/capabilities/setup" do
     case Mitos.PipelineRegistry.create(conn.body_params) do
       {:ok, %{"id" => id}} ->
@@ -363,6 +365,85 @@ defmodule Mitos.Web.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(200, Jason.encode!(%{"credentials" => Mitos.KeyVault.list(seller_id)}))
+  end
+
+  # POST /broker/runs/:run_id/egress
+  #
+  # Broker endpoint for a sandbox/proxy egress attempt. Requests with only
+  # credential_id+dest return the allow/deny decision. Requests with a url are
+  # forwarded by the broker with credentials attached at the edge.
+  post "/broker/runs/:run_id/egress" do
+    body = map_or_empty(conn.body_params)
+
+    with {:ok, credential_id} <- required_body_string(body, "credential_id"),
+         {:ok, dest} <- required_body_string(body, "dest") do
+      egress_ref = broker_egress_ref(body, dest, credential_id)
+      caused_by = broker_caused_by(body)
+      trace = broker_trace(run_id)
+      trace = append_broker_egress_attempt(trace, egress_ref, body, caused_by)
+
+      case Mitos.KeyVault.resolve_run(run_id, credential_id, dest) do
+        {:ok, credential_ref} ->
+          if broker_approval_required?(credential_ref) do
+            _trace =
+              append_broker_approval_requested(trace, egress_ref, credential_ref, caused_by)
+
+            broker_pending_approval(conn, run_id, dest, egress_ref)
+          else
+            if broker_forward_request?(body) do
+              case broker_forward(run_id, credential_id, dest, body) do
+                {:ok, forwarded} ->
+                  _trace =
+                    append_broker_egress_allowed(
+                      trace,
+                      egress_ref,
+                      credential_ref,
+                      caused_by,
+                      broker_forward_trace_payload(forwarded)
+                    )
+
+                  broker_forward_response(conn, forwarded)
+
+                {:deny, reason} ->
+                  _trace = append_broker_egress_denied(trace, egress_ref, reason, caused_by)
+                  broker_deny(conn, run_id, dest, reason)
+
+                {:error, reason} ->
+                  _trace =
+                    append_broker_egress_allowed(trace, egress_ref, credential_ref, caused_by, %{
+                      "status" => 502,
+                      "error" => inspect(reason)
+                    })
+
+                  broker_forward_error(conn, run_id, dest, reason)
+              end
+            else
+              _trace = append_broker_egress_allowed(trace, egress_ref, credential_ref, caused_by)
+
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(
+                200,
+                Jason.encode!(%{
+                  decision: "allow",
+                  run_id: run_id,
+                  dest: dest,
+                  credential: credential_ref
+                })
+              )
+            end
+          end
+
+        {:error, reason} ->
+          _trace = append_broker_egress_denied(trace, egress_ref, reason, caused_by)
+          broker_deny(conn, run_id, dest, reason)
+      end
+    else
+      {:error, reason} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(422, Jason.encode!(%{error: "invalid broker request", detail: reason}))
+    end
   end
 
   # POST /capabilities/:id/validate
@@ -646,6 +727,601 @@ defmodule Mitos.Web.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(400, Jason.encode!(%{error: "invalid key registration", detail: reason}))
+  end
+
+  defp broker_deny(conn, run_id, dest, reason) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(
+      403,
+      Jason.encode!(%{decision: "deny", run_id: run_id, dest: dest, reason: reason})
+    )
+  end
+
+  defp broker_forward_error(conn, run_id, dest, reason) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(
+      502,
+      Jason.encode!(%{
+        decision: "allow",
+        run_id: run_id,
+        dest: dest,
+        error: "broker forward failed",
+        detail: inspect(reason)
+      })
+    )
+  end
+
+  defp broker_pending_approval(conn, run_id, dest, ref) do
+    approval_id = ref["request_id"] || broker_request_id()
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(
+      202,
+      Jason.encode!(%{
+        decision: "pending_approval",
+        run_id: run_id,
+        dest: dest,
+        request_id: ref["request_id"],
+        approval_id: approval_id,
+        reason: "egress approval required"
+      })
+    )
+  end
+
+  defp required_body_string(%{} = body, key) do
+    case body[key] do
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: {:error, "#{key} is required"}, else: {:ok, value}
+
+      _other ->
+        {:error, "#{key} is required"}
+    end
+  end
+
+  defp broker_forward_request?(%{"url" => url}) when is_binary(url) do
+    String.trim(url) != ""
+  end
+
+  defp broker_forward_request?(_body), do: false
+
+  defp broker_approval_required?(%{"requires_approval" => true}), do: true
+  defp broker_approval_required?(_credential_ref), do: false
+
+  defp broker_forward(run_id, credential_id, dest, body) do
+    with {:ok, uri} <- broker_forward_uri(body, dest),
+         {:ok, %{"headers" => attachment_headers, "redaction_values" => redaction_values}} <-
+           Mitos.KeyVault.resolve_run_attachment(run_id, credential_id, dest),
+         {:ok, request_body, body_content_type} <- broker_forward_body(body),
+         {:ok, method} <- broker_forward_method(body),
+         {:ok, headers} <- broker_forward_headers(body, attachment_headers, body_content_type),
+         {:ok, response} <- broker_http_request(uri, method, headers, request_body) do
+      {:ok,
+       response
+       |> Map.put(:request_bytes, byte_size(request_body))
+       |> Map.put(:body, redact_values(response.body, redaction_values))}
+    end
+  end
+
+  defp broker_forward_uri(%{"url" => url}, dest) when is_binary(url) do
+    uri = URI.parse(String.trim(url))
+
+    cond do
+      uri.scheme not in ["http", "https"] ->
+        {:error, {:unsupported_broker_forward_scheme, uri.scheme}}
+
+      not is_binary(uri.host) or uri.host == "" ->
+        {:error, :broker_forward_url_host_required}
+
+      broker_destination(uri) != dest ->
+        {:deny, "broker forward destination mismatch"}
+
+      true ->
+        {:ok, uri}
+    end
+  end
+
+  defp broker_forward_uri(_body, _dest), do: {:error, :broker_forward_url_required}
+
+  defp broker_destination(%URI{scheme: scheme, host: host, port: port}) do
+    if port in [nil, broker_default_port(scheme)] do
+      host
+    else
+      host <> ":" <> Integer.to_string(port)
+    end
+  end
+
+  defp broker_forward_body(%{"body_base64" => body}) when is_binary(body) do
+    case Base.decode64(body) do
+      {:ok, decoded} -> {:ok, decoded, nil}
+      :error -> {:error, :invalid_broker_forward_body_base64}
+    end
+  end
+
+  defp broker_forward_body(%{"body" => body}) when is_binary(body), do: {:ok, body, nil}
+
+  defp broker_forward_body(%{"body" => body}) when is_map(body) or is_list(body) do
+    {:ok, Jason.encode!(body), "application/json"}
+  end
+
+  defp broker_forward_body(_body), do: {:ok, "", nil}
+
+  defp broker_forward_method(%{"method" => method}) when is_binary(method) do
+    method =
+      method
+      |> String.trim()
+      |> String.upcase()
+
+    if method in ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] do
+      {:ok, method}
+    else
+      {:error, {:unsupported_broker_forward_method, method}}
+    end
+  end
+
+  defp broker_forward_method(%{"body" => body}) when body not in [nil, ""], do: {:ok, "POST"}
+
+  defp broker_forward_method(%{"body_base64" => body}) when body not in [nil, ""],
+    do: {:ok, "POST"}
+
+  defp broker_forward_method(_body), do: {:ok, "GET"}
+
+  defp broker_forward_headers(body, attachment_headers, body_content_type) do
+    headers =
+      body
+      |> Map.get("headers", %{})
+      |> normalize_forward_headers()
+      |> reject_forward_headers()
+      |> reject_credential_headers(attachment_headers)
+      |> maybe_put_content_type(body_content_type)
+      |> Kernel.++(attachment_headers)
+
+    if Enum.all?(headers, fn {name, value} ->
+         valid_header_name?(name) and valid_header_value?(value)
+       end) do
+      {:ok, headers}
+    else
+      {:error, :invalid_broker_forward_header}
+    end
+  end
+
+  defp normalize_forward_headers(%{} = headers) do
+    Enum.flat_map(headers, fn
+      {name, value} when is_binary(name) and is_binary(value) ->
+        [{String.downcase(name), value}]
+
+      {name, value} when is_atom(name) and is_binary(value) ->
+        [{name |> Atom.to_string() |> String.downcase(), value}]
+
+      _other ->
+        []
+    end)
+  end
+
+  defp normalize_forward_headers(headers) when is_list(headers) do
+    Enum.flat_map(headers, fn
+      [name, value] when is_binary(name) and is_binary(value) ->
+        [{String.downcase(name), value}]
+
+      {name, value} when is_binary(name) and is_binary(value) ->
+        [{String.downcase(name), value}]
+
+      %{"name" => name, "value" => value} when is_binary(name) and is_binary(value) ->
+        [{String.downcase(name), value}]
+
+      _other ->
+        []
+    end)
+  end
+
+  defp normalize_forward_headers(_headers), do: []
+
+  defp reject_forward_headers(headers) do
+    rejected =
+      MapSet.new([
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade"
+      ])
+
+    Enum.reject(headers, fn {name, _value} -> MapSet.member?(rejected, name) end)
+  end
+
+  defp reject_credential_headers(headers, attachment_headers) do
+    credential_headers =
+      attachment_headers
+      |> Enum.map(fn {name, _value} -> String.downcase(name) end)
+      |> MapSet.new()
+
+    Enum.reject(headers, fn {name, _value} -> MapSet.member?(credential_headers, name) end)
+  end
+
+  defp maybe_put_content_type(headers, nil), do: headers
+
+  defp maybe_put_content_type(headers, content_type) do
+    if Enum.any?(headers, fn {name, _value} -> name == "content-type" end) do
+      headers
+    else
+      [{"content-type", content_type} | headers]
+    end
+  end
+
+  defp valid_header_name?(name) when is_binary(name) do
+    String.match?(name, ~r/^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$/)
+  end
+
+  defp valid_header_name?(_name), do: false
+
+  defp valid_header_value?(value) when is_binary(value) do
+    not String.contains?(value, ["\r", "\n", <<0>>])
+  end
+
+  defp valid_header_value?(_value), do: false
+
+  defp broker_http_request(uri, method, headers, body) do
+    case broker_connect(uri) do
+      {:ok, socket, transport} ->
+        try do
+          with :ok <- broker_send_request(socket, transport, uri, method, headers, body),
+               {:ok, status, response_headers, response_body} <-
+                 broker_read_response(socket, transport) do
+            {:ok,
+             %{
+               status: status,
+               headers: response_headers,
+               body: response_body,
+               response_bytes: byte_size(response_body)
+             }}
+          end
+        after
+          broker_close(socket, transport)
+        end
+
+      {:error, reason} ->
+        {:error, {:broker_forward_unavailable, reason}}
+    end
+  end
+
+  defp broker_connect(%URI{scheme: scheme, host: host} = uri)
+       when scheme in ["http", "https"] and is_binary(host) do
+    port = uri.port || broker_default_port(scheme)
+
+    if scheme == "https" do
+      _ = Application.ensure_all_started(:ssl)
+
+      case :ssl.connect(
+             String.to_charlist(host),
+             port,
+             [:binary, active: false],
+             @broker_http_timeout_ms
+           ) do
+        {:ok, socket} -> {:ok, socket, :ssl}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      case :gen_tcp.connect(
+             String.to_charlist(host),
+             port,
+             [:binary, packet: :raw, active: false],
+             @broker_http_timeout_ms
+           ) do
+        {:ok, socket} -> {:ok, socket, :tcp}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp broker_connect(%URI{scheme: scheme}), do: {:error, {:unsupported_scheme, scheme}}
+
+  defp broker_default_port("http"), do: 80
+  defp broker_default_port("https"), do: 443
+
+  defp broker_send_request(socket, transport, uri, method, headers, body) do
+    request = [
+      method,
+      " ",
+      broker_request_target(uri),
+      " HTTP/1.1\r\n",
+      "host: ",
+      broker_host_header(uri),
+      "\r\n",
+      broker_header_lines(headers),
+      "content-length: ",
+      Integer.to_string(byte_size(body)),
+      "\r\n",
+      "connection: close\r\n",
+      "\r\n",
+      body
+    ]
+
+    broker_send_data(socket, transport, request)
+  end
+
+  defp broker_request_target(%URI{path: nil, query: nil}), do: "/"
+  defp broker_request_target(%URI{path: "", query: nil}), do: "/"
+  defp broker_request_target(%URI{path: nil, query: query}), do: "/?" <> query
+  defp broker_request_target(%URI{path: "", query: query}), do: "/?" <> query
+  defp broker_request_target(%URI{path: path, query: nil}), do: path
+  defp broker_request_target(%URI{path: path, query: query}), do: path <> "?" <> query
+
+  defp broker_host_header(%URI{scheme: scheme, host: host, port: port}) do
+    if port in [nil, broker_default_port(scheme)] do
+      host
+    else
+      host <> ":" <> Integer.to_string(port)
+    end
+  end
+
+  defp broker_header_lines(headers) do
+    Enum.map(headers, fn {name, value} -> [name, ": ", value, "\r\n"] end)
+  end
+
+  defp broker_read_response(socket, transport, acc \\ "") do
+    case broker_recv_data(socket, transport) do
+      {:ok, chunk} ->
+        acc = acc <> chunk
+
+        case broker_parse_response(acc, false) do
+          {:ok, status, headers, body} -> {:ok, status, headers, body}
+          :more -> broker_read_response(socket, transport, acc)
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, :closed} ->
+        case broker_parse_response(acc, true) do
+          :more -> {:error, :incomplete_broker_forward_response}
+          parsed -> parsed
+        end
+
+      {:error, reason} ->
+        {:error, {:broker_forward_unavailable, reason}}
+    end
+  end
+
+  defp broker_parse_response(bytes, closed?) do
+    case :binary.match(bytes, "\r\n\r\n") do
+      {header_size, 4} ->
+        header = binary_part(bytes, 0, header_size)
+        body_offset = header_size + 4
+        body = binary_part(bytes, body_offset, byte_size(bytes) - body_offset)
+        [status_line | header_lines] = String.split(header, "\r\n")
+
+        with {:ok, status} <- broker_status_code(status_line),
+             {:ok, headers} <- broker_response_headers(header_lines),
+             {:ok, content_length} <- broker_content_length(headers),
+             true <- content_length != nil or closed?,
+             true <- content_length == nil or byte_size(body) >= content_length do
+          body =
+            if is_integer(content_length) do
+              binary_part(body, 0, content_length)
+            else
+              body
+            end
+
+          {:ok, status, headers, body}
+        else
+          false -> :more
+          {:error, reason} -> {:error, reason}
+        end
+
+      :nomatch ->
+        :more
+    end
+  end
+
+  defp broker_status_code(status_line) do
+    case String.split(status_line, " ", parts: 3) do
+      [_http, status | _] ->
+        case Integer.parse(status) do
+          {status, ""} -> {:ok, status}
+          _error -> {:error, :invalid_broker_forward_status}
+        end
+
+      _other ->
+        {:error, :invalid_broker_forward_status}
+    end
+  end
+
+  defp broker_response_headers(header_lines) do
+    headers =
+      Enum.flat_map(header_lines, fn line ->
+        case String.split(line, ":", parts: 2) do
+          [name, value] -> [{String.downcase(name), String.trim(value)}]
+          _other -> []
+        end
+      end)
+
+    {:ok, headers}
+  end
+
+  defp broker_content_length(headers) do
+    headers
+    |> Enum.find_value(fn
+      {"content-length", value} -> value
+      _other -> nil
+    end)
+    |> case do
+      nil ->
+        {:ok, nil}
+
+      value ->
+        case Integer.parse(value) do
+          {length, ""} when length >= 0 -> {:ok, length}
+          _other -> {:error, :invalid_broker_forward_content_length}
+        end
+    end
+  end
+
+  defp broker_send_data(socket, :tcp, request), do: :gen_tcp.send(socket, request)
+  defp broker_send_data(socket, :ssl, request), do: :ssl.send(socket, request)
+
+  defp broker_recv_data(socket, :tcp), do: :gen_tcp.recv(socket, 0, @broker_http_timeout_ms)
+  defp broker_recv_data(socket, :ssl), do: :ssl.recv(socket, 0, @broker_http_timeout_ms)
+
+  defp broker_close(socket, :tcp), do: :gen_tcp.close(socket)
+  defp broker_close(socket, :ssl), do: :ssl.close(socket)
+
+  defp broker_forward_trace_payload(%{
+         status: status,
+         request_bytes: request_bytes,
+         response_bytes: response_bytes
+       }) do
+    %{
+      "status" => status,
+      "request_bytes" => request_bytes,
+      "response_bytes" => response_bytes
+    }
+  end
+
+  defp broker_forward_response(conn, %{status: status, headers: headers, body: body}) do
+    content_type =
+      Enum.find_value(headers, "application/octet-stream", fn
+        {"content-type", value} -> value
+        _other -> nil
+      end)
+
+    conn
+    |> put_resp_content_type(content_type)
+    |> send_resp(status, body)
+  end
+
+  defp redact_values(value, redaction_values) when is_binary(value) do
+    Enum.reduce(redaction_values, value, fn secret, acc ->
+      String.replace(acc, secret, "[redacted]")
+    end)
+  end
+
+  defp redact_values(value, _redaction_values), do: value
+
+  defp broker_trace(run_id), do: Mitos.Trace.open!(run_id: run_id)
+
+  defp broker_egress_ref(body, dest, credential_id) do
+    %{
+      "dest" => dest,
+      "credential_id" => credential_id,
+      "request_id" => body["request_id"] || body["nonce"] || broker_request_id(),
+      "method" => body["method"],
+      "policy_rule" => body["policy_rule"]
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
+  end
+
+  defp append_broker_egress_attempt(trace, ref, body, caused_by) do
+    Mitos.Trace.append_effect(trace, %{
+      type: "egress_attempted",
+      caused_by: caused_by,
+      ref: ref,
+      payload:
+        %{
+          "origin" => "broker_http",
+          "method" => body["method"],
+          "url" => body["url"],
+          "request_bytes" => broker_trace_request_bytes(body)
+        }
+        |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+        |> Map.new()
+    })
+  end
+
+  defp broker_trace_request_bytes(%{"body_base64" => encoded}) when is_binary(encoded) do
+    case Base.decode64(encoded) do
+      {:ok, decoded} -> byte_size(decoded)
+      :error -> 0
+    end
+  end
+
+  defp broker_trace_request_bytes(%{"body" => body}) when is_binary(body), do: byte_size(body)
+
+  defp broker_trace_request_bytes(%{"body" => body}) when is_map(body) or is_list(body) do
+    body
+    |> Jason.encode!()
+    |> byte_size()
+  end
+
+  defp broker_trace_request_bytes(_body), do: 0
+
+  defp append_broker_egress_allowed(trace, ref, credential_ref, caused_by, meta \\ %{}) do
+    status = Map.get(meta, "status", 200)
+    response_bytes = Map.get(meta, "response_bytes", 0)
+
+    allowed_payload =
+      %{
+        "decision" => "allow",
+        "status" => status,
+        "credential" => credential_ref,
+        "request_bytes" => Map.get(meta, "request_bytes"),
+        "response_bytes" => response_bytes,
+        "error" => Map.get(meta, "error")
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+
+    completed_payload =
+      %{
+        "status" => status,
+        "response_bytes" => response_bytes,
+        "error" => Map.get(meta, "error")
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+
+    trace
+    |> Mitos.Trace.append_effect(%{
+      type: "egress_allowed",
+      caused_by: caused_by,
+      ref: ref,
+      payload: allowed_payload
+    })
+    |> Mitos.Trace.append_effect(%{
+      type: "egress_completed",
+      caused_by: caused_by,
+      ref: ref,
+      payload: completed_payload
+    })
+  end
+
+  defp append_broker_egress_denied(trace, ref, reason, caused_by) do
+    Mitos.Trace.append_effect(trace, %{
+      type: "egress_denied",
+      caused_by: caused_by,
+      ref: ref,
+      payload: %{"decision" => "deny", "status" => 403, "reason" => reason}
+    })
+  end
+
+  defp append_broker_approval_requested(trace, ref, credential_ref, caused_by) do
+    approval_id = ref["request_id"] || broker_request_id()
+
+    Mitos.Trace.append_effect(trace, %{
+      type: "approval_requested",
+      caused_by: caused_by,
+      ref: Map.put(ref, "approval_id", approval_id),
+      payload: %{
+        "kind" => "egress",
+        "decision" => "pending",
+        "reason" => "egress approval required",
+        "dest" => ref["dest"],
+        "credential" => credential_ref
+      }
+    })
+  end
+
+  defp broker_caused_by(%{"caused_by" => caused_by}) when is_integer(caused_by), do: caused_by
+  defp broker_caused_by(_body), do: 0
+
+  defp broker_request_id do
+    "broker-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
   end
 
   defp capability_setup_response(conn, id, status) do

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { writable } from "svelte/store";
   import { themeContract, themeSwatches, type ThemeMode } from "./theme";
 
   type JsonMap = Record<string, any>;
@@ -59,10 +60,17 @@
     source?: string;
     priority?: number;
     runs?: string[];
+    input_keys?: string[];
     payload?: JsonMap;
     status_reason?: string;
     created_at?: string;
     updated_at?: string;
+  };
+
+  type SetupCheck = {
+    label: string;
+    detail: string;
+    state: "ready" | "warning" | "blocked";
   };
 
   type StepDraft = {
@@ -98,6 +106,7 @@
   ];
 
   const statusOrder = ["blocked", "queued", "scheduled", "running", "parked", "done", "failed", "cancelled"];
+  const initialBoard = { statuses: statusOrder, columns: {}, tasks: [], totals: {} };
   const defaultPipelineDraft = {
     id: "repo-review",
     title: "Repository review",
@@ -153,7 +162,7 @@
   let runs: RunSummary[] = [];
   let pipelines: Pipeline[] = [];
   let capabilities: Capability[] = [];
-  let board: JsonMap = { statuses: statusOrder, columns: {}, tasks: [], totals: {} };
+  const workBoard = writable<JsonMap>(initialBoard);
   let setupTotals: JsonMap = {};
   let pipelineTotals: JsonMap = {};
 
@@ -166,13 +175,29 @@
   );
   $: selectedPipeline = pipelines.find((pipeline) => pipeline.id === selectedPipelineId) || pipelines[0] || null;
   $: selectedCapability = capabilities.find((capability) => capability.id === selectedCapabilityId) || capabilities[0] || null;
-  $: selectedTask = (board.tasks || []).find((task: Task) => task.id === selectedTaskId) || null;
+  $: selectedCapabilitySetup = selectedCapability?.setup || {};
+  $: selectedCapabilityWork = selectedCapability?.work || {};
+  $: selectedCapabilityTasks = selectedCapabilityWork.tasks || {};
+  $: selectedCapabilityRecentTasks = (selectedCapabilityWork.recent_tasks || []) as Task[];
+  $: capabilityCanRun = Boolean(selectedCapabilitySetup.can_run);
+  $: capabilitySetupChecks = setupChecksFor(selectedCapability);
+  $: capabilitySetupProgress = setupProgressPercent(capabilitySetupChecks);
+  $: capabilityTemplateKeys = templateKeys(capabilityDraft.template);
+  $: boardTotals = $workBoard.totals || {};
+  $: boardTasks = ($workBoard.tasks || []) as Task[];
+  $: boardColumns = $workBoard.columns || {};
+  $: boardStatuses = $workBoard.statuses || statusOrder;
+  $: boardTotalTasks = boardTotals.all || boardTasks.length || 0;
+  $: boardBlockedTasks = (boardTotals.blocked || 0) + (boardTotals.failed || 0);
+  $: boardQueueHealth = boardTotalTasks
+    ? Math.max(0, Math.round(((boardTotalTasks - boardBlockedTasks) / boardTotalTasks) * 100))
+    : 100;
+  $: selectedTask = boardTasks.find((task: Task) => task.id === selectedTaskId) || null;
   $: workflowSteps = workflowStepsFor(selectedPipeline);
   $: selectedWorkflowSteps = workflowSteps.length > 0 ? workflowSteps : pipelineSteps;
   $: capabilityOptionIds = capabilities.map((capability) => capability.id).filter(Boolean);
   $: activeExecutions = selectedPipeline?.executions || [];
-  $: boardStatuses = board.statuses || statusOrder;
-  $: dashboardTotals = summarize(runs, pipelines, capabilities, board, setupTotals, pipelineTotals);
+  $: dashboardTotals = summarize(runs, pipelines, capabilities, $workBoard, setupTotals, pipelineTotals);
   $: document.documentElement.dataset.theme = activeTheme;
 
   onMount(() => {
@@ -203,7 +228,7 @@
       headers.set("content-type", "application/json");
     }
 
-    const response = await fetch(pathName, { ...init, headers });
+    const response = await fetch(pathName, { cache: "no-store", ...init, headers });
     const body = await response.text();
     const parsed = body ? JSON.parse(body) : {};
 
@@ -259,7 +284,7 @@
   }
 
   async function loadWorkPool() {
-    board = await requestJson<JsonMap>("/work-pool");
+    workBoard.set(await requestJson<JsonMap>("/work-pool"));
   }
 
   async function openRun(run: RunSummary | string) {
@@ -640,6 +665,12 @@
     return "ghost";
   }
 
+  function setupCheckColor(state: SetupCheck["state"]) {
+    if (state === "ready") return "success";
+    if (state === "warning") return "warning";
+    return "danger";
+  }
+
   function displayStatus(status?: string) {
     return (status || "unknown").replaceAll("_", " ");
   }
@@ -666,26 +697,69 @@
     return JSON.stringify(value || {}, null, 2);
   }
 
-  function columnTasks(status: string): Task[] {
-    return board.columns?.[status] || [];
+  function columnTasksFor(columns: JsonMap, status: string): Task[] {
+    return (columns?.[status] || []) as Task[];
+  }
+
+  function setupChecksFor(capability: Capability | null): SetupCheck[] {
+    const files = capability?.files || [];
+    const definition = files.find((file) => file.kind === "workload_definition");
+    const manifest = files.find((file) => file.kind === "capability_manifest");
+    const missingEnv = capability?.env?.missing_passthrough || [];
+    const passThrough = capability?.env?.passthrough || [];
+    const storedKeys = capability?.env?.stored_keys || [];
+    const provider = capability?.runtime?.provider || capability?.provider || "";
+    const transport = capability?.runtime?.transport_order || [];
+    const sandboxStatus = capability?.sandbox?.status || "ready";
+
+    return [
+      {
+        label: "Definition",
+        detail: definition?.present ? definition.path : "Missing workload JSON",
+        state: definition?.present ? "ready" : "blocked"
+      },
+      {
+        label: "Runtime",
+        detail: provider ? `${provider}${transport.length ? ` / ${transport.join(", ")}` : ""}` : "Missing provider",
+        state: provider ? "ready" : "blocked"
+      },
+      {
+        label: "Host env",
+        detail: missingEnv.length
+          ? missingEnv.join(", ")
+          : passThrough.length || storedKeys.length
+            ? `${passThrough.length} passthrough / ${storedKeys.length} stored`
+            : "No host env required",
+        state: missingEnv.length ? "blocked" : "ready"
+      },
+      {
+        label: "Capability",
+        detail: capability?.capability
+          ? `${capability.capability.trust_tier || capability.sandbox?.trust_tier || "T1"} / ${(capability.capability.harnesses || []).join(", ") || "harness"}`
+          : "Derived from workload",
+        state: manifest?.present || capability?.capability ? "ready" : "warning"
+      },
+      {
+        label: "Sandbox",
+        detail: displayStatus(sandboxStatus),
+        state: ["failed", "blocked", "needs_env"].includes(sandboxStatus) ? "blocked" : "ready"
+      }
+    ];
+  }
+
+  function setupProgressPercent(checks: SetupCheck[]) {
+    if (!checks.length) return 0;
+    const ready = checks.filter((check) => check.state === "ready").length;
+    return Math.round((ready / checks.length) * 100);
+  }
+
+  function templateKeys(template: string) {
+    const keys = Array.from(template.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g), (match) => match[1]);
+    return [...new Set(keys)].filter(Boolean);
   }
 
   function runById(id: string) {
     return runs.find((run) => run.run_id === id);
-  }
-
-  function totalTasks() {
-    return board.totals?.all || (board.tasks || []).length || 0;
-  }
-
-  function blockedTasks() {
-    return (board.totals?.blocked || 0) + (board.totals?.failed || 0);
-  }
-
-  function queueHealthPercent() {
-    const total = totalTasks();
-    if (!total) return 100;
-    return Math.max(0, Math.round(((total - blockedTasks()) / total) * 100));
   }
 
   function taskLatestRun(task: Task) {
@@ -895,12 +969,13 @@
           <sg-scroller class="queue-scroller compact" axis="x" label="Queue health lanes">
             <div class="queue-columns compact-board">
               {#each boardStatuses.slice(0, 5) as status}
+                {@const tasks = columnTasksFor(boardColumns, status)}
                 <sg-card class="queue-column compact-column" elevation={0}>
                   <div class="column-title">
                     <span>{humanize(status)}</span>
-                    <strong>{columnTasks(status).length}</strong>
+                    <strong>{tasks.length}</strong>
                   </div>
-                  {#each columnTasks(status).slice(0, 3) as task}
+                  {#each tasks.slice(0, 3) as task}
                     {@const latest = taskLatestRun(task)}
                     <button class="task-card compact-task" type="button" onclick={() => openTask(task)}>
                       <div class="task-card-head">
@@ -1200,20 +1275,105 @@
           </sg-card-header>
 
           <sg-card-body>
-          <sg-grid class="readiness-list" columns="3" gap="related" collapse="md">
-            <div>
-              <span>Definition</span>
-              <strong>{selectedCapability?.files?.find((file) => file.kind === "workload_definition")?.present ? "Present" : "Missing"}</strong>
-            </div>
-            <div>
-              <span>Host env</span>
-              <strong>{selectedCapability?.env?.missing_passthrough?.length ? "Needs keys" : "Ready"}</strong>
-            </div>
-            <div>
-              <span>Sandbox</span>
-              <strong>{displayStatus(selectedCapability?.sandbox?.status)}</strong>
-            </div>
+          <sg-grid class="capability-command-grid" columns="2" gap="grouped" collapse="lg">
+            <section class="setup-status-panel" aria-labelledby="setup-readiness-title">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Setup readiness</span>
+                  <h3 id="setup-readiness-title">{displayStatus(selectedCapabilitySetup.status || "draft")}</h3>
+                </div>
+                <sg-badge color={statusColor(selectedCapabilitySetup.status)} size="sm">
+                  {capabilitySetupProgress}%
+                </sg-badge>
+              </div>
+              <progress
+                class="sg-progress"
+                data-size="sm"
+                data-color={capabilityCanRun ? "success" : "warning"}
+                value={capabilitySetupProgress}
+                max="100"
+                aria-label="Capability setup progress"
+              ></progress>
+              <div class="setup-checklist">
+                {#each capabilitySetupChecks as check}
+                  <div>
+                    <sg-badge color={setupCheckColor(check.state)} size="sm">{check.state}</sg-badge>
+                    <div>
+                      <strong>{check.label}</strong>
+                      <span>{check.detail}</span>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </section>
+
+            <section class="run-console-panel" aria-labelledby="wrapper-run-title">
+              <div class="panel-head">
+                <div>
+                  <span class="eyebrow">Execution console</span>
+                  <h3 id="wrapper-run-title">{selectedCapability?.id ? `/workloads/${selectedCapability.id}/execute` : "Draft wrapper"}</h3>
+                </div>
+                <sg-badge color={capabilityCanRun ? "success" : "warning"} size="sm">
+                  {capabilityCanRun ? "ready" : "blocked"}
+                </sg-badge>
+              </div>
+              <sg-field label="Wrapper input" html-for="capability-run-input">
+                <textarea id="capability-run-input" class="sg-textarea mono" rows="6" value={runInputJson} oninput={(event) => (runInputJson = inputValue(event))}></textarea>
+              </sg-field>
+              <div class="template-key-row" aria-label="Template input keys">
+                {#each capabilityTemplateKeys as key}
+                  <sg-badge color="ghost" size="sm">{key}</sg-badge>
+                {:else}
+                  <sg-badge color="ghost" size="sm">no template keys</sg-badge>
+                {/each}
+              </div>
+              <sg-button-group class="button-row full">
+                <button class="sg-button" data-color="primary" type="button" onclick={() => executeCapability()} disabled={!selectedCapability || !capabilityCanRun}>
+                  Execute wrapper
+                </button>
+                <button class="sg-button" data-color="outline" type="button" onclick={() => selectedCapability && openCapability(selectedCapability)} disabled={!selectedCapability}>
+                  Details
+                </button>
+              </sg-button-group>
+            </section>
           </sg-grid>
+
+          <sg-section class="capability-history-section" title="Recent work" level="3" gap="related">
+            <sg-grid class="capability-work-metrics" columns="4" gap="related" collapse="md">
+              <div>
+                <span>Total</span>
+                <strong>{selectedCapabilityTasks.total || 0}</strong>
+              </div>
+              <div>
+                <span>Active</span>
+                <strong>{selectedCapabilityTasks.active || 0}</strong>
+              </div>
+              <div>
+                <span>Done</span>
+                <strong>{selectedCapabilityTasks.done || 0}</strong>
+              </div>
+              <div>
+                <span>Failed</span>
+                <strong>{selectedCapabilityTasks.failed || 0}</strong>
+              </div>
+            </sg-grid>
+            <div class="recent-task-list">
+              {#each selectedCapabilityRecentTasks as task}
+                {@const latest = taskLatestRun(task)}
+                <button class="recent-task-row" type="button" onclick={() => openTask(task)}>
+                  <div>
+                    <strong>{compactId(task.id)}</strong>
+                    <span>{(task.payload?.input_keys || task.input_keys || []).join(", ") || task.pool || "interactive"}</span>
+                  </div>
+                  <sg-badge color={statusColor(latest?.status || task.status)} size="sm">
+                    {displayStatus(latest?.status || task.status)}
+                  </sg-badge>
+                </button>
+              {:else}
+                <sg-empty class="empty-state" title="No wrapper work yet"></sg-empty>
+              {/each}
+            </div>
+          </sg-section>
 
           <sg-section class="setup-editor-section" title="Setup definition" level="3" gap="grouped">
             <form class="capability-setup-form" onsubmit={(event) => { event.preventDefault(); void saveCapabilitySetup(); }}>
@@ -1231,9 +1391,9 @@
               </sg-field>
               <sg-field label="Trust tier" html-for="capability-trust-tier">
                 <select id="capability-trust-tier" class="sg-native-select" value={capabilityDraft.trust_tier} oninput={(event) => updateCapabilityDraft("trust_tier", inputValue(event))}>
+                  <option value="T0">T0</option>
                   <option value="T1">T1</option>
                   <option value="T2">T2</option>
-                  <option value="T3">T3</option>
                 </select>
               </sg-field>
               <sg-field label="Approvals" html-for="capability-approvals">
@@ -1282,20 +1442,6 @@
               </div>
             </sg-section>
           {/if}
-
-          <sg-section class="wrapper-run-section" title="Run test" level="3" gap="grouped">
-            <sg-field label="Wrapper input" html-for="capability-run-input" description="JSON object sent to the selected runtime wrapper.">
-              <textarea id="capability-run-input" class="sg-textarea mono" rows="7" value={runInputJson} oninput={(event) => (runInputJson = inputValue(event))}></textarea>
-            </sg-field>
-            <sg-button-group class="button-row full">
-              <button class="sg-button" data-color="primary" type="button" onclick={() => executeCapability()}>
-                Execute wrapper
-              </button>
-              <button class="sg-button" data-color="outline" type="button" onclick={() => selectedCapability && openCapability(selectedCapability)}>
-                Details
-              </button>
-            </sg-button-group>
-          </sg-section>
           </sg-card-body>
         </sg-card>
       </sg-grid>
@@ -1306,31 +1452,31 @@
             <span class="eyebrow">Kanban queue</span>
             <sg-card-title as="h2">Work pool</sg-card-title>
           </div>
-          <sg-badge color="info">{totalTasks()} tasks</sg-badge>
+          <sg-badge color="info">{boardTotalTasks} tasks</sg-badge>
         </sg-card-header>
 
         <sg-card-body>
         <sg-grid class="board-summary-grid" columns="4" gap="related" collapse="md">
           <div>
             <span>Queued</span>
-            <strong>{board.totals?.queued || 0}</strong>
+            <strong>{boardTotals.queued || 0}</strong>
           </div>
           <div>
             <span>Active</span>
-            <strong>{board.totals?.active || 0}</strong>
+            <strong>{boardTotals.active || 0}</strong>
           </div>
           <div>
             <span>Blocked / failed</span>
-            <strong>{blockedTasks()}</strong>
+            <strong>{boardBlockedTasks}</strong>
           </div>
           <div class="board-health">
             <span id="queue-health-label">Queue health</span>
-            <strong>{queueHealthPercent()}%</strong>
+            <strong>{boardQueueHealth}%</strong>
             <progress
               class="sg-progress"
               data-size="sm"
-              data-color={queueHealthPercent() < 75 ? "warning" : "success"}
-              value={queueHealthPercent()}
+              data-color={boardQueueHealth < 75 ? "warning" : "success"}
+              value={boardQueueHealth}
               max="100"
               aria-labelledby="queue-health-label"
             ></progress>
@@ -1340,12 +1486,13 @@
         <sg-scroller class="queue-scroller" axis="x" label="Work pool lanes">
           <div class="queue-columns">
             {#each boardStatuses as status}
+              {@const tasks = columnTasksFor(boardColumns, status)}
               <sg-card class="queue-column" elevation={0}>
                 <div class="column-title">
                   <span>{humanize(status)}</span>
-                  <strong>{columnTasks(status).length}</strong>
+                  <strong>{tasks.length}</strong>
                 </div>
-                {#each columnTasks(status) as task}
+                {#each tasks as task}
                   {@const latest = taskLatestRun(task)}
                   <button class="task-card" type="button" onclick={() => openTask(task)}>
                     <div class="task-card-head">

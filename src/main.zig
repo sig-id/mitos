@@ -18,6 +18,8 @@ const fake_transports = [_]TransportName{.stdio_json};
 const codex_transports = [_]TransportName{.stdio_json};
 const claude_transports = [_]TransportName{.stdio_json};
 const gemini_transports = [_]TransportName{.stdio_json};
+const opencode_transports = [_]TransportName{.stdio_json};
+const pi_transports = [_]TransportName{.stdio_json};
 const no_transports = [_]TransportName{};
 
 pub fn main() !void {
@@ -253,6 +255,13 @@ fn runCommand(
             .stream = .stdout,
             .bytes = result.stdout,
         } });
+        var sink_context = TraceAdapterSink{ .trace = &trace };
+        try mitos.providers.headless.emitNormalizedJsonl(
+            allocator,
+            sink_context.sink(),
+            resolved.provider,
+            result.stdout,
+        );
     }
     if (result.stderr.len > 0) {
         _ = try trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
@@ -432,7 +441,10 @@ fn transportOrder(
     if (std.mem.eql(u8, provider, "fake")) return &fake_transports;
     if (std.mem.eql(u8, provider, "codex")) return &codex_transports;
     if (std.mem.eql(u8, provider, "claude")) return &claude_transports;
+    if (std.mem.eql(u8, provider, "claudecode") or std.mem.eql(u8, provider, "claude-code")) return &claude_transports;
     if (std.mem.eql(u8, provider, "gemini")) return &gemini_transports;
+    if (std.mem.eql(u8, provider, "opencode")) return &opencode_transports;
+    if (std.mem.eql(u8, provider, "pi")) return &pi_transports;
     return &no_transports;
 }
 
@@ -496,7 +508,7 @@ fn printRunHelp(writer: anytype) !void {
         \\  mitos run --provider <name> --task-file <path> [options]
         \\
         \\Options:
-        \\  --provider <name>     Provider to run: fake, codex, claude, gemini.
+        \\  --provider <name>     Provider to run: fake, claudecode, codex, gemini, opencode, pi.
         \\  --task <text>         Task text to pass to the provider.
         \\  --task-file <path>    Read task text from a file.
         \\  --run-id <id>         Artifact directory name under .runs/.
@@ -515,10 +527,34 @@ fn printProviders(writer: anytype) !void {
         \\Built-in providers:
         \\  fake    stdio-json  local deterministic test provider
         \\  codex   stdio-json  runs `codex exec --json`
-        \\  claude  stdio-json  runs `claude --print`
-        \\  gemini  stdio-json       runs `gemini --prompt ... --output-format stream-json`
+        \\  claudecode stdio-json runs `claude --print --output-format stream-json`
+        \\  claude  stdio-json  alias-compatible Claude Code provider
+        \\  gemini  stdio-json  runs `gemini --prompt ... --output-format stream-json`
+        \\  opencode stdio-json runs `opencode run --format json`
+        \\  pi      stdio-json  runs `pi --mode json`
     );
 }
+
+const TraceAdapterSink = struct {
+    trace: *mitos.trace.file_store.FileTrace,
+
+    fn sink(self: *TraceAdapterSink) mitos.adapters.AdapterEventSink {
+        return .{ .context = self, .emit = emit };
+    }
+
+    fn emit(context: *anyopaque, event: mitos.adapters.AdapterEvent) anyerror!void {
+        const self: *TraceAdapterSink = @ptrCast(@alignCast(context));
+        switch (event) {
+            .structured => |bytes| {
+                _ = try self.trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
+                    .stream = .structured,
+                    .bytes = bytes,
+                } });
+            },
+            else => {},
+        }
+    }
+};
 
 fn isHelp(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "--help") or
