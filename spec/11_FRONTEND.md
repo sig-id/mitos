@@ -238,8 +238,8 @@ product; the v1 frontend targets the **local** runner.
    app's entry pipelines — decided by trying `explicit` first.
 2. **Inner-trace fidelity:** how much raw harness spool to surface vs redact in
    the inner screen (`05` redaction) for non-developer consumers.
-3. **App manifest shape:** the exact fields of the application bundle (entry
-   pipelines, default I/O bindings, service defaults) — to pin alongside `03`'s
-   capability manifest and `04`'s pipeline format.
+3. **App manifest shape:** ~~the exact fields of the application bundle~~ — now
+   fixed in `12_APPLICATION` (`01 §8.8`). Remaining sub-questions (inputs dialect,
+   OCI artifact shape, version-bump UX) live in `12 §11`.
 4. **Web/CLI parity surface:** which operate actions are web-only vs need CLI
    parity for headless/automation.

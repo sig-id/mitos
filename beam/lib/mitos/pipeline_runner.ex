@@ -12,10 +12,23 @@ defmodule Mitos.PipelineRunner do
   def execute(id, bindings, opts \\ [])
 
   def execute(id, bindings, opts) when is_binary(id) and is_map(bindings) do
-    execution_id = "pipe-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+    with {:ok, pipeline} <- Mitos.PipelineRegistry.get(id) do
+      execute_definition(pipeline, bindings, opts)
+    end
+  end
 
-    with {:ok, pipeline} <- Mitos.PipelineRegistry.get(id),
-         {:ok, steps} <- pipeline_steps(pipeline),
+  def execute(_id, _bindings, _opts),
+    do: {:error, {:invalid_pipeline, "pipeline id is required"}}
+
+  @doc "Run an already loaded pipeline definition."
+  def execute_definition(pipeline, bindings, opts \\ [])
+
+  def execute_definition(%{} = pipeline, bindings, opts) when is_map(bindings) do
+    execution_id =
+      Keyword.get(opts, :pipeline_execution_id) ||
+        "pipe-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+
+    with {:ok, steps} <- pipeline_steps(pipeline),
          {:ok, results} <-
            run_steps(
              pipeline,
@@ -29,8 +42,8 @@ defmodule Mitos.PipelineRunner do
     end
   end
 
-  def execute(_id, _bindings, _opts),
-    do: {:error, {:invalid_pipeline, "pipeline id is required"}}
+  def execute_definition(_pipeline, _bindings, _opts),
+    do: {:error, {:invalid_pipeline, "pipeline definition must be an object"}}
 
   defp pipeline_steps(%{"workflow" => %{"steps" => steps}}) when is_list(steps) do
     steps =
@@ -64,7 +77,7 @@ defmodule Mitos.PipelineRunner do
 
   defp run_steps(pipeline, steps, bindings, opts) do
     Enum.reduce_while(steps, {:ok, []}, fn step, {:ok, results} ->
-      with {:ok, workload} <- Mitos.Workload.fetch(step["capability_id"]),
+      with {:ok, workload} <- step_workload(step, opts),
            {:ok, result} <-
              Mitos.Workload.Runner.execute(
                workload,
@@ -73,7 +86,8 @@ defmodule Mitos.PipelineRunner do
                  task_id: step_task_id(pipeline, step, opts),
                  pool: Keyword.get(opts, :pool, "interactive"),
                  source: "pipeline:#{pipeline["id"]}:#{step["id"]}",
-                 pipeline: pipeline["pipeline_id"] || "workload:#{pipeline["id"]}"
+                 pipeline: pipeline["pipeline_id"] || "workload:#{pipeline["id"]}",
+                 provenance: Keyword.get(opts, :provenance, %{})
                )
              ) do
         {:cont, {:ok, results ++ [step_result(step, workload, result)]}}
@@ -82,6 +96,11 @@ defmodule Mitos.PipelineRunner do
           {:halt, {:error, {:pipeline_step_failed, step["id"], step["capability_id"], reason}}}
       end
     end)
+  end
+
+  defp step_workload(step, opts) do
+    resolver = Keyword.get(opts, :capability_resolver, &Mitos.Workload.fetch/1)
+    resolver.(step["capability_id"])
   end
 
   defp step_bindings(bindings, step, previous_results) do
@@ -110,6 +129,7 @@ defmodule Mitos.PipelineRunner do
 
   defp step_result(step, workload, result) do
     proof = Mitos.Proof.build(result.run_id)
+    delivery_result = get_in(proof, ["delivery", "result"]) || %{}
 
     %{
       "id" => step["id"],
@@ -117,11 +137,23 @@ defmodule Mitos.PipelineRunner do
       "capability_id" => workload.id,
       "run_id" => result.run_id,
       "status" => "completed",
-      "summary" => result.result,
+      "summary" => delivered_summary(delivery_result, result.result),
       "exit_code" => result.exit_code,
       "errors" => result.errors,
       "proof" => proof
     }
+  end
+
+  defp delivered_summary(%{"synthetic" => true}, fallback), do: fallback
+
+  defp delivered_summary(%{} = delivery_result, fallback) do
+    needs = List.wrap(delivery_result["needs"])
+
+    if Enum.any?(needs, &(&1 in ["result_missing", "result_invalid"])) do
+      fallback
+    else
+      delivery_result["summary"] || delivery_result["signal"] || fallback
+    end
   end
 
   defp response(pipeline, results, execution_id) do

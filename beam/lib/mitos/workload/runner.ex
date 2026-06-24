@@ -154,9 +154,15 @@ defmodule Mitos.Workload.Runner do
                      decision_seq,
                      launch_spec,
                      workload.package_root,
-                     session_id
+                     session_id,
+                     workload.timeout_ms
                    ) do
                 {:ok, trace, result} ->
+                  finish_task_trace(trace, task_context, result)
+                  result
+
+                {:timeout, trace} ->
+                  result = {:error, {:timeout, session_id}}
                   finish_task_trace(trace, task_context, result)
                   result
 
@@ -228,16 +234,37 @@ defmodule Mitos.Workload.Runner do
          decision_seq,
          launch_spec,
          schema_root,
-         session_id
+         session_id,
+         timeout_ms
        ) do
     try do
-      with {trace, acc} <- collect_remote(provider.stream(session), trace, decision_seq),
-           {:ok, harvest} <- provider.harvest(session) do
-        harvest = validate_remote_harvest(harvest, launch_spec, schema_root)
-        trace = trace_remote_finish(trace, decision_seq, acc, harvest)
-        {:ok, trace, finish_remote(acc, harvest, session_id)}
-      else
-        {:error, reason} -> {:error, trace, reason}
+      case collect_remote(provider, session, trace, decision_seq, timeout_ms) do
+        {:ok, trace, acc} ->
+          case provider.harvest(session) do
+            {:ok, harvest} ->
+              harvest = validate_remote_harvest(harvest, launch_spec, schema_root)
+              trace = trace_remote_finish(trace, decision_seq, acc, harvest)
+              {:ok, trace, finish_remote(acc, harvest, session_id)}
+
+            {:error, reason} ->
+              {:error, trace, reason}
+          end
+
+        {:timeout, trace, acc} ->
+          control_result = interrupt_remote_session(provider, session, timeout_ms)
+          trace = trace_remote_timeout(trace, decision_seq, timeout_ms, control_result)
+          acc = %{acc | exit_code: nil, errors: acc.errors ++ ["timeout"]}
+
+          with {:ok, harvest} <- provider.harvest(session) do
+            harvest = validate_remote_harvest(harvest, launch_spec, schema_root)
+            trace = trace_remote_finish(trace, decision_seq, acc, harvest, status: "timeout")
+            {:timeout, trace}
+          else
+            {:error, reason} -> {:error, trace, {:timeout_harvest_failed, reason}}
+          end
+
+        {:error, trace, reason} ->
+          {:error, trace, reason}
       end
     rescue
       exception -> {:error, trace, Exception.message(exception)}
@@ -335,47 +362,107 @@ defmodule Mitos.Workload.Runner do
     end
   end
 
-  defp collect_remote(events, trace, decision_seq) do
-    {trace, acc} =
-      Enum.reduce(
-        events,
-        {trace, %{final: nil, raw: [], errors: [], exit_code: 0, usage: []}},
-        fn event, {trace, acc} ->
-          event = normalize_event(event)
-          source_sequence = trace.seq
-          usage = token_usage_entry(event, source_sequence)
-          trace = Mitos.Trace.append_event(trace, event)
+  defp collect_remote(provider, session, trace, decision_seq, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    ref = make_ref()
+    parent = self()
 
-          acc =
-            acc
-            |> maybe_add_usage(usage)
-            |> case do
-              acc ->
-                case event do
-                  %{"type" => "FINAL_OUTPUT", "text" => text} when is_binary(text) ->
-                    %{acc | final: text}
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        try do
+          provider.stream(session)
+          |> Enum.each(fn event -> send(parent, {:remote_stream_event, ref, event}) end)
 
-                  %{"type" => "OUTPUT", "bytes" => bytes} when is_binary(bytes) ->
-                    %{acc | raw: [acc.raw, bytes]}
-
-                  %{"type" => type, "code" => code} when type in ["exit", "PROCESS_EXITED"] ->
-                    %{acc | exit_code: code}
-
-                  %{"type" => type} when type in ["ERROR", "error"] ->
-                    detail = Map.get(event, "detail", Map.get(event, "message", inspect(event)))
-                    %{acc | errors: acc.errors ++ [to_string(detail)]}
-
-                  _event ->
-                    acc
-                end
-            end
-
-          {trace, acc}
+          send(parent, {:remote_stream_done, ref})
+        rescue
+          exception ->
+            send(parent, {:remote_stream_failed, ref, Exception.message(exception)})
+        catch
+          kind, reason ->
+            send(parent, {:remote_stream_failed, ref, {kind, reason}})
         end
-      )
+      end)
 
-    {trace_token_usage(trace, decision_seq, acc.usage), acc}
+    collect_remote_messages(trace, decision_seq, remote_acc(), ref, pid, monitor, deadline)
   end
+
+  defp collect_remote_messages(trace, decision_seq, acc, ref, pid, monitor, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      stop_remote_collector(pid, monitor)
+      {:timeout, trace_token_usage(trace, decision_seq, acc.usage), acc}
+    else
+      receive do
+        {:remote_stream_event, ^ref, event} ->
+          {trace, acc} = record_remote_event(trace, decision_seq, acc, event)
+          collect_remote_messages(trace, decision_seq, acc, ref, pid, monitor, deadline)
+
+        {:remote_stream_done, ^ref} ->
+          Process.demonitor(monitor, [:flush])
+          {:ok, trace_token_usage(trace, decision_seq, acc.usage), acc}
+
+        {:remote_stream_failed, ^ref, reason} ->
+          stop_remote_collector(pid, monitor)
+          {:error, trace_token_usage(trace, decision_seq, acc.usage), reason}
+
+        {:DOWN, ^monitor, :process, ^pid, :normal} ->
+          {:ok, trace_token_usage(trace, decision_seq, acc.usage), acc}
+
+        {:DOWN, ^monitor, :process, ^pid, reason} ->
+          {:error, trace_token_usage(trace, decision_seq, acc.usage), reason}
+      after
+        remaining ->
+          stop_remote_collector(pid, monitor)
+          {:timeout, trace_token_usage(trace, decision_seq, acc.usage), acc}
+      end
+    end
+  end
+
+  defp stop_remote_collector(pid, monitor) do
+    if Process.alive?(pid), do: Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    after
+      100 -> Process.demonitor(monitor, [:flush])
+    end
+  end
+
+  defp record_remote_event(trace, _decision_seq, acc, event) do
+    event = normalize_event(event)
+    source_sequence = trace.seq
+    usage = token_usage_entry(event, source_sequence)
+    trace = Mitos.Trace.append_event(trace, event)
+
+    acc =
+      acc
+      |> maybe_add_usage(usage)
+      |> case do
+        acc ->
+          case event do
+            %{"type" => "FINAL_OUTPUT", "text" => text} when is_binary(text) ->
+              %{acc | final: text}
+
+            %{"type" => "OUTPUT", "bytes" => bytes} when is_binary(bytes) ->
+              %{acc | raw: [acc.raw, bytes]}
+
+            %{"type" => type, "code" => code} when type in ["exit", "PROCESS_EXITED"] ->
+              %{acc | exit_code: code}
+
+            %{"type" => type} when type in ["ERROR", "error"] ->
+              detail = Map.get(event, "detail", Map.get(event, "message", inspect(event)))
+              %{acc | errors: acc.errors ++ [to_string(detail)]}
+
+            _event ->
+              acc
+          end
+      end
+
+    {trace, acc}
+  end
+
+  defp remote_acc, do: %{final: nil, raw: [], errors: [], exit_code: 0, usage: []}
 
   defp token_usage_entry(%{"type" => type} = event, source_sequence) when is_binary(type) do
     if String.downcase(type) == "token_usage" do
@@ -441,13 +528,15 @@ defmodule Mitos.Workload.Runner do
 
   defp sum_payload(payloads, key), do: Enum.sum(Enum.map(payloads, &numeric(&1[key])))
 
-  defp trace_remote_finish(trace, decision_seq, acc, harvest) do
+  defp trace_remote_finish(trace, decision_seq, acc, harvest, opts \\ []) do
+    status = Keyword.get(opts, :status, if(acc.exit_code == 0, do: "completed", else: "failed"))
+
     Mitos.Trace.append_effect(trace, %{
       type: "capability_finished",
       caused_by: decision_seq,
       ref: %{"result" => harvest.result["path"] || "RESULT"},
       payload: %{
-        "status" => if(acc.exit_code == 0, do: "completed", else: "failed"),
+        "status" => status,
         "exit_code" => acc.exit_code,
         "signal" => nil,
         "final_output" => acc.final,
@@ -458,6 +547,42 @@ defmodule Mitos.Workload.Runner do
       }
     })
   end
+
+  defp trace_remote_timeout(trace, decision_seq, timeout_ms, control_result) do
+    Mitos.Trace.append_effect(trace, %{
+      type: "capability_interrupted",
+      caused_by: decision_seq,
+      ref: %{"reason" => "timeout"},
+      payload: %{
+        "reason" => "timeout",
+        "timeout_ms" => timeout_ms,
+        "control" => control_payload(control_result)
+      }
+    })
+  end
+
+  defp interrupt_remote_session(provider, session, timeout_ms) do
+    case safe_remote_control(
+           provider,
+           session,
+           {:steer, :interrupt, reason: "timeout", timeout_ms: timeout_ms}
+         ) do
+      :ok -> :ok
+      {:error, :unsupported_control} -> safe_remote_control(provider, session, {:signal, 2})
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp safe_remote_control(provider, session, command) do
+    provider.control(session, command)
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp control_payload(:ok), do: %{"status" => "sent"}
+  defp control_payload({:error, reason}), do: %{"status" => "failed", "reason" => inspect(reason)}
 
   defp task_context(workload, bindings, rendered_task, opts) do
     task_id =
@@ -480,7 +605,8 @@ defmodule Mitos.Workload.Runner do
         "workload_id" => workload.id,
         "inputs" => bindings
       },
-      budget: Keyword.get(opts, :budget, %{})
+      budget: Keyword.get(opts, :budget, %{}),
+      provenance: Keyword.get(opts, :provenance, %{})
     }
   end
 

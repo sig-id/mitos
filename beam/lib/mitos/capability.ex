@@ -286,6 +286,9 @@ defmodule Mitos.Capability do
           not present?(field(rule, "dest")) and not present?(field(rule, "destination")) ->
             "egress_policy entries require dest"
 
+          not present?(field(rule, "credential")) and not present?(field(rule, "credential_id")) ->
+            "egress_policy entries require credential or credential_id"
+
           true ->
             nil
         end

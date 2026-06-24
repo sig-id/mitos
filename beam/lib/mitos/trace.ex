@@ -818,6 +818,20 @@ defmodule Mitos.Trace do
   defp effect_idempotency_key(%{"type" => "budget_charged", "caused_by" => caused_by}),
     do: ["budget_charged", caused_by]
 
+  defp effect_idempotency_key(%{"type" => "signal_received", "ref" => ref})
+       when is_map(ref) do
+    connector = ref["connector"]
+    key = ref["idempotency_key"] || ref["delivery_id"] || ref["signal_id"]
+    if connector && key, do: ["signal_received", connector, key]
+  end
+
+  defp effect_idempotency_key(%{"type" => type, "ref" => ref})
+       when type in ["delivery_attempted", "delivery_sent", "delivery_failed"] and is_map(ref) do
+    sink = ref["sink"]
+    dest = ref["dest"] || ref["destination"] || ref["url"] || ref["delivery_id"]
+    if sink && dest, do: [type, sink, dest]
+  end
+
   defp effect_idempotency_key(_event), do: nil
 
   defp budget_state(decisions, effects) do

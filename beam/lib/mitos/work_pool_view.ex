@@ -110,7 +110,14 @@ defmodule Mitos.WorkPoolView do
 
   defp task_payload(payload) do
     payload
-    |> Map.take(["workload_id", "intent", "inputs", "dedupe_key", "dependency_results"])
+    |> Map.take([
+      "workload_id",
+      "intent",
+      "inputs",
+      "dedupe_key",
+      "reply_ref",
+      "dependency_results"
+    ])
   end
 
   defp columns(tasks) do

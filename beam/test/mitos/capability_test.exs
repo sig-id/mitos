@@ -99,23 +99,17 @@ defmodule Mitos.CapabilityTest do
     }
 
     assert {:ok, first} =
-             Mitos.Capability.from_json("content-addressed", manifest,
-               package_root: package_root
-             )
+             Mitos.Capability.from_json("content-addressed", manifest, package_root: package_root)
 
     assert {:ok, same} =
-             Mitos.Capability.from_json("content-addressed", manifest,
-               package_root: package_root
-             )
+             Mitos.Capability.from_json("content-addressed", manifest, package_root: package_root)
 
     assert same.id == first.id
 
     File.write!(skill_path, "role v2\n")
 
     assert {:ok, changed_skill} =
-             Mitos.Capability.from_json("content-addressed", manifest,
-               package_root: package_root
-             )
+             Mitos.Capability.from_json("content-addressed", manifest, package_root: package_root)
 
     refute changed_skill.id == first.id
 
@@ -123,9 +117,7 @@ defmodule Mitos.CapabilityTest do
     File.write!(tool_path, "print('tool v2')\n")
 
     assert {:ok, changed_tool} =
-             Mitos.Capability.from_json("content-addressed", manifest,
-               package_root: package_root
-             )
+             Mitos.Capability.from_json("content-addressed", manifest, package_root: package_root)
 
     refute changed_tool.id == first.id
 
@@ -133,9 +125,7 @@ defmodule Mitos.CapabilityTest do
     File.write!(data_path, "data v2\n")
 
     assert {:ok, changed_data} =
-             Mitos.Capability.from_json("content-addressed", manifest,
-               package_root: package_root
-             )
+             Mitos.Capability.from_json("content-addressed", manifest, package_root: package_root)
 
     refute changed_data.id == first.id
   end
@@ -442,6 +432,15 @@ defmodule Mitos.CapabilityTest do
                    "credential" => "seller_key",
                    "secret" => "must-not-be-here"
                  }
+               ])
+             )
+
+    assert {:error,
+            {:invalid_capability, "egress_policy entries require credential or credential_id"}} =
+             Mitos.Capability.from_json(
+               "bad-egress-credential",
+               Map.put(base, "egress_policy", [
+                 %{"dest" => "api.example.test", "requires_approval" => true}
                ])
              )
 

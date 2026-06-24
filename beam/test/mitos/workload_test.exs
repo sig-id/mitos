@@ -28,9 +28,33 @@ defmodule Mitos.TestRemoteMicrovmProvider do
   end
 
   @impl true
+  def stream(%{launch_spec: %{task: task}, events: events}) when is_binary(task) do
+    if String.contains?(task, "timeout job") do
+      Stream.resource(
+        fn -> :pending end,
+        fn
+          :pending ->
+            Process.sleep(10_000)
+            {[], :done}
+
+          :done ->
+            {:halt, :done}
+        end,
+        fn _state -> :ok end
+      )
+    else
+      events
+    end
+  end
+
   def stream(%{events: events}), do: events
 
   @impl true
+  def control(%{launch_spec: launch_spec}, command) do
+    send(self(), {:test_remote_microvm_control, launch_spec.run_id, command})
+    :ok
+  end
+
   def control(_session, _command), do: {:error, :unsupported_control}
 
   @impl true
@@ -2351,6 +2375,104 @@ defmodule Mitos.WorkloadTest do
                  "payload" => %{"reason" => reason}
                } ->
                  reason =~ ":harvest_failed"
+
+               _ ->
+                 false
+             end)
+    end
+
+    test "remote workload timeout interrupts, harvests partial result, and stops", %{dir: dir} do
+      previous_providers = Application.get_env(:mitos, :sandbox_providers)
+      previous_trace_base_dir = Application.get_env(:mitos, :trace_base_dir)
+      previous_leases = Application.get_env(:mitos, :key_vault_leases)
+      trace_base_dir = unique_tmp_dir("remote-timeout-trace")
+
+      Application.put_env(:mitos, :sandbox_providers, [Mitos.TestRemoteMicrovmProvider])
+      Application.put_env(:mitos, :trace_base_dir, trace_base_dir)
+      Application.delete_env(:mitos, :key_vault_leases)
+
+      on_exit(fn ->
+        if previous_providers do
+          Application.put_env(:mitos, :sandbox_providers, previous_providers)
+        else
+          Application.delete_env(:mitos, :sandbox_providers)
+        end
+
+        if previous_trace_base_dir do
+          Application.put_env(:mitos, :trace_base_dir, previous_trace_base_dir)
+        else
+          Application.delete_env(:mitos, :trace_base_dir)
+        end
+
+        if previous_leases do
+          Application.put_env(:mitos, :key_vault_leases, previous_leases)
+        else
+          Application.delete_env(:mitos, :key_vault_leases)
+        end
+
+        File.rm_rf!(trace_base_dir)
+      end)
+
+      write_workload!(dir, "remote-timeout", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 50,
+        capability: %{
+          name: "remote-timeout-demo",
+          harnesses: ["fake"],
+          trust_tier: "T2",
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("remote-timeout")
+
+      assert {:error, {:timeout, run_id}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "timeout job"})
+
+      assert_receive {:test_remote_microvm_env, nil}
+      assert_receive {:test_remote_microvm_launch_spec, %{run_id: ^run_id}}
+      assert_receive {:test_remote_microvm_control, ^run_id, {:steer, :interrupt, opts}}
+      assert opts[:reason] == "timeout"
+      assert opts[:timeout_ms] == 50
+      assert_receive {:test_remote_microvm_stopped, ^run_id}
+
+      refute Map.has_key?(Application.get_env(:mitos, :key_vault_leases, %{}), run_id)
+
+      events = Mitos.Trace.read_events(run_id, base_dir: trace_base_dir)
+      pool = Mitos.WorkPool.fold_events(events)
+      [task] = Map.values(pool["tasks"])
+
+      assert task["status"] == "failed"
+      assert task["status_reason"] =~ ":timeout"
+
+      assert Enum.any?(events, fn
+               %{
+                 "kind" => "effect",
+                 "type" => "capability_interrupted",
+                 "payload" => %{
+                   "reason" => "timeout",
+                   "timeout_ms" => 50,
+                   "control" => %{"status" => "sent"}
+                 }
+               } ->
+                 true
+
+               _ ->
+                 false
+             end)
+
+      assert Enum.any?(events, fn
+               %{
+                 "kind" => "effect",
+                 "type" => "capability_finished",
+                 "payload" => %{
+                   "status" => "timeout",
+                   "exit_code" => nil,
+                   "harvest" => %{"result" => %{"signal" => "ship"}}
+                 }
+               } ->
+                 true
 
                _ ->
                  false

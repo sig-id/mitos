@@ -13,6 +13,9 @@ LLM task runner for automated code analysis and generation.
   (Run & Watch · Build & Test · Fleet); CLI-first dev, web-first operate.
 - [I/O Plane](spec/10_IO_PLANE.md): connectors in (chat/email/calendar/
   webhook/web), sinks out (notify/deliver/reply/web) — the input/output layer.
+- [Application](spec/12_APPLICATION.md): the shipping unit — the application
+  manifest (capabilities/pipelines/entrypoints, default I/O bindings, service
+  composition), `app_id` identity, and OCI packaging.
 - [Gentix Facilitator](spec/08_FACILITATOR.md): the hosted capability
   service built on mitos — "Pickaxe for agent harnesses": sellers' processes
   executed by full agent harnesses in sandboxes, sold as metered completed

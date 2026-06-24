@@ -243,7 +243,9 @@ defmodule Mitos.Workload do
       %{} = manifest ->
         id
         |> published_manifest(manifest, pricing)
-        |> then(&Mitos.Capability.from_json(id, &1, package_root: Keyword.get(opts, :package_root)))
+        |> then(
+          &Mitos.Capability.from_json(id, &1, package_root: Keyword.get(opts, :package_root))
+        )
 
       _ ->
         {:error, {:invalid_capability, "capability must be an object"}}

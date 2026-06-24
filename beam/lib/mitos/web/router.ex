@@ -335,6 +335,140 @@ defmodule Mitos.Web.Router do
     end
   end
 
+  # GET /apps — local application manifests, buyer-safe.
+  get "/apps" do
+    apps = Mitos.Applications.list()
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, Jason.encode!(%{"apps" => apps, "totals" => %{"apps" => length(apps)}}))
+  end
+
+  # GET /apps/:id — one local application by directory id, manifest name, or app_id.
+  get "/apps/:id" do
+    case Mitos.Applications.fetch(id) do
+      {:ok, app} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(%{"app" => Mitos.Applications.public_view(app)}))
+
+      error ->
+        app_error(conn, error)
+    end
+  end
+
+  # POST /apps/:id/activations — install/control-plane projection for app I/O
+  # bindings and service active-set requirements. It does not execute frontend
+  # code or materialize connector/sink credentials.
+  post "/apps/:id/activations" do
+    case Mitos.Applications.activation_plan(id, activation_opts(conn.body_params)) do
+      {:ok, activation} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(%{"activation" => activation}))
+
+      error ->
+        app_activation_error(conn, error)
+    end
+  end
+
+  # POST /apps/:id/packages — publish one local application as a local OCI layout.
+  post "/apps/:id/packages" do
+    body = conn.body_params
+
+    case Mitos.Applications.publish_local(id, package_id(body), package_opts(body)) do
+      {:ok, package} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(201, Jason.encode!(%{"package" => package}))
+
+      error ->
+        app_package_error(conn, error)
+    end
+  end
+
+  # POST /app-packages/:package_id/install — install a local OCI app package.
+  post "/app-packages/:package_id/install" do
+    body = conn.body_params
+
+    case Mitos.Applications.install_package(package_id, install_id(body), install_opts(body)) do
+      {:ok, install} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(201, Jason.encode!(%{"install" => install}))
+
+      error ->
+        app_install_error(conn, error)
+    end
+  end
+
+  # POST /app-runs/:run_id/deliveries/redrive — replay app sink delivery from
+  # the durable trace without rerunning the application pipeline. Delivery
+  # Effects are idempotent, so an already delivered run reports zero appended
+  # effects and leaves the log unchanged.
+  post "/app-runs/:run_id/deliveries/redrive" do
+    case Mitos.Applications.redrive_deliveries(run_id) do
+      {:ok, redrive} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(%{"redrive" => redrive}))
+
+      error ->
+        app_delivery_error(conn, error)
+    end
+  end
+
+  # POST /apps/:id/connectors/:connector/signals — generic backend connector
+  # ingress. The connector signal is matched against app `io.inputs` explicit
+  # bindings, normalized to a Task, and executed through the same app runner as
+  # manual/web entrypoint runs.
+  post "/apps/:id/connectors/:connector/signals" do
+    body = conn.body_params
+
+    case Mitos.Applications.run_connector(
+           id,
+           connector,
+           app_inputs(body),
+           connector_signal_opts(body, connector)
+         ) do
+      {:ok, result} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(result))
+
+      error ->
+        app_run_error(conn, error)
+    end
+  end
+
+  # POST /apps/:id/entrypoints/:entrypoint/runs — run one application entrypoint.
+  #
+  # The app manifest validates the typed input payload and maps the entrypoint
+  # onto a canonical Task. Execution currently delegates to an existing local
+  # workload-backed pipeline with the same id as the entrypoint's pipeline.
+  post "/apps/:id/entrypoints/:entrypoint/runs" do
+    body = conn.body_params
+    connector = app_connector(body)
+
+    case Mitos.Applications.run_entrypoint(id, entrypoint, app_inputs(body),
+           pool: "interactive",
+           source: "connector:#{connector}",
+           connector: connector,
+           idempotency_key: app_idempotency_key(body),
+           reply_ref: app_reply_ref(body),
+           tenant: tenant_context(body),
+           task_id: request_task_id(body)
+         ) do
+      {:ok, result} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, Jason.encode!(result))
+
+      error ->
+        app_run_error(conn, error)
+    end
+  end
+
   # GET /work-pool — board-ready durable Task projection across known runs.
   get "/work-pool" do
     conn
@@ -563,12 +697,159 @@ defmodule Mitos.Web.Router do
     |> Enum.into(%{}, fn {key, value} -> {to_string(key), binding_value(value)} end)
   end
 
+  defp app_inputs(body) do
+    task = map_or_empty(body["task"])
+
+    task_bindings =
+      %{
+        "objective" => task["objective"],
+        "expected_output" => task["expected_output"]
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    map_or_empty(body["request"])
+    |> Map.merge(map_or_empty(body["inputs"]))
+    |> Map.merge(task_bindings)
+    |> stringify_map()
+  end
+
+  defp package_id(body) do
+    body
+    |> map_or_empty()
+    |> Map.get("package_id")
+  end
+
+  defp package_opts(body) do
+    body = map_or_empty(body)
+
+    case body["tag"] do
+      tag when is_binary(tag) and tag != "" -> [tag: tag]
+      _tag -> []
+    end
+  end
+
+  defp install_id(body) do
+    body
+    |> map_or_empty()
+    |> Map.get("install_id")
+  end
+
+  defp install_opts(body) do
+    body = map_or_empty(body)
+    availability = map_or_empty(body["availability"] || body["available"])
+
+    []
+    |> maybe(:tag, nonempty_string(body["tag"]))
+    |> maybe(:app_id, nonempty_string(body["app_id"]))
+    |> maybe(:io, install_io_bindings(body))
+    |> maybe(
+      :available_connectors,
+      install_availability_list(body, availability, "available_connectors", "connectors")
+    )
+    |> maybe(
+      :available_harnesses,
+      install_availability_list(body, availability, "available_harnesses", "harnesses")
+    )
+    |> maybe(
+      :available_sinks,
+      install_availability_list(body, availability, "available_sinks", "sinks")
+    )
+  end
+
+  defp install_availability_list(body, availability, direct_key, nested_key) do
+    case body[direct_key] || availability[nested_key] do
+      values when is_list(values) -> values
+      _values -> nil
+    end
+  end
+
+  defp install_io_bindings(body) do
+    bindings = map_or_empty(body["bindings"] || body["binding_overrides"])
+
+    case body["io"] || bindings["io"] do
+      %{} = io -> io
+      _io -> nil
+    end
+  end
+
+  defp activation_opts(body) do
+    body = map_or_empty(body)
+
+    []
+    |> maybe(:units, list_or_empty(body["units"]))
+    |> maybe(:targets, list_or_empty(body["targets"]))
+    |> maybe(:presets, list_or_empty(body["presets"]))
+    |> maybe(:pipelines, list_or_empty(body["pipelines"]))
+    |> maybe(:active_pipelines, list_or_empty(body["active_pipelines"]))
+    |> maybe(:enable, list_or_empty(body["enable"] || body["explicit_enable"]))
+    |> maybe(:disable, list_or_empty(body["disable"] || body["explicit_disable"]))
+    |> maybe(:project_type, nonempty_string(body["project_type"]))
+  end
+
+  defp connector_signal_opts(body, connector) do
+    body = map_or_empty(body)
+    signal = map_or_empty(body["signal"])
+
+    [
+      pool: "interactive",
+      source: "connector:#{connector}",
+      connector: connector,
+      tenant: tenant_context(body),
+      task_id: request_task_id(body)
+    ]
+    |> maybe(:path, nonempty_string(body["path"] || signal["path"]))
+    |> maybe(
+      :idempotency_key,
+      nonempty_string(
+        body["idempotency_key"] ||
+          body["delivery_id"] ||
+          body["signal_id"] ||
+          signal["idempotency_key"] ||
+          signal["delivery_id"] ||
+          signal["id"]
+      )
+    )
+    |> maybe(:delivery_id, nonempty_string(body["delivery_id"] || signal["delivery_id"]))
+    |> maybe(:signal_id, nonempty_string(body["signal_id"] || signal["id"]))
+    |> maybe(:reply_ref, body["reply_ref"] || signal["reply_ref"])
+  end
+
   defp request_task_id(body) do
     body
     |> map_or_empty()
     |> Map.get("task")
     |> map_or_empty()
     |> Map.get("task_id")
+  end
+
+  defp app_connector(body) do
+    body = map_or_empty(body)
+    signal = map_or_empty(body["signal"])
+
+    nonempty_string(body["connector"]) ||
+      nonempty_string(signal["connector"]) ||
+      "web"
+  end
+
+  defp app_idempotency_key(body) do
+    body = map_or_empty(body)
+    signal = map_or_empty(body["signal"])
+    task = map_or_empty(body["task"])
+
+    nonempty_string(body["idempotency_key"]) ||
+      nonempty_string(signal["idempotency_key"]) ||
+      nonempty_string(signal["delivery_id"]) ||
+      nonempty_string(signal["signal_id"]) ||
+      nonempty_string(task["idempotency_key"])
+  end
+
+  defp app_reply_ref(body) do
+    body = map_or_empty(body)
+    signal = map_or_empty(body["signal"])
+
+    nonempty_string(body["reply_ref"]) ||
+      nonempty_string(signal["reply_ref"])
   end
 
   defp tenant_context(body) do
@@ -1393,6 +1674,49 @@ defmodule Mitos.Web.Router do
         {:error, {:invalid_pipeline, detail}} ->
           {422, %{error: "invalid pipeline definition", detail: detail}}
 
+        {:error,
+         {:app_run_failed, app_run_id,
+          {:pipeline_step_failed, step_id, capability_id, {:unknown_capability_ref, ref}}}} ->
+          {404,
+           %{
+             error: "application capability ref not found",
+             app_run_id: app_run_id,
+             step_id: step_id,
+             capability_id: capability_id,
+             ref: ref
+           }}
+
+        {:error,
+         {:app_run_failed, app_run_id,
+          {:pipeline_step_failed, step_id, capability_id, {:unsupported_app_capability_ref, ref}}}} ->
+          {422,
+           %{
+             error: "unsupported application capability ref",
+             app_run_id: app_run_id,
+             step_id: step_id,
+             capability_id: capability_id,
+             ref: ref
+           }}
+
+        {:error,
+         {:app_run_failed, app_run_id, {:pipeline_step_failed, step_id, capability_id, reason}}} ->
+          {502,
+           %{
+             error: "pipeline step failed",
+             app_run_id: app_run_id,
+             step_id: step_id,
+             capability_id: capability_id,
+             detail: inspect(reason)
+           }}
+
+        {:error, {:app_run_failed, app_run_id, reason}} ->
+          {500,
+           %{
+             error: "application run failed",
+             app_run_id: app_run_id,
+             detail: inspect(reason)
+           }}
+
         {:error, {:pipeline_step_failed, step_id, capability_id, reason}} ->
           {502,
            %{
@@ -1404,6 +1728,232 @@ defmodule Mitos.Web.Router do
 
         {:error, reason} ->
           {500, %{error: "pipeline execution failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, :not_found} ->
+          {404, %{error: "app not found"}}
+
+        {:error, {:application_not_found, path}} ->
+          {404, %{error: "app not found", path: path}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, {:unsupported_manifest_format, detail}} ->
+          {422, %{error: "unsupported application manifest format", detail: detail}}
+
+        {:error, reason} ->
+          {500, %{error: "application registry failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_activation_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, :not_found} ->
+          {404, %{error: "app not found"}}
+
+        {:error, {:application_not_found, path}} ->
+          {404, %{error: "app not found", path: path}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, {:unsupported_manifest_format, detail}} ->
+          {422, %{error: "unsupported application manifest format", detail: detail}}
+
+        {:error, {:invalid_application_activation, detail}} ->
+          {422, %{error: "invalid application activation", detail: detail}}
+
+        {:error, {:application_activation_failed, detail}} ->
+          {422, %{error: "application activation failed", detail: detail}}
+
+        {:error, {:application_activation_conflict, ids}} ->
+          {409, %{error: "application activation conflict", services: ids}}
+
+        {:error, reason} ->
+          {500, %{error: "application activation failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_run_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, :not_found} ->
+          {404, %{error: "app or pipeline not found"}}
+
+        {:error, {:unknown_entrypoint, entrypoint}} ->
+          {404, %{error: "entrypoint not found", entrypoint: entrypoint}}
+
+        {:error, {:invalid_application_input, detail}} ->
+          {422, %{error: "invalid application input", detail: detail}}
+
+        {:error, {:application_connector_not_found, connector}} ->
+          {404, %{error: "application connector not found", connector: connector}}
+
+        {:error, {:invalid_application_io, detail}} ->
+          {422, %{error: "invalid application io", detail: detail}}
+
+        {:error, {:unsupported_application_selection, mode}} ->
+          {422, %{error: "unsupported application selection", mode: mode}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, {:invalid_pipeline, detail}} ->
+          {422, %{error: "invalid pipeline definition", detail: detail}}
+
+        {:error,
+         {:app_run_failed, app_run_id,
+          {:pipeline_step_failed, step_id, capability_id, {:unknown_capability_ref, ref}}}} ->
+          {404,
+           %{
+             error: "application capability ref not found",
+             app_run_id: app_run_id,
+             step_id: step_id,
+             capability_id: capability_id,
+             ref: ref
+           }}
+
+        {:error,
+         {:app_run_failed, app_run_id,
+          {:pipeline_step_failed, step_id, capability_id, {:unsupported_app_capability_ref, ref}}}} ->
+          {422,
+           %{
+             error: "unsupported application capability ref",
+             app_run_id: app_run_id,
+             step_id: step_id,
+             capability_id: capability_id,
+             ref: ref
+           }}
+
+        {:error,
+         {:app_run_failed, app_run_id, {:pipeline_step_failed, step_id, capability_id, reason}}} ->
+          {502,
+           %{
+             error: "pipeline step failed",
+             app_run_id: app_run_id,
+             step_id: step_id,
+             capability_id: capability_id,
+             detail: inspect(reason)
+           }}
+
+        {:error, {:app_run_failed, app_run_id, reason}} ->
+          {500,
+           %{
+             error: "application run failed",
+             app_run_id: app_run_id,
+             detail: inspect(reason)
+           }}
+
+        {:error, {:pipeline_step_failed, step_id, capability_id, reason}} ->
+          {502,
+           %{
+             error: "pipeline step failed",
+             step_id: step_id,
+             capability_id: capability_id,
+             detail: inspect(reason)
+           }}
+
+        {:error, reason} ->
+          {500, %{error: "application run failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_delivery_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, {:application_run_not_found, app_run_id}} ->
+          {404, %{error: "application run not found", app_run_id: app_run_id}}
+
+        {:error, {:application_run_not_completed, task_id}} ->
+          {409, %{error: "application run not completed", task_id: task_id}}
+
+        {:error, {:application_run_not_deliverable, detail}} ->
+          {422, %{error: "application run not deliverable", detail: detail}}
+
+        {:error, {:invalid_application_run, detail}} ->
+          {422, %{error: "invalid application run", detail: detail}}
+
+        {:error, :not_found} ->
+          {404, %{error: "app not found"}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, reason} ->
+          {500, %{error: "application delivery failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_package_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, :not_found} ->
+          {404, %{error: "app not found"}}
+
+        {:error, {:application_not_found, path}} ->
+          {404, %{error: "app not found", path: path}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, {:unsupported_manifest_format, detail}} ->
+          {422, %{error: "unsupported application manifest format", detail: detail}}
+
+        {:error, {:invalid_application_package, detail}} ->
+          {422, %{error: "invalid application package", detail: detail}}
+
+        {:error, reason} ->
+          {500, %{error: "application package failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_install_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, {:application_package_not_found, package_id}} ->
+          {404, %{error: "application package not found", package_id: package_id}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, {:unsupported_manifest_format, detail}} ->
+          {422, %{error: "unsupported application manifest format", detail: detail}}
+
+        {:error, {:invalid_application_package, detail}} ->
+          {422, %{error: "invalid application package", detail: detail}}
+
+        {:error, reason} ->
+          {500, %{error: "application install failed", detail: inspect(reason)}}
       end
 
     conn
@@ -1466,6 +2016,9 @@ defmodule Mitos.Web.Router do
 
   defp map_or_empty(%{} = map), do: map
   defp map_or_empty(_), do: %{}
+
+  defp list_or_empty(values) when is_list(values), do: values
+  defp list_or_empty(_values), do: []
 
   defp buyer_workspace_from_body(body) do
     body = map_or_empty(body)
@@ -1540,6 +2093,13 @@ defmodule Mitos.Web.Router do
 
   defp maybe(opts, _key, nil), do: opts
   defp maybe(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp nonempty_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp nonempty_string(_value), do: nil
 
   @steer_interactions %{
     "approve" => :approve,

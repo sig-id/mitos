@@ -293,6 +293,29 @@ The pool is a `fold` over Task-lifecycle Effect events; `task.status` (queue) is
 from `run.status` (execution). Pools + disciplines, the dependency graph, invoke/subtasks,
 sources/connectors, and the drainer are specified in `06`.
 
+### 8.8 Application manifest (skeleton — elaborated in `12`)
+
+The **application** is the shipping unit: a bundle of pipelines + the capabilities
+they reference + this manifest. It *references* the contracts above; it MUST NOT
+redefine their fields. No secrets ever appear in it.
+
+```
+ApplicationManifest {
+  name, version
+  capabilities : [ {ref: <capability_ref|path>, as: <alias>} ]   # pinned atoms (§8.3, identity §03 §9)
+  pipelines    : [ {id, file} ]                                  # markdown pipelines (04 §8)
+  entrypoints  : [ {id, pipeline, title?, inputs:{schema}, workspace: repo|dataset|none, defaults?} ]
+  io           : { inputs: [...], outputs: [...] }               # DEFAULT bindings (10 §4); tenant overrides at install
+  services     : { requires: [...], wants: [...], units?: [...] } # composition root (06 §9–10)
+  requirements : { harnesses, connectors, egress, trust_tier, resources }  # install-time transparency (authority stays per-cap)
+}
+# identity (immutable, replayable — mirrors 03 §9):
+#   app_id = H( canonical(manifest) ‖ sorted(capability_id …) ‖ sorted(pipeline_sha256 …) )
+```
+
+A user **runs a pipeline** named by an `entrypoint`, never a bare capability; an
+entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
+
 ---
 
 ## 9. Glossary
@@ -315,7 +338,8 @@ sources/connectors, and the drainer are specified in `06`.
 - **Work pool / Pool** — the durable container of Tasks. A *pool* names only the container; **how a Task is picked is a separate, pluggable `discipline`** — a pool is *not* a queue (FIFO is one discipline). (`06` §2)
 - **Discipline** — how the drainer selects the next Task from a pool: `fifo | lifo | priority | weighted-fair | deadline | agent-pick | custom`. (`06` §2)
 - **Subtask** — a child Task a capability spawns mid-run via the governed `invoke` affordance; its result returns to the parent (which parks). A full sandboxed/metered Task — unlike an opaque harness sub-agent. (`06` §5)
-- **Agentic application** — the shipping unit: a bundle of one or more *pipelines* + the *capabilities* they reference + an app manifest (entry pipelines, I/O bindings, service defaults), packaged as OCI. A user **runs a pipeline**, never a bare capability. (`11` §2)
+- **Agentic application** — the shipping unit: a bundle of one or more *pipelines* + the *capabilities* they reference + an application manifest (§8.8: entrypoints, I/O bindings, service defaults), packaged as OCI. A user **runs a pipeline**, never a bare capability. (`12`; user-facing framing `11` §2)
+- **Entrypoint** — a pipeline an application exposes as runnable, with an input schema; maps onto a Task (§8.7) at run time. (`12` §4)
 - **Connector** — a platform-level **ingress** adapter that normalizes an external signal (chat/email/calendar/webhook/event, the dev trackers kanban-md/GitHub/Linear, or the web app) into a Task/trigger; the pool is the source of truth. (`06` §6, generalized in `10` §3)
 - **Sink** — a control-plane **egress** adapter that delivers a run's outcome (notify/deliver/reply/web) after harvest, reading the event log + artifacts. NOT the in-sandbox egress broker (`05` §5.3). (`10` §5)
 - **I/O plane** — the layer that gives mitos a world-facing input/output: connectors in, sinks out, the web app as one of each. (`10`)
@@ -353,3 +377,4 @@ sources/connectors, and the drainer are specified in `06`.
 | `09_IMPLEMENTATION_PLAN` | Phased build on BEAM+Zig, reuse map, sequencing |
 | `10_IO_PLANE` | **I/O plane**: connectors (ingress: chat/email/calendar/webhook/event/web), sinks (egress: notify/deliver/reply/web), application I/O bindings; distinct from the in-sandbox broker (`05`) |
 | `11_FRONTEND` | **Frontend product spec**: app⊃pipeline⊃capability hierarchy, three surfaces (Run & Watch two-zoom · Build & Test · Fleet), CLI/web primacy, packaging lifecycle |
+| `12_APPLICATION` | **Application packaging & manifest** (`§8.8`): capabilities/pipelines/entrypoints, input→Task mapping, ship-vs-bind I/O defaults, composition root, `app_id` identity, OCI bundling |

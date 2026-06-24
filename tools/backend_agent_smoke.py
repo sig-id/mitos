@@ -42,25 +42,62 @@ def main() -> int:
     root = pathlib.Path(tempfile.mkdtemp(prefix="mitos-backend-smoke-"))
     try:
         workloads = root / "workloads"
+        apps = root / "apps"
+        app_package = apps / "backend-smoke-app"
+        packages = root / "packages"
         traces = root / "traces"
         package = workloads
         (package / "tools").mkdir(parents=True)
         (package / "data").mkdir(parents=True)
+        (package / "pipelines").mkdir(parents=True)
+        apps.mkdir(parents=True)
+        packages.mkdir(parents=True)
         traces.mkdir(parents=True)
 
         write_package(package)
+        shutil.copytree(package, app_package)
         with RemoteProviderStub() as remote:
-            result = run_backend(workloads, traces, remote.endpoint)
+            result = run_backend(workloads, apps, packages, traces, remote.endpoint)
             assert result["skill_missing"] is True
             assert result["skill_invalid"] is True
             assert result["data_missing"] is True
             assert result["secret_env_rejected"] is True
+            assert result["capability_ref"].startswith("cap:sha256:")
+            assert result["capability_identity_changes"] is True
+            verify_api_route(result["api_route"])
+            verify_app_run(result["app_run"])
+            verify_app_chain(result["app_chain"])
+            verify_app_route(result["app_route"])
+            verify_app_signal(result["app_signal"])
+            verify_app_activation(result["app_activation"])
+            verify_app_package(result["app_package"])
+            verify_app_install(result["app_install"])
+            verify_installed_app_run(result["installed_app_run"])
+            verify_installed_app_signal(result["installed_app_signal"])
             verify_remote_provider(result["remote"], remote.requests)
+            verify_paid_route(result["paid_route"], remote.requests)
+            verify_remote_timeout(result["remote_timeout"], remote.requests)
             verify_remote_missing_key(result["remote_missing_key"])
             verify_remote_cleanup(result["remote_cleanup"])
             verify_broker(result["broker"])
 
         verify_trace(traces, result["run_id"])
+        verify_trace(traces, result["api_route"]["run_id"])
+        verify_trace(traces, result["app_run"]["step_run_id"])
+        verify_app_trace(traces, result["app_run"])
+        verify_trace(traces, result["app_chain"]["first_step_run_id"])
+        verify_app_trace(traces, result["app_chain"])
+        verify_trace(traces, result["app_route"]["step_run_id"])
+        verify_app_trace(traces, result["app_route"])
+        verify_trace(traces, result["app_signal"]["step_run_id"])
+        verify_app_trace(traces, result["app_signal"])
+        verify_app_signal_trace(traces, result["app_signal"])
+        verify_trace(traces, result["installed_app_run"]["step_run_id"])
+        verify_app_trace(traces, result["installed_app_run"])
+        verify_trace(traces, result["installed_app_signal"]["step_run_id"])
+        verify_app_trace(traces, result["installed_app_signal"])
+        verify_paid_trace(traces, result["paid_route"]["run_id"])
+        verify_remote_timeout_trace(traces, result["remote_timeout"]["run_id"])
         verify_provider_trace(traces, result["provider_session_id"], result["provider_events"])
         print(json.dumps({"ok": True, "run_id": result["run_id"], "trace_dir": str(traces)}))
         return 0
@@ -168,6 +205,111 @@ pathlib.Path("RESULT").write_text(json.dumps({
     }
     (package / "backend-smoke.json").write_text(json.dumps(workload), encoding="utf-8")
 
+    review_workload = {
+        "provider": "fake",
+        "template": "Review {{objective}} after {{previous_results}}",
+        "transport_order": ["stdio-json"],
+        "timeout_ms": 30000,
+        "capability": {
+            "name": "backend-review",
+            "harnesses": ["fake"],
+            "trust_tier": "T1",
+        },
+    }
+    (package / "backend-review.json").write_text(json.dumps(review_workload), encoding="utf-8")
+
+    (package / "pipelines" / "backend-app.md").write_text(
+        """# Pipeline: backend-app
+
+Goal: run the backend smoke capability through an application entrypoint.
+
+## Stages
+1. **backend-smoke** - execute the local SKILL/TOOLS/DATA capability.
+""",
+        encoding="utf-8",
+    )
+
+    (package / "pipelines" / "backend-chain.md").write_text(
+        """# Pipeline: backend-chain
+
+Goal: run a two-step backend application pipeline.
+
+## Stages
+1. **backend-smoke** - execute the local SKILL/TOOLS/DATA capability.
+2. **backend-review** - inspect the previous capability result.
+""",
+        encoding="utf-8",
+    )
+
+    app_manifest = {
+        "name": "backend-smoke-app",
+        "version": "1.0.0",
+        "capabilities": [
+            {"ref": "backend-smoke.json", "as": "backend-smoke"},
+            {"ref": "backend-review.json", "as": "backend-review"},
+        ],
+        "pipelines": [
+            {"id": "backend-app", "file": "pipelines/backend-app.md"},
+            {
+                "id": "backend-chain",
+                "file": "pipelines/backend-chain.md",
+                "requires": {"services": ["chain-audit"]},
+            },
+        ],
+        "entrypoints": [
+            {
+                "id": "backend",
+                "pipeline": "backend-app",
+                "title": "Backend smoke app",
+                "workspace": "none",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["objective"],
+                        "additionalProperties": False,
+                        "properties": {"objective": {"type": "string"}},
+                    }
+                },
+                "defaults": {"budget": {"usd": 1, "wall_ms": 30000}},
+            },
+            {
+                "id": "chain",
+                "pipeline": "backend-chain",
+                "title": "Backend smoke chain",
+                "workspace": "none",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["objective"],
+                        "additionalProperties": False,
+                        "properties": {"objective": {"type": "string"}},
+                    }
+                },
+                "defaults": {"budget": {"usd": 1, "wall_ms": 30000}},
+            }
+        ],
+        "io": {
+            "inputs": [
+                {
+                    "entrypoint": "backend",
+                    "connector": "webhook",
+                    "path": "/apps/backend-smoke/runs",
+                    "select": {"mode": "explicit", "pipeline": "backend-app"},
+                }
+            ],
+            "outputs": [
+                {
+                    "entrypoint": "backend",
+                    "sink": "web",
+                    "on": "run.done",
+                    "render": "result.summary + artifacts",
+                }
+            ],
+        },
+        "services": {"requires": ["backend-runner"], "wants": ["usage-meter"]},
+    }
+    (package / "app.json").write_text(json.dumps(app_manifest), encoding="utf-8")
+
     missing_skill_workload = {
         "provider": "fake",
         "template": "missing skill {{objective}}",
@@ -244,6 +386,27 @@ Only rules.
         json.dumps(secret_env_workload), encoding="utf-8"
     )
 
+    bad_egress_workload = {
+        "provider": "fake",
+        "template": "bad egress {{objective}}",
+        "timeout_ms": 30000,
+        "capability": {
+            "name": "backend-smoke-bad-egress",
+            "harnesses": ["fake"],
+            "trust_tier": "T1",
+            "egress_policy": [
+                {
+                    "dest": "api.provider.test",
+                    "requires_approval": True,
+                }
+            ],
+            "result": {"path": "RESULT"},
+        },
+    }
+    (package / "bad-egress-smoke.json").write_text(
+        json.dumps(bad_egress_workload), encoding="utf-8"
+    )
+
     remote_cleanup_workload = {
         "provider": "fake",
         "template": "remote cleanup {{objective}}",
@@ -257,6 +420,21 @@ Only rules.
     }
     (package / "remote-cleanup-smoke.json").write_text(
         json.dumps(remote_cleanup_workload), encoding="utf-8"
+    )
+
+    remote_timeout_workload = {
+        "provider": "fake",
+        "template": "remote timeout {{objective}}",
+        "timeout_ms": 50,
+        "capability": {
+            "name": "backend-smoke-remote-timeout",
+            "harnesses": ["fake"],
+            "trust_tier": "T2",
+            "result": {"path": "RESULT"},
+        },
+    }
+    (package / "remote-timeout-smoke.json").write_text(
+        json.dumps(remote_timeout_workload), encoding="utf-8"
     )
 
     remote_missing_key_workload = {
@@ -282,11 +460,416 @@ Only rules.
         json.dumps(remote_missing_key_workload), encoding="utf-8"
     )
 
+    paid_route_workload = {
+        "provider": "fake",
+        "template": "paid route {{objective}}",
+        "seller_id": "py-seller",
+        "timeout_ms": 30000,
+        "pricing": {
+            "type": "flat",
+            "amount_usdc": "2.50",
+            "take_rate_bps": 1500,
+            "take_floor_usdc": "0.01",
+            "payout_address": "usdc:seller:smoke",
+        },
+        "capability": {
+            "name": "backend-smoke-paid-route",
+            "harnesses": ["fake"],
+            "trust_tier": "T1",
+            "result": {"path": "RESULT"},
+        },
+    }
+    (package / "paid-route-smoke.json").write_text(
+        json.dumps(paid_route_workload), encoding="utf-8"
+    )
 
-def run_backend(workloads: pathlib.Path, traces: pathlib.Path, remote_endpoint: str) -> dict[str, Any]:
+
+def run_backend(
+    workloads: pathlib.Path,
+    apps: pathlib.Path,
+    packages: pathlib.Path,
+    traces: pathlib.Path,
+    remote_endpoint: str,
+) -> dict[str, Any]:
     code = """
 {:ok, workload} = Mitos.Workload.fetch("backend-smoke")
+capability_ref = workload.capability.id
 {:ok, result} = Mitos.Workload.Runner.execute(workload, %{"objective" => "from python"})
+
+api_conn =
+  Plug.Test.conn(
+    :post,
+    "/workloads/backend-smoke/execute",
+    Jason.encode!(%{
+      schema_id: "gentix.provider_execution_request",
+      schema_version: 1,
+      task: %{
+        task_id: "backend-smoke-api",
+        objective: "from backend route",
+        expected_output: "ship result"
+      },
+      capability: %{capability_id: capability_ref},
+      request: %{}
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = api_conn.status == 200
+api_body = Jason.decode!(api_conn.resp_body)
+true = get_in(api_body, ["deliverable", "result", "signal"]) == "ship"
+true = String.contains?(api_body["deliverable_summary"], "overlay=True")
+true = String.starts_with?(api_body["execution_id"], "wl-")
+false = String.contains?(inspect(api_body), "FAKE_FINAL")
+
+{:ok, app_result} =
+  Mitos.AppRunner.run(
+    System.fetch_env!("MITOS_WORKLOADS_DIR"),
+    "backend",
+    %{"objective" => "from app"},
+    task_id: "backend-app-smoke",
+    trace_base_dir: System.fetch_env!("MITOS_TRACE_DIR"),
+    tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"},
+    source: "manual"
+  )
+
+true = app_result["status"] == "completed"
+true = app_result["app_id"] |> String.starts_with?("app:sha256:")
+true = app_result["app_run_id"] |> String.starts_with?("app-")
+true = app_result["deliverable_summary"] |> String.contains?("overlay=True")
+true = Enum.map(app_result["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["web"]
+true = Enum.map(app_result["deliveries"], &get_in(&1, ["receipt", "status"])) == ["sent"]
+[app_step] = app_result["pipeline"]["steps"]
+true = app_step["capability_id"] == "backend-smoke"
+true = app_step["run_id"] |> String.starts_with?("wl-")
+
+{:ok, app_chain_result} =
+  Mitos.AppRunner.run(
+    System.fetch_env!("MITOS_WORKLOADS_DIR"),
+    "chain",
+    %{"objective" => "from chain"},
+    task_id: "backend-chain-smoke",
+    trace_base_dir: System.fetch_env!("MITOS_TRACE_DIR"),
+    tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"},
+    source: "manual"
+  )
+
+true = app_chain_result["status"] == "completed"
+true = app_chain_result["app_id"] == app_result["app_id"]
+true = app_chain_result["app_run_id"] |> String.starts_with?("app-")
+true = app_chain_result["pipeline_id"] == "backend-chain"
+true = Enum.map(app_chain_result["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["web"]
+[app_chain_first_step, app_chain_second_step] = app_chain_result["pipeline"]["steps"]
+true = app_chain_first_step["capability_id"] == "backend-smoke"
+true = app_chain_second_step["capability_id"] == "backend-review"
+true = app_chain_second_step["summary"] |> String.contains?("data_write_denied=True")
+true = app_chain_first_step["run_id"] |> String.starts_with?("wl-")
+true = app_chain_second_step["run_id"] |> String.starts_with?("wl-")
+
+apps_conn = Plug.Test.conn(:get, "/apps") |> Mitos.Web.Router.call([])
+true = apps_conn.status == 200
+apps_body = Jason.decode!(apps_conn.resp_body)
+true = apps_body["totals"]["apps"] == 1
+true = hd(apps_body["apps"])["id"] == "backend-smoke-app"
+
+app_get_conn = Plug.Test.conn(:get, "/apps/backend-smoke-app") |> Mitos.Web.Router.call([])
+true = app_get_conn.status == 200
+app_get_body = Jason.decode!(app_get_conn.resp_body)
+true = get_in(app_get_body, ["app", "name"]) == "backend-smoke-app"
+true = get_in(app_get_body, ["app", "app_id"]) |> String.starts_with?("app:sha256:")
+
+service_units = [
+  %{
+    id: "backend-runner",
+    scope: "project",
+    schedule: %{type: "manual"},
+    execution: %{type: "pipeline", pipeline: "backend-app"}
+  },
+  %{
+    id: "usage-meter",
+    scope: "project",
+    schedule: %{type: "interval", every_ms: 60_000},
+    execution: %{type: "pipeline", pipeline: "backend-app"}
+  },
+  %{
+    id: "chain-audit",
+    scope: "project",
+    schedule: %{type: "manual"},
+    execution: %{type: "pipeline", pipeline: "backend-chain"}
+  }
+]
+
+app_activation_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/activations",
+    Jason.encode!(%{units: service_units})
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_activation_conn.status == 200
+app_activation_body = Jason.decode!(app_activation_conn.resp_body)["activation"]
+true = app_activation_body["app_id"] == get_in(app_get_body, ["app", "app_id"])
+true = get_in(app_activation_body, ["services", "target", "requires"]) == ["backend-runner"]
+true = get_in(app_activation_body, ["services", "target", "wants"]) == ["usage-meter"]
+true = get_in(app_activation_body, ["services", "missing_wants"]) == []
+app_activation_active = get_in(app_activation_body, ["services", "active_set", "active"])
+true = Map.has_key?(app_activation_active, "backend-runner")
+true = Map.has_key?(app_activation_active, "usage-meter")
+true = Map.has_key?(app_activation_active, "chain-audit")
+true = "#{app_activation_body["app_id"]} (requires)" in app_activation_active["backend-runner"]["why"]
+true = "#{app_activation_body["app_id"]} (wants)" in app_activation_active["usage-meter"]["why"]
+true = "pipeline:backend-chain (requires)" in app_activation_active["chain-audit"]["why"]
+true = get_in(app_activation_body, ["io", "defaults_applied?"]) == false
+true = Enum.map(get_in(app_activation_body, ["io", "inputs"]), & &1["connector"]) == ["webhook"]
+true = Enum.map(get_in(app_activation_body, ["io", "outputs"]), & &1["sink"]) == ["web"]
+
+app_activation_missing_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/activations",
+    Jason.encode!(%{units: []})
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_activation_missing_conn.status == 422
+app_activation_missing_body = Jason.decode!(app_activation_missing_conn.resp_body)
+true = app_activation_missing_body["error"] == "application activation failed"
+true = app_activation_missing_body["detail"] == "missing required service backend-runner"
+
+app_route_invalid_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/entrypoints/backend/runs",
+    Jason.encode!(%{inputs: %{}})
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_route_invalid_conn.status == 422
+
+app_route_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/entrypoints/backend/runs",
+    Jason.encode!(%{
+      inputs: %{objective: "from app route"},
+      task: %{task_id: "backend-app-route"},
+      tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"}
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_route_conn.status == 200
+app_route_body = Jason.decode!(app_route_conn.resp_body)
+true = app_route_body["status"] == "completed"
+true = app_route_body["app_id"] == get_in(app_get_body, ["app", "app_id"])
+true = app_route_body["app_run_id"] |> String.starts_with?("app-")
+true = app_route_body["deliverable_summary"] |> String.contains?("overlay=True")
+true = Enum.map(app_route_body["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["web"]
+[app_route_step] = app_route_body["pipeline"]["steps"]
+true = app_route_step["capability_id"] == "backend-smoke"
+true = app_route_step["run_id"] |> String.starts_with?("wl-")
+
+app_signal_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/connectors/webhook/signals",
+    Jason.encode!(%{
+      path: "/apps/backend-smoke/runs",
+      delivery_id: "py-webhook-1",
+      reply_ref: "py-thread-1",
+      inputs: %{objective: "from webhook app route"},
+      task: %{task_id: "backend-app-webhook"},
+      tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"}
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_signal_conn.status == 200
+app_signal_body = Jason.decode!(app_signal_conn.resp_body)
+true = app_signal_body["status"] == "completed"
+true = app_signal_body["connector"] == "webhook"
+true = app_signal_body["entrypoint"] == "backend"
+true = app_signal_body["task_id"] == "backend-app-webhook"
+true = get_in(app_signal_body, ["io_binding", "path"]) == "/apps/backend-smoke/runs"
+true = app_signal_body["app_id"] == get_in(app_get_body, ["app", "app_id"])
+true = app_signal_body["app_run_id"] |> String.starts_with?("app-")
+true = app_signal_body["deliverable_summary"] |> String.contains?("overlay=True")
+true = Enum.map(app_signal_body["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["web"]
+[app_signal_step] = app_signal_body["pipeline"]["steps"]
+true = app_signal_step["capability_id"] == "backend-smoke"
+true = app_signal_step["run_id"] |> String.starts_with?("wl-")
+
+app_signal_duplicate_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/connectors/webhook/signals",
+    Jason.encode!(%{
+      path: "/apps/backend-smoke/runs",
+      delivery_id: "py-webhook-1",
+      reply_ref: "py-thread-redelivery",
+      inputs: %{objective: "from webhook app route redelivery"},
+      task: %{task_id: "backend-app-webhook-redelivery"},
+      tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"}
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_signal_duplicate_conn.status == 200
+app_signal_duplicate_body = Jason.decode!(app_signal_duplicate_conn.resp_body)
+true = app_signal_duplicate_body["duplicate?"] == true
+true = app_signal_duplicate_body["app_run_id"] == app_signal_body["app_run_id"]
+true = app_signal_duplicate_body["task_id"] == app_signal_body["task_id"]
+true = app_signal_duplicate_body["deliverable_summary"] == app_signal_body["deliverable_summary"]
+true = not String.contains?(app_signal_duplicate_body["deliverable_summary"], "redelivery")
+
+app_signal_redrive_conn =
+  Plug.Test.conn(
+    :post,
+    "/app-runs/#{app_signal_body["app_run_id"]}/deliveries/redrive",
+    Jason.encode!(%{})
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_signal_redrive_conn.status == 200
+app_signal_redrive_body = Jason.decode!(app_signal_redrive_conn.resp_body)["redrive"]
+true = app_signal_redrive_body["app_run_id"] == app_signal_body["app_run_id"]
+true = app_signal_redrive_body["task_id"] == app_signal_body["task_id"]
+true = app_signal_redrive_body["idempotent?"] == true
+true = app_signal_redrive_body["effects_appended"] == 0
+true = app_signal_redrive_body["new_deliveries"] == 0
+true = Enum.map(app_signal_redrive_body["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["web"]
+
+app_package_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-app/packages",
+    Jason.encode!(%{package_id: "backend-smoke-release", tag: "backend-smoke-1"})
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_package_conn.status == 201
+app_package_body = Jason.decode!(app_package_conn.resp_body)["package"]
+true = app_package_body["package_id"] == "backend-smoke-release"
+true = app_package_body["app_id"] |> String.starts_with?("app:sha256:")
+true = app_package_body["app_id"] != app_route_body["app_id"]
+true = get_in(app_package_body, ["app", "app_id"]) == app_route_body["app_id"]
+true = app_package_body["manifest_digest"] |> String.starts_with?("sha256:")
+true = File.regular?(Path.join(app_package_body["layout_dir"], "oci-layout"))
+true = File.regular?(Path.join(app_package_body["layout_dir"], "index.json"))
+
+app_install_conn =
+  Plug.Test.conn(
+    :post,
+    "/app-packages/backend-smoke-release/install",
+    Jason.encode!(%{
+      install_id: "backend-smoke-installed",
+      tag: "backend-smoke-1",
+      app_id: app_package_body["app_id"],
+      available_connectors: ["webhook"],
+      available_sinks: ["reply"],
+      io: %{
+        inputs: [
+          %{
+            entrypoint: "backend",
+            connector: "webhook",
+            path: "/apps/backend-smoke/installed-runs",
+            select: %{mode: "explicit", pipeline: "backend-app"}
+          }
+        ],
+        outputs: [
+          %{
+            entrypoint: "backend",
+            sink: "reply",
+            on: "run.done",
+            reply_to: "input.reply_ref"
+          }
+        ]
+      }
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = app_install_conn.status == 201
+app_install_body = Jason.decode!(app_install_conn.resp_body)["install"]
+true = app_install_body["package_id"] == "backend-smoke-release"
+true = app_install_body["install_id"] == "backend-smoke-installed"
+true = app_install_body["app_id"] == app_package_body["app_id"]
+true = app_install_body["app_dir"] |> String.ends_with?("/backend-smoke-installed")
+true = get_in(app_install_body, ["app", "app_id"]) == app_package_body["app_id"]
+true =
+  get_in(app_install_body, ["app", "capabilities"])
+  |> Enum.all?(fn %{"ref" => ref} -> String.starts_with?(ref, "cap:sha256:") end)
+true = app_install_body["bindings_applied?"] == true
+true = get_in(app_install_body, ["app", "io", "inputs"]) |> hd() |> Map.get("path") == "/apps/backend-smoke/installed-runs"
+true = get_in(app_install_body, ["app", "io", "outputs"]) |> hd() |> Map.get("sink") == "reply"
+
+installed_app_run_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-installed/entrypoints/backend/runs",
+    Jason.encode!(%{
+      inputs: %{objective: "from installed app"},
+      reply_ref: "py-installed-thread-1",
+      task: %{task_id: "backend-installed-route"},
+      tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"}
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = installed_app_run_conn.status == 200
+installed_app_run_body = Jason.decode!(installed_app_run_conn.resp_body)
+true = installed_app_run_body["app_id"] == app_package_body["app_id"]
+true = installed_app_run_body["status"] == "completed"
+true = installed_app_run_body["deliverable_summary"] |> String.contains?("overlay=True")
+true = Enum.map(installed_app_run_body["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["reply"]
+true = Enum.map(installed_app_run_body["deliveries"], &get_in(&1, ["receipt", "destination"])) == ["py-installed-thread-1"]
+[installed_app_step] = installed_app_run_body["pipeline"]["steps"]
+true = installed_app_step["capability_id"] == "backend-smoke"
+true = installed_app_step["run_id"] |> String.starts_with?("wl-")
+
+installed_app_signal_conn =
+  Plug.Test.conn(
+    :post,
+    "/apps/backend-smoke-installed/connectors/webhook/signals",
+    Jason.encode!(%{
+      path: "/apps/backend-smoke/installed-runs",
+      delivery_id: "py-installed-webhook-1",
+      reply_ref: "py-installed-thread-2",
+      inputs: %{objective: "from installed connector"},
+      task: %{task_id: "backend-installed-webhook"},
+      tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"}
+    })
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = installed_app_signal_conn.status == 200
+installed_app_signal_body = Jason.decode!(installed_app_signal_conn.resp_body)
+true = installed_app_signal_body["app_id"] == app_package_body["app_id"]
+true = installed_app_signal_body["status"] == "completed"
+true = installed_app_signal_body["task_id"] == "backend-installed-webhook"
+true = get_in(installed_app_signal_body, ["io_binding", "path"]) == "/apps/backend-smoke/installed-runs"
+true = Enum.map(installed_app_signal_body["deliveries"], &get_in(&1, ["receipt", "sink"])) == ["reply"]
+true = Enum.map(installed_app_signal_body["deliveries"], &get_in(&1, ["receipt", "destination"])) == ["py-installed-thread-2"]
+[installed_app_signal_step] = installed_app_signal_body["pipeline"]["steps"]
+true = installed_app_signal_step["capability_id"] == "backend-smoke"
+true = installed_app_signal_step["run_id"] |> String.starts_with?("wl-")
+
+skill_path = Path.join(System.fetch_env!("MITOS_WORKLOADS_DIR"), "skill.md")
+File.write!(skill_path, File.read!(skill_path) <> "\\n<!-- identity smoke change -->\\n")
+{:ok, changed_identity_workload} = Mitos.Workload.fetch("backend-smoke")
+true = changed_identity_workload.capability.id != capability_ref
 
 {:ok, missing_skill_workload} = Mitos.Workload.fetch("missing-skill-smoke")
 {:error, {:runtime_prepare_failed, {:skill_unavailable, "missing.md", :enoent}}} =
@@ -305,6 +888,11 @@ def run_backend(workloads: pathlib.Path, traces: pathlib.Path, remote_endpoint: 
 
 {:error, {:invalid_workload, "capability workloads must not use env_passthrough"}} =
   Mitos.Workload.fetch("secret-env-smoke")
+
+{:error,
+ {:invalid_workload,
+  "invalid capability manifest: egress_policy entries require credential or credential_id"}} =
+  Mitos.Workload.fetch("bad-egress-smoke")
 
 provider_session_id = "py-provider-" <> Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
 {:ok, handle} = Mitos.SandboxProvider.LocalSidecar.prepare(%{
@@ -363,6 +951,66 @@ remote_events = Mitos.SandboxProvider.RemoteMicrovm.stream(remote_session) |> En
 {:ok, remote_snapshot} = Mitos.SandboxProvider.RemoteMicrovm.snapshot(remote_session)
 {:ok, remote_harvest} = Mitos.SandboxProvider.RemoteMicrovm.harvest(remote_session)
 :ok = Mitos.SandboxProvider.RemoteMicrovm.stop(remote_session)
+
+{:ok, remote_timeout_workload} = Mitos.Workload.fetch("remote-timeout-smoke")
+{:error, {:timeout, remote_timeout_run_id}} =
+  Mitos.Workload.Runner.execute(remote_timeout_workload, %{"objective" => "from python"})
+remote_timeout_events = Mitos.Trace.read_events(remote_timeout_run_id)
+remote_timeout_fold = Mitos.WorkPool.fold_events(remote_timeout_events)
+[remote_timeout_task | _] = Map.values(remote_timeout_fold["tasks"])
+
+paid_request = %{
+  schema_id: "gentix.provider_execution_request",
+  schema_version: 1,
+  tenant: %{org: "py-buyer", project: "backend-smoke", actor: "python"},
+  buyer_workspace: %{
+    snapshot: "snap://buyer/backend-smoke",
+    mount: "/workspace",
+    ro: true,
+    sha256: "sha256:buyer-backend-smoke"
+  },
+  task: %{task_id: "paid-route-smoke", objective: "paid backend route"},
+  request: %{}
+}
+
+paid_quote_conn =
+  Plug.Test.conn(
+    :post,
+    "/capabilities/paid-route-smoke/runs",
+    Jason.encode!(paid_request)
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Mitos.Web.Router.call([])
+
+true = paid_quote_conn.status == 402
+paid_quote = Jason.decode!(paid_quote_conn.resp_body)
+
+paid_payment =
+  Jason.encode!(%{
+    quote_id: paid_quote["quote_id"],
+    amount_usdc: paid_quote["amount_usdc"],
+    currency: "USDC",
+    pay_to: paid_quote["pay_to"],
+    status: "settled",
+    settlement_tx: "usdc-tx-python-smoke"
+  })
+
+paid_conn =
+  Plug.Test.conn(
+    :post,
+    "/capabilities/paid-route-smoke/runs",
+    Jason.encode!(paid_request)
+  )
+  |> Plug.Conn.put_req_header("content-type", "application/json")
+  |> Plug.Conn.put_req_header("x-payment", paid_payment)
+  |> Mitos.Web.Router.call([])
+
+true = paid_conn.status == 200
+paid_body = Jason.decode!(paid_conn.resp_body)
+true = paid_body["settlement"]["status"] == "settled"
+true = paid_body["settlement"]["settlement_tx"] == "usdc-tx-python-smoke"
+true = get_in(paid_body, ["deliverable", "result", "signal"]) == "ship"
+true = get_in(paid_body, ["evidence", "proof", "metering", "budget_charged_units"]) == 1
 
 missing_id_launch_spec = Map.put(t2_launch_spec, :run_id, "py-remote-missing-id")
 {:ok, missing_id_handle} = Mitos.SandboxProvider.RemoteMicrovm.prepare(missing_id_launch_spec)
@@ -583,6 +1231,147 @@ cleanup_lease_present =
 IO.puts("MITOS_BACKEND_SMOKE " <> Jason.encode!(%{
   run_id: result.run_id,
   summary: result.result,
+  api_route: %{
+    run_id: api_body["execution_id"],
+    status: api_conn.status,
+    signal: get_in(api_body, ["deliverable", "result", "signal"]),
+    summary: api_body["deliverable_summary"],
+    proof_hash: get_in(api_body, ["evidence", "proof", "effect_log_sha256"])
+  },
+  app_run: %{
+    app_id: app_result["app_id"],
+    app_run_id: app_result["app_run_id"],
+    task_id: app_result["task_id"],
+    entrypoint: app_result["entrypoint"],
+    pipeline_id: app_result["pipeline_id"],
+    status: app_result["status"],
+    summary: app_result["deliverable_summary"],
+    deliveries: Enum.map(app_result["deliveries"], &get_in(&1, ["receipt", "sink"])),
+    step_run_id: app_step["run_id"],
+    step_capability_id: app_step["capability_id"]
+  },
+  app_chain: %{
+    app_id: app_chain_result["app_id"],
+    app_run_id: app_chain_result["app_run_id"],
+    task_id: app_chain_result["task_id"],
+    entrypoint: app_chain_result["entrypoint"],
+    pipeline_id: app_chain_result["pipeline_id"],
+    status: app_chain_result["status"],
+    summary: app_chain_result["deliverable_summary"],
+    deliveries: Enum.map(app_chain_result["deliveries"], &get_in(&1, ["receipt", "sink"])),
+    first_step_run_id: app_chain_first_step["run_id"],
+    second_step_run_id: app_chain_second_step["run_id"],
+    first_step_capability_id: app_chain_first_step["capability_id"],
+    second_step_capability_id: app_chain_second_step["capability_id"]
+  },
+  app_route: %{
+    list_status: apps_conn.status,
+    get_status: app_get_conn.status,
+    invalid_status: app_route_invalid_conn.status,
+    run_status: app_route_conn.status,
+    app_id: app_route_body["app_id"],
+    app_run_id: app_route_body["app_run_id"],
+    task_id: app_route_body["task_id"],
+    entrypoint: app_route_body["entrypoint"],
+    pipeline_id: app_route_body["pipeline_id"],
+    status: app_route_body["status"],
+    summary: app_route_body["deliverable_summary"],
+    deliveries: Enum.map(app_route_body["deliveries"], &get_in(&1, ["receipt", "sink"])),
+    step_run_id: app_route_step["run_id"],
+    step_capability_id: app_route_step["capability_id"]
+  },
+  app_signal: %{
+    connector: app_signal_body["connector"],
+    app_id: app_signal_body["app_id"],
+    app_run_id: app_signal_body["app_run_id"],
+    task_id: app_signal_body["task_id"],
+    entrypoint: app_signal_body["entrypoint"],
+    pipeline_id: app_signal_body["pipeline_id"],
+    status: app_signal_body["status"],
+    summary: app_signal_body["deliverable_summary"],
+    deliveries: Enum.map(app_signal_body["deliveries"], &get_in(&1, ["receipt", "sink"])),
+    binding_path: get_in(app_signal_body, ["io_binding", "path"]),
+    step_run_id: app_signal_step["run_id"],
+    step_capability_id: app_signal_step["capability_id"],
+    redelivery_duplicate: app_signal_duplicate_body["duplicate?"],
+    redelivery_app_run_id: app_signal_duplicate_body["app_run_id"],
+    redelivery_task_id: app_signal_duplicate_body["task_id"],
+    redelivery_summary: app_signal_duplicate_body["deliverable_summary"],
+    redrive_idempotent: app_signal_redrive_body["idempotent?"],
+    redrive_effects_appended: app_signal_redrive_body["effects_appended"],
+    redrive_new_deliveries: app_signal_redrive_body["new_deliveries"]
+  },
+  app_activation: %{
+    status: app_activation_conn.status,
+    missing_status: app_activation_missing_conn.status,
+    app_id: app_activation_body["app_id"],
+    active_services: app_activation_active |> Map.keys() |> Enum.sort(),
+    missing_wants: get_in(app_activation_body, ["services", "missing_wants"]),
+    pipeline_requires: get_in(app_activation_body, ["services", "pipeline_requires"]),
+    input_connectors:
+      Enum.map(get_in(app_activation_body, ["io", "inputs"]), fn binding ->
+        binding["connector"]
+      end),
+    output_sinks:
+      Enum.map(get_in(app_activation_body, ["io", "outputs"]), fn binding ->
+        binding["sink"]
+      end),
+    defaults_applied: get_in(app_activation_body, ["io", "defaults_applied?"]),
+    missing_detail: app_activation_missing_body["detail"]
+  },
+  app_package: %{
+    status: app_package_conn.status,
+    package_id: app_package_body["package_id"],
+    app_id: app_package_body["app_id"],
+    dev_app_id: get_in(app_package_body, ["app", "app_id"]),
+    manifest_digest: app_package_body["manifest_digest"],
+    layout_dir: app_package_body["layout_dir"],
+    app_name: get_in(app_package_body, ["app", "name"])
+  },
+  app_install: %{
+    status: app_install_conn.status,
+    package_id: app_install_body["package_id"],
+    install_id: app_install_body["install_id"],
+    app_id: app_install_body["app_id"],
+    app_dir: app_install_body["app_dir"],
+    bindings_applied: app_install_body["bindings_applied?"],
+    input_path: get_in(app_install_body, ["app", "io", "inputs"]) |> hd() |> Map.get("path"),
+    output_sink: get_in(app_install_body, ["app", "io", "outputs"]) |> hd() |> Map.get("sink"),
+    frozen_refs:
+      Enum.map(get_in(app_install_body, ["app", "capabilities"]), fn %{"ref" => ref} -> ref end)
+  },
+  installed_app_run: %{
+    app_id: installed_app_run_body["app_id"],
+    app_run_id: installed_app_run_body["app_run_id"],
+    task_id: installed_app_run_body["task_id"],
+    entrypoint: installed_app_run_body["entrypoint"],
+    pipeline_id: installed_app_run_body["pipeline_id"],
+    status: installed_app_run_body["status"],
+    summary: installed_app_run_body["deliverable_summary"],
+    deliveries: Enum.map(installed_app_run_body["deliveries"], &get_in(&1, ["receipt", "sink"])),
+    destinations:
+      Enum.map(installed_app_run_body["deliveries"], &get_in(&1, ["receipt", "destination"])),
+    step_run_id: installed_app_step["run_id"],
+    step_capability_id: installed_app_step["capability_id"]
+  },
+  installed_app_signal: %{
+    app_id: installed_app_signal_body["app_id"],
+    app_run_id: installed_app_signal_body["app_run_id"],
+    task_id: installed_app_signal_body["task_id"],
+    entrypoint: installed_app_signal_body["entrypoint"],
+    pipeline_id: installed_app_signal_body["pipeline_id"],
+    status: installed_app_signal_body["status"],
+    summary: installed_app_signal_body["deliverable_summary"],
+    deliveries:
+      Enum.map(installed_app_signal_body["deliveries"], &get_in(&1, ["receipt", "sink"])),
+    destinations:
+      Enum.map(installed_app_signal_body["deliveries"], &get_in(&1, ["receipt", "destination"])),
+    binding_path: get_in(installed_app_signal_body, ["io_binding", "path"]),
+    step_run_id: installed_app_signal_step["run_id"],
+    step_capability_id: installed_app_signal_step["capability_id"]
+  },
+  capability_ref: capability_ref,
+  capability_identity_changes: true,
   skill_missing: true,
   skill_invalid: true,
   data_missing: true,
@@ -594,6 +1383,24 @@ IO.puts("MITOS_BACKEND_SMOKE " <> Jason.encode!(%{
     egress_attestation: remote_session.egress_attestation,
     snapshot: remote_snapshot,
     harvest: remote_harvest
+  },
+  paid_route: %{
+    quote_status: paid_quote_conn.status,
+    run_status: paid_conn.status,
+    run_id: paid_body["execution_id"],
+    signal: get_in(paid_body, ["deliverable", "result", "signal"]),
+    settlement_status: paid_body["settlement"]["status"],
+    settlement_tx: paid_body["settlement"]["settlement_tx"],
+    budget_charged_units: get_in(paid_body, ["evidence", "proof", "metering", "budget_charged_units"]),
+    buyer_charge_usdc: paid_body["settlement"]["buyer_charge_usdc"]
+  },
+  remote_timeout: %{
+    run_id: remote_timeout_run_id,
+    task_status: remote_timeout_task["status"],
+    status_reason: remote_timeout_task["status_reason"],
+    lease_present:
+      Application.get_env(:mitos, :key_vault_leases, %{})
+      |> Map.has_key?(remote_timeout_run_id)
   },
   remote_missing_key: %{
     run_id: missing_key_run_id,
@@ -632,6 +1439,8 @@ IO.puts("MITOS_BACKEND_SMOKE " <> Jason.encode!(%{
         {
             "MIX_ENV": "test",
             "MITOS_WORKLOADS_DIR": str(workloads),
+            "MITOS_APPS_DIR": str(apps),
+            "MITOS_APP_PACKAGES_DIR": str(packages),
             "MITOS_TRACE_DIR": str(traces),
             "MITOS_TERM_BIN": str(SIDECAR),
             "MITOS_REMOTE_MICROVM_ENDPOINT": remote_endpoint,
@@ -764,10 +1573,8 @@ def verify_remote_provider(remote: dict[str, Any], requests: list[dict[str, Any]
     assert launch_spec["posture"]["workspace"]["host_bind"] is False
     assert launch_spec["posture"]["data"]["host_bind"] is False
 
-    assert [req["body"]["cursor"] for req in requests if req["path"].endswith("/events")] == [
-        "0",
-        "1",
-    ]
+    event_cursors = [req["body"]["cursor"] for req in requests if req["path"].endswith("/events")]
+    assert event_cursors[:2] == ["0", "1"]
     control = find_request(requests, "POST", "/runs/remote-smoke-1/control")
     assert control["body"]["command"] == {
         "cmd": "steer",
@@ -781,6 +1588,381 @@ def verify_remote_provider(remote: dict[str, Any], requests: list[dict[str, Any]
     assert forward_request["headers"]["authorization"] == "Bearer py-secret"
     assert forward_request["headers"]["x-smoke"] == "python"
     assert forward_request["body"] == {"ping": "pong"}
+
+
+def verify_api_route(api_route: dict[str, Any]) -> None:
+    assert api_route["status"] == 200
+    assert api_route["run_id"].startswith("wl-")
+    assert api_route["signal"] == "ship"
+    assert "overlay=True" in api_route["summary"]
+    assert api_route["proof_hash"].startswith("sha256:")
+
+
+def verify_app_run(app_run: dict[str, Any]) -> None:
+    assert app_run["app_id"].startswith("app:sha256:")
+    assert app_run["app_run_id"].startswith("app-")
+    assert app_run["task_id"] == "backend-app-smoke"
+    assert app_run["entrypoint"] == "backend"
+    assert app_run["pipeline_id"] == "backend-app"
+    assert app_run["status"] == "completed"
+    assert "overlay=True" in app_run["summary"]
+    assert app_run["deliveries"] == ["web"]
+    assert app_run["step_run_id"].startswith("wl-")
+    assert app_run["step_capability_id"] == "backend-smoke"
+
+
+def verify_app_chain(app_chain: dict[str, Any]) -> None:
+    assert app_chain["app_id"].startswith("app:sha256:")
+    assert app_chain["app_run_id"].startswith("app-")
+    assert app_chain["task_id"] == "backend-chain-smoke"
+    assert app_chain["entrypoint"] == "chain"
+    assert app_chain["pipeline_id"] == "backend-chain"
+    assert app_chain["status"] == "completed"
+    assert "data_write_denied=True" in app_chain["summary"]
+    assert app_chain["deliveries"] == ["web"]
+    assert app_chain["first_step_run_id"].startswith("wl-")
+    assert app_chain["second_step_run_id"].startswith("wl-")
+    assert app_chain["first_step_capability_id"] == "backend-smoke"
+    assert app_chain["second_step_capability_id"] == "backend-review"
+
+
+def verify_app_route(app_route: dict[str, Any]) -> None:
+    assert app_route["list_status"] == 200
+    assert app_route["get_status"] == 200
+    assert app_route["invalid_status"] == 422
+    assert app_route["run_status"] == 200
+    assert app_route["app_id"].startswith("app:sha256:")
+    assert app_route["app_run_id"].startswith("app-")
+    assert app_route["task_id"] == "backend-app-route"
+    assert app_route["entrypoint"] == "backend"
+    assert app_route["pipeline_id"] == "backend-app"
+    assert app_route["status"] == "completed"
+    assert "overlay=True" in app_route["summary"]
+    assert app_route["deliveries"] == ["web"]
+    assert app_route["step_run_id"].startswith("wl-")
+    assert app_route["step_capability_id"] == "backend-smoke"
+
+
+def verify_app_signal(app_signal: dict[str, Any]) -> None:
+    assert app_signal["connector"] == "webhook"
+    assert app_signal["app_id"].startswith("app:sha256:")
+    assert app_signal["app_run_id"].startswith("app-")
+    assert app_signal["task_id"] == "backend-app-webhook"
+    assert app_signal["entrypoint"] == "backend"
+    assert app_signal["pipeline_id"] == "backend-app"
+    assert app_signal["status"] == "completed"
+    assert "overlay=True" in app_signal["summary"]
+    assert app_signal["deliveries"] == ["web"]
+    assert app_signal["binding_path"] == "/apps/backend-smoke/runs"
+    assert app_signal["step_run_id"].startswith("wl-")
+    assert app_signal["step_capability_id"] == "backend-smoke"
+    assert app_signal["redelivery_duplicate"] is True
+    assert app_signal["redelivery_app_run_id"] == app_signal["app_run_id"]
+    assert app_signal["redelivery_task_id"] == app_signal["task_id"]
+    assert app_signal["redelivery_summary"] == app_signal["summary"]
+    assert app_signal["redrive_idempotent"] is True
+    assert app_signal["redrive_effects_appended"] == 0
+    assert app_signal["redrive_new_deliveries"] == 0
+
+
+def verify_app_activation(app_activation: dict[str, Any]) -> None:
+    assert app_activation["status"] == 200
+    assert app_activation["missing_status"] == 422
+    assert app_activation["app_id"].startswith("app:sha256:")
+    assert app_activation["active_services"] == [
+        "backend-runner",
+        "chain-audit",
+        "usage-meter",
+    ]
+    assert app_activation["missing_wants"] == []
+    assert app_activation["pipeline_requires"] == [
+        {"pipeline": "backend-chain", "services": ["chain-audit"], "targets": []}
+    ]
+    assert app_activation["input_connectors"] == ["webhook"]
+    assert app_activation["output_sinks"] == ["web"]
+    assert app_activation["defaults_applied"] is False
+    assert app_activation["missing_detail"] == "missing required service backend-runner"
+
+
+def verify_app_package(app_package: dict[str, Any]) -> None:
+    assert app_package["status"] == 201
+    assert app_package["package_id"] == "backend-smoke-release"
+    assert app_package["app_id"].startswith("app:sha256:")
+    assert app_package["dev_app_id"].startswith("app:sha256:")
+    assert app_package["app_id"] != app_package["dev_app_id"]
+    assert app_package["manifest_digest"].startswith("sha256:")
+    assert app_package["app_name"] == "backend-smoke-app"
+
+    layout = pathlib.Path(app_package["layout_dir"])
+    assert json.loads((layout / "oci-layout").read_text(encoding="utf-8")) == {
+        "imageLayoutVersion": "1.0.0"
+    }
+
+    index = json.loads((layout / "index.json").read_text(encoding="utf-8"))
+    assert len(index["manifests"]) == 1
+    manifest = index["manifests"][0]
+    assert manifest["artifactType"] == "application/vnd.mitos.application.v1+json"
+    assert manifest["annotations"]["dev.mitos.app_id"] == app_package["app_id"]
+    assert manifest["annotations"]["org.opencontainers.image.ref.name"] == "backend-smoke-1"
+
+
+def verify_app_install(app_install: dict[str, Any]) -> None:
+    assert app_install["status"] == 201
+    assert app_install["package_id"] == "backend-smoke-release"
+    assert app_install["install_id"] == "backend-smoke-installed"
+    assert app_install["app_id"].startswith("app:sha256:")
+    assert app_install["app_dir"].endswith("/backend-smoke-installed")
+    assert app_install["bindings_applied"] is True
+    assert app_install["input_path"] == "/apps/backend-smoke/installed-runs"
+    assert app_install["output_sink"] == "reply"
+    assert app_install["frozen_refs"]
+    assert all(ref.startswith("cap:sha256:") for ref in app_install["frozen_refs"])
+
+
+def verify_installed_app_run(installed_app_run: dict[str, Any]) -> None:
+    assert installed_app_run["app_id"].startswith("app:sha256:")
+    assert installed_app_run["app_run_id"].startswith("app-")
+    assert installed_app_run["task_id"] == "backend-installed-route"
+    assert installed_app_run["entrypoint"] == "backend"
+    assert installed_app_run["pipeline_id"] == "backend-app"
+    assert installed_app_run["status"] == "completed"
+    assert "overlay=True" in installed_app_run["summary"]
+    assert installed_app_run["deliveries"] == ["reply"]
+    assert installed_app_run["destinations"] == ["py-installed-thread-1"]
+    assert installed_app_run["step_run_id"].startswith("wl-")
+    assert installed_app_run["step_capability_id"] == "backend-smoke"
+
+
+def verify_installed_app_signal(installed_app_signal: dict[str, Any]) -> None:
+    assert installed_app_signal["app_id"].startswith("app:sha256:")
+    assert installed_app_signal["app_run_id"].startswith("app-")
+    assert installed_app_signal["task_id"] == "backend-installed-webhook"
+    assert installed_app_signal["entrypoint"] == "backend"
+    assert installed_app_signal["pipeline_id"] == "backend-app"
+    assert installed_app_signal["status"] == "completed"
+    assert "overlay=True" in installed_app_signal["summary"]
+    assert installed_app_signal["deliveries"] == ["reply"]
+    assert installed_app_signal["destinations"] == ["py-installed-thread-2"]
+    assert installed_app_signal["binding_path"] == "/apps/backend-smoke/installed-runs"
+    assert installed_app_signal["step_run_id"].startswith("wl-")
+    assert installed_app_signal["step_capability_id"] == "backend-smoke"
+
+
+def verify_app_trace(traces: pathlib.Path, app_run: dict[str, Any]) -> None:
+    events = read_jsonl(traces / ".runs" / app_run["app_run_id"] / "events.jsonl")
+    task_done_seq = None
+    expected_sinks = app_run.get("deliveries") or ["web"]
+
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "signal_received"
+        and event.get("ref", {}).get("task_id") == app_run["task_id"]
+        and event.get("payload", {}).get("intake", {}).get("input_keys") == ["objective"]
+        for event in events
+    )
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "task_enqueued"
+        and event.get("payload", {}).get("task", {}).get("provenance", {}).get("app_id")
+        == app_run["app_id"]
+        and event.get("payload", {}).get("task", {}).get("provenance", {}).get("entrypoint")
+        == app_run["entrypoint"]
+        for event in events
+    )
+
+    for event in events:
+        if (
+            event.get("kind") == "effect"
+            and event.get("type") == "task_done"
+            and event.get("ref", {}).get("task_id") == app_run["task_id"]
+        ):
+            task_done_seq = event.get("seq")
+            break
+
+    assert isinstance(task_done_seq, int)
+
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "delivery_attempted"
+        and event.get("ref", {}).get("task_id") == app_run["task_id"]
+        and event.get("ref", {}).get("sink") in expected_sinks
+        and event.get("caused_by") == task_done_seq
+        for event in events
+    )
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "delivery_sent"
+        and event.get("ref", {}).get("task_id") == app_run["task_id"]
+        and event.get("ref", {}).get("sink") in expected_sinks
+        and event.get("caused_by") == task_done_seq
+        and event.get("payload", {}).get("receipt", {}).get("status") == "sent"
+        for event in events
+    )
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "task_done"
+        and event.get("ref", {}).get("task_id") == app_run["task_id"]
+        and event.get("payload", {}).get("status") == "done"
+        and event.get("payload", {}).get("result", {}).get("status") == "completed"
+        for event in events
+    )
+
+
+def verify_app_signal_trace(traces: pathlib.Path, app_signal: dict[str, Any]) -> None:
+    events = read_jsonl(traces / ".runs" / app_signal["app_run_id"] / "events.jsonl")
+
+    signal_events = [
+        event
+        for event in events
+        if event.get("kind") == "effect"
+        and event.get("type") == "signal_received"
+        and event.get("ref", {}).get("connector") == "webhook"
+        and event.get("ref", {}).get("idempotency_key") == "py-webhook-1"
+    ]
+
+    assert len(signal_events) == 1
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "signal_received"
+        and event.get("ref", {}).get("connector") == "webhook"
+        and event.get("ref", {}).get("idempotency_key") == "py-webhook-1"
+        and event.get("ref", {}).get("task_id") == app_signal["task_id"]
+        and event.get("payload", {}).get("intake", {}).get("reply_ref") == "py-thread-1"
+        for event in events
+    )
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "task_enqueued"
+        and event.get("payload", {}).get("task", {}).get("source") == "connector:webhook"
+        for event in events
+    )
+    assert not any(
+        event.get("kind") == "effect"
+        and event.get("type") == "task_enqueued"
+        and event.get("payload", {}).get("task", {}).get("id")
+        == "backend-app-webhook-redelivery"
+        for event in events
+    )
+
+    delivery_sent_events = [
+        event
+        for event in events
+        if event.get("kind") == "effect"
+        and event.get("type") == "delivery_sent"
+        and event.get("ref", {}).get("task_id") == app_signal["task_id"]
+    ]
+    assert len(delivery_sent_events) == 1
+
+
+def verify_paid_route(paid_route: dict[str, Any], requests: list[dict[str, Any]]) -> None:
+    assert paid_route["quote_status"] == 402
+    assert paid_route["run_status"] == 200
+    assert paid_route["run_id"].startswith("wl-")
+    assert paid_route["signal"] == "ship"
+    assert paid_route["settlement_status"] == "settled"
+    assert paid_route["settlement_tx"] == "usdc-tx-python-smoke"
+    assert paid_route["budget_charged_units"] == 1
+    assert paid_route["buyer_charge_usdc"] == "2.500000"
+
+    paid_run_requests = [
+        req
+        for req in requests
+        if req["method"] == "POST"
+        and req["path"] == "/runs"
+        and req["body"]["launch_spec"].get("workspace", {}).get("snapshot")
+        == "snap://buyer/backend-smoke"
+    ]
+    assert len(paid_run_requests) == 1
+
+    paid_launch = paid_run_requests[0]["body"]["launch_spec"]
+    assert paid_launch["trust_tier"] == "T2"
+    assert paid_launch["workspace"] == {
+        "snapshot": "snap://buyer/backend-smoke",
+        "mount": "/workspace",
+        "ro": True,
+        "sha256": "sha256:buyer-backend-smoke",
+    }
+    assert paid_launch["posture"]["net_mode"] == "deny_all_except_broker"
+    assert paid_launch["posture"]["egress"] == "broker"
+    assert paid_run_requests[0]["body"]["env"] == {}
+
+
+def verify_paid_trace(traces: pathlib.Path, run_id: str) -> None:
+    events = read_jsonl(traces / ".runs" / run_id / "events.jsonl")
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "budget_charged"
+        and event.get("ref", {}).get("settlement_tx") == "usdc-tx-python-smoke"
+        for event in events
+    )
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "capability_finished"
+        and event.get("payload", {}).get("result", {}).get("signal") == "ship"
+        for event in events
+    )
+
+
+def verify_remote_timeout(timeout: dict[str, Any], requests: list[dict[str, Any]]) -> None:
+    assert timeout["run_id"].startswith("wl-")
+    assert timeout["task_status"] == "failed"
+    assert "timeout" in timeout["status_reason"]
+    assert timeout["lease_present"] is False
+
+    timeout_run_requests = [
+        req
+        for req in requests
+        if req["method"] == "POST"
+        and req["path"] == "/runs"
+        and req["body"]["launch_spec"].get("task") == "remote timeout from python"
+    ]
+    assert len(timeout_run_requests) == 1
+    assert timeout_run_requests[0]["body"]["env"] == {}
+
+    launch_spec = timeout_run_requests[0]["body"]["launch_spec"]
+    assert launch_spec["trust_tier"] == "T2"
+    assert launch_spec["posture"]["net_mode"] == "deny_all_except_broker"
+    assert launch_spec["posture"]["egress"] == "broker"
+
+    assert any(
+        req["method"] == "POST" and req["path"] == "/runs/remote-timeout-1/events"
+        for req in requests
+    )
+
+    control = find_request(requests, "POST", "/runs/remote-timeout-1/control")
+    assert control["body"]["command"] == {
+        "cmd": "steer",
+        "interaction": "interrupt",
+        "reason": "timeout",
+        "timeout_ms": 50,
+    }
+    assert find_request(requests, "POST", "/runs/remote-timeout-1/harvest")
+    assert find_request(requests, "POST", "/runs/remote-timeout-1/stop")
+
+
+def verify_remote_timeout_trace(traces: pathlib.Path, run_id: str) -> None:
+    events = read_jsonl(traces / ".runs" / run_id / "events.jsonl")
+
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "capability_interrupted"
+        and event.get("payload", {}).get("reason") == "timeout"
+        and event.get("payload", {}).get("timeout_ms") == 50
+        and event.get("payload", {}).get("control", {}).get("status") == "sent"
+        for event in events
+    )
+
+    assert any(
+        event.get("kind") == "effect"
+        and event.get("type") == "capability_finished"
+        and event.get("payload", {}).get("status") == "timeout"
+        and event.get("payload", {}).get("exit_code") is None
+        and event.get("payload", {}).get("harvest", {}).get("result", {}).get("signal")
+        == "ship"
+        and event.get("payload", {}).get("harvest", {}).get("result", {}).get("summary")
+        == "partial timeout smoke"
+        for event in events
+    )
 
 
 def verify_remote_cleanup(cleanup: dict[str, Any]) -> None:
@@ -893,7 +2075,10 @@ class RemoteProviderStub:
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(encoded)))
                 self.end_headers()
-                self.wfile.write(encoded)
+                try:
+                    self.wfile.write(encoded)
+                except BrokenPipeError:
+                    return
 
             def log_message(self, _format: str, *_args: Any) -> None:
                 return
@@ -927,6 +2112,27 @@ class RemoteProviderStub:
             )
 
         if path == "/runs":
+            if body.get("launch_spec", {}).get("task") == "remote timeout from python":
+                return (
+                    200,
+                    {
+                        "run_id": "remote-timeout-1",
+                        "egress_attestation": {
+                            "enforced": True,
+                            "egress": "broker",
+                            "net_mode": "deny_all_except_broker",
+                            "deny_all_else": True,
+                            "host_network": False,
+                            "loopback_bypass": False,
+                            "mechanism": "forced_proxy",
+                            "broker_endpoint": "https://broker.test/proxy",
+                        },
+                        "event_cursor": "0",
+                        "stream_poll_ms": 1,
+                        "stream_max_empty_polls": 10000,
+                    },
+                )
+
             if body.get("launch_spec", {}).get("run_id") == "py-remote-missing-id":
                 return (200, {"events": [{"type": "RUN_STARTED"}]})
 
@@ -952,6 +2158,40 @@ class RemoteProviderStub:
                     "stream_max_empty_polls": 2,
                 },
             )
+
+        if path == "/runs/remote-timeout-1/events":
+            return (
+                200,
+                {
+                    "events": [],
+                    "next_cursor": body.get("cursor") or "0",
+                    "done": False,
+                },
+            )
+
+        if path == "/runs/remote-timeout-1/control":
+            return (200, {"ok": True})
+
+        if path == "/runs/remote-timeout-1/harvest":
+            return (
+                200,
+                {
+                    "harvest": {
+                        "diff": {"empty?": False, "files_changed": ["RESULT"]},
+                        "result": {
+                            "path": "RESULT",
+                            "signal": "ship",
+                            "summary": "partial timeout smoke",
+                        },
+                        "artifacts": [
+                            {"kind": "file", "path": "RESULT", "sha256": "sha256:partial"}
+                        ],
+                    }
+                },
+            )
+
+        if path == "/runs/remote-timeout-1/stop":
+            return (200, {"ok": True})
 
         if path == "/runs/remote-smoke-1/events" and body.get("cursor") == "0":
             return (
