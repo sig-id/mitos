@@ -71,9 +71,11 @@ tenant has explicitly added.
 
 The shared core, for both the casual consumer and the developer testing.
 
-**Journey.** Add an app (§3) → pick one of its **pipelines** → provide intent +
-inputs (the input being the I/O-plane's input side, `10 §3`) → **watch** → receive
-output (the I/O-plane's output side, `10 §5`). For the casual user this is the
+**Journey.** Add an app (§3) → pick one of its **pipelines** → provide the
+three-part input contract (`12 §4`): **workspace** (the repo/dataset ref —
+resolved server-side, so no git login in the browser), **inputs** (the run's
+subject data), and **parameters** (per-run knobs, pre-filled with their defaults)
+→ **watch** → receive output (the I/O-plane's output side, `10 §5`). For the casual user this is the
 whole product: *give intent, watch the orchestrator pull capabilities in and
 work, get a result.*
 

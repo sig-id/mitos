@@ -68,34 +68,40 @@ defmodule Mitos.Web.TerminalSocket do
 
   @impl true
   def websocket_handle({:binary, bytes}, state) do
-    Mitos.Session.write_stdin(state.session_pid, bytes)
-    {[], state}
+    state.session_pid
+    |> Mitos.Session.write_stdin(bytes)
+    |> control_result(state, "stdin")
   end
 
   def websocket_handle({:text, text}, state) do
     case Jason.decode(text) do
       {:ok, %{"type" => "resize", "cols" => cols, "rows" => rows}}
       when is_integer(cols) and is_integer(rows) and cols > 0 and rows > 0 ->
-        Mitos.Session.resize(state.session_pid, cols, rows)
-        {[], state}
+        state.session_pid
+        |> Mitos.Session.resize(cols, rows)
+        |> control_result(state, "resize")
 
       {:ok, %{"type" => "stdin", "bytes" => bytes}} when is_binary(bytes) ->
-        Mitos.Session.write_stdin(state.session_pid, bytes)
-        {[], state}
+        state.session_pid
+        |> Mitos.Session.write_stdin(bytes)
+        |> control_result(state, "stdin")
 
       {:ok, %{"type" => "signal", "signum" => signum}} when is_integer(signum) ->
-        Mitos.Session.signal(state.session_pid, signum)
-        {[], state}
+        state.session_pid
+        |> Mitos.Session.signal(signum)
+        |> control_result(state, "signal")
 
       {:ok, %{"type" => "authorize", "action_id" => action_id, "token" => token}}
       when is_binary(action_id) and is_binary(token) ->
-        Mitos.Session.authorize(state.session_pid, action_id, token)
-        {[], state}
+        state.session_pid
+        |> Mitos.Session.authorize(action_id, token)
+        |> control_result(state, "authorize")
 
       {:ok, %{"type" => "deny", "action_id" => action_id, "reason" => reason}}
       when is_binary(action_id) and is_binary(reason) ->
-        Mitos.Session.deny(state.session_pid, action_id, reason)
-        {[], state}
+        state.session_pid
+        |> Mitos.Session.deny(action_id, reason)
+        |> control_result(state, "deny")
 
       {:ok, %{"type" => "steer", "interaction" => interaction} = msg}
       when is_map_key(@steer_interactions, interaction) ->
@@ -104,8 +110,9 @@ defmodule Mitos.Web.TerminalSocket do
           |> steer_opt(:text, msg["text"])
           |> steer_opt(:option, msg["option"])
 
-        Mitos.Session.steer(state.session_pid, @steer_interactions[interaction], opts)
-        {[], state}
+        state.session_pid
+        |> Mitos.Session.steer(@steer_interactions[interaction], opts)
+        |> control_result(state, "steer")
 
       {:ok, %{"type" => "snapshot"}} ->
         case Mitos.Session.snapshot(state.session_pid, 2_000) do
@@ -148,6 +155,13 @@ defmodule Mitos.Web.TerminalSocket do
 
   @impl true
   def terminate(_reason, _req, _state), do: :ok
+
+  defp control_result(:ok, state, _kind), do: {[], state}
+
+  defp control_result({:error, reason}, state, kind) do
+    event = %{"type" => "ERROR", "kind" => kind, "detail" => inspect(reason)}
+    {[{:text, Jason.encode!(%{type: "event", event: event})}], state}
+  end
 
   defp steer_opt(opts, _key, nil), do: opts
   defp steer_opt(opts, key, value), do: Keyword.put(opts, key, value)

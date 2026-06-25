@@ -14,17 +14,14 @@ defmodule Mitos.Runs do
 
   @doc "Summaries of every run on disk, newest first, with live status merged in."
   def list do
-    runs_dir = Path.join(Mitos.Trace.base_dir(), ".runs")
-
-    case File.ls(runs_dir) do
-      {:ok, entries} ->
-        entries
-        |> Enum.map(&summary(Path.join(runs_dir, &1), &1))
-        |> Enum.reject(&is_nil/1)
-        |> Enum.sort_by(& &1["created_at_ms"], :desc)
-
-      {:error, _} ->
-        []
+    with {:ok, runs_dir} <- trusted_runs_dir(),
+         {:ok, entries} <- File.ls(runs_dir) do
+      entries
+      |> Enum.map(&summary(Path.join(runs_dir, &1), &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort_by(& &1["created_at_ms"], :desc)
+    else
+      _ -> []
     end
   end
 
@@ -33,25 +30,27 @@ defmodule Mitos.Runs do
   #{@max_events} events), and the approvals sidecar.
   """
   def fetch(run_id) when is_binary(run_id) do
-    dir = Path.join([Mitos.Trace.base_dir(), ".runs", run_id])
+    if Mitos.Trace.valid_run_id?(run_id) do
+      with {:ok, dir} <- trusted_run_dir(run_id) do
+        events = read_jsonl(Path.join(dir, "events.jsonl"))
+        approvals = read_jsonl(Path.join(dir, "approvals.jsonl"))
+        manifest = read_manifest(Path.join(dir, "run.yaml"))
+        status_event = status_source(events)
 
-    if safe_id?(run_id) and File.dir?(dir) do
-      events = read_jsonl(Path.join(dir, "events.jsonl"))
-      approvals = read_jsonl(Path.join(dir, "approvals.jsonl"))
-      manifest = read_manifest(Path.join(dir, "run.yaml"))
-      status_event = status_source(events)
-
-      {:ok,
-       %{
-         "run_id" => run_id,
-         "manifest" => manifest,
-         "live" => live?(run_id),
-         "status" => status(run_id, status_event || List.last(events)),
-         "event_count" => length(events),
-         "events" => limit_events(events, @max_events),
-         "approvals" => approvals,
-         "proof" => Mitos.Proof.from_events(events)
-       }}
+        {:ok,
+         %{
+           "run_id" => run_id,
+           "manifest" => manifest,
+           "live" => live?(run_id),
+           "status" => status(run_id, status_event || List.last(events)),
+           "event_count" => length(events),
+           "events" => limit_events(events, @max_events),
+           "approvals" => approvals,
+           "proof" => Mitos.Proof.from_events(events)
+         }}
+      else
+        _ -> {:error, :not_found}
+      end
     else
       {:error, :not_found}
     end
@@ -63,11 +62,13 @@ defmodule Mitos.Runs do
   def events(run_id, opts \\ [])
 
   def events(run_id, opts) when is_binary(run_id) and is_list(opts) do
-    dir = Path.join([Mitos.Trace.base_dir(), ".runs", run_id])
-
-    if safe_id?(run_id) and File.dir?(dir) do
-      events = read_jsonl(Path.join(dir, "events.jsonl"))
-      {:ok, limit_events(events, Keyword.get(opts, :limit, :all))}
+    if Mitos.Trace.valid_run_id?(run_id) do
+      with {:ok, dir} <- trusted_run_dir(run_id) do
+        events = read_jsonl(Path.join(dir, "events.jsonl"))
+        {:ok, limit_events(events, Keyword.get(opts, :limit, :all))}
+      else
+        _ -> {:error, :not_found}
+      end
     else
       {:error, :not_found}
     end
@@ -89,7 +90,7 @@ defmodule Mitos.Runs do
   end
 
   defp summary(dir, run_id) do
-    if File.dir?(dir) do
+    if Mitos.Trace.valid_run_id?(run_id) and regular_dir?(dir) do
       manifest = read_manifest(Path.join(dir, "run.yaml"))
       {event_count, last_event, status_event} = scan_events(Path.join(dir, "events.jsonl"))
       approvals = count_lines(Path.join(dir, "approvals.jsonl"))
@@ -149,7 +150,7 @@ defmodule Mitos.Runs do
   # capability_finished event, so the literal last event is not always the run
   # lifecycle status.
   defp scan_events(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         lines = raw |> String.split("\n", trim: true)
 
@@ -191,7 +192,7 @@ defmodule Mitos.Runs do
   defp status_event?(_event), do: false
 
   defp count_lines(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} -> raw |> String.split("\n", trim: true) |> length()
       {:error, _} -> 0
     end
@@ -205,7 +206,7 @@ defmodule Mitos.Runs do
   defp limit_events(events, _limit), do: events
 
   defp read_jsonl(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         raw
         |> String.split("\n", trim: true)
@@ -224,7 +225,7 @@ defmodule Mitos.Runs do
   # run.yaml is the flat `key: value` manifest Mitos.Trace writes — not
   # arbitrary YAML, so a line parser is the whole contract.
   defp read_manifest(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         raw
         |> String.split("\n", trim: true)
@@ -250,5 +251,71 @@ defmodule Mitos.Runs do
 
   defp int_or_nil(_), do: nil
 
-  defp safe_id?(id), do: Regex.match?(~r/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, id)
+  defp regular_dir?(path), do: match?({:ok, %{type: :directory}}, File.lstat(path))
+
+  defp trusted_runs_dir do
+    with {:ok, base_dir} <- trusted_trace_base_dir(),
+         runs_dir <- Path.join(base_dir, ".runs"),
+         true <- regular_dir?(runs_dir) do
+      {:ok, runs_dir}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp trusted_run_dir(run_id) do
+    with {:ok, runs_dir} <- trusted_runs_dir(),
+         dir <- Path.join(runs_dir, run_id),
+         true <- regular_dir?(dir) do
+      {:ok, dir}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp trusted_trace_base_dir do
+    path = Path.expand(Mitos.Trace.base_dir())
+
+    with true <- regular_dir?(path),
+         true <- no_symlink_absolute_path?(path) do
+      {:ok, path}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 end

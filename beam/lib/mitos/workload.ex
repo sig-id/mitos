@@ -44,6 +44,7 @@ defmodule Mitos.Workload do
     SECRET
     TOKEN
   )
+  @secret_url_query_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
   defstruct [
     :id,
     :provider,
@@ -79,22 +80,21 @@ defmodule Mitos.Workload do
 
   @doc "List all parseable workload definitions in the workloads directory."
   def list do
-    case File.ls(dir()) do
-      {:ok, entries} ->
-        entries
-        |> Enum.filter(&String.ends_with?(&1, ".json"))
-        |> Enum.sort()
-        |> Enum.flat_map(fn file ->
-          id = Path.rootname(file)
+    with {:ok, root} <- trusted_workloads_dir(),
+         {:ok, entries} <- File.ls(root) do
+      entries
+      |> Enum.filter(&String.ends_with?(&1, ".json"))
+      |> Enum.sort()
+      |> Enum.flat_map(fn file ->
+        id = Path.rootname(file)
 
-          case fetch(id) do
-            {:ok, workload} -> [workload]
-            {:error, _} -> []
-          end
-        end)
-
-      {:error, _} ->
-        []
+        case fetch(id) do
+          {:ok, workload} -> [workload]
+          {:error, _} -> []
+        end
+      end)
+    else
+      _error -> []
     end
   end
 
@@ -105,12 +105,15 @@ defmodule Mitos.Workload do
         {:error, :not_found}
 
       true ->
-        path = Path.join(dir(), id <> ".json")
-
-        with {:ok, raw} <- read_file(path),
+        with {:ok, root} <- trusted_workloads_dir(),
+             path <- Path.join(root, id <> ".json"),
+             {:ok, raw} <- read_file(path),
              {:ok, json} <- decode_json(json_source(raw)),
              {:ok, workload} <- from_json(id, json, package_root: Path.dirname(path)) do
           {:ok, workload}
+        else
+          {:error, :workloads_dir_unavailable} -> {:error, :not_found}
+          {:error, _reason} = error -> error
         end
     end
   end
@@ -123,16 +126,18 @@ defmodule Mitos.Workload do
   def from_json(id, %{} = json, opts) do
     provider = json["provider"]
     template = json["template"]
+    defaults = %__MODULE__{id: id, provider: provider, template: template}
 
     with :ok <- require_string(provider, "provider"),
          :ok <- require_string(template, "template"),
+         {:ok, env} <- env_from_json(json["env"], defaults.env),
+         {:ok, env_passthrough} <-
+           env_passthrough_from_json(json["env_passthrough"], defaults.env_passthrough),
          {:ok, pricing} <- pricing_from_json(json["pricing"] || json["price"]),
          {:ok, payout_address} <- payout_address_from_json(json, pricing),
          {:ok, capability} <- capability_from_json(id, json, pricing, opts),
          :ok <- capability_accepts_provider(capability, provider),
-         :ok <- capability_env_policy(capability, json) do
-      defaults = %__MODULE__{id: id, provider: provider, template: template}
-
+         :ok <- capability_env_policy(capability, env, env_passthrough) do
       {:ok,
        %__MODULE__{
          defaults
@@ -145,8 +150,8 @@ defmodule Mitos.Workload do
            seller_id: seller_id(json),
            payout_address: payout_address,
            transport_order: string_list_or(json["transport_order"], defaults.transport_order),
-           env: map_or(json["env"], defaults.env),
-           env_passthrough: string_list_or(json["env_passthrough"], defaults.env_passthrough),
+           env: env,
+           env_passthrough: env_passthrough,
            timeout_ms: positive_int_or(json["timeout_ms"], defaults.timeout_ms),
            idle_ms: positive_int_or(json["idle_ms"], defaults.idle_ms),
            approvals: approvals_or(json["approvals"], defaults.approvals)
@@ -268,18 +273,19 @@ defmodule Mitos.Workload do
     end
   end
 
-  defp capability_env_policy(nil, _json), do: :ok
+  defp capability_env_policy(nil, _env, _passthrough), do: :ok
 
-  defp capability_env_policy(%Mitos.Capability{}, %{} = json) do
-    env = map_or(json["env"], %{})
-    passthrough = string_list_or(json["env_passthrough"], [])
-
+  defp capability_env_policy(%Mitos.Capability{}, %{} = env, passthrough) do
     cond do
       passthrough != [] ->
         {:error, "capability workloads must not use env_passthrough"}
 
       secret_key = secret_env_key(env) ->
         {:error, "capability env must not contain secret-like key #{secret_key}"}
+
+      secret_value_key = secret_env_value_key(env) ->
+        {:error,
+         "capability env must not contain credential-bearing URL value for #{secret_value_key}"}
 
       true ->
         :ok
@@ -297,8 +303,58 @@ defmodule Mitos.Workload do
     Enum.any?(@secret_env_fragments, &String.contains?(key, &1))
   end
 
+  defp secret_env_value_key(%{} = env) do
+    env
+    |> Enum.find_value(fn
+      {key, value} when is_binary(value) ->
+        if credential_url?(value) or credential_url_query?(value), do: to_string(key)
+
+      _entry ->
+        nil
+    end)
+  end
+
+  defp credential_url?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, userinfo: userinfo}
+      when is_binary(scheme) and is_binary(host) and is_binary(userinfo) ->
+        userinfo != ""
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, query: query}
+      when is_binary(scheme) and is_binary(host) and is_binary(query) ->
+        query
+        |> String.split("&", trim: true)
+        |> Enum.any?(&credential_url_query_pair?/1)
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query_pair?(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+    Regex.match?(@secret_url_query_key_pattern, safe_form_decode(key))
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
+  end
+
   defp read_file(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         {:ok, raw}
 
@@ -307,6 +363,54 @@ defmodule Mitos.Workload do
 
       {:error, reason} ->
         {:error, {:invalid_workload, "unreadable definition: #{inspect(reason)}"}}
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp trusted_workloads_dir do
+    path = Path.expand(dir())
+
+    with true <- regular_dir?(path),
+         true <- no_symlink_absolute_path?(path) do
+      {:ok, path}
+    else
+      _ -> {:error, :workloads_dir_unavailable}
+    end
+  end
+
+  defp regular_dir?(path), do: match?({:ok, %{type: :directory}}, File.lstat(path))
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
     end
   end
 
@@ -331,6 +435,61 @@ defmodule Mitos.Workload do
 
   defp map_or(%{} = value, _default), do: value
   defp map_or(_value, default), do: default
+
+  defp env_from_json(nil, default), do: {:ok, default}
+
+  defp env_from_json(%{} = env, _default) do
+    Enum.reduce_while(env, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
+      with {:ok, key} <- validate_env_name(key, "env name"),
+           {:ok, value} <- validate_env_value(key, value) do
+        {:cont, {:ok, Map.put(acc, key, value)}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp env_from_json(_env, _default), do: {:error, "env must be an object"}
+
+  defp env_passthrough_from_json(nil, default), do: {:ok, default}
+
+  defp env_passthrough_from_json(values, _default) when is_list(values) do
+    Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
+      case validate_env_name(value, "env_passthrough entry") do
+        {:ok, name} -> {:cont, {:ok, [name | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, values} -> {:ok, Enum.reverse(values)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp env_passthrough_from_json(_values, _default),
+    do: {:error, "env_passthrough must be a list"}
+
+  defp validate_env_name(name, field) when is_binary(name) do
+    cond do
+      name == "" -> {:error, "#{field} must not be empty"}
+      String.contains?(name, <<0>>) -> {:error, "#{field} must not contain NUL"}
+      String.contains?(name, "=") -> {:error, "#{field} must not contain ="}
+      true -> {:ok, name}
+    end
+  end
+
+  defp validate_env_name(_name, field), do: {:error, "#{field} must be a string"}
+
+  defp validate_env_value(_key, value) when not is_binary(value),
+    do: {:error, "env values must be strings"}
+
+  defp validate_env_value(key, value) do
+    if String.contains?(value, <<0>>) do
+      {:error, "env value for #{inspect(key)} must not contain NUL"}
+    else
+      {:ok, value}
+    end
+  end
 
   defp pricing_from_json(nil), do: {:ok, nil}
 

@@ -265,6 +265,125 @@ defmodule Mitos.ServiceRuntimeTest do
            end)
   end
 
+  test "file existence conditions do not follow symlinks" do
+    base_dir = unique_tmp_dir("service-runtime-condition-symlink")
+    outside = unique_tmp_dir("service-runtime-condition-symlink-outside")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    File.mkdir_p!(base_dir)
+    File.mkdir_p!(outside)
+
+    outside_ready_file = Path.join(outside, "ready.flag")
+    ready_link = Path.join(base_dir, "ready.flag")
+
+    File.write!(outside_ready_file, "ready")
+    File.ln_s!(outside_ready_file, ready_link)
+
+    trace = opened_trace(base_dir, "run-service-runtime-condition-symlink")
+
+    unit =
+      unit("symlink-conditional-listener",
+        schedule: %{type: "webhook"},
+        conditions: [%{type: "file_exists", path: ready_link}]
+      )
+
+    {trace, skipped_task} =
+      Mitos.ServiceRuntime.append_trigger(
+        trace,
+        unit,
+        %{type: "webhook", delivery_id: "evt-symlink-skipped"},
+        caused_by: 0
+      )
+
+    assert skipped_task == nil
+
+    File.rm!(ready_link)
+    File.write!(ready_link, "ready")
+
+    {trace, admitted_task} =
+      Mitos.ServiceRuntime.append_trigger(
+        trace,
+        unit,
+        %{type: "webhook", delivery_id: "evt-regular-admitted"},
+        caused_by: 0
+      )
+
+    events = Mitos.Trace.read_events(trace.run_id, base_dir: base_dir)
+    condition_events = Enum.filter(events, &(&1["type"] == "service_conditions_checked"))
+
+    assert Enum.at(condition_events, 0)["payload"]["passed?"] == false
+    assert Enum.at(condition_events, 1)["payload"]["passed?"] == true
+    assert admitted_task["id"] == "svc:symlink-conditional-listener:webhook:evt-regular-admitted"
+
+    pool = Mitos.WorkPool.fold_events(events)
+
+    assert get_in(pool, ["tasks", "svc:symlink-conditional-listener:webhook:evt-symlink-skipped"]) ==
+             nil
+
+    assert get_in(pool, ["tasks", admitted_task["id"], "status"]) == "queued"
+  end
+
+  test "file existence conditions reject symlinked parent directories" do
+    base_dir = unique_tmp_dir("service-runtime-condition-parent-symlink")
+    outside = unique_tmp_dir("service-runtime-condition-parent-symlink-outside")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    File.mkdir_p!(base_dir)
+    File.mkdir_p!(outside)
+
+    File.write!(Path.join(outside, "ready.flag"), "ready")
+    ready_parent = Path.join(base_dir, "linked")
+    ready_path = Path.join(ready_parent, "ready.flag")
+    File.ln_s!(outside, ready_parent)
+
+    trace = opened_trace(base_dir, "run-service-runtime-condition-parent-symlink")
+
+    unit =
+      unit("parent-symlink-conditional-listener",
+        schedule: %{type: "webhook"},
+        conditions: [%{type: "file_exists", path: ready_path}]
+      )
+
+    {trace, skipped_task} =
+      Mitos.ServiceRuntime.append_trigger(
+        trace,
+        unit,
+        %{type: "webhook", delivery_id: "evt-parent-symlink-skipped"},
+        caused_by: 0
+      )
+
+    assert skipped_task == nil
+
+    File.rm!(ready_parent)
+    File.mkdir_p!(ready_parent)
+    File.write!(ready_path, "ready")
+
+    {_trace, admitted_task} =
+      Mitos.ServiceRuntime.append_trigger(
+        trace,
+        unit,
+        %{type: "webhook", delivery_id: "evt-regular-parent-admitted"},
+        caused_by: 0
+      )
+
+    events = Mitos.Trace.read_events(trace.run_id, base_dir: base_dir)
+    condition_events = Enum.filter(events, &(&1["type"] == "service_conditions_checked"))
+
+    assert Enum.at(condition_events, 0)["payload"]["passed?"] == false
+    assert Enum.at(condition_events, 1)["payload"]["passed?"] == true
+
+    assert admitted_task["id"] ==
+             "svc:parent-symlink-conditional-listener:webhook:evt-regular-parent-admitted"
+  end
+
   test "tick-driven interval schedules fire only when due" do
     base_dir = unique_tmp_dir("service-runtime-interval")
     on_exit(fn -> File.rm_rf!(base_dir) end)

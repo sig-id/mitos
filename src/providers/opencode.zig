@@ -8,8 +8,20 @@ pub const provider_id = adapters.ProviderId{ .value = "opencode" };
 pub const run_adapter_id = adapters.AdapterId{ .value = "opencode.run" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "opencode.pty" };
 
+const pty_terminal_chrome_markers = [_][]const u8{
+    "OpenCode",
+    "opencode",
+    "Working",
+    "Thinking",
+    "follow-up",
+    "loading",
+    "connected",
+    "transport:",
+};
+pub const pty_terminal_observation = adapters.terminalObservationProviderTui(&pty_terminal_chrome_markers);
+
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const unavailable_warnings = [_][]const u8{"opencode binary was not found on PATH"};
+const unavailable_warnings = [_][]const u8{"opencode binary was not found on PATH or common toolchain directories"};
 const unsupported_warnings = [_][]const u8{"opencode does not advertise run --format json support"};
 
 pub fn initRunAdapter() adapters.AgentAdapter {

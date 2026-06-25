@@ -69,6 +69,11 @@ defmodule Mitos.AppRunnerTest do
              %{
                "kind" => "effect",
                "type" => "signal_received",
+               "tenant" => %{
+                 "org_id" => "buyer",
+                 "project_id" => "demo",
+                 "actor_id" => "operator"
+               },
                "ref" => %{"connector" => "manual", "task_id" => "app-task-1"},
                "payload" => %{"intake" => %{"input_keys" => ["count", "name", "objective"]}}
              } ->
@@ -178,7 +183,8 @@ defmodule Mitos.AppRunnerTest do
                    sink: "webhook",
                    entrypoint: "ship",
                    on: "run.done",
-                   url: "https://hooks.example.test/deliver",
+                   url:
+                     "https://hook-user:hook-pass@hooks.example.test/deliver?token=top-level-token&visible=ok&sig=nested-secret",
                    token: "top-level-token",
                    headers: %{
                      :authorization => "Bearer nested-secret",
@@ -193,7 +199,18 @@ defmodule Mitos.AppRunnerTest do
                ]
              )
 
-    assert [%{"receipt" => %{"sink" => "webhook", "status" => "sent"}}] = result["deliveries"]
+    redacted_url =
+      "https://hooks.example.test/deliver?token=[redacted]&visible=ok&sig=[redacted]"
+
+    assert [
+             %{
+               "receipt" => %{
+                 "sink" => "webhook",
+                 "status" => "sent",
+                 "destination" => ^redacted_url
+               }
+             }
+           ] = result["deliveries"]
 
     app_events = Mitos.Trace.read_events(result["app_run_id"], base_dir: traces)
 
@@ -219,18 +236,93 @@ defmodule Mitos.AppRunnerTest do
                "nested" => [%{"keep" => "visible"}]
              },
              "sink" => "webhook",
-             "url" => "https://hooks.example.test/deliver"
+             "url" => redacted_url
            }
+
+    assert get_in(attempted, ["payload", "destination"]) == redacted_url
+    assert get_in(attempted, ["ref", "dest"]) == redacted_url
 
     refute inspect(attempted) =~ "top-level-token"
     refute inspect(attempted) =~ "nested-secret"
+    refute inspect(attempted) =~ "hook-pass"
     refute inspect(attempted) =~ "payload-secret"
     refute inspect(attempted) =~ "nested-key"
+    refute inspect(result) =~ "top-level-token"
+    refute inspect(result) =~ "nested-secret"
+    refute inspect(result) =~ "hook-pass"
+  end
+
+  test "delivery idempotency distinguishes destinations that share a redacted public URL", %{
+    root: root,
+    traces: traces
+  } do
+    write_app!(root)
+
+    assert {:ok, result} =
+             Mitos.AppRunner.run(
+               root,
+               "ship",
+               %{"objective" => "from app", "name" => "Ada", "count" => 3},
+               task_id: "app-task-redacted-distinct-deliveries",
+               trace_base_dir: traces,
+               io_outputs: [
+                 %{
+                   sink: "webhook",
+                   entrypoint: "ship",
+                   on: "run.done",
+                   url: "https://hooks.example.test/deliver?token=secret-a&visible=ok"
+                 },
+                 %{
+                   sink: "webhook",
+                   entrypoint: "ship",
+                   on: "run.done",
+                   url: "https://hooks.example.test/deliver?token=secret-b&visible=ok"
+                 }
+               ]
+             )
+
+    public_url = "https://hooks.example.test/deliver?token=[redacted]&visible=ok"
+
+    assert [
+             %{"receipt" => %{"destination" => ^public_url, "delivery_id" => first_id}},
+             %{"receipt" => %{"destination" => ^public_url, "delivery_id" => second_id}}
+           ] = result["deliveries"]
+
+    assert first_id != second_id
+
+    app_events = Mitos.Trace.read_events(result["app_run_id"], base_dir: traces)
+
+    delivery_sent =
+      Enum.filter(app_events, fn
+        %{
+          "kind" => "effect",
+          "type" => "delivery_sent",
+          "ref" => %{"task_id" => "app-task-redacted-distinct-deliveries"}
+        } ->
+          true
+
+        _event ->
+          false
+      end)
+
+    assert length(delivery_sent) == 2
+    assert Enum.map(delivery_sent, &get_in(&1, ["ref", "dest"])) == [public_url, public_url]
+
+    assert delivery_sent
+           |> Enum.map(&get_in(&1, ["ref", "delivery_id"]))
+           |> Enum.uniq()
+           |> length() == 2
+
+    refute inspect(app_events) =~ "secret-a"
+    refute inspect(app_events) =~ "secret-b"
+    refute inspect(result) =~ "secret-a"
+    refute inspect(result) =~ "secret-b"
   end
 
   test "public io binding helper handles atom keys and nested lists" do
     assert Mitos.IOPlane.public_binding(%{
              sink: "webhook",
+             url: "https://user:pass@example.test/hook?api_key=secret-key&keep=yes",
              token: "top-level-token",
              headers: %{:authorization => "Bearer nested-secret", "x-public" => "visible"},
              destinations: [
@@ -240,8 +332,122 @@ defmodule Mitos.AppRunnerTest do
            }) == %{
              "destinations" => [%{"channel" => "ops"}, %{"channel" => "audit"}],
              "headers" => %{"x-public" => "visible"},
-             "sink" => "webhook"
+             "sink" => "webhook",
+             "url" => "https://example.test/hook?api_key=[redacted]&keep=yes"
            }
+  end
+
+  test "delivery redrive reports no new deliveries when effects are duplicates", %{
+    root: root,
+    traces: traces
+  } do
+    write_app!(root,
+      io: %{
+        inputs: [],
+        outputs: [
+          %{sink: "reply", entrypoint: "ship", on: "run.done", reply_to: "input.reply_ref"}
+        ]
+      }
+    )
+
+    assert {:ok, app} = Mitos.AppManifest.load(root)
+
+    assert {:ok, task} =
+             Mitos.AppManifest.task_for_entrypoint(
+               app,
+               "ship",
+               %{"objective" => "from redrive"},
+               task_id: "app-task-delivery-redrive",
+               reply_ref: "thread-redrive-1"
+             )
+
+    trace = Mitos.Trace.open!(run_id: "app-delivery-redrive", base_dir: traces)
+
+    pipeline_result = %{
+      "status" => "completed",
+      "deliverable_summary" => "done",
+      "execution_id" => "pipe-app-task-delivery-redrive",
+      "evidence" => %{"steps" => [], "run_ids" => []}
+    }
+
+    {trace, first_deliveries} =
+      Mitos.IOPlane.append_deliveries(trace, app, task, pipeline_result, caused_by: 0)
+
+    assert [%{"receipt" => %{"sink" => "reply", "destination" => "thread-redrive-1"}}] =
+             first_deliveries
+
+    {_trace, second_deliveries} =
+      Mitos.IOPlane.append_deliveries(trace, app, task, pipeline_result, caused_by: 0)
+
+    assert second_deliveries == []
+
+    events = Mitos.Trace.read_events("app-delivery-redrive", base_dir: traces)
+
+    assert 1 ==
+             Enum.count(events, fn
+               %{"kind" => "effect", "type" => "delivery_attempted"} -> true
+               _event -> false
+             end)
+
+    assert 1 ==
+             Enum.count(events, fn
+               %{"kind" => "effect", "type" => "delivery_sent"} -> true
+               _event -> false
+             end)
+  end
+
+  test "does not use default web delivery when outputs are scoped to another entrypoint", %{
+    root: root,
+    traces: traces
+  } do
+    write_app!(root,
+      entrypoints: [
+        %{
+          id: "audit",
+          pipeline: "ship-flow",
+          title: "Audit app output",
+          workspace: "none",
+          inputs: %{
+            schema: %{
+              type: "object",
+              required: ["objective"],
+              additionalProperties: false,
+              properties: %{objective: %{type: "string"}}
+            }
+          }
+        }
+      ],
+      io: %{
+        inputs: [],
+        outputs: [%{sink: "reply", entrypoint: "audit", on: "run.done"}]
+      }
+    )
+
+    assert {:ok, result} =
+             Mitos.AppRunner.run(
+               root,
+               "ship",
+               %{"objective" => "from app", "name" => "Ada", "count" => 3},
+               task_id: "app-task-no-output-fallback",
+               trace_base_dir: traces
+             )
+
+    assert result["deliveries"] == []
+
+    app_events = Mitos.Trace.read_events(result["app_run_id"], base_dir: traces)
+
+    refute Enum.any?(app_events, fn
+             %{
+               "kind" => "effect",
+               "type" => type,
+               "ref" => %{"task_id" => "app-task-no-output-fallback"}
+             }
+             when type in ["delivery_attempted", "delivery_sent"] ->
+               true
+
+             _event ->
+               false
+           end)
   end
 
   test "resolves content-addressed capability refs from the local workload catalog", %{
@@ -373,8 +579,140 @@ defmodule Mitos.AppRunnerTest do
              )
   end
 
+  test "rejects local capability refs that resolve outside the app root through symlinks", %{
+    root: root,
+    traces: traces
+  } do
+    write_app!(root)
+    outside = unique_tmp_dir("app-runner-outside-capability")
+    File.mkdir_p!(outside)
+
+    File.write!(
+      Path.join(outside, "workload.json"),
+      Jason.encode!(%{
+        provider: "fake",
+        template: "outside {{objective}}",
+        capability: %{name: "ship-cap", harnesses: ["fake"], trust_tier: "T1"}
+      })
+    )
+
+    File.rm_rf!(Path.join([root, "capabilities", "ship"]))
+    File.ln_s!(outside, Path.join([root, "capabilities", "ship"]))
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error,
+            {:app_run_failed, _run_id,
+             {:pipeline_step_failed, "ship-cap", "ship-cap",
+              {:invalid_application, "capability ref escapes the application root"}}}} =
+             Mitos.AppRunner.run(
+               root,
+               "ship",
+               %{"objective" => "bad ref", "name" => "Dee"},
+               task_id: "app-task-symlink-ref",
+               trace_base_dir: traces
+             )
+  end
+
+  test "rejects local capability refs that are symlinked files", %{
+    root: root,
+    traces: traces
+  } do
+    write_app!(root)
+    outside = unique_tmp_dir("app-runner-outside-capability-file")
+    File.mkdir_p!(outside)
+
+    outside_workload = Path.join(outside, "workload.json")
+
+    File.write!(
+      outside_workload,
+      Jason.encode!(%{
+        provider: "fake",
+        template: "outside {{objective}}",
+        capability: %{name: "ship-cap", harnesses: ["fake"], trust_tier: "T1"}
+      })
+    )
+
+    File.rm!(Path.join([root, "capabilities", "ship", "workload.json"]))
+    File.ln_s!(outside_workload, Path.join([root, "capabilities", "ship", "workload.json"]))
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error,
+            {:app_run_failed, _run_id,
+             {:pipeline_step_failed, "ship-cap", "ship-cap",
+              {:invalid_application, "capability ref escapes the application root"}}}} =
+             Mitos.AppRunner.run(
+               root,
+               "ship",
+               %{"objective" => "bad ref", "name" => "Dee"},
+               task_id: "app-task-symlink-file-ref",
+               trace_base_dir: traces
+             )
+  end
+
+  test "rejects directory capability refs with symlinked default workload before alias fallback",
+       %{
+         root: root,
+         traces: traces
+       } do
+    write_app!(root, cap_ref: "capabilities/ship")
+
+    workload_path = Path.join([root, "capabilities", "ship", "workload.json"])
+    File.rm!(workload_path)
+
+    File.ln_s!(
+      Path.join(unique_tmp_dir("app-runner-missing-capability-file"), "missing.json"),
+      workload_path
+    )
+
+    File.write!(
+      Path.join([root, "capabilities", "ship", "ship-cap.json"]),
+      Jason.encode!(%{
+        provider: "fake",
+        template: "alias {{objective}}",
+        capability: %{name: "ship-cap", harnesses: ["fake"], trust_tier: "T1"}
+      })
+    )
+
+    assert {:error,
+            {:app_run_failed, _run_id,
+             {:pipeline_step_failed, "ship-cap", "ship-cap",
+              {:invalid_application, "capability ref escapes the application root"}}}} =
+             Mitos.AppRunner.run(
+               root,
+               "ship",
+               %{"objective" => "bad ref", "name" => "Dee"},
+               task_id: "app-task-symlink-file-before-alias",
+               trace_base_dir: traces
+             )
+  end
+
   defp write_app!(root, opts \\ []) do
     cap_ref = Keyword.get(opts, :cap_ref, "capabilities/ship/workload.json")
+
+    entrypoints =
+      [
+        %{
+          id: "ship",
+          pipeline: "ship-flow",
+          title: "Ship app output",
+          workspace: "none",
+          inputs: %{
+            schema: %{
+              type: "object",
+              required: ["objective"],
+              additionalProperties: false,
+              properties: %{
+                objective: %{type: "string"},
+                name: %{type: "string"},
+                count: %{type: "int"}
+              }
+            }
+          },
+          defaults: %{budget: %{usd: 1, wall_ms: 30_000}}
+        }
+      ] ++ Keyword.get(opts, :entrypoints, [])
 
     File.write!(Path.join(root, "pipelines/ship.md"), """
     # Pipeline: ship-flow
@@ -406,37 +744,22 @@ defmodule Mitos.AppRunnerTest do
         pipelines: [
           %{id: "ship-flow", file: "pipelines/ship.md"}
         ],
-        entrypoints: [
-          %{
-            id: "ship",
-            pipeline: "ship-flow",
-            title: "Ship app output",
-            workspace: "none",
-            inputs: %{
-              schema: %{
-                type: "object",
-                required: ["objective"],
-                additionalProperties: false,
-                properties: %{
-                  objective: %{type: "string"},
-                  name: %{type: "string"},
-                  count: %{type: "int"}
-                }
-              }
-            },
-            defaults: %{budget: %{usd: 1, wall_ms: 30_000}}
-          }
-        ],
-        io: %{inputs: [], outputs: []},
+        entrypoints: entrypoints,
+        io: Keyword.get(opts, :io, %{inputs: [], outputs: []}),
         services: %{requires: [], wants: []}
       })
     )
   end
 
   defp unique_tmp_dir(prefix) do
-    path = Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{System.unique_integer([:positive])}")
+    path = Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{tmp_suffix()}")
     File.rm_rf!(path)
     path
+  end
+
+  defp tmp_suffix do
+    random = :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
+    "#{System.unique_integer([:positive, :monotonic])}-#{random}"
   end
 
   defp writable_rm_rf(path) do

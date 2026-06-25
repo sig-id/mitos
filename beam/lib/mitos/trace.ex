@@ -28,6 +28,14 @@ defmodule Mitos.Trace do
     approvals.jsonl
     test_results.jsonl
   )
+  @sensitive_event_key_pattern ~r/(^token$|(^|[_-])(access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|secret|password|passwd|authorization|auth[_-]?header|bearer|private[_-]?key|credential[_-]?value|credentials)([_-]|$))/i
+  @sensitive_url_query_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
+  @http_url_text_pattern ~r/https?:\/\/[^\s"'<>]+/
+  @authorization_text_pattern ~r/\b(authorization|proxy-authorization)\s*:\s*(bearer|basic)\s+[^\s"'<>]+/i
+  @authorization_assignment_text_pattern ~r/\b(authorization|auth[_-]?header)\b(\s*=\s*)(["']?)[^\s"'&<>]+/i
+  @bearer_text_pattern ~r/\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]+/i
+  @sensitive_assignment_text_pattern ~r/\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|private[_-]?key|credential[_-]?value)\b(\s*[:=]\s*)(["']?)[^\s"'&<>]+/i
+  @safe_run_id_pattern ~r/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
 
   @doc """
   Base directory under which `.runs/` lives. Resolution order: app config
@@ -40,13 +48,25 @@ defmodule Mitos.Trace do
       File.cwd!()
   end
 
+  @doc "True when a run id is safe to use as one trace directory name."
+  def valid_run_id?(run_id) when is_binary(run_id),
+    do: Regex.match?(@safe_run_id_pattern, run_id)
+
+  def valid_run_id?(_run_id), do: false
+
+  @doc false
+  def redact_public_value(value), do: value |> normalize() |> redact_trace_value()
+
+  @doc false
+  def redact_public_text(value) when is_binary(value), do: public_trace_text(value)
+  def redact_public_text(value), do: value
+
   @doc "Open or initialize a trace directory for a run."
   def open!(opts) do
-    run_id = Keyword.fetch!(opts, :run_id)
+    run_id = opts |> Keyword.fetch!(:run_id) |> run_id!()
     base_dir = Keyword.get_lazy(opts, :base_dir, &base_dir/0)
-    dir = Path.join([base_dir, ".runs", run_id])
+    dir = ensure_trace_dir!(base_dir, run_id)
 
-    File.mkdir_p!(dir)
     launch_spec = Keyword.get(opts, :launch_spec, %{})
     trace_context = trace_context(opts, launch_spec, dir)
     write_manifest_once!(dir, Keyword.put(opts, :trace_context, trace_context))
@@ -55,8 +75,8 @@ defmodule Mitos.Trace do
       ensure_file!(Path.join(dir, file))
     end
 
-    File.mkdir_p!(Path.join(dir, "screenshots"))
-    File.mkdir_p!(Path.join(dir, "artifacts"))
+    ensure_directory!(Path.join(dir, "screenshots"), "trace screenshots directory")
+    ensure_directory!(Path.join(dir, "artifacts"), "trace artifacts directory")
 
     %__MODULE__{
       run_id: run_id,
@@ -75,7 +95,7 @@ defmodule Mitos.Trace do
       "tenant" => tenant_record(trace),
       "sequence" => trace.seq,
       "timestamp_ms" => System.system_time(:millisecond),
-      "event" => normalize(event)
+      "event" => event |> normalize() |> redact_trace_value()
     }
 
     append_jsonl!(trace, "events.jsonl", record)
@@ -124,10 +144,18 @@ defmodule Mitos.Trace do
       "ts" => iso8601_now(),
       "actor" => required_string!(attrs, "actor"),
       "type" => required_string!(attrs, "type"),
-      "target" => normalize(Map.get(attrs, "target", Map.get(attrs, :target))),
-      "params" => normalize(Map.get(attrs, "params", Map.get(attrs, :params, %{}))),
+      "target" =>
+        attrs
+        |> Map.get("target", Map.get(attrs, :target))
+        |> normalize()
+        |> redact_trace_value(),
+      "params" =>
+        attrs
+        |> Map.get("params", Map.get(attrs, :params, %{}))
+        |> normalize()
+        |> redact_trace_value(),
       "inputs_hash" => required_string!(attrs, "inputs_hash"),
-      "rationale" => required_string!(attrs, "rationale"),
+      "rationale" => attrs |> required_string!("rationale") |> public_trace_text(),
       "budget" => normalize(Map.get(attrs, "budget", Map.get(attrs, :budget, %{})))
     }
 
@@ -162,8 +190,16 @@ defmodule Mitos.Trace do
       "ts" => iso8601_now(),
       "type" => required_string!(attrs, "type"),
       "caused_by" => required_integer!(attrs, "caused_by"),
-      "ref" => normalize(Map.get(attrs, "ref", Map.get(attrs, :ref, %{}))),
-      "payload" => normalize(Map.get(attrs, "payload", Map.get(attrs, :payload, %{})))
+      "ref" =>
+        attrs
+        |> Map.get("ref", Map.get(attrs, :ref, %{}))
+        |> normalize()
+        |> redact_trace_value(),
+      "payload" =>
+        attrs
+        |> Map.get("payload", Map.get(attrs, :payload, %{}))
+        |> normalize()
+        |> redact_trace_value()
     }
 
     if duplicate_effect?(trace, record) do
@@ -186,21 +222,24 @@ defmodule Mitos.Trace do
   @doc "Read decoded events for a run from the trace store."
   def read_events(run_id, opts \\ []) when is_binary(run_id) do
     base_dir = Keyword.get_lazy(opts, :base_dir, &base_dir/0)
-    path = Path.join([base_dir, ".runs", run_id, "events.jsonl"])
 
-    case File.read(path) do
-      {:ok, raw} ->
-        raw
-        |> String.split("\n", trim: true)
-        |> Enum.flat_map(fn line ->
-          case Jason.decode(line) do
-            {:ok, %{} = event} -> [event]
-            _ -> []
-          end
-        end)
+    if valid_run_id?(run_id) do
+      case read_trace_file(base_dir, run_id, "events.jsonl") do
+        {:ok, raw} ->
+          raw
+          |> String.split("\n", trim: true)
+          |> Enum.flat_map(fn line ->
+            case Jason.decode(line) do
+              {:ok, %{} = event} -> [event]
+              _ -> []
+            end
+          end)
 
-      {:error, _} ->
-        []
+        {:error, _} ->
+          []
+      end
+    else
+      []
     end
   end
 
@@ -362,7 +401,7 @@ defmodule Mitos.Trace do
   end
 
   def append_snapshot(%__MODULE__{} = trace, snapshot) when is_map(snapshot) do
-    snapshot = normalize(snapshot)
+    snapshot = snapshot |> normalize() |> redact_trace_value()
 
     append_jsonl!(trace, "terminal.snapshots.jsonl", %{
       "schema_version" => 1,
@@ -390,7 +429,7 @@ defmodule Mitos.Trace do
       "schema_version" => 1,
       "run_id" => trace.run_id,
       "timestamp_ms" => System.system_time(:millisecond),
-      "event" => normalize(event)
+      "event" => event |> normalize() |> redact_trace_value()
     }
 
     append_jsonl!(trace, "commands.jsonl", record)
@@ -406,7 +445,23 @@ defmodule Mitos.Trace do
 
   defp write_manifest_once!(dir, opts) do
     path = Path.join(dir, "run.yaml")
-    if File.exists?(path), do: :ok, else: write_manifest!(path, opts)
+
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        :ok
+
+      {:error, :enoent} ->
+        write_manifest!(path, opts)
+
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "trace file must not be a symlink: #{path}"
+
+      {:ok, stat} ->
+        raise ArgumentError, "trace file must be regular: #{path} (#{inspect(stat.type)})"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect trace file", path: path
+    end
   end
 
   defp redrive_pending(trace, [], _redrive_fun, effects), do: {:ok, trace, effects}
@@ -485,12 +540,152 @@ defmodule Mitos.Trace do
   end
 
   defp run_dir_exists?(run_id, opts) do
-    opts
-    |> Keyword.get_lazy(:base_dir, &base_dir/0)
-    |> Path.join(".runs")
-    |> Path.join(run_id)
-    |> File.dir?()
+    if valid_run_id?(run_id) do
+      with {:ok, runs_dir} <- trusted_runs_dir(Keyword.get_lazy(opts, :base_dir, &base_dir/0)) do
+        runs_dir
+        |> Path.join(run_id)
+        |> regular_dir?()
+      else
+        _ -> false
+      end
+    else
+      false
+    end
   end
+
+  defp ensure_trace_dir!(base_dir, run_id) do
+    runs_dir = Path.join(base_dir, ".runs")
+    dir = Path.join(runs_dir, run_id)
+
+    ensure_directory_path!(base_dir, "trace base")
+    ensure_directory!(runs_dir, "trace root")
+    ensure_directory!(dir, "trace directory")
+
+    dir
+  end
+
+  defp ensure_directory_path!(path, label) do
+    path = Path.expand(path)
+    parent = Path.dirname(path)
+
+    if path == parent do
+      ensure_directory!(path, label)
+    else
+      ensure_directory_path!(parent, label)
+      ensure_directory!(path, label)
+    end
+  end
+
+  defp ensure_directory!(path, label) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        :ok
+
+      {:error, :enoent} ->
+        case File.mkdir(path) do
+          :ok ->
+            :ok
+
+          {:error, :eexist} ->
+            if regular_dir?(path) do
+              :ok
+            else
+              raise ArgumentError, "#{label} must be a directory: #{path}"
+            end
+
+          {:error, reason} ->
+            raise File.Error, reason: reason, action: "create #{label}", path: path
+        end
+
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "#{label} must not be a symlink: #{path}"
+
+      {:ok, stat} ->
+        raise ArgumentError, "#{label} must be a directory: #{path} (#{inspect(stat.type)})"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect #{label}", path: path
+    end
+  end
+
+  defp read_trace_file(base_dir, run_id, file) do
+    with {:ok, runs_dir} <- trusted_runs_dir(base_dir),
+         dir <- Path.join(runs_dir, run_id),
+         true <- regular_dir?(dir),
+         {:ok, bytes} <- read_regular_file(Path.join(dir, file)) do
+      {:ok, bytes}
+    else
+      _ -> {:error, :enoent}
+    end
+  end
+
+  defp regular_dir?(path), do: match?({:ok, %{type: :directory}}, File.lstat(path))
+
+  defp trusted_base_dir(base_dir) do
+    path = Path.expand(base_dir)
+
+    with true <- regular_dir?(path),
+         true <- no_symlink_absolute_path?(path) do
+      {:ok, path}
+    else
+      _ -> {:error, :untrusted_trace_base}
+    end
+  end
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp trusted_runs_dir(base_dir) do
+    with {:ok, base_dir} <- trusted_base_dir(base_dir),
+         runs_dir <- Path.join(base_dir, ".runs"),
+         true <- regular_dir?(runs_dir) do
+      {:ok, runs_dir}
+    else
+      _ -> {:error, :untrusted_trace_runs}
+    end
+  end
+
+  defp run_id!(run_id) when is_binary(run_id) do
+    if valid_run_id?(run_id) do
+      run_id
+    else
+      raise ArgumentError, "run_id must be a safe trace identifier"
+    end
+  end
+
+  defp run_id!(_run_id), do: raise(ArgumentError, "run_id must be a safe trace identifier")
 
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
@@ -524,12 +719,94 @@ defmodule Mitos.Trace do
       |> maybe_manifest_line("trust_tier", launch_spec_value(launch_spec, "trust_tier"))
       |> Kernel.++([""])
 
-    File.write!(path, Enum.join(manifest, "\n"))
+    write_new_file!(path, Enum.join(manifest, "\n"))
   end
 
   defp ensure_file!(path) do
-    unless File.exists?(path), do: File.write!(path, "")
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        :ok
+
+      {:error, :enoent} ->
+        write_new_file!(path, "")
+
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "trace file must not be a symlink: #{path}"
+
+      {:ok, stat} ->
+        raise ArgumentError, "trace file must be regular: #{path} (#{inspect(stat.type)})"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect trace file", path: path
+    end
   end
+
+  defp write_new_file!(path, bytes) do
+    case File.open(path, [:write, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        raise File.Error, reason: reason, action: "write trace file", path: path
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "create trace file", path: path
+    end
+  end
+
+  defp append_regular_file!(path, bytes) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular} = stat} ->
+        append_same_regular_file!(path, stat, bytes)
+
+      {:error, :enoent} ->
+        write_new_file!(path, bytes)
+
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "trace file must not be a symlink: #{path}"
+
+      {:ok, stat} ->
+        raise ArgumentError, "trace file must be regular: #{path} (#{inspect(stat.type)})"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect trace file", path: path
+    end
+  end
+
+  defp append_same_regular_file!(path, stat, bytes) do
+    case File.open(path, [:append], fn io ->
+           with {:ok, file_info} <- :file.read_file_info(io),
+                true <- same_file?(stat, file_info),
+                :ok <- IO.binwrite(io, bytes) do
+             :ok
+           else
+             false -> {:error, :changed}
+             {:error, reason} -> {:error, reason}
+             other -> {:error, other}
+           end
+         end) do
+      {:ok, :ok} ->
+        :ok
+
+      {:ok, {:error, :changed}} ->
+        raise ArgumentError, "trace file changed before append: #{path}"
+
+      {:ok, {:error, reason}} ->
+        raise File.Error, reason: reason, action: "append trace file", path: path
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "open trace file", path: path
+    end
+  end
+
+  defp same_file?(
+         %File.Stat{type: :regular, major_device: major, minor_device: minor, inode: inode},
+         {:file_info, _size, :regular, _access, _atime, _mtime, _ctime, _mode, _links, major,
+          minor, inode, _uid, _gid}
+       ),
+       do: true
+
+  defp same_file?(_stat, _file_info), do: false
 
   defp trace_context(opts, launch_spec, dir) do
     manifest = read_manifest_values(Path.join(dir, "run.yaml"))
@@ -562,7 +839,7 @@ defmodule Mitos.Trace do
   defp normalize_context_value(_value, default), do: default
 
   defp read_manifest_values(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         raw
         |> String.split("\n", trim: true)
@@ -596,7 +873,7 @@ defmodule Mitos.Trace do
   end
 
   defp read_sequence_values(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         raw
         |> String.split("\n", trim: true)
@@ -634,7 +911,8 @@ defmodule Mitos.Trace do
 
   defp append_jsonl!(trace, file, record) do
     line = Jason.encode!(record)
-    File.write!(Path.join(trace.dir, file), line <> "\n", [:append])
+    path = Path.join(trace.dir, file)
+    append_regular_file!(path, line <> "\n")
   end
 
   defp maybe_append_sidecar!(trace, %{"event" => %{"type" => type}} = record)
@@ -828,7 +1106,7 @@ defmodule Mitos.Trace do
   defp effect_idempotency_key(%{"type" => type, "ref" => ref})
        when type in ["delivery_attempted", "delivery_sent", "delivery_failed"] and is_map(ref) do
     sink = ref["sink"]
-    dest = ref["dest"] || ref["destination"] || ref["url"] || ref["delivery_id"]
+    dest = ref["delivery_id"] || ref["dest"] || ref["destination"] || ref["url"]
     if sink && dest, do: [type, sink, dest]
   end
 
@@ -892,7 +1170,7 @@ defmodule Mitos.Trace do
   defp read_trace_events(%__MODULE__{} = trace) do
     path = Path.join(trace.dir, "events.jsonl")
 
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         raw
         |> String.split("\n", trim: true)
@@ -1027,4 +1305,106 @@ defmodule Mitos.Trace do
   defp normalize(value) when is_boolean(value) or is_nil(value), do: value
   defp normalize(value) when is_atom(value), do: to_string(value)
   defp normalize(value), do: value
+
+  defp redact_trace_value(%{} = event) do
+    Map.new(event, fn {key, value} ->
+      if sensitive_event_key?(key) do
+        {key, redacted_event_value(value)}
+      else
+        {key, redact_trace_value(value)}
+      end
+    end)
+  end
+
+  defp redact_trace_value(values) when is_list(values),
+    do: Enum.map(values, &redact_trace_value/1)
+
+  defp redact_trace_value(value) when is_binary(value), do: public_trace_text(value)
+  defp redact_trace_value(value), do: value
+
+  defp redacted_event_value(nil), do: nil
+  defp redacted_event_value(""), do: ""
+  defp redacted_event_value(_value), do: "[redacted]"
+
+  defp sensitive_event_key?(key) do
+    Regex.match?(@sensitive_event_key_pattern, to_string(key))
+  end
+
+  defp public_trace_text(value) when is_binary(value) do
+    value
+    |> redact_urls_in_text()
+    |> redact_sensitive_text()
+  end
+
+  defp redact_urls_in_text(value) do
+    Regex.replace(@http_url_text_pattern, value, fn url -> public_trace_url(url) end)
+  end
+
+  defp redact_sensitive_text(value) do
+    value =
+      Regex.replace(@authorization_text_pattern, value, fn _match, name, scheme ->
+        "#{name}: #{scheme} [redacted]"
+      end)
+
+    value =
+      Regex.replace(@bearer_text_pattern, value, fn _match, scheme ->
+        "#{scheme} [redacted]"
+      end)
+
+    value =
+      Regex.replace(@authorization_assignment_text_pattern, value, fn _match,
+                                                                      key,
+                                                                      separator,
+                                                                      quote ->
+        "#{key}#{separator}#{quote}[redacted]"
+      end)
+
+    Regex.replace(@sensitive_assignment_text_pattern, value, fn _match, key, separator, quote ->
+      "#{key}#{separator}#{quote}[redacted]"
+    end)
+  end
+
+  defp public_trace_url(value) when is_binary(value) do
+    uri = URI.parse(value)
+
+    if uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" do
+      uri
+      |> Map.put(:userinfo, nil)
+      |> Map.put(:query, public_trace_url_query(uri.query))
+      |> URI.to_string()
+    else
+      value
+    end
+  rescue
+    _exception -> value
+  end
+
+  defp public_trace_url_query(nil), do: nil
+
+  defp public_trace_url_query(query) do
+    query
+    |> String.split("&", trim: false)
+    |> Enum.map(&public_trace_url_query_pair/1)
+    |> Enum.join("&")
+  end
+
+  defp public_trace_url_query_pair(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+
+    if sensitive_trace_url_query_key?(safe_form_decode(key)) do
+      key <> "=[redacted]"
+    else
+      pair
+    end
+  end
+
+  defp sensitive_trace_url_query_key?(key) do
+    Regex.match?(@sensitive_url_query_key_pattern, to_string(key))
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
+  end
 end

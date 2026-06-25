@@ -37,7 +37,7 @@ defmodule Mitos.CapabilityRuntime do
     tools_dir = Path.join(runtime_root, "tools")
     data_dir = Path.join(runtime_root, "data")
 
-    with :ok <- mkdirs([runtime_root, workspace, skill_dir, tools_dir, data_dir]),
+    with :ok <- mkdir_runtime_dirs(runtime_root, workspace, [skill_dir, tools_dir, data_dir]),
          {:ok, skill} <- materialize_skill(workload, agent_opts, skill_dir),
          {:ok, tools} <- materialize_tools(workload, tools_dir),
          {:ok, data} <- materialize_data(workload, data_dir),
@@ -85,13 +85,72 @@ defmodule Mitos.CapabilityRuntime do
   defp workspace_path(_workload, runtime_root, _agent_opts),
     do: Path.join(runtime_root, "workspace")
 
-  defp mkdirs(paths) do
-    Enum.reduce_while(paths, :ok, fn path, :ok ->
-      case File.mkdir_p(path) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, {:mkdir_failed, path, reason}}}
-      end
-    end)
+  defp mkdir_runtime_dirs(runtime_root, workspace, pillar_dirs) do
+    with :ok <- mkdir_regular_p(runtime_root),
+         :ok <- mkdir_workspace(workspace, runtime_root) do
+      pillar_dirs
+      |> Enum.reduce_while(:ok, fn path, :ok ->
+        case mkdir_regular_p(path) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
+  end
+
+  defp mkdir_workspace(workspace, _runtime_root), do: mkdir_regular_p(workspace)
+
+  defp mkdir_regular_p(path) do
+    path = Path.expand(path)
+    parent = Path.dirname(path)
+
+    cond do
+      path == parent ->
+        ensure_existing_regular_dir(path)
+
+      true ->
+        with :ok <- mkdir_regular_p(parent) do
+          ensure_regular_dir(path)
+        end
+    end
+  end
+
+  defp ensure_existing_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} -> :ok
+      {:ok, %{type: :symlink}} -> {:error, {:mkdir_failed, path, :symlink}}
+      {:ok, _stat} -> {:error, {:mkdir_failed, path, :not_directory}}
+      {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp ensure_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        :ok
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:mkdir_failed, path, :symlink}}
+
+      {:ok, _stat} ->
+        {:error, {:mkdir_failed, path, :not_directory}}
+
+      {:error, :enoent} ->
+        case File.mkdir(path) do
+          :ok -> :ok
+          {:error, :eexist} -> ensure_regular_dir(path)
+          {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp inside_root?(path, root) do
+    path = Path.expand(path)
+    root = Path.expand(root)
+    path == root or String.starts_with?(path, root <> "/")
   end
 
   defp materialize_skill(_workload, agent_opts, skill_dir) do
@@ -101,7 +160,7 @@ defmodule Mitos.CapabilityRuntime do
         target = Path.join(skill_dir, "resolved.md")
 
         if is_binary(body) do
-          File.write!(target, body)
+          write_runtime_file!(target, body)
         end
 
         {:ok,
@@ -140,7 +199,7 @@ defmodule Mitos.CapabilityRuntime do
       end)
 
     manifest = Path.join(tools_dir, "tools.json")
-    File.write!(manifest, Jason.encode!(%{"items" => tools}))
+    write_runtime_file!(manifest, Jason.encode!(%{"items" => tools}))
 
     {:ok, %{"manifest" => manifest, "items" => tools}}
   rescue
@@ -151,15 +210,30 @@ defmodule Mitos.CapabilityRuntime do
 
   defp materialize_tool_exec(workload, %{"exec" => exec} = tool, tools_dir)
        when is_binary(exec) and exec != "" do
-    with {:ok, source} <- package_file(workload.package_root, exec),
-         true <- File.regular?(source) do
-      target = Path.join(tools_dir, Path.basename(exec))
-      File.cp!(source, target)
-      chmod_like_source(source, target)
-      {:ok, target}
-    else
-      false ->
-        throw({:tool_error, {:tool_exec_missing, tool["name"], exec}})
+    case package_file(workload.package_root, exec) do
+      {:ok, source} ->
+        case File.lstat(source) do
+          {:ok, %{type: :regular}} ->
+            target = Path.join(tools_dir, Path.basename(exec))
+
+            case copy_runtime_file(source, target) do
+              :ok ->
+                chmod_like_source(source, target)
+                {:ok, target}
+
+              {:error, reason} ->
+                throw({:tool_error, {:tool_exec_unavailable, tool["name"], exec, reason}})
+            end
+
+          {:ok, %{type: :symlink}} ->
+            throw({:tool_error, {:tool_exec_unavailable, tool["name"], exec, :symlink}})
+
+          {:ok, _stat} ->
+            throw({:tool_error, {:tool_exec_missing, tool["name"], exec}})
+
+          {:error, reason} ->
+            throw({:tool_error, {:tool_exec_unavailable, tool["name"], exec, reason}})
+        end
 
       {:error, reason} ->
         throw({:tool_error, {:tool_exec_unavailable, tool["name"], exec, reason}})
@@ -178,7 +252,7 @@ defmodule Mitos.CapabilityRuntime do
     case data_source(data) do
       nil ->
         ref_path = Path.join(data_dir, "data_ref.json")
-        File.write!(ref_path, Jason.encode!(data))
+        write_runtime_file!(ref_path, Jason.encode!(data))
         {:ok, Map.merge(data, %{"path" => data_dir, "ref" => ref_path})}
 
       source_ref ->
@@ -208,34 +282,81 @@ defmodule Mitos.CapabilityRuntime do
   end
 
   defp copy_data_source(source_ref, source, target_dir) do
-    cond do
-      File.dir?(source) ->
-        case File.ls(source) do
-          {:ok, entries} ->
-            Enum.reduce_while(entries, :ok, fn entry, :ok ->
-              from = Path.join(source, entry)
-              to = Path.join(target_dir, entry)
+    case File.lstat(source) do
+      {:ok, %{type: :directory}} ->
+        copy_data_directory(source_ref, source, target_dir, "")
 
-              case File.cp_r(from, to) do
-                {:ok, _files} -> {:cont, :ok}
-                {:error, reason, _file} -> {:halt, {:error, {:data_copy_failed, entry, reason}}}
-              end
-            end)
-
-          {:error, reason} ->
-            {:error, {:data_unavailable, source_ref, reason}}
-        end
-
-      File.regular?(source) ->
-        case File.cp(source, Path.join(target_dir, Path.basename(source))) do
+      {:ok, %{type: :regular}} ->
+        case copy_runtime_file(source, Path.join(target_dir, Path.basename(source))) do
           :ok -> :ok
           {:error, reason} -> {:error, {:data_copy_failed, Path.basename(source), reason}}
         end
 
-      true ->
+      {:ok, %{type: :symlink}} ->
+        {:error, {:data_unavailable, source_ref, :symlink}}
+
+      {:ok, _stat} ->
         {:error, {:data_unavailable, source_ref, :missing}}
+
+      {:error, :enoent} ->
+        {:error, {:data_unavailable, source_ref, :missing}}
+
+      {:error, reason} ->
+        {:error, {:data_unavailable, source_ref, reason}}
     end
   end
+
+  defp copy_data_directory(source_ref, source, target_dir, relative) do
+    case File.ls(source) do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, :ok, fn entry, :ok ->
+          from = Path.join(source, entry)
+          to = Path.join(target_dir, entry)
+          child_relative = relative_path(relative, entry)
+
+          case copy_data_entry(source_ref, from, to, child_relative) do
+            :ok -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+
+      {:error, reason} ->
+        {:error, {:data_unavailable, source_ref, reason}}
+    end
+  end
+
+  defp copy_data_entry(source_ref, from, to, relative) do
+    case File.lstat(from) do
+      {:ok, %{type: :directory}} ->
+        with :ok <- mkdir_regular_p(to) do
+          copy_data_directory(source_ref, from, to, relative)
+        else
+          {:error, {:mkdir_failed, _path, reason}} ->
+            {:error, {:data_copy_failed, relative, reason}}
+
+          {:error, reason} ->
+            {:error, {:data_copy_failed, relative, reason}}
+        end
+
+      {:ok, %{type: :regular}} ->
+        case copy_runtime_file(from, to) do
+          :ok -> :ok
+          {:error, reason} -> {:error, {:data_copy_failed, relative, reason}}
+        end
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:data_copy_failed, relative, :symlink}}
+
+      {:ok, _stat} ->
+        {:error, {:data_copy_failed, relative, :unsupported_file_type}}
+
+      {:error, reason} ->
+        {:error, {:data_copy_failed, relative, reason}}
+    end
+  end
+
+  defp relative_path("", entry), do: entry
+  defp relative_path(parent, entry), do: Path.join(parent, entry)
 
   defp package_file(package_root, path) when is_binary(package_root) and is_binary(path) do
     root = Path.expand(package_root)
@@ -247,14 +368,124 @@ defmodule Mitos.CapabilityRuntime do
         Path.expand(path, root)
       end
 
-    if expanded == root or String.starts_with?(expanded, root <> "/") do
-      {:ok, expanded}
-    else
-      {:error, :path_escape}
+    cond do
+      not inside_root?(expanded, root) ->
+        {:error, :path_escape}
+
+      not source_parent_without_symlinks?(expanded, root) ->
+        {:error, :path_symlink}
+
+      true ->
+        {:ok, expanded}
     end
   end
 
   defp package_file(_package_root, _path), do: {:error, :missing_package_root}
+
+  defp source_parent_without_symlinks?(path, root) do
+    path =
+      if Path.expand(path) == Path.expand(root) do
+        path
+      else
+        Path.dirname(path)
+      end
+
+    no_symlink_path?(path, root)
+  end
+
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, :enoent} -> {:halt, true}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        true -> true
+        _last_path -> true
+      end
+    else
+      {:error, :enoent} -> true
+      _ -> false
+    end
+  end
+
+  defp copy_runtime_file(source, target) do
+    with {:ok, bytes} <- read_regular_file(source),
+         :ok <- write_runtime_file(target, bytes) do
+      :ok
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp write_runtime_file!(path, bytes) do
+    case write_runtime_file(path, bytes) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise ArgumentError, "runtime file write failed at #{path}: #{inspect(reason)}"
+    end
+  end
+
+  defp write_runtime_file(path, bytes) when is_binary(bytes) do
+    parent = Path.dirname(path)
+
+    with {:ok, %{type: :directory}} <- File.lstat(parent),
+         :ok <- ensure_runtime_file_replaceable(path) do
+      write_new_runtime_file(path, bytes)
+    else
+      {:ok, %{type: :symlink}} -> {:error, :parent_symlink}
+      {:ok, _stat} -> {:error, :parent_not_directory}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_runtime_file_replaceable(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        File.rm(path)
+
+      {:ok, %{type: :symlink}} ->
+        {:error, :symlink}
+
+      {:ok, _stat} ->
+        {:error, :not_regular}
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp write_new_runtime_file(path, bytes) do
+    case File.open(path, [:write, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp runtime_env(base_env, runtime) do
     base_env
@@ -297,7 +528,7 @@ defmodule Mitos.CapabilityRuntime do
   end
 
   defp chmod_like_source(source, target) do
-    case File.stat(source) do
+    case File.lstat(source) do
       {:ok, %{mode: mode}} -> File.chmod(target, mode)
       {:error, _reason} -> :ok
     end
@@ -314,8 +545,8 @@ defmodule Mitos.CapabilityRuntime do
   end
 
   defp read_only_tree(path) do
-    cond do
-      File.dir?(path) ->
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
         with {:ok, entries} <- File.ls(path),
              :ok <-
                Enum.reduce_while(entries, :ok, fn entry, :ok ->
@@ -327,16 +558,22 @@ defmodule Mitos.CapabilityRuntime do
           File.chmod(path, 0o555)
         end
 
-      File.regular?(path) ->
+      {:ok, %{type: :regular}} ->
         File.chmod(path, read_only_file_mode(path))
 
-      true ->
+      {:ok, %{type: :symlink}} ->
+        {:error, {:symlink, path}}
+
+      {:ok, _stat} ->
         :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp read_only_file_mode(path) do
-    case File.stat(path) do
+    case File.lstat(path) do
       {:ok, %{mode: mode}} when Bitwise.band(mode, 0o111) != 0 -> 0o555
       _other -> 0o444
     end

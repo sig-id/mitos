@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["signal", "summary", "verdict", "findings", "stats"],
+  "properties": {
+    "signal": {
+      "type": "string",
+      "enum": ["pass", "fix", "fail"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FIX", "FAIL"]
+    },
+    "findings": {
+      "type": "array"
+    },
+    "stats": {
+      "type": "object"
+    },
+    "evidence": {
+      "type": "array"
+    }
+  }
+}

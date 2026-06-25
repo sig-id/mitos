@@ -130,6 +130,52 @@ defmodule Mitos.CapabilityTest do
     refute changed_data.id == first.id
   end
 
+  test "package-aware identity does not hash symlinked content outside the package root" do
+    package_root =
+      Path.join(
+        System.tmp_dir!(),
+        "mitos-capability-symlink-id-#{System.unique_integer([:positive])}"
+      )
+
+    outside =
+      Path.join(
+        System.tmp_dir!(),
+        "mitos-capability-symlink-outside-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(package_root, "data"))
+    File.mkdir_p!(outside)
+
+    on_exit(fn ->
+      File.rm_rf!(package_root)
+      File.rm_rf!(outside)
+    end)
+
+    outside_secret = Path.join(outside, "secret.txt")
+    File.write!(outside_secret, "secret v1\n")
+    File.ln_s!(outside_secret, Path.join([package_root, "data", "linked.txt"]))
+
+    manifest = %{
+      "name" => "content-addressed-symlink",
+      "harnesses" => ["fake"],
+      "data" => %{"path" => "data", "mount" => "/data", "ro" => true}
+    }
+
+    assert {:ok, first} =
+             Mitos.Capability.from_json("content-addressed-symlink", manifest,
+               package_root: package_root
+             )
+
+    File.write!(outside_secret, "secret v2\n")
+
+    assert {:ok, second} =
+             Mitos.Capability.from_json("content-addressed-symlink", manifest,
+               package_root: package_root
+             )
+
+    assert second.id == first.id
+  end
+
   test "resolves per-model skill adaptation overlays deterministically" do
     base = """
     <!-- @skill:role -->
@@ -444,6 +490,37 @@ defmodule Mitos.CapabilityTest do
                ])
              )
 
+    assert {:error, {:invalid_capability, "egress_policy credential must be an id string"}} =
+             Mitos.Capability.from_json(
+               "bad-egress-credential-object",
+               Map.put(base, "egress_policy", [
+                 %{"dest" => "api.example.test", "credential" => %{"id" => "seller_key"}}
+               ])
+             )
+
+    assert {:error,
+            {:invalid_capability,
+             "egress_policy credential must reference a credential id, not secret material"}} =
+             Mitos.Capability.from_json(
+               "bad-egress-credential-token",
+               Map.put(base, "egress_policy", [
+                 %{"dest" => "api.example.test", "credential" => "sk-live-must-not-be-here"}
+               ])
+             )
+
+    assert {:error,
+            {:invalid_capability,
+             "egress_policy credential must reference a credential id, not secret material"}} =
+             Mitos.Capability.from_json(
+               "bad-egress-credential-url",
+               Map.put(base, "egress_policy", [
+                 %{
+                   "dest" => "api.example.test",
+                   "credential_id" => "https://user:pass@vault.example.test/credential"
+                 }
+               ])
+             )
+
     assert {:error,
             {:invalid_capability,
              "capability manifests must not contain baked secret field tools.0.env"}} =
@@ -460,6 +537,29 @@ defmodule Mitos.CapabilityTest do
              Mitos.Capability.from_json(
                "bad-resource-token",
                Map.put(base, "resources", %{"token" => "must-not-be-here"})
+             )
+
+    assert {:error,
+            {:invalid_capability,
+             "capability manifests must not contain credential-bearing URL field resources.callback_url"}} =
+             Mitos.Capability.from_json(
+               "bad-resource-url-userinfo",
+               Map.put(base, "resources", %{
+                 "callback_url" => "https://user:pass@example.test/callback"
+               })
+             )
+
+    assert {:error,
+            {:invalid_capability,
+             "capability manifests must not contain credential-bearing URL query field egress_policy.0.dest"}} =
+             Mitos.Capability.from_json(
+               "bad-egress-query-token",
+               Map.put(base, "egress_policy", [
+                 %{
+                   "dest" => "https://api.example.test/v1?access_token=must-not-be-here",
+                   "credential" => "seller_key"
+                 }
+               ])
              )
   end
 end

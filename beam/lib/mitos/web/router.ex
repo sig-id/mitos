@@ -16,6 +16,8 @@ defmodule Mitos.Web.Router do
   use Plug.Router
 
   @broker_http_timeout_ms 5_000
+  @secret_forward_header_pattern ~r/(^|[-_])(api[-_]?key|apikey|token|secret|credential|password|passwd|private[-_]?key|bearer|signature|sig)([-_]|$)/i
+  @secret_url_query_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
 
   plug(:match)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
@@ -48,26 +50,34 @@ defmodule Mitos.Web.Router do
 
   # POST /sessions  body: {"argv": ["claude", "--print"], "cwd": "/tmp"}
   post "/sessions" do
-    %{"argv" => argv} = body = conn.body_params
+    body = map_or_empty(conn.body_params)
 
-    opts =
-      [argv: argv]
-      |> maybe(:cwd, body["cwd"])
-      |> maybe(:cols, body["cols"])
-      |> maybe(:rows, body["rows"])
-      |> maybe(:env, body["env"])
-      |> maybe(:project_id, body["project_id"])
+    with {:ok, argv} <- raw_session_argv(body["argv"]) do
+      opts =
+        [argv: argv]
+        |> maybe(:cwd, body["cwd"])
+        |> maybe(:cols, body["cols"])
+        |> maybe(:rows, body["rows"])
+        |> maybe(:env, body["env"])
+        |> maybe(:project_id, body["project_id"])
 
-    case Mitos.SessionSupervisor.start_session(opts) do
-      {:ok, %{session_id: id}} ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(200, Jason.encode!(%{session_id: id}))
+      case Mitos.SessionSupervisor.start_session(opts) do
+        {:ok, %{session_id: id}} ->
+          conn
+          |> put_resp_content_type("application/json")
+          |> send_resp(200, Jason.encode!(%{session_id: id}))
 
-      {:error, reason} ->
-        conn
-        |> put_resp_content_type("application/json")
-        |> send_resp(500, Jason.encode!(%{error: inspect(reason)}))
+        {:error, reason} ->
+          if raw_session_input_error?(reason) do
+            raw_session_bad_request(conn, inspect(reason))
+          else
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(500, Jason.encode!(%{error: inspect(reason)}))
+          end
+      end
+    else
+      {:error, detail} -> raw_session_bad_request(conn, detail)
     end
   end
 
@@ -79,17 +89,18 @@ defmodule Mitos.Web.Router do
   # keymap turns the interaction into the right key sequence, so HTTP callers
   # never deal in raw bytes (use the WS binary path for that).
   post "/sessions/:id/steer" do
-    body = conn.body_params
+    body = map_or_empty(conn.body_params)
 
     with {:ok, interaction} <- steer_interaction(body["interaction"]),
-         [{pid, _}] <- Registry.lookup(Mitos.SessionRegistry, id) do
-      opts =
-        []
-        |> maybe(:text, body["text"])
-        |> maybe(:option, body["option"])
-
-      Mitos.Session.steer(pid, interaction, opts)
-
+         [{pid, _}] <- Registry.lookup(Mitos.SessionRegistry, id),
+         :ok <-
+           Mitos.Session.steer(
+             pid,
+             interaction,
+             []
+             |> maybe(:text, body["text"])
+             |> maybe(:option, body["option"])
+           ) do
       conn
       |> put_resp_content_type("application/json")
       |> send_resp(200, Jason.encode!(%{ok: true, interaction: to_string(interaction)}))
@@ -107,6 +118,17 @@ defmodule Mitos.Web.Router do
           Jason.encode!(%{
             error:
               "interaction must be one of approve, deny, answer, prompt, interrupt, select_option"
+          })
+        )
+
+      {:error, {:invalid_steer, reason}} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(
+          400,
+          Jason.encode!(%{
+            error: "invalid steering request",
+            detail: inspect(reason)
           })
         )
     end
@@ -344,6 +366,23 @@ defmodule Mitos.Web.Router do
     |> send_resp(200, Jason.encode!(%{"apps" => apps, "totals" => %{"apps" => length(apps)}}))
   end
 
+  # POST /apps — add an application to the local registry from a git URL or
+  # local directory. The source is copied/cloned into the tenant-side app
+  # registry; app identity still comes from the manifest content.
+  post "/apps" do
+    body = conn.body_params
+
+    case Mitos.Applications.add_source(app_source(body), install_id(body), app_source_opts(body)) do
+      {:ok, install} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(201, Jason.encode!(%{"install" => install}))
+
+      error ->
+        app_source_error(conn, error)
+    end
+  end
+
   # GET /apps/:id — one local application by directory id, manifest name, or app_id.
   get "/apps/:id" do
     case Mitos.Applications.fetch(id) do
@@ -454,6 +493,8 @@ defmodule Mitos.Web.Router do
            pool: "interactive",
            source: "connector:#{connector}",
            connector: connector,
+           parameters: app_parameters(body),
+           workspace: app_workspace(body),
            idempotency_key: app_idempotency_key(body),
            reply_ref: app_reply_ref(body),
            tenant: tenant_context(body),
@@ -667,15 +708,72 @@ defmodule Mitos.Web.Router do
   # The Svelte console is served with no-cache (not no-store) so the browser
   # revalidates on every load and local builds show up immediately.
   defp serve_webapp_file(conn, relative) do
-    path = Path.join(webapp_dir(), relative)
-
-    if String.contains?(relative, "..") or not File.regular?(path) do
-      send_resp(conn, 404, "not found")
-    else
+    with {:ok, path} <- webapp_file_path(relative),
+         {:ok, bytes} <- read_regular_file(path) do
       conn
       |> put_resp_content_type(MIME.from_path(path))
       |> put_resp_header("cache-control", "no-cache")
-      |> send_resp(200, File.read!(path))
+      |> send_resp(200, bytes)
+    else
+      _ -> send_resp(conn, 404, "not found")
+    end
+  end
+
+  defp webapp_file_path(relative) do
+    root = Path.expand(webapp_dir())
+    path = Path.expand(relative, root)
+
+    cond do
+      Path.type(relative) != :relative ->
+        {:error, :invalid_path}
+
+      ".." in Path.split(relative) ->
+        {:error, :invalid_path}
+
+      not inside_path?(path, root) ->
+        {:error, :invalid_path}
+
+      not no_symlink_path?(path, root) ->
+        {:error, :invalid_path}
+
+      true ->
+        {:ok, path}
+    end
+  end
+
+  defp inside_path?(path, root), do: path == root or String.starts_with?(path, root <> "/")
+
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type == :directory do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -712,6 +810,37 @@ defmodule Mitos.Web.Router do
     |> Map.merge(map_or_empty(body["inputs"]))
     |> Map.merge(task_bindings)
     |> stringify_map()
+  end
+
+  defp app_parameters(body), do: map_or_empty(body["parameters"])
+
+  defp app_workspace(body) do
+    case body do
+      %{"workspace" => workspace} when is_binary(workspace) and workspace != "" ->
+        %{"ref" => workspace}
+
+      %{"workspace" => %{} = workspace} ->
+        workspace
+
+      _ ->
+        nil
+    end
+  end
+
+  defp app_source(body) do
+    body = map_or_empty(body)
+
+    nonempty_string(body["source"]) ||
+      nonempty_string(body["url"]) ||
+      nonempty_string(body["git_url"]) ||
+      nonempty_string(body["path"])
+  end
+
+  defp app_source_opts(body) do
+    body = map_or_empty(body)
+
+    []
+    |> maybe(:tmp_dir, nonempty_string(body["tmp_dir"]))
   end
 
   defp package_id(body) do
@@ -1097,6 +1226,12 @@ defmodule Mitos.Web.Router do
       not is_binary(uri.host) or uri.host == "" ->
         {:error, :broker_forward_url_host_required}
 
+      credentialed_broker_forward_url?(uri) ->
+        {:deny, "broker forward URL must not contain credentials"}
+
+      sensitive_broker_forward_query?(uri.query) ->
+        {:deny, "broker forward URL must not contain credential query parameters"}
+
       broker_destination(uri) != dest ->
         {:deny, "broker forward destination mismatch"}
 
@@ -1156,6 +1291,7 @@ defmodule Mitos.Web.Router do
       |> Map.get("headers", %{})
       |> normalize_forward_headers()
       |> reject_forward_headers()
+      |> reject_secret_forward_headers()
       |> reject_credential_headers(attachment_headers)
       |> maybe_put_content_type(body_content_type)
       |> Kernel.++(attachment_headers)
@@ -1216,6 +1352,14 @@ defmodule Mitos.Web.Router do
       ])
 
     Enum.reject(headers, fn {name, _value} -> MapSet.member?(rejected, name) end)
+  end
+
+  defp reject_secret_forward_headers(headers) do
+    rejected = MapSet.new(["authorization", "proxy-authorization", "cookie", "set-cookie"])
+
+    Enum.reject(headers, fn {name, _value} ->
+      MapSet.member?(rejected, name) or Regex.match?(@secret_forward_header_pattern, name)
+    end)
   end
 
   defp reject_credential_headers(headers, attachment_headers) do
@@ -1507,12 +1651,77 @@ defmodule Mitos.Web.Router do
         %{
           "origin" => "broker_http",
           "method" => body["method"],
-          "url" => body["url"],
+          "url" => public_broker_url(body["url"]),
           "request_bytes" => broker_trace_request_bytes(body)
         }
         |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
         |> Map.new()
     })
+  end
+
+  defp public_broker_url(url) when is_binary(url) do
+    uri = URI.parse(url)
+
+    if is_binary(uri.scheme) and is_binary(uri.host) do
+      uri
+      |> Map.put(:userinfo, nil)
+      |> Map.put(:query, public_broker_url_query(uri.query))
+      |> URI.to_string()
+    else
+      url
+    end
+  end
+
+  defp public_broker_url(url), do: url
+
+  defp credentialed_broker_forward_url?(%URI{userinfo: userinfo})
+       when is_binary(userinfo) and userinfo != "",
+       do: true
+
+  defp credentialed_broker_forward_url?(_uri), do: false
+
+  defp sensitive_broker_forward_query?(nil), do: false
+
+  defp sensitive_broker_forward_query?(query) when is_binary(query) do
+    query
+    |> String.split("&", trim: false)
+    |> Enum.any?(&sensitive_broker_query_pair?/1)
+  end
+
+  defp sensitive_broker_forward_query?(_query), do: false
+
+  defp public_broker_url_query(nil), do: nil
+
+  defp public_broker_url_query(query) do
+    query
+    |> String.split("&", trim: false)
+    |> Enum.map(&public_broker_url_query_pair/1)
+    |> Enum.join("&")
+  end
+
+  defp public_broker_url_query_pair(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+
+    if sensitive_broker_url_query_key?(safe_form_decode(key)) do
+      key <> "=[redacted]"
+    else
+      pair
+    end
+  end
+
+  defp sensitive_broker_query_pair?(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+    sensitive_broker_url_query_key?(safe_form_decode(key))
+  end
+
+  defp sensitive_broker_url_query_key?(key) do
+    Regex.match?(@secret_url_query_key_pattern, to_string(key))
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
   end
 
   defp broker_trace_request_bytes(%{"body_base64" => encoded}) when is_binary(encoded) do
@@ -1752,6 +1961,36 @@ defmodule Mitos.Web.Router do
 
         {:error, reason} ->
           {500, %{error: "application registry failed", detail: inspect(reason)}}
+      end
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp app_source_error(conn, error) do
+    {status, payload} =
+      case error do
+        {:error, {:application_source_not_found, source}} ->
+          {404, %{error: "application source not found", source: source}}
+
+        {:error, {:application_source_conflict, install_id}} ->
+          {409, %{error: "application already installed", install_id: install_id}}
+
+        {:error, {:invalid_application_source, detail}} ->
+          {422, %{error: "invalid application source", detail: detail}}
+
+        {:error, {:application_not_found, path}} ->
+          {404, %{error: "app not found", path: path}}
+
+        {:error, {:invalid_application, detail}} ->
+          {422, %{error: "invalid application manifest", detail: detail}}
+
+        {:error, {:unsupported_manifest_format, detail}} ->
+          {422, %{error: "unsupported application manifest format", detail: detail}}
+
+        {:error, reason} ->
+          {500, %{error: "application install failed", detail: inspect(reason)}}
       end
 
     conn
@@ -2016,6 +2255,38 @@ defmodule Mitos.Web.Router do
 
   defp map_or_empty(%{} = map), do: map
   defp map_or_empty(_), do: %{}
+
+  defp raw_session_argv([command | _rest] = argv) do
+    cond do
+      not Enum.all?(argv, &is_binary/1) ->
+        {:error, "argv entries must be strings"}
+
+      command == "" ->
+        {:error, "argv command must not be empty"}
+
+      Enum.any?(argv, &String.contains?(&1, <<0>>)) ->
+        {:error, "argv entries must not contain NUL"}
+
+      true ->
+        {:ok, argv}
+    end
+  end
+
+  defp raw_session_argv(_argv), do: {:error, "argv must be a non-empty list of strings"}
+
+  defp raw_session_input_error?({:invalid_env, _detail}), do: true
+  defp raw_session_input_error?({:invalid_cwd, _detail}), do: true
+  defp raw_session_input_error?({:invalid_argv, _detail}), do: true
+  defp raw_session_input_error?({:invalid_size, _detail}), do: true
+  defp raw_session_input_error?({:invalid_idle_ms, _detail}), do: true
+  defp raw_session_input_error?({:invalid_open_control, _detail}), do: true
+  defp raw_session_input_error?(_reason), do: false
+
+  defp raw_session_bad_request(conn, detail) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(400, Jason.encode!(%{error: "invalid session request", detail: detail}))
+  end
 
   defp list_or_empty(values) when is_list(values), do: values
   defp list_or_empty(_values), do: []

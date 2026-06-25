@@ -2,6 +2,10 @@ const std = @import("std");
 const runtime = @import("../runtime/types.zig");
 const trace = @import("types.zig");
 
+const FileTraceError = error{
+    SymlinkRejected,
+};
+
 pub const MemoryTraceStore = struct {
     events_appended: usize = 0,
     artifacts_written: usize = 0,
@@ -58,11 +62,14 @@ pub const FileTrace = struct {
         run_id: runtime.RunId,
         options: CreateOptions,
     ) !FileTrace {
-        const run_path = try std.fs.path.join(allocator, &.{ ".runs", run_id.value });
-        defer allocator.free(run_path);
+        try runtime.RunId.validate(run_id.value);
 
-        try base_dir.makePath(run_path);
-        const run_dir = try base_dir.openDir(run_path, .{});
+        try makeRegularDir(base_dir, ".runs");
+        var runs_dir = try base_dir.openDir(".runs", .{ .no_follow = true });
+        defer runs_dir.close();
+
+        try makeRegularDir(runs_dir, run_id.value);
+        const run_dir = try runs_dir.openDir(run_id.value, .{ .no_follow = true });
 
         var self: FileTrace = .{
             .allocator = allocator,
@@ -132,10 +139,7 @@ pub const FileTrace = struct {
     }
 
     pub fn appendBytes(self: *FileTrace, kind: trace.ArtifactKind, bytes: []const u8) !void {
-        var file = try self.run_dir.createFile(trace.defaultArtifactPath(kind), .{ .truncate = false });
-        defer file.close();
-        try file.seekFromEnd(0);
-        try file.writeAll(bytes);
+        try appendFileNoSymlink(self.run_dir, trace.defaultArtifactPath(kind), bytes);
     }
 
     pub fn writeArtifact(
@@ -144,7 +148,7 @@ pub const FileTrace = struct {
         contents: []const u8,
     ) !trace.ArtifactRef {
         const path = trace.defaultArtifactPath(kind);
-        try self.run_dir.writeFile(.{ .sub_path = path, .data = contents });
+        try writeFileNoSymlink(self.run_dir, path, contents);
         return .{ .kind = kind, .path = path };
     }
 
@@ -155,10 +159,7 @@ pub const FileTrace = struct {
             .{ self.run_id.value, options.created_at_ms, options.provider, options.task },
         );
         defer self.allocator.free(manifest);
-        try self.run_dir.writeFile(.{
-            .sub_path = trace.defaultArtifactPath(.run_manifest),
-            .data = manifest,
-        });
+        try writeFileNoSymlink(self.run_dir, trace.defaultArtifactPath(.run_manifest), manifest);
 
         const empty_files = [_][]const u8{
             trace.defaultArtifactPath(.events),
@@ -172,22 +173,81 @@ pub const FileTrace = struct {
             trace.defaultArtifactPath(.test_results),
         };
         for (empty_files) |path| {
-            try self.run_dir.writeFile(.{ .sub_path = path, .data = "" });
+            try writeFileNoSymlink(self.run_dir, path, "");
         }
-        try self.run_dir.makePath(trace.defaultArtifactPath(.screenshot));
-        try self.run_dir.makePath(trace.defaultArtifactPath(.artifact));
+        try makeRegularDir(self.run_dir, trace.defaultArtifactPath(.screenshot));
+        try makeRegularDir(self.run_dir, trace.defaultArtifactPath(.artifact));
     }
 
     fn appendLine(self: *FileTrace, path: []const u8, line: []const u8) !void {
-        var file = try self.run_dir.createFile(path, .{ .truncate = false });
-        defer file.close();
-        try file.seekFromEnd(0);
-        try file.writeAll(line);
+        try appendFileNoSymlink(self.run_dir, path, line);
         if (line.len == 0 or line[line.len - 1] != '\n') {
-            try file.writeAll("\n");
+            try appendFileNoSymlink(self.run_dir, path, "\n");
         }
     }
 };
+
+fn makeRegularDir(dir: std.fs.Dir, path: []const u8) !void {
+    dir.makeDir(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => |e| return e,
+    };
+
+    var opened = try dir.openDir(path, .{ .no_follow = true });
+    opened.close();
+}
+
+fn appendFileNoSymlink(dir: std.fs.Dir, path: []const u8, bytes: []const u8) !void {
+    try rejectSymlink(dir, path);
+    var file = try dir.createFile(path, .{ .truncate = false });
+    defer file.close();
+    try file.seekFromEnd(0);
+    try file.writeAll(bytes);
+}
+
+fn writeFileNoSymlink(dir: std.fs.Dir, path: []const u8, bytes: []const u8) !void {
+    try rejectSymlink(dir, path);
+    dir.deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
+    };
+
+    var file = try dir.createFile(path, .{ .exclusive = true });
+    defer file.close();
+    try file.writeAll(bytes);
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return FileTraceError.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
+}
+
+fn readFileAllocNoSymlink(
+    dir: std.fs.Dir,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    max_bytes: usize,
+) ![]u8 {
+    const fd = std.posix.openat(
+        dir.fd,
+        path,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true },
+        0,
+    ) catch |err| switch (err) {
+        error.SymLinkLoop => return FileTraceError.SymlinkRejected,
+        else => |e| return e,
+    };
+
+    const file: std.fs.File = .{ .handle = fd };
+    defer file.close();
+
+    return file.readToEndAlloc(allocator, max_bytes);
+}
 
 pub const TraceSummary = struct {
     run_id: ?[]u8 = null,
@@ -216,7 +276,8 @@ pub fn summarizeEvents(
     allocator: std.mem.Allocator,
     run_dir: std.fs.Dir,
 ) !TraceSummary {
-    const bytes = run_dir.readFileAlloc(
+    const bytes = readFileAllocNoSymlink(
+        run_dir,
         allocator,
         trace.defaultArtifactPath(.events),
         16 * 1024 * 1024,
@@ -532,6 +593,81 @@ test "file trace writes events and sidecar resources" {
     );
     defer allocator.free(commands);
     try std.testing.expect(std.mem.containsAtLeast(u8, commands, 1, "\"type\":\"process_spawned\""));
+}
+
+test "file trace rejects unsafe run id path segments" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const unsafe_run_id: runtime.RunId = .{ .value = "../escape" };
+
+    try std.testing.expectError(
+        error.UnsafeRunId,
+        FileTrace.create(allocator, tmp.dir, unsafe_run_id, .{}),
+    );
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openDir("escape", .{}));
+}
+
+test "file trace rejects symlinked run directories" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath(".runs");
+    try tmp.dir.makePath("outside");
+    try tmp.dir.symLink("../outside", ".runs/01HSYMLINK", .{ .is_directory = true });
+
+    const run_id = try runtime.RunId.init("01HSYMLINK");
+    try std.testing.expectError(
+        error.NotDir,
+        FileTrace.create(allocator, tmp.dir, run_id, .{}),
+    );
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("outside/run.yaml", .{}));
+}
+
+test "file trace rejects symlinked artifact files" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const run_id = try runtime.RunId.init("01HARTIFACT");
+    var store = try FileTrace.create(allocator, tmp.dir, run_id, .{});
+    defer store.deinit();
+
+    try tmp.dir.writeFile(.{ .sub_path = "outside-events.jsonl", .data = "outside\n" });
+    try store.run_dir.deleteFile(trace.defaultArtifactPath(.events));
+    try store.run_dir.symLink("../../outside-events.jsonl", trace.defaultArtifactPath(.events), .{});
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        store.appendJsonl(.events, "inside"),
+    );
+
+    const outside = try tmp.dir.readFileAlloc(allocator, "outside-events.jsonl", 4096);
+    defer allocator.free(outside);
+    try std.testing.expectEqualStrings("outside\n", outside);
+}
+
+test "trace summary rejects symlinked event logs" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const run_id = try runtime.RunId.init("01HSUMMARY");
+    var store = try FileTrace.create(allocator, tmp.dir, run_id, .{});
+    defer store.deinit();
+
+    try tmp.dir.writeFile(.{ .sub_path = "outside-events.jsonl", .data = "{}\n" });
+    try store.run_dir.deleteFile(trace.defaultArtifactPath(.events));
+    try store.run_dir.symLink("../../outside-events.jsonl", trace.defaultArtifactPath(.events), .{});
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        summarizeEvents(allocator, store.run_dir),
+    );
 }
 
 test "trace summary replays terminal state and audit counts" {

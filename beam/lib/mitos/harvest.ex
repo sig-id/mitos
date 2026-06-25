@@ -53,19 +53,20 @@ defmodule Mitos.Harvest do
         {"", []}
       end
 
-    sha = sha256(patch)
+    public_patch = Mitos.Trace.redact_public_text(patch)
+    sha = sha256(public_patch)
 
-    write_trace_artifact(trace_dir, "diff.patch", patch)
+    write_trace_artifact(trace_dir, "diff.patch", public_patch)
     write_trace_artifact(trace_dir, "files_changed.json", Jason.encode!(files))
 
     {:ok,
      %{
        "path" => "diff.patch",
        "sha256" => sha,
-       "bytes" => byte_size(patch),
+       "bytes" => byte_size(public_patch),
        "files_changed" => files,
-       "empty?" => patch == "",
-       "patch" => patch
+       "empty?" => public_patch == "",
+       "patch" => public_patch
      }}
   end
 
@@ -96,6 +97,13 @@ defmodule Mitos.Harvest do
 
         {:error, :missing} ->
           synthetic_result("RESULT artifact missing", "result_missing", diff)
+
+        {:error, reason} ->
+          synthetic_result(
+            "RESULT artifact unavailable: #{inspect(reason)}",
+            "result_unavailable",
+            diff
+          )
       end
 
     result =
@@ -210,8 +218,7 @@ defmodule Mitos.Harvest do
 
     case {cwd, artifact["path"]} do
       {cwd, path} when is_binary(cwd) and is_binary(path) ->
-        with {:ok, absolute_path} <- workspace_path(cwd, path),
-             {:ok, bytes} <- File.read(absolute_path) do
+        with {:ok, bytes} <- read_workspace_file(cwd, path) do
           artifact
           |> Map.put_new("sha256", sha256(bytes))
           |> Map.put_new("bytes", byte_size(bytes))
@@ -471,8 +478,7 @@ defmodule Mitos.Harvest do
   end
 
   defp evidence_artifact(cwd, path) when is_binary(cwd) and is_binary(path) do
-    with {:ok, absolute_path} <- workspace_path(cwd, path),
-         {:ok, bytes} <- File.read(absolute_path) do
+    with {:ok, bytes} <- read_workspace_file(cwd, path) do
       {:ok,
        %{
          "kind" => "file",
@@ -641,7 +647,7 @@ defmodule Mitos.Harvest do
   defp missing_ref(ref), do: ref
 
   defp git_worktree?(cwd) when is_binary(cwd) do
-    File.dir?(cwd) and
+    trusted_workspace_dir?(cwd) and
       match?(
         {"true\n", 0},
         System.cmd("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree"],
@@ -651,6 +657,17 @@ defmodule Mitos.Harvest do
   end
 
   defp git_worktree?(_cwd), do: false
+
+  defp trusted_workspace_dir?(path) do
+    path = Path.expand(path)
+
+    with {:ok, %{type: :directory}} <- File.lstat(path),
+         true <- no_symlink_absolute_path?(path) do
+      true
+    else
+      _ -> false
+    end
+  end
 
   defp git_output(cwd, args) do
     case System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) do
@@ -677,14 +694,26 @@ defmodule Mitos.Harvest do
 
   defp read_workspace_file(cwd, relative_path) when is_binary(cwd) and is_binary(relative_path) do
     with {:ok, path} <- workspace_path(cwd, relative_path),
-         {:ok, bytes} <- File.read(path) do
+         true <- no_symlink_path?(path, cwd),
+         {:ok, bytes} <- read_regular_file(path) do
       {:ok, bytes}
     else
+      false -> {:error, :symlink}
+      {:error, reason} -> {:error, reason}
       _ -> {:error, :missing}
     end
   end
 
   defp read_workspace_file(_cwd, _relative_path), do: {:error, :missing}
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp workspace_path(cwd, relative_path) do
     path = Path.expand(relative_path, cwd)
@@ -697,8 +726,62 @@ defmodule Mitos.Harvest do
     end
   end
 
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    else
+      false -> false
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
   defp read_jsonl(path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         raw
         |> String.split("\n", trim: true)
@@ -717,7 +800,62 @@ defmodule Mitos.Harvest do
   defp write_trace_artifact(nil, _path, _bytes), do: :ok
 
   defp write_trace_artifact(trace_dir, path, bytes) do
-    File.write!(Path.join(trace_dir, path), bytes)
+    root = Path.expand(trace_dir)
+    target = Path.expand(path, root)
+
+    unless target == root or String.starts_with?(target, root <> "/") do
+      raise ArgumentError, "trace artifact path escapes trace directory"
+    end
+
+    case {File.lstat(root), no_symlink_absolute_path?(root)} do
+      {{:ok, %{type: :directory}}, true} ->
+        write_regular_trace_file!(target, bytes)
+
+      {{:ok, %{type: :symlink}}, _} ->
+        raise ArgumentError, "trace directory must not be a symlink"
+
+      {{:ok, %{type: :directory}}, false} ->
+        raise ArgumentError, "trace directory must not contain symlinks"
+
+      {{:ok, stat}, _} ->
+        raise ArgumentError, "trace directory must be a directory: #{inspect(stat.type)}"
+
+      {{:error, reason}, _} ->
+        raise File.Error, reason: reason, action: "inspect trace directory", path: root
+    end
+  end
+
+  defp write_regular_trace_file!(path, bytes) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        File.rm!(path)
+        write_new_trace_file!(path, bytes)
+
+      {:error, :enoent} ->
+        write_new_trace_file!(path, bytes)
+
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "trace artifact must not be a symlink"
+
+      {:ok, stat} ->
+        raise ArgumentError, "trace artifact must be regular: #{inspect(stat.type)}"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect trace artifact", path: path
+    end
+  end
+
+  defp write_new_trace_file!(path, bytes) do
+    case File.open(path, [:write, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        raise File.Error, reason: reason, action: "write trace artifact", path: path
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "create trace artifact", path: path
+    end
   end
 
   defp sha256(bytes) when is_binary(bytes) do

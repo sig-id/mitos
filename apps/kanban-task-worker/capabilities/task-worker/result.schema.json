@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "required": ["signal", "summary", "task_id", "status", "changed_files", "validation"],
+  "properties": {
+    "signal": {
+      "type": "string",
+      "enum": ["ready_for_review", "blocked", "failed", "no_task"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending_approval", "blocked", "failed", "none"]
+    },
+    "changed_files": {
+      "type": "array"
+    },
+    "validation": {
+      "type": "object"
+    },
+    "evidence": {
+      "type": "array"
+    }
+  }
+}

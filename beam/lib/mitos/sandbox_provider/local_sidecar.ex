@@ -123,27 +123,22 @@ defmodule Mitos.SandboxProvider.LocalSidecar do
 
   def control(session, {:write_stdin, bytes}) when is_binary(bytes) do
     Mitos.Session.write_stdin(session, bytes)
-    :ok
   end
 
   def control(session, {:steer, interaction, opts}) when is_list(opts) do
     Mitos.Session.steer(session, interaction, opts)
-    :ok
   end
 
   def control(session, {:resize, cols, rows}) when is_integer(cols) and is_integer(rows) do
     Mitos.Session.resize(session, cols, rows)
-    :ok
   end
 
   def control(session, {:signal, signum}) when is_integer(signum) do
     Mitos.Session.signal(session, signum)
-    :ok
   end
 
   def control(session, {:shutdown, grace_ms}) when is_integer(grace_ms) do
     Mitos.Session.shutdown(session, grace_ms)
-    :ok
   end
 
   def control(_session, _command), do: {:error, :unsupported_control}

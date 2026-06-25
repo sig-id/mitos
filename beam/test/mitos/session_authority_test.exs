@@ -324,6 +324,66 @@ defmodule Mitos.SessionAuthorityTest do
     assert get_in(pool, ["invocations", "parent-task->child-task", "status"]) == "returned"
   end
 
+  test "tool broker rejects cwd paths containing symlinked parents", %{binary: binary} do
+    session_id =
+      "authority-broker-cwd-symlink-" <> Integer.to_string(System.unique_integer([:positive]))
+
+    trace_base_dir = unique_tmp_dir("session-authority-broker-cwd-symlink-trace")
+    outside = unique_tmp_dir("session-authority-broker-cwd-symlink-outside")
+    link = unique_tmp_dir("session-authority-broker-cwd-symlink-link")
+
+    File.mkdir_p!(Path.join(outside, "workspace"))
+    File.ln_s!(outside, link)
+
+    on_exit(fn ->
+      stop_session(session_id)
+      File.rm_rf!(trace_base_dir)
+      File.rm_rf!(outside)
+      File.rm(link)
+    end)
+
+    Mitos.PubSub.subscribe(session_id)
+
+    {:ok, run} =
+      Mitos.Agent.start(
+        session_id: session_id,
+        trace_base_dir: trace_base_dir,
+        project_id: "proj-a",
+        provider: "generic",
+        task: "",
+        transport_order: ["pty"],
+        argv: ["/bin/sh", "-c", "sleep 10"],
+        sidecar_path: binary,
+        idle_ms: 50,
+        egress_policy: [
+          %{
+            "id" => "allow-api-example",
+            "dest" => "api.example.test",
+            "requires_approval" => true
+          }
+        ]
+      )
+
+    %{launch_spec: %{authority: authority}} = :sys.get_state(run.pid)
+    marker = Path.join([outside, "workspace", "broker-ran.txt"])
+
+    response =
+      authorized_request(run.pid, session_id, authority.socket_path, %{
+        "method" => "tool_broker",
+        "token" => authority.token,
+        "context" => %{
+          "argv" => ["/bin/sh", "-c", "printf ran > broker-ran.txt"],
+          "cwd" => Path.join(link, "workspace"),
+          "dest" => "api.example.test"
+        }
+      })
+
+    assert response["ok"] == false
+    assert response["error"] == "request_failed"
+    assert response["detail"] =~ "tool_broker cwd must not contain symlinks"
+    refute File.exists?(marker)
+  end
+
   test "subrun spawn timeout resumes parked parent with an error result", %{binary: binary} do
     session_id =
       "authority-subrun-timeout-" <> Integer.to_string(System.unique_integer([:positive]))
@@ -386,6 +446,69 @@ defmodule Mitos.SessionAuthorityTest do
     assert get_in(pool, ["tasks", "child-timeout", "status_reason"]) == "timeout"
     assert get_in(pool, ["invocations", "parent-timeout->child-timeout", "result"]) == result
     assert Enum.any?(events, &(Map.get(&1, "type") == "subtask_timed_out"))
+  end
+
+  test "authority memory methods reject symlinked memory files", %{binary: binary} do
+    session_id =
+      "authority-memory-symlink-" <> Integer.to_string(System.unique_integer([:positive]))
+
+    trace_base_dir = unique_tmp_dir("session-authority-memory-symlink-trace")
+    outside = unique_tmp_dir("session-authority-memory-symlink-outside")
+
+    on_exit(fn ->
+      File.rm_rf!(trace_base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    Mitos.PubSub.subscribe(session_id)
+
+    {:ok, run} =
+      Mitos.Agent.start(
+        session_id: session_id,
+        trace_base_dir: trace_base_dir,
+        project_id: "proj-a",
+        provider: "generic",
+        task: "",
+        transport_order: ["pty"],
+        argv: ["/bin/sh", "-c", "sleep 10"],
+        sidecar_path: binary,
+        idle_ms: 50
+      )
+
+    on_exit(fn -> stop_session(session_id) end)
+
+    %{launch_spec: %{authority: authority}} = :sys.get_state(run.pid)
+    run_dir = Path.join([trace_base_dir, ".runs", session_id])
+    memory_dir = Path.join([run_dir, "artifacts", "memory", "proj-a"])
+    File.mkdir_p!(memory_dir)
+    File.mkdir_p!(outside)
+
+    outside_file = Path.join(outside, "linked-memory")
+    File.write!(outside_file, "outside secret")
+    File.ln_s!(outside_file, Path.join(memory_dir, "linked"))
+
+    fetch =
+      authorized_request(run.pid, session_id, authority.socket_path, %{
+        "method" => "memory_fetch",
+        "token" => authority.token,
+        "context" => %{"key" => "linked"}
+      })
+
+    assert fetch["ok"] == false
+    assert fetch["error"] == "request_failed"
+    assert fetch["detail"] =~ "memory file must not be a symlink"
+
+    put =
+      authorized_request(run.pid, session_id, authority.socket_path, %{
+        "method" => "memory_put",
+        "token" => authority.token,
+        "context" => %{"key" => "linked", "bytes" => "overwritten"}
+      })
+
+    assert put["ok"] == false
+    assert put["error"] == "request_failed"
+    assert put["detail"] =~ "memory file must not be a symlink"
+    assert File.read!(outside_file) == "outside secret"
   end
 
   test "egress policy auto-allows matching broker destination and denies the rest", %{

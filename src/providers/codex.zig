@@ -8,8 +8,25 @@ pub const provider_id = adapters.ProviderId{ .value = "codex" };
 pub const exec_adapter_id = adapters.AdapterId{ .value = "codex.exec" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "codex.pty" };
 
+const pty_terminal_chrome_markers = [_][]const u8{
+    "OpenAI Codex",
+    "model:",
+    "directory:",
+    "Tip:",
+    "Context ",
+    "% used",
+    "gpt-",
+    "/model to change",
+    "esc to interrupt",
+    "Booting MCP",
+    "MCP startup",
+    "Working",
+    "Thinking",
+};
+pub const pty_terminal_observation = adapters.terminalObservationProviderTui(&pty_terminal_chrome_markers);
+
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const unavailable_warnings = [_][]const u8{"codex binary was not found on PATH"};
+const unavailable_warnings = [_][]const u8{"codex binary was not found on PATH or common toolchain directories"};
 const no_json_warnings = [_][]const u8{"codex exec does not advertise --json support"};
 
 pub fn initExecAdapter() adapters.AgentAdapter {

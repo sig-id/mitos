@@ -19,6 +19,7 @@ pub const ResolvedLaunch = struct {
     provider: adapters.ProviderId,
     adapter: adapters.AdapterId,
     transport_name: transport.TransportName,
+    terminal_observation: adapters.TerminalObservationProfile = adapters.terminal_observation_generic_pty,
     argv: []const []const u8,
     cwd: ?[]const u8 = null,
     initial_input: ?[]const u8 = null,
@@ -30,6 +31,128 @@ pub const ResolvedLaunch = struct {
             if (self.initial_input) |input| allocator.free(input);
         }
     }
+};
+
+const PtyCommand = struct {
+    argv: []const []const u8,
+    cwd: []const u8,
+    initial_input: ?[]const u8 = null,
+    owns_initial_input: bool = false,
+};
+
+const PtyBuildFn = *const fn (std.mem.Allocator, adapters.Task, []const u8) anyerror!PtyCommand;
+const StdioJsonBuildFn = *const fn (std.mem.Allocator, adapters.Task, []const u8) anyerror!headless.HeadlessCommand;
+
+const PtyLaunchAdapter = struct {
+    aliases: []const []const u8,
+    provider: adapters.ProviderId,
+    adapter: adapters.AdapterId,
+    terminal_observation: adapters.TerminalObservationProfile,
+    build: PtyBuildFn,
+};
+
+const StdioJsonLaunchAdapter = struct {
+    aliases: []const []const u8,
+    provider: adapters.ProviderId,
+    adapter: adapters.AdapterId,
+    build: StdioJsonBuildFn,
+};
+
+const pty_launch_adapters = [_]PtyLaunchAdapter{
+    .{
+        .aliases = &.{"fake"},
+        .provider = fake.provider_id,
+        .adapter = fake.pty_adapter_id,
+        .terminal_observation = fake.pty_terminal_observation,
+        .build = buildFakePty,
+    },
+    .{
+        .aliases = &.{"claude"},
+        .provider = claude.provider_id,
+        .adapter = claude.pty_adapter_id,
+        .terminal_observation = claude.pty_terminal_observation,
+        .build = buildClaudePty,
+    },
+    .{
+        .aliases = &.{ "claudecode", "claude-code" },
+        .provider = claude.claudecode_provider_id,
+        .adapter = claude.claudecode_pty_adapter_id,
+        .terminal_observation = claude.pty_terminal_observation,
+        .build = buildClaudePty,
+    },
+    .{
+        .aliases = &.{"codex"},
+        .provider = codex.provider_id,
+        .adapter = codex.pty_adapter_id,
+        .terminal_observation = codex.pty_terminal_observation,
+        .build = buildCodexPty,
+    },
+    .{
+        .aliases = &.{"gemini"},
+        .provider = gemini.provider_id,
+        .adapter = gemini.pty_adapter_id,
+        .terminal_observation = gemini.pty_terminal_observation,
+        .build = buildGeminiPty,
+    },
+    .{
+        .aliases = &.{"opencode"},
+        .provider = opencode.provider_id,
+        .adapter = opencode.pty_adapter_id,
+        .terminal_observation = opencode.pty_terminal_observation,
+        .build = buildOpencodePty,
+    },
+    .{
+        .aliases = &.{"pi"},
+        .provider = pi.provider_id,
+        .adapter = pi.pty_adapter_id,
+        .terminal_observation = pi.pty_terminal_observation,
+        .build = buildPiPty,
+    },
+};
+
+const stdio_json_launch_adapters = [_]StdioJsonLaunchAdapter{
+    .{
+        .aliases = &.{"fake"},
+        .provider = fake.provider_id,
+        .adapter = fake.headless_adapter_id,
+        .build = fake.buildHeadlessCommand,
+    },
+    .{
+        .aliases = &.{"claude"},
+        .provider = claude.provider_id,
+        .adapter = claude.print_adapter_id,
+        .build = claude.buildPrintCommand,
+    },
+    .{
+        .aliases = &.{ "claudecode", "claude-code" },
+        .provider = claude.claudecode_provider_id,
+        .adapter = claude.claudecode_print_adapter_id,
+        .build = claude.buildPrintCommand,
+    },
+    .{
+        .aliases = &.{"codex"},
+        .provider = codex.provider_id,
+        .adapter = codex.exec_adapter_id,
+        .build = codex.buildExecCommand,
+    },
+    .{
+        .aliases = &.{"gemini"},
+        .provider = gemini.provider_id,
+        .adapter = gemini.headless_adapter_id,
+        .build = gemini.buildHeadlessCommand,
+    },
+    .{
+        .aliases = &.{"opencode"},
+        .provider = opencode.provider_id,
+        .adapter = opencode.run_adapter_id,
+        .build = opencode.buildRunCommand,
+    },
+    .{
+        .aliases = &.{"pi"},
+        .provider = pi.provider_id,
+        .adapter = pi.json_adapter_id,
+        .build = pi.buildJsonCommand,
+    },
 };
 
 pub fn resolve(
@@ -93,71 +216,17 @@ fn resolveProviderPty(
     const cwd = spec.cwd orelse ".";
     const task: adapters.Task = .{ .text = spec.task };
 
-    if (std.mem.eql(u8, spec.provider, "fake")) {
-        const command = try fake.buildPtyCommand(allocator, task, cwd);
+    if (findPtyLaunchAdapter(spec.provider)) |entry| {
+        const command = try entry.build(allocator, task, cwd);
         return .{
-            .provider = fake.provider_id,
-            .adapter = fake.pty_adapter_id,
+            .provider = entry.provider,
+            .adapter = entry.adapter,
             .transport_name = .pty,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-
-    if (isClaudeProvider(spec.provider)) {
-        const command = try claude.buildPtyCommand(allocator, task, cwd);
-        return .{
-            .provider = if (std.mem.eql(u8, spec.provider, "claude")) claude.provider_id else claude.claudecode_provider_id,
-            .adapter = if (std.mem.eql(u8, spec.provider, "claude")) claude.pty_adapter_id else claude.claudecode_pty_adapter_id,
-            .transport_name = .pty,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-
-    if (std.mem.eql(u8, spec.provider, "codex")) {
-        const command = try codex.buildPtyCommand(allocator, task, cwd);
-        return .{
-            .provider = codex.provider_id,
-            .adapter = codex.pty_adapter_id,
-            .transport_name = .pty,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-
-    if (std.mem.eql(u8, spec.provider, "gemini")) {
-        const command = try gemini.buildPtyCommand(allocator, task, cwd);
-        return .{
-            .provider = gemini.provider_id,
-            .adapter = gemini.pty_adapter_id,
-            .transport_name = .pty,
+            .terminal_observation = entry.terminal_observation,
             .argv = command.argv,
             .cwd = command.cwd,
             .initial_input = command.initial_input,
-            .owns_initial_input = true,
-        };
-    }
-
-    if (std.mem.eql(u8, spec.provider, "opencode")) {
-        const command = try opencode.buildPtyCommand(allocator, task, cwd);
-        return .{
-            .provider = opencode.provider_id,
-            .adapter = opencode.pty_adapter_id,
-            .transport_name = .pty,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-
-    if (std.mem.eql(u8, spec.provider, "pi")) {
-        const command = try pi.buildPtyCommand(allocator, task, cwd);
-        return .{
-            .provider = pi.provider_id,
-            .adapter = pi.pty_adapter_id,
-            .transport_name = .pty,
-            .argv = command.argv,
-            .cwd = command.cwd,
+            .owns_initial_input = command.owns_initial_input,
         };
     }
 
@@ -171,6 +240,7 @@ fn resolveProviderPty(
             .provider = .{ .value = "generic-pty" },
             .adapter = .{ .value = "generic-pty.terminal" },
             .transport_name = .pty,
+            .terminal_observation = adapters.terminal_observation_generic_pty,
             .argv = argv,
             .cwd = spec.cwd,
             .initial_input = if (spec.task.len == 0) null else spec.task,
@@ -184,57 +254,13 @@ fn resolveProviderStdioJson(
     allocator: std.mem.Allocator,
     spec: transport.LaunchSpec,
 ) !ResolvedLaunch {
-    const command = try resolveStdioJson(allocator, spec);
-
-    if (std.mem.eql(u8, spec.provider, "fake")) {
+    if (findStdioJsonLaunchAdapter(spec.provider)) |entry| {
+        const cwd = spec.cwd orelse ".";
+        const task: adapters.Task = .{ .text = spec.task };
+        const command = try entry.build(allocator, task, cwd);
         return .{
-            .provider = fake.provider_id,
-            .adapter = fake.headless_adapter_id,
-            .transport_name = .stdio_json,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-    if (isClaudeProvider(spec.provider)) {
-        return .{
-            .provider = if (std.mem.eql(u8, spec.provider, "claude")) claude.provider_id else claude.claudecode_provider_id,
-            .adapter = if (std.mem.eql(u8, spec.provider, "claude")) claude.print_adapter_id else claude.claudecode_print_adapter_id,
-            .transport_name = .stdio_json,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-    if (std.mem.eql(u8, spec.provider, "codex")) {
-        return .{
-            .provider = codex.provider_id,
-            .adapter = codex.exec_adapter_id,
-            .transport_name = .stdio_json,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-    if (std.mem.eql(u8, spec.provider, "gemini")) {
-        return .{
-            .provider = gemini.provider_id,
-            .adapter = gemini.headless_adapter_id,
-            .transport_name = .stdio_json,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-    if (std.mem.eql(u8, spec.provider, "opencode")) {
-        return .{
-            .provider = opencode.provider_id,
-            .adapter = opencode.run_adapter_id,
-            .transport_name = .stdio_json,
-            .argv = command.argv,
-            .cwd = command.cwd,
-        };
-    }
-    if (std.mem.eql(u8, spec.provider, "pi")) {
-        return .{
-            .provider = pi.provider_id,
-            .adapter = pi.json_adapter_id,
+            .provider = entry.provider,
+            .adapter = entry.adapter,
             .transport_name = .stdio_json,
             .argv = command.argv,
             .cwd = command.cwd,
@@ -248,46 +274,93 @@ pub fn resolveStdioJson(
     allocator: std.mem.Allocator,
     spec: transport.LaunchSpec,
 ) !headless.HeadlessCommand {
+    const entry = findStdioJsonLaunchAdapter(spec.provider) orelse return error.TransportUnavailable;
     const cwd = spec.cwd orelse ".";
     const task: adapters.Task = .{ .text = spec.task };
 
-    if (std.mem.eql(u8, spec.provider, "fake")) {
-        const argv = try allocator.alloc([]const u8, 5);
-        argv[0] = "/bin/sh";
-        argv[1] = "-c";
-        argv[2] = "case \"$1\" in *\"token usage\"*) printf '%s\\n' '{\"type\":\"token_usage\",\"provider\":\"fake\",\"model\":\"fake-local\",\"input_tokens\":7,\"output_tokens\":3,\"usd\":0.11,\"wall_ms\":125}';; esac; printf 'FAKE_FINAL: %s\\n' \"$1\"";
-        argv[3] = "mitos-fake-provider";
-        argv[4] = spec.task;
-        return .{ .argv = argv, .cwd = cwd };
-    }
-
-    if (isClaudeProvider(spec.provider)) {
-        return try claude.buildPrintCommand(allocator, task, cwd);
-    }
-
-    if (std.mem.eql(u8, spec.provider, "codex")) {
-        return try codex.buildExecCommand(allocator, task, cwd);
-    }
-
-    if (std.mem.eql(u8, spec.provider, "gemini")) {
-        return try gemini.buildHeadlessCommand(allocator, task, cwd);
-    }
-
-    if (std.mem.eql(u8, spec.provider, "opencode")) {
-        return try opencode.buildRunCommand(allocator, task, cwd);
-    }
-
-    if (std.mem.eql(u8, spec.provider, "pi")) {
-        return try pi.buildJsonCommand(allocator, task, cwd);
-    }
-
-    return error.TransportUnavailable;
+    return try entry.build(allocator, task, cwd);
 }
 
-fn isClaudeProvider(provider: []const u8) bool {
-    return std.mem.eql(u8, provider, "claude") or
-        std.mem.eql(u8, provider, "claudecode") or
-        std.mem.eql(u8, provider, "claude-code");
+fn findPtyLaunchAdapter(provider: []const u8) ?*const PtyLaunchAdapter {
+    for (&pty_launch_adapters) |*entry| {
+        if (matchesAnyAlias(provider, entry.aliases)) return entry;
+    }
+    return null;
+}
+
+fn findStdioJsonLaunchAdapter(provider: []const u8) ?*const StdioJsonLaunchAdapter {
+    for (&stdio_json_launch_adapters) |*entry| {
+        if (matchesAnyAlias(provider, entry.aliases)) return entry;
+    }
+    return null;
+}
+
+fn matchesAnyAlias(provider: []const u8, aliases: []const []const u8) bool {
+    for (aliases) |alias| {
+        if (std.mem.eql(u8, provider, alias)) return true;
+    }
+    return false;
+}
+
+fn commandFromHeadless(command: headless.HeadlessCommand) PtyCommand {
+    return .{
+        .argv = command.argv,
+        .cwd = command.cwd,
+    };
+}
+
+fn buildFakePty(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) anyerror!PtyCommand {
+    return commandFromHeadless(try fake.buildPtyCommand(allocator, task, cwd));
+}
+
+fn buildClaudePty(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) anyerror!PtyCommand {
+    return commandFromHeadless(try claude.buildPtyCommand(allocator, task, cwd));
+}
+
+fn buildCodexPty(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) anyerror!PtyCommand {
+    return commandFromHeadless(try codex.buildPtyCommand(allocator, task, cwd));
+}
+
+fn buildGeminiPty(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) anyerror!PtyCommand {
+    const command = try gemini.buildPtyCommand(allocator, task, cwd);
+    return .{
+        .argv = command.argv,
+        .cwd = command.cwd,
+        .initial_input = command.initial_input,
+        .owns_initial_input = true,
+    };
+}
+
+fn buildOpencodePty(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) anyerror!PtyCommand {
+    return commandFromHeadless(try opencode.buildPtyCommand(allocator, task, cwd));
+}
+
+fn buildPiPty(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) anyerror!PtyCommand {
+    return commandFromHeadless(try pi.buildPtyCommand(allocator, task, cwd));
 }
 
 test "resolves fake pty launch without BEAM provider knowledge" {
@@ -303,6 +376,7 @@ test "resolves fake pty launch without BEAM provider knowledge" {
     try std.testing.expectEqualStrings("fake", resolved.provider.value);
     try std.testing.expectEqualStrings("fake.pty", resolved.adapter.value);
     try std.testing.expectEqual(transport.TransportName.pty, resolved.transport_name);
+    try std.testing.expect(resolved.terminal_observation.emit_raw_refs);
     try std.testing.expectEqualStrings("/bin/sh", resolved.argv[0]);
 }
 
@@ -317,6 +391,8 @@ test "resolves codex pty launch through provider registry" {
     defer resolved.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("codex.pty", resolved.adapter.value);
+    try std.testing.expect(!resolved.terminal_observation.emit_raw_refs);
+    try std.testing.expect(resolved.terminal_observation.extract_visible_text);
     try std.testing.expectEqualStrings("codex", resolved.argv[0]);
     try std.testing.expectEqualStrings("--cd", resolved.argv[2]);
 }

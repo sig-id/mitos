@@ -8,8 +8,16 @@ pub const provider_id = adapters.ProviderId{ .value = "gemini" };
 pub const headless_adapter_id = adapters.AdapterId{ .value = "gemini.headless" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "gemini.pty" };
 
+const pty_terminal_chrome_markers = [_][]const u8{
+    "Working",
+    "Thinking",
+    "loading",
+    "connected",
+};
+pub const pty_terminal_observation = adapters.terminalObservationProviderTui(&pty_terminal_chrome_markers);
+
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const unavailable_warnings = [_][]const u8{"gemini binary was not found on PATH"};
+const unavailable_warnings = [_][]const u8{"gemini binary was not found on PATH or common toolchain directories"};
 const unsupported_warnings = [_][]const u8{"gemini does not advertise --prompt stream-json support"};
 
 pub fn initHeadlessAdapter() adapters.AgentAdapter {

@@ -69,9 +69,12 @@ entrypoints:                           # §4 — the runnable surface + input co
     pipeline: resize-and-deliver
     title: Resize an image
     description: Upload an image and target dimensions; get a resized, watermarked file.
-    workspace: dataset                 # repo | dataset | none  (01 §8.7 payload.workspace)
-    inputs:                            # JSON Schema (abbrev.) → Task payload.inputs
+    workspace: { kind: dataset }        # {kind: repo|dataset|none, ref?, refspec?} (01 §8.7 payload.workspace)
+    inputs:                            # JSON Schema (abbrev.) → Task payload.inputs  (the SUBJECT data)
       schema: { image: { type: file }, width: { type: int }, height: { type: int } }
+    parameters:                        # §4.1 — per-run KNOBS (how to run), typed, with defaults
+      - { name: format, type: string, default: webp, description: "Output format: webp|png|jpg." }
+      - { name: keep_original, type: boolean, default: false, description: "Retain the unresized input." }
     defaults:                          # optional run defaults (04 §8.1 / 01 §8.7)
       budget: { usd: 2, wall_ms: 300000 }
       constraints: [ "stay within sRGB" ]
@@ -127,24 +130,54 @@ Not every pipeline is user-facing; some are internal (e.g. invoked as subtasks,
 **how to collect their input** — the contract a Run & Watch form (`11 §4`) or a
 connector payload (`10 §3`) satisfies.
 
-An entrypoint maps directly onto a **Task** (`01 §8.7`) at run time:
+An entrypoint maps directly onto a **Task** (`01 §8.7`) at run time. Its input
+contract is **three kinds of thing a caller supplies**, kept distinct because
+they are collected, defaulted, and trusted differently:
 
 ```
-run(entrypoint=resize, inputs=I)  ⇒  Task {
-    pipeline : <entrypoint.pipeline>,                       # 01 §8.7 pipeline
-    payload  : { intent, workspace: <entrypoint.workspace>, # 01 §8.7 payload
-                 inputs: I, constraints, success_criteria },
+run(entrypoint=resize, workspace=W, inputs=I, parameters=P)  ⇒  Task {
+    pipeline : <entrypoint.pipeline>,                           # 01 §8.7 pipeline
+    payload  : { intent, workspace: W, inputs: I, parameters: P,   # 01 §8.7 payload
+                 constraints, success_criteria },
     budget   : <entrypoint.defaults.budget | tenant default>,
-    source   : human | connector:<name> | trigger:<id>      # who ran it (10 §3)
+    source   : human | connector:<name> | trigger:<id>        # who ran it (10 §3)
 }  ⇒ dispatch ⇒ run (04)
 ```
 
-- `inputs.schema` is **JSON Schema** (aligning with the tool I/O dialect question,
-  `03 §11.4`); it lets the platform render a form, validate a connector payload,
-  and reject a malformed run before any model spend.
-- `workspace ∈ {repo, dataset, none}` matches `01 §8.7`'s optional workspace.
+| Field | Is | Supplied by | Defaulted? |
+|---|---|---|---|
+| **`workspace`** | the **data substrate** the run operates on — a repo or dataset | the caller (a git URL/path + optional refspec), resolved + cloned by `prepare` (`01 §7`, `05 §5.4`) | no (when `kind != none`) |
+| **`inputs`** | the run's **subject data** — *what* to work on (a kanban path + task id, a diff command, a file) | the caller, validated against `inputs.schema` | per JSON Schema `required` |
+| **`parameters`** | per-run **knobs** — *how* to run (worker parallelism, severity floor, output format) | the caller, validated against `parameters[]` | **yes — each has a `default`** |
+
+- `inputs.schema` is **JSON Schema** (aligning with the tool I/O dialect
+  question, `03 §11.4`); it lets the platform render a form, validate a
+  connector payload, and reject a malformed run before any model spend.
+- `parameters[]` is a flat array of `{ name, type, default?, description? }`
+  using the same type vocabulary as `inputs.schema`. A caller MAY omit any
+  parameter and the entrypoint's `default` is applied; this is what a Run form
+  renders as labeled controls independent of the data (§4.1).
+- `workspace: { kind, ref?, refspec? }` matches `01 §8.7`'s payload workspace.
+  `kind` is declared by the entrypoint (`repo | dataset | none`); `ref`/`refspec`
+  are supplied at run time. Because resolution (clone/checkout) happens **server-
+  side in `prepare`**, the browser/connector only ever passes a ref — **it never
+  handles git credentials** (creds stay in the control-plane vault, `01 §8.5`,
+  `10 §7`). A bare `kind` string (`workspace: repo`) is accepted as shorthand for
+  `{ kind: repo }`.
 - `defaults` seed the run's `budget`/`constraints`; a caller MAY override within
-  tenant limits (`08 §3` budget ceilings).
+  tenant limits (`08 §3` budget ceilings). `parameters` defaults are a separate,
+  narrower mechanism for per-run knobs and do not overlap with `defaults`.
+
+### 4.1 Why data and parameters are separate
+
+Conflating them (one flat `inputs` bag) hides the distinction a Run form and a
+connector both need: the **subject data** is required, run-specific, and rarely
+has a sane default (which repo? which task?), while **parameters** are optional
+knobs with sensible defaults the user tweaks per run. Splitting them lets the
+frontend render a *workspace picker*, a *data* section, and a *parameters*
+section — and lets a connector omit parameters entirely and inherit defaults,
+supplying only the data. At execution the two are merged into the capability's
+template bindings, so a pipeline/`{{placeholder}}` resolves from either.
 
 ---
 
@@ -261,8 +294,13 @@ The application manifest is **not an authority surface**. Authority stays where
 
 ## 11. Open questions
 
-1. **Inputs dialect:** JSON Schema for `entrypoints[].inputs` vs a lighter typed
-   DSL — MUST align with the tool I/O dialect decision (`03 §11.4`).
+1. **Inputs dialect:** ~~JSON Schema for `entrypoints[].inputs` vs a lighter typed
+   DSL~~ — decided: JSON Schema for `inputs`, and a flat `{name,type,default?}`
+   array for `parameters` (§4). Both MUST keep aligning with the tool I/O dialect
+   decision (`03 §11.4`). Workspace supply is now `{kind, ref?, refspec?}`,
+   resolved server-side (§4). Remaining sub-question: enum/`oneOf` support for
+   parameters (e.g. a fixed policy set) — currently a free `string` with the
+   options named in `description`.
 2. **OCI artifact shape:** referenced capability images via OCI `subject`/referrers
    vs an index image embedding them — affects pull cost and registry support.
 3. **Versioning UX:** when a referenced capability has a newer digest, is bumping

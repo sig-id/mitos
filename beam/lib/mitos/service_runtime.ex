@@ -657,7 +657,7 @@ defmodule Mitos.ServiceRuntime do
       case condition["type"] do
         "file_exists" ->
           path = condition["path"]
-          is_binary(path) and File.exists?(path)
+          regular_file_exists?(path)
 
         "env_present" ->
           condition_env(opts, condition["name"]) not in [nil, ""]
@@ -680,6 +680,41 @@ defmodule Mitos.ServiceRuntime do
     |> maybe_put("path", condition["path"])
     |> maybe_put("name", condition["name"])
     |> maybe_put("command", condition["command"])
+  end
+
+  defp regular_file_exists?(path) when is_binary(path) do
+    path = Path.expand(path)
+
+    no_symlink_absolute_path?(path) and
+      match?({:ok, %{type: :regular}}, File.lstat(path))
+  end
+
+  defp regular_file_exists?(_path), do: false
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
   end
 
   defp condition_env(opts, name) when is_binary(name) do

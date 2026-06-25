@@ -8,6 +8,7 @@ pub const WorkspaceError = error{
     EmptyRepoRoot,
     EmptyBaseBranch,
     UnsafeRunId,
+    SymlinkRejected,
     GitFailed,
 };
 
@@ -120,7 +121,7 @@ pub fn finalizeGitWorktree(
 }
 
 pub fn createGitWorktree(allocator: std.mem.Allocator, plan: WorktreePlan) !void {
-    try std.fs.cwd().makePath(plan.worktree_root);
+    try ensureWorktreeRoot(plan.repo_root);
     try runGitDiscardingOutput(allocator, plan.repo_root, &.{
         "git",
         "-C",
@@ -131,6 +132,21 @@ pub fn createGitWorktree(allocator: std.mem.Allocator, plan: WorktreePlan) !void
         plan.host_path,
         plan.base_branch,
     });
+}
+
+fn ensureWorktreeRoot(repo_root: []const u8) !void {
+    try validateDirNoSymlink(repo_root);
+    var repo_dir = try std.fs.openDirAbsolute(repo_root, .{ .no_follow = true });
+    defer repo_dir.close();
+
+    try rejectSymlink(repo_dir, default_worktree_dir);
+    repo_dir.makeDir(default_worktree_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => |e| return e,
+    };
+
+    var worktree_root = try repo_dir.openDir(default_worktree_dir, .{ .no_follow = true });
+    worktree_root.close();
 }
 
 pub fn cleanupGitWorktree(allocator: std.mem.Allocator, plan: WorktreePlan) !void {
@@ -146,6 +162,7 @@ pub fn cleanupGitWorktree(allocator: std.mem.Allocator, plan: WorktreePlan) !voi
 }
 
 pub fn captureDiff(allocator: std.mem.Allocator, worktree_path: []const u8) ![]u8 {
+    try validateDirNoSymlink(worktree_path);
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "git", "-C", worktree_path, "diff", "--binary", "--" },
@@ -158,6 +175,7 @@ pub fn captureDiff(allocator: std.mem.Allocator, worktree_path: []const u8) ![]u
 }
 
 pub fn captureChangedFiles(allocator: std.mem.Allocator, worktree_path: []const u8) ![]const FileChange {
+    try validateDirNoSymlink(worktree_path);
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ "git", "-C", worktree_path, "status", "--porcelain=v1" },
@@ -199,6 +217,7 @@ pub fn captureWorkspaceSnapshot(allocator: std.mem.Allocator, worktree_path: []c
 }
 
 fn runGitDiscardingOutput(allocator: std.mem.Allocator, cwd: []const u8, argv: []const []const u8) !void {
+    try validateDirNoSymlink(cwd);
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
@@ -227,6 +246,45 @@ fn validateRunIdPathSegment(value: []const u8) WorkspaceError!void {
     }
 }
 
+fn validateDirNoSymlink(path: []const u8) !void {
+    if (path.len == 0) return error.FileNotFound;
+
+    var it = try std.fs.path.componentIterator(path);
+    var current: std.fs.Dir = undefined;
+    var current_owned = false;
+    if (it.root()) |root| {
+        current = try std.fs.openDirAbsolute(root, .{ .no_follow = true });
+        current_owned = true;
+    } else {
+        current = std.fs.cwd();
+    }
+    defer if (current_owned) current.close();
+
+    var component = it.next() orelse return;
+    while (true) {
+        try rejectSymlink(current, component.name);
+        const child = current.openDir(component.name, .{ .no_follow = true }) catch |err| switch (err) {
+            error.SymLinkLoop => return error.SymlinkRejected,
+            else => |e| return e,
+        };
+        if (current_owned) current.close();
+        current = child;
+        current_owned = true;
+
+        component = it.next() orelse return;
+    }
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return error.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
+}
+
 test "git worktree plan uses stable per-run workspace path" {
     const allocator = std.testing.allocator;
     const run_id = try runtime.RunId.init("01HXYZ");
@@ -247,10 +305,27 @@ test "git worktree plan uses stable per-run workspace path" {
 
 test "git worktree plan rejects path-like run ids" {
     const allocator = std.testing.allocator;
-    const run_id = try runtime.RunId.init("../escape");
+    const run_id: runtime.RunId = .{ .value = "../escape" };
     const workspace: config.WorkspaceConfig = .{ .base_branch = "main" };
 
     try std.testing.expectError(error.UnsafeRunId, planGitWorktree(allocator, "/repo", run_id, workspace));
+}
+
+test "git worktree root rejects symlinks" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("repo");
+    try tmp.dir.makeDir("outside");
+    try tmp.dir.symLink("../outside", "repo/.agent-worktrees", .{ .is_directory = true });
+
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+    const repo_path = try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", tmp.sub_path[0..], "repo" });
+    defer allocator.free(repo_path);
+
+    try std.testing.expectError(error.SymlinkRejected, ensureWorktreeRoot(repo_path));
 }
 
 test "git worktree lifecycle captures pre and post run snapshots" {
@@ -298,4 +373,30 @@ test "git worktree lifecycle captures pre and post run snapshots" {
     try std.testing.expectEqualStrings("README.md", post.changed_files[0].path);
     try std.testing.expect(std.mem.indexOf(u8, post.diff_patch, "-base") != null);
     try std.testing.expect(std.mem.indexOf(u8, post.diff_patch, "+changed") != null);
+}
+
+test "git snapshot rejects symlinked worktree paths before invoking git" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("repo");
+    var repo_dir = try tmp.dir.openDir("repo", .{});
+    defer repo_dir.close();
+    try repo_dir.writeFile(.{ .sub_path = "README.md", .data = "base\n" });
+
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+    const base_path = try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", tmp.sub_path[0..] });
+    defer allocator.free(base_path);
+    const repo_path = try std.fs.path.join(allocator, &.{ base_path, "repo" });
+    defer allocator.free(repo_path);
+
+    try runGitDiscardingOutput(allocator, repo_path, &.{ "git", "-C", repo_path, "init" });
+    try tmp.dir.symLink("repo", "repo-link", .{ .is_directory = true });
+
+    const link_path = try std.fs.path.join(allocator, &.{ base_path, "repo-link" });
+    defer allocator.free(link_path);
+
+    try std.testing.expectError(error.SymlinkRejected, captureWorkspaceSnapshot(allocator, link_path));
 }

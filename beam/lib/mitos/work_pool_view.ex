@@ -321,12 +321,20 @@ defmodule Mitos.WorkPoolView do
   defp persisted_workflow(id) do
     path = Path.join(Mitos.Workload.dir(), id <> ".json")
 
-    with {:ok, raw} <- File.read(path),
+    with {:ok, raw} <- read_regular_file(path),
          {:ok, json} <- Jason.decode(strip_json_comments(raw)),
          %{} = workflow <- json["workflow"] do
       workflow
     else
       _ -> nil
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
     end
   end
 

@@ -12,6 +12,7 @@ defmodule Mitos.IOPlane do
   alias Mitos.Trace
 
   @sensitive_binding_key ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer)/i
+  @sensitive_url_query_key ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
   @terminal_on_values [nil, "", "run.done", "task_done", "capability_finished"]
 
   @doc "Append a canonical ingress Effect for the signal that created an app Task."
@@ -66,8 +67,10 @@ defmodule Mitos.IOPlane do
     |> output_bindings(task, opts)
     |> Enum.reduce({trace, []}, fn binding, {trace, deliveries} ->
       if terminal_binding?(binding) do
-        {trace, delivery} = append_delivery(trace, app, task, pipeline_result, binding, caused_by)
-        {trace, deliveries ++ [delivery]}
+        case append_delivery(trace, app, task, pipeline_result, binding, caused_by) do
+          {trace, nil} -> {trace, deliveries}
+          {trace, delivery} -> {trace, deliveries ++ [delivery]}
+        end
       else
         {trace, deliveries}
       end
@@ -75,11 +78,17 @@ defmodule Mitos.IOPlane do
   end
 
   defp append_delivery(trace, app, task, pipeline_result, binding, caused_by) do
+    before_seq = trace.seq
     sink = string_or(binding["sink"], "web")
     entrypoint = get_in(task, ["provenance", "entrypoint"])
-    destination = destination(binding, sink, task)
-    ref = delivery_ref(trace.run_id, app, task, binding, sink, destination)
-    payload = render_payload(trace.run_id, app, task, pipeline_result, binding, sink, destination)
+    raw_destination = destination(binding, sink, task)
+    public_destination = public_destination(raw_destination)
+
+    ref =
+      delivery_ref(trace.run_id, app, task, binding, sink, raw_destination, public_destination)
+
+    payload =
+      render_payload(trace.run_id, app, task, pipeline_result, binding, sink, public_destination)
 
     trace =
       Trace.append_effect(trace, %{
@@ -90,7 +99,7 @@ defmodule Mitos.IOPlane do
           "sink" => sink,
           "entrypoint" => entrypoint,
           "on" => binding["on"] || "run.done",
-          "destination" => destination,
+          "destination" => public_destination,
           "binding" => public_binding(binding)
         }
       })
@@ -98,7 +107,7 @@ defmodule Mitos.IOPlane do
     receipt = %{
       "delivery_id" => ref["delivery_id"],
       "sink" => sink,
-      "destination" => destination,
+      "destination" => public_destination,
       "status" => "sent"
     }
 
@@ -110,13 +119,20 @@ defmodule Mitos.IOPlane do
         payload: %{"receipt" => receipt, "rendered" => payload}
       })
 
-    {trace, %{"receipt" => receipt, "payload" => payload}}
+    delivery =
+      if trace.seq == before_seq do
+        nil
+      else
+        %{"receipt" => receipt, "payload" => payload}
+      end
+
+    {trace, delivery}
   end
 
   defp output_bindings(%AppManifest{} = app, task, opts) do
     entrypoint = get_in(task, ["provenance", "entrypoint"])
 
-    outputs =
+    declared_outputs =
       opts
       |> Keyword.get(:io_outputs)
       |> case do
@@ -125,13 +141,13 @@ defmodule Mitos.IOPlane do
       end
 
     outputs =
-      outputs
+      declared_outputs
       |> Enum.filter(&is_map/1)
       |> Enum.filter(fn binding ->
         binding["entrypoint"] in [nil, "", entrypoint]
       end)
 
-    if outputs == [], do: default_outputs(entrypoint), else: outputs
+    if declared_outputs == [], do: default_outputs(entrypoint), else: outputs
   end
 
   defp default_outputs(entrypoint) do
@@ -176,13 +192,13 @@ defmodule Mitos.IOPlane do
     |> drop_nil()
   end
 
-  defp delivery_ref(run_id, app, task, binding, sink, destination) do
-    delivery_id = delivery_id(run_id, sink, destination)
+  defp delivery_ref(run_id, app, task, binding, sink, raw_destination, public_destination) do
+    delivery_id = delivery_id(run_id, sink, raw_destination)
 
     %{
       "delivery_id" => delivery_id,
       "sink" => sink,
-      "dest" => destination,
+      "dest" => public_destination,
       "app_id" => app.app_id,
       "entrypoint" => get_in(task, ["provenance", "entrypoint"]),
       "task_id" => task["id"],
@@ -239,24 +255,64 @@ defmodule Mitos.IOPlane do
   end
 
   @doc "Return a public I/O binding view with credential-shaped fields removed recursively."
-  def public_binding(%{} = binding), do: binding |> stringify_value() |> drop_sensitive_fields()
+  def public_binding(%{} = binding), do: binding |> stringify_value() |> public_value()
   def public_binding(value), do: value
 
   defp input_keys(%{} = inputs), do: inputs |> Map.keys() |> Enum.sort()
   defp input_keys(_inputs), do: []
 
-  defp drop_sensitive_fields(%{} = map) do
+  defp public_value(%{} = map) do
     map
     |> Enum.reject(fn {key, _value} -> sensitive_binding_key?(key) end)
-    |> Map.new(fn {key, value} -> {key, drop_sensitive_fields(value)} end)
+    |> Map.new(fn {key, value} -> {key, public_value(value)} end)
   end
 
-  defp drop_sensitive_fields(values) when is_list(values),
-    do: Enum.map(values, &drop_sensitive_fields/1)
+  defp public_value(values) when is_list(values), do: Enum.map(values, &public_value/1)
+  defp public_value(value) when is_binary(value), do: public_destination(value)
+  defp public_value(value), do: value
 
-  defp drop_sensitive_fields(value), do: value
+  defp public_destination(value) when is_binary(value) do
+    uri = URI.parse(value)
+
+    if is_binary(uri.scheme) and is_binary(uri.host) do
+      uri
+      |> Map.put(:userinfo, nil)
+      |> Map.put(:query, public_url_query(uri.query))
+      |> URI.to_string()
+    else
+      value
+    end
+  end
+
+  defp public_destination(value), do: value
+
+  defp public_url_query(nil), do: nil
+
+  defp public_url_query(query) do
+    query
+    |> String.split("&", trim: false)
+    |> Enum.map(&public_url_query_pair/1)
+    |> Enum.join("&")
+  end
+
+  defp public_url_query_pair(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+
+    if sensitive_url_query_key?(safe_form_decode(key)) do
+      key <> "=[redacted]"
+    else
+      pair
+    end
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
+  end
 
   defp sensitive_binding_key?(key), do: Regex.match?(@sensitive_binding_key, to_string(key))
+  defp sensitive_url_query_key?(key), do: Regex.match?(@sensitive_url_query_key, to_string(key))
 
   defp stringify_list(values), do: Enum.map(values, &stringify_value/1)
 

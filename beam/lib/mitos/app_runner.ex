@@ -30,7 +30,7 @@ defmodule Mitos.AppRunner do
 
       case Mitos.PipelineRunner.execute_definition(
              pipeline,
-             pipeline_bindings(task["payload"]["inputs"]),
+             pipeline_bindings(run_bindings(task["payload"])),
              pipeline_opts(app, task, opts)
            ) do
         {:ok, pipeline_result} ->
@@ -94,7 +94,8 @@ defmodule Mitos.AppRunner do
     path = Path.expand(file, root)
 
     with true <- inside_root?(path, root),
-         {:ok, raw} <- File.read(path) do
+         true <- no_symlink_path?(path, root),
+         {:ok, raw} <- read_regular_file(path) do
       {:ok, raw}
     else
       false ->
@@ -260,6 +261,7 @@ defmodule Mitos.AppRunner do
     trace =
       [run_id: run_id, launch_spec: app_launch_spec(app, task, pipeline)]
       |> maybe_kw(:base_dir, Keyword.get(opts, :trace_base_dir))
+      |> put_trace_tenant(task)
       |> Trace.open!()
 
     trace
@@ -334,8 +336,10 @@ defmodule Mitos.AppRunner do
     with :ok <- safe_relative_path(ref),
          path <- Path.expand(ref, root),
          true <- inside_root?(path, root),
+         true <- no_symlink_path?(path, root),
          {:ok, workload_path} <- workload_path(path, alias),
-         {:ok, raw} <- File.read(workload_path),
+         true <- no_symlink_path?(workload_path, root),
+         {:ok, raw} <- read_regular_file(workload_path),
          {:ok, json} <- Jason.decode(strip_json_comments(raw)),
          {:ok, workload} <-
            Mitos.Workload.from_json(alias, json, package_root: Path.dirname(workload_path)) do
@@ -415,20 +419,33 @@ defmodule Mitos.AppRunner do
   end
 
   defp workload_path(path, alias) do
-    cond do
-      File.regular?(path) ->
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
         {:ok, path}
 
-      File.dir?(path) ->
+      {:ok, %{type: :directory}} ->
         [Path.join(path, "workload.json"), Path.join(path, alias <> ".json")]
-        |> Enum.find(&File.regular?/1)
+        |> Enum.find_value(&workload_file_candidate/1)
         |> case do
           nil -> {:error, {:invalid_application, "capability ref does not contain workload.json"}}
           workload_path -> {:ok, workload_path}
         end
 
-      true ->
+      {:ok, %{type: :symlink}} ->
+        {:ok, path}
+
+      {:ok, _stat} ->
         {:error, {:invalid_application, "capability ref is unavailable"}}
+
+      {:error, _reason} ->
+        {:error, {:invalid_application, "capability ref is unavailable"}}
+    end
+  end
+
+  defp workload_file_candidate(path) do
+    case File.lstat(path) do
+      {:ok, %{type: type}} when type in [:regular, :symlink] -> path
+      _other -> nil
     end
   end
 
@@ -464,12 +481,80 @@ defmodule Mitos.AppRunner do
     path == root or String.starts_with?(path, root <> "/")
   end
 
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp put_trace_tenant(opts, %{"tenant" => %{} = tenant}) do
+    opts
+    |> maybe_kw(:org_id, tenant_value(tenant, ["org", "org_id", :org, :org_id]))
+    |> maybe_kw(
+      :project_id,
+      tenant_value(tenant, ["project", "project_id", :project, :project_id])
+    )
+    |> maybe_kw(:actor_id, tenant_value(tenant, ["actor", "actor_id", :actor, :actor_id]))
+  end
+
+  defp put_trace_tenant(opts, _task), do: opts
+
+  defp tenant_value(tenant, keys) do
+    keys
+    |> Enum.find_value(fn key ->
+      case Map.get(tenant, key) do
+        value when is_binary(value) and value != "" -> value
+        _other -> nil
+      end
+    end)
+  end
+
   defp maybe_kw(opts, _key, nil), do: opts
   defp maybe_kw(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp pipeline_bindings(inputs) when is_map(inputs) do
     Map.new(inputs, fn {key, value} -> {to_string(key), binding_value(value)} end)
   end
+
+  defp run_bindings(%{} = payload) do
+    (payload["inputs"] || %{})
+    |> Map.merge(payload["parameters"] || %{})
+    |> Map.put("workspace", workspace_binding(payload["workspace"]))
+  end
+
+  defp workspace_binding(nil), do: ""
+  defp workspace_binding(%{"ref" => ref}) when is_binary(ref) and ref != "", do: ref
+  defp workspace_binding(%{"kind" => kind}) when is_binary(kind), do: kind
+  defp workspace_binding(value) when is_binary(value), do: value
+  defp workspace_binding(_), do: ""
 
   defp binding_value(value) when is_binary(value), do: value
   defp binding_value(nil), do: ""

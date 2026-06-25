@@ -53,7 +53,7 @@ defmodule Mitos.PipelineRegistry do
     attrs = attrs |> stringify() |> Map.put("id", id)
 
     with :ok <- validate_id(id),
-         true <- File.exists?(definition_path(id)) || {:error, :not_found},
+         :ok <- ensure_definition_present(id),
          {:ok, existing} <- persisted_definition(id),
          {:ok, definition} <- definition_from_attrs(id, attrs, existing),
          :ok <- persist(id, definition),
@@ -140,15 +140,29 @@ defmodule Mitos.PipelineRegistry do
   end
 
   defp persist(id, definition) do
-    with :ok <- File.mkdir_p(Mitos.Workload.dir()),
-         :ok <-
-           File.write(
-             definition_path(id),
-             Jason.encode!(definition, pretty: true) <> "\n"
-           ) do
-      :ok
-    else
-      {:error, reason} -> {:error, {:invalid_pipeline, "could not persist definition: #{reason}"}}
+    dir = Mitos.Workload.dir()
+    path = definition_path(id)
+    bytes = Jason.encode!(definition, pretty: true) <> "\n"
+
+    case mkdir_regular_p(dir) do
+      :ok ->
+        case write_persist_tmp(dir, id, bytes) do
+          {:ok, tmp_path} ->
+            case File.rename(tmp_path, path) do
+              :ok ->
+                :ok
+
+              {:error, reason} ->
+                File.rm(tmp_path)
+                persist_error(reason)
+            end
+
+          {:error, reason} ->
+            persist_error(reason)
+        end
+
+      {:error, reason} ->
+        persist_error(reason)
     end
   end
 
@@ -164,12 +178,28 @@ defmodule Mitos.PipelineRegistry do
   end
 
   defp persisted_definition(id) do
-    with {:ok, raw} <- File.read(definition_path(id)),
+    with {:ok, path} <- trusted_definition_path(id),
+         {:ok, raw} <- read_regular_file(path),
          {:ok, json} <- Jason.decode(strip_json_comments(raw)) do
       {:ok, stringify(json)}
     else
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, {:invalid_pipeline, _detail}} = error ->
+        error
+
       {:error, reason} ->
         {:error, {:invalid_pipeline, "could not read definition: #{inspect(reason)}"}}
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -181,11 +211,167 @@ defmodule Mitos.PipelineRegistry do
   end
 
   defp ensure_available(id) do
-    if File.exists?(definition_path(id)) do
-      {:error, {:conflict, id}}
-    else
-      :ok
+    case File.lstat(definition_path(id)) do
+      {:ok, _stat} ->
+        {:error, {:conflict, id}}
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, {:invalid_pipeline, "could not inspect definition: #{inspect(reason)}"}}
     end
+  end
+
+  defp ensure_definition_present(id) do
+    case trusted_definition_path(id) do
+      {:ok, _path} -> :ok
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp trusted_definition_path(id) do
+    with {:ok, dir} <- trusted_workloads_dir() do
+      path = Path.join(dir, id <> ".json")
+
+      case File.lstat(path) do
+        {:ok, %{type: :regular}} ->
+          {:ok, path}
+
+        {:ok, %{type: :symlink}} ->
+          {:error, {:invalid_pipeline, "definition must not be a symlink"}}
+
+        {:ok, _stat} ->
+          {:error, {:invalid_pipeline, "definition must be a regular file"}}
+
+        {:error, :enoent} ->
+          {:error, :not_found}
+
+        {:error, reason} ->
+          {:error, {:invalid_pipeline, "could not inspect definition: #{inspect(reason)}"}}
+      end
+    else
+      {:error, reason} ->
+        {:error,
+         {:invalid_pipeline, "workload definition directory unavailable: #{inspect(reason)}"}}
+    end
+  end
+
+  defp trusted_workloads_dir do
+    path = Path.expand(Mitos.Workload.dir())
+
+    with {:ok, %{type: :directory}} <- File.lstat(path),
+         true <- no_symlink_absolute_path?(path) do
+      {:ok, path}
+    else
+      {:error, :enoent} ->
+        {:error, :not_found}
+
+      _ ->
+        {:error, :workloads_dir_unavailable}
+    end
+  end
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp write_persist_tmp(dir, id, bytes), do: write_persist_tmp(dir, id, bytes, 0)
+
+  defp write_persist_tmp(_dir, _id, _bytes, 16), do: {:error, :eexist}
+
+  defp write_persist_tmp(dir, id, bytes, attempts) do
+    tmp_path =
+      Path.join(
+        dir,
+        ".#{id}.#{System.unique_integer([:positive, :monotonic])}.tmp"
+      )
+
+    case write_exclusive(tmp_path, bytes) do
+      :ok -> {:ok, tmp_path}
+      {:error, :eexist} -> write_persist_tmp(dir, id, bytes, attempts + 1)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp mkdir_regular_p(path) do
+    path = Path.expand(path)
+    parent = Path.dirname(path)
+
+    if path == parent do
+      ensure_existing_regular_dir(path)
+    else
+      with :ok <- mkdir_regular_p(parent) do
+        ensure_regular_dir(path)
+      end
+    end
+  end
+
+  defp ensure_existing_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} -> :ok
+      {:ok, %{type: :symlink}} -> {:error, {:mkdir_failed, path, :symlink}}
+      {:ok, _stat} -> {:error, {:mkdir_failed, path, :not_directory}}
+      {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp ensure_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        :ok
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:mkdir_failed, path, :symlink}}
+
+      {:ok, _stat} ->
+        {:error, {:mkdir_failed, path, :not_directory}}
+
+      {:error, :enoent} ->
+        case File.mkdir(path) do
+          :ok -> :ok
+          {:error, :eexist} -> ensure_regular_dir(path)
+          {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp write_exclusive(path, bytes) do
+    case File.open(path, [:write, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} -> :ok
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp persist_error(reason) do
+    {:error, {:invalid_pipeline, "could not persist definition: #{inspect(reason)}"}}
   end
 
   defp validate_id(id) when is_binary(id) do
@@ -239,26 +425,28 @@ defmodule Mitos.PipelineRegistry do
 
   defp string_list_allow_empty(values) when is_list(values) do
     values
-    |> Enum.filter(&is_binary/1)
-    |> Enum.map(&String.trim/1)
+    |> Enum.map(fn
+      value when is_binary(value) -> String.trim(value)
+      value -> value
+    end)
     |> Enum.reject(&(&1 == ""))
   end
 
-  defp string_list_allow_empty(_values), do: nil
+  defp string_list_allow_empty(nil), do: nil
+  defp string_list_allow_empty(values), do: values
 
   defp env_or_nil(%{} = env) do
-    env
-    |> Enum.reduce(%{}, fn
-      {key, value}, acc when is_binary(key) and is_binary(value) ->
-        key = String.trim(key)
-        if key == "", do: acc, else: Map.put(acc, key, value)
+    Map.new(env, fn
+      {key, value} when is_binary(key) ->
+        {String.trim(key), value}
 
-      _entry, acc ->
-        acc
+      entry ->
+        entry
     end)
   end
 
-  defp env_or_nil(_env), do: nil
+  defp env_or_nil(nil), do: nil
+  defp env_or_nil(env), do: env
 
   defp value_or_existing(attrs, existing, key, normalize) do
     if Map.has_key?(attrs, key) do

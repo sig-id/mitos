@@ -53,6 +53,10 @@ pub const Redactor = struct {
             current = next;
         }
 
+        const url_redacted = try redactUrlUserinfo(allocator, current);
+        allocator.free(current);
+        current = url_redacted;
+
         const assignment_redacted = try redactSecretAssignments(allocator, current);
         allocator.free(current);
         current = assignment_redacted;
@@ -109,6 +113,68 @@ fn redactSecretAssignments(allocator: std.mem.Allocator, input: []const u8) ![]u
     }
 
     return out.toOwnedSlice();
+}
+
+fn redactUrlUserinfo(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    var index: usize = 0;
+    while (index < input.len) {
+        const scheme_start = nextHttpScheme(input, index) orelse {
+            try out.writer.writeAll(input[index..]);
+            break;
+        };
+
+        try out.writer.writeAll(input[index..scheme_start]);
+
+        var url_end = scheme_start;
+        while (url_end < input.len and !isUrlTerminator(input[url_end])) : (url_end += 1) {}
+        try writeUrlWithRedactedUserinfo(&out, input[scheme_start..url_end]);
+        index = url_end;
+    }
+
+    return out.toOwnedSlice();
+}
+
+fn nextHttpScheme(input: []const u8, start: usize) ?usize {
+    var index = start;
+    while (index < input.len) : (index += 1) {
+        if (std.mem.startsWith(u8, input[index..], "http://") or
+            std.mem.startsWith(u8, input[index..], "https://"))
+        {
+            return index;
+        }
+    }
+    return null;
+}
+
+fn writeUrlWithRedactedUserinfo(
+    out: *std.io.Writer.Allocating,
+    url: []const u8,
+) !void {
+    const scheme_separator = std.mem.indexOf(u8, url, "://") orelse {
+        try out.writer.writeAll(url);
+        return;
+    };
+    const authority_start = scheme_separator + 3;
+    var authority_end = authority_start;
+    while (authority_end < url.len and
+        url[authority_end] != '/' and
+        url[authority_end] != '?' and
+        url[authority_end] != '#') : (authority_end += 1)
+    {}
+
+    const authority = url[authority_start..authority_end];
+    const at = std.mem.lastIndexOfScalar(u8, authority, '@') orelse {
+        try out.writer.writeAll(url);
+        return;
+    };
+
+    try out.writer.writeAll(url[0..authority_start]);
+    try out.writer.writeAll("[REDACTED]@");
+    try out.writer.writeAll(authority[at + 1 ..]);
+    try out.writer.writeAll(url[authority_end..]);
 }
 
 fn redactQuotedSecretAssignment(
@@ -193,6 +259,8 @@ fn isLikelySecretToken(token: []const u8) bool {
 }
 
 fn isSensitiveKey(key: []const u8) bool {
+    if (isTokenMetricKey(key)) return false;
+
     return asciiContainsIgnoreCase(key, "api_key") or
         asciiContainsIgnoreCase(key, "apikey") or
         asciiContainsIgnoreCase(key, "authorization") or
@@ -205,6 +273,23 @@ fn isSensitiveKey(key: []const u8) bool {
         asciiContainsIgnoreCase(key, "refresh_token") or
         asciiContainsIgnoreCase(key, "secret") or
         asciiContainsIgnoreCase(key, "token");
+}
+
+fn isTokenMetricKey(key: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(key, "input_tokens") or
+        std.ascii.eqlIgnoreCase(key, "inputTokens") or
+        std.ascii.eqlIgnoreCase(key, "output_tokens") or
+        std.ascii.eqlIgnoreCase(key, "outputTokens") or
+        std.ascii.eqlIgnoreCase(key, "total_tokens") or
+        std.ascii.eqlIgnoreCase(key, "totalTokens") or
+        std.ascii.eqlIgnoreCase(key, "prompt_tokens") or
+        std.ascii.eqlIgnoreCase(key, "promptTokens") or
+        std.ascii.eqlIgnoreCase(key, "completion_tokens") or
+        std.ascii.eqlIgnoreCase(key, "completionTokens") or
+        std.ascii.eqlIgnoreCase(key, "cached_tokens") or
+        std.ascii.eqlIgnoreCase(key, "cachedTokens") or
+        std.ascii.eqlIgnoreCase(key, "cache_read_tokens") or
+        std.ascii.eqlIgnoreCase(key, "cacheReadTokens");
 }
 
 fn asciiContainsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
@@ -247,7 +332,14 @@ fn isSecretValueTerminator(byte: u8, key: []const u8) bool {
         return byte == '\n' or byte == '\r' or byte == ',' or byte == ';';
     }
 
-    return std.ascii.isWhitespace(byte) or byte == ',' or byte == ';';
+    return std.ascii.isWhitespace(byte) or
+        byte == ',' or
+        byte == ';' or
+        byte == '&' or
+        byte == '"' or
+        byte == '\'' or
+        byte == '<' or
+        byte == '>';
 }
 
 fn isAuthorizationKey(key: []const u8) bool {
@@ -268,6 +360,17 @@ fn isKeyChar(byte: u8) bool {
 
 fn isTokenChar(byte: u8) bool {
     return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-' or byte == '.';
+}
+
+fn isUrlTerminator(byte: u8) bool {
+    return std.ascii.isWhitespace(byte) or
+        byte == '"' or
+        byte == '\'' or
+        byte == '<' or
+        byte == '>' or
+        byte == ')' or
+        byte == ']' or
+        byte == '}';
 }
 
 test "redactor applies ordered literal replacements by scope" {
@@ -334,6 +437,23 @@ test "redactor masks sensitive assignment values without explicit rules" {
     );
 }
 
+test "redactor preserves token usage metric fields" {
+    const allocator = std.testing.allocator;
+    const redactor: Redactor = .{};
+
+    const output = try redactor.redactAlloc(
+        allocator,
+        .provider_event,
+        "{\"type\":\"token_usage\",\"input_tokens\":7,\"outputTokens\":3,\"total_tokens\":10,\"access_token\":\"secret-value\"}",
+    );
+    defer allocator.free(output);
+
+    try std.testing.expectEqualStrings(
+        "{\"type\":\"token_usage\",\"input_tokens\":7,\"outputTokens\":3,\"total_tokens\":10,\"access_token\":[REDACTED]}",
+        output,
+    );
+}
+
 test "redactor masks quoted sensitive fields and full authorization headers" {
     const allocator = std.testing.allocator;
     const redactor: Redactor = .{};
@@ -350,4 +470,22 @@ test "redactor masks quoted sensitive fields and full authorization headers" {
     try std.testing.expect(!std.mem.containsAtLeast(u8, output, 1, "plain-secret-token"));
     try std.testing.expect(std.mem.containsAtLeast(u8, output, 3, "[REDACTED]"));
     try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "\"keep\":\"visible\""));
+}
+
+test "redactor masks credentialed URLs and sensitive query params" {
+    const allocator = std.testing.allocator;
+    const redactor: Redactor = .{};
+
+    const output = try redactor.redactAlloc(
+        allocator,
+        .terminal_text,
+        "fetch https://user:pass@example.test/path?token=abc123&next=ok and \"https://api.example.test/cb?client_secret=shh&state=kept\"",
+    );
+    defer allocator.free(output);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, output, 1, "user:pass"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, output, 1, "abc123"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, output, 1, "shh"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "https://[REDACTED]@example.test/path?token=[REDACTED]&next=ok"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "client_secret=[REDACTED]&state=kept"));
 }

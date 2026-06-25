@@ -49,7 +49,7 @@ defmodule Mitos.Hooks do
       case command(hook["run"]) do
         {:ok, cmd, args, command_text} ->
           try do
-            case System.cmd(cmd, args, cmd_opts(cwd, env)) do
+            case System.cmd(cmd, args, cmd_opts(validate_cwd!(cwd), env)) do
               {output, status} -> {output, status, nil, command_text}
             end
           rescue
@@ -116,6 +116,55 @@ defmodule Mitos.Hooks do
     Map.get(map, key, Map.get(map, String.to_atom(key), default))
   end
 
+  defp validate_cwd!(cwd) when is_binary(cwd) and cwd != "" do
+    path = Path.expand(cwd)
+
+    with {:ok, %{type: :directory}} <- File.lstat(path),
+         true <- no_symlink_absolute_path?(path) do
+      path
+    else
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "hook cwd must not be a symlink"
+
+      {:ok, _stat} ->
+        raise ArgumentError, "hook cwd must be a directory"
+
+      {:error, reason} ->
+        raise ArgumentError, "hook cwd is unavailable: #{inspect(reason)}"
+
+      false ->
+        raise ArgumentError, "hook cwd must not contain symlinks"
+    end
+  end
+
+  defp validate_cwd!(_cwd), do: raise(ArgumentError, "hook cwd must be a non-empty string")
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
   defp cmd_opts(cwd, env) do
     [cd: cwd, stderr_to_stdout: true]
     |> maybe_put_env(env_pairs(env))
@@ -127,15 +176,51 @@ defmodule Mitos.Hooks do
   defp env_pairs(nil), do: nil
 
   defp env_pairs(%{} = env) do
-    Enum.map(env, fn {key, value} -> {to_string(key), to_string(value)} end)
+    Enum.map(env, fn {key, value} -> env_pair!(key, value) end)
   end
 
   defp env_pairs(env) when is_list(env) do
-    Enum.flat_map(env, fn
-      {key, value} -> [{to_string(key), to_string(value)}]
-      %{"name" => key, "value" => value} -> [{to_string(key), to_string(value)}]
-      %{name: key, value: value} -> [{to_string(key), to_string(value)}]
-      _ -> []
+    Enum.map(env, fn
+      {key, value} -> env_pair!(key, value)
+      %{"name" => key, "value" => value} -> env_pair!(key, value)
+      %{name: key, value: value} -> env_pair!(key, value)
+      _ -> raise ArgumentError, "hook env entries must include name and value"
     end)
+  end
+
+  defp env_pairs(_env), do: raise(ArgumentError, "hook env must be a map or list")
+
+  defp env_pair!(key, value) do
+    key = env_string!(key, "name")
+
+    cond do
+      key == "" ->
+        raise ArgumentError, "hook env name must not be empty"
+
+      String.contains?(key, <<0>>) ->
+        raise ArgumentError, "hook env name must not contain NUL"
+
+      String.contains?(key, "=") ->
+        raise ArgumentError, "hook env name must not contain ="
+
+      true ->
+        {key, env_value!(key, value)}
+    end
+  end
+
+  defp env_value!(key, value) do
+    value = env_string!(value, "value")
+
+    if String.contains?(value, <<0>>) do
+      raise ArgumentError, "hook env value for #{inspect(key)} must not contain NUL"
+    else
+      value
+    end
+  end
+
+  defp env_string!(value, field) do
+    to_string(value)
+  rescue
+    Protocol.UndefinedError -> raise ArgumentError, "hook env #{field} must be stringable"
   end
 end

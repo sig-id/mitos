@@ -515,7 +515,7 @@ async function buildOnce() {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Mitos Operations Console</title>
+    <title>Mitos</title>
     <link rel="stylesheet" href="/assets/sigui.css" />
     <link rel="stylesheet" href="/assets/app.css" />
   </head>

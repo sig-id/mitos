@@ -18,6 +18,7 @@ defmodule Mitos.Authority do
     :project_id,
     :token,
     :socket_path,
+    :socket_identity,
     :listen_socket,
     :acceptor,
     :session,
@@ -28,6 +29,9 @@ defmodule Mitos.Authority do
   @request_methods ~w(tool_broker approval artifact_register memory_fetch memory_put subrun_spawn subtask_return task_emit)
   @socket_timeout_ms 5_000
   @default_token_ttl_ms 60 * 60 * 1_000
+  @max_socket_line_bytes 1 * 1024 * 1024
+  @max_token_bytes 4 * 1024
+  @max_action_bytes 4 * 1024
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
@@ -50,38 +54,106 @@ defmodule Mitos.Authority do
     expires_at_ms = System.system_time(:millisecond) + token_ttl_ms
     session = Keyword.fetch!(opts, :session)
 
-    File.rm(socket_path)
+    with :ok <- remove_stale_socket(socket_path),
+         {:ok, listen_socket} <-
+           :gen_tcp.listen(0, [
+             :binary,
+             packet: :line,
+             packet_size: @max_socket_line_bytes + 64 * 1024,
+             active: false,
+             ip: {:local, socket_path}
+           ]),
+         {:ok, socket_identity} <- protect_socket_path(socket_path, listen_socket) do
+      owner = self()
+      {:ok, acceptor} = Task.start_link(fn -> accept_loop(listen_socket, owner) end)
 
-    {:ok, listen_socket} =
-      :gen_tcp.listen(0, [
-        :binary,
-        packet: :line,
-        active: false,
-        ip: {:local, socket_path}
-      ])
-
-    owner = self()
-    {:ok, acceptor} = Task.start_link(fn -> accept_loop(listen_socket, owner) end)
-
-    {:ok,
-     %__MODULE__{
-       run_id: run_id,
-       project_id: project_id,
-       token: token,
-       socket_path: socket_path,
-       listen_socket: listen_socket,
-       acceptor: acceptor,
-       session: session,
-       token_ttl_ms: token_ttl_ms,
-       tokens: %{
-         token => %{
-           run_id: run_id,
-           project_id: project_id,
-           methods: MapSet.new(@request_methods),
-           expires_at_ms: expires_at_ms
+      {:ok,
+       %__MODULE__{
+         run_id: run_id,
+         project_id: project_id,
+         token: token,
+         socket_path: socket_path,
+         socket_identity: socket_identity,
+         listen_socket: listen_socket,
+         acceptor: acceptor,
+         session: session,
+         token_ttl_ms: token_ttl_ms,
+         tokens: %{
+           token => %{
+             run_id: run_id,
+             project_id: project_id,
+             methods: MapSet.new(@request_methods),
+             expires_at_ms: expires_at_ms
+           }
          }
-       }
-     }}
+       }}
+    else
+      {:error, {:socket_path_exists, path}} -> {:stop, {:socket_path_exists, path}}
+      {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  defp remove_stale_socket(socket_path) do
+    case File.lstat(socket_path) do
+      {:ok, %File.Stat{type: :other}} ->
+        File.rm(socket_path)
+
+      {:ok, _stat} ->
+        {:error, {:socket_path_exists, socket_path}}
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp remove_owned_socket(socket_path, nil), do: remove_stale_socket(socket_path)
+
+  defp remove_owned_socket(socket_path, expected_identity) do
+    case File.lstat(socket_path) do
+      {:ok, %File.Stat{type: :other} = stat} ->
+        if socket_identity(stat) == expected_identity do
+          File.rm(socket_path)
+        else
+          :ok
+        end
+
+      {:ok, _stat} ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp socket_identity(%File.Stat{
+         major_device: major_device,
+         minor_device: minor_device,
+         inode: inode
+       }) do
+    {major_device, minor_device, inode}
+  end
+
+  defp protect_socket_path(socket_path, listen_socket) do
+    with :ok <- File.chmod(socket_path, 0o600),
+         {:ok, %File.Stat{type: :other} = stat} <- File.lstat(socket_path) do
+      {:ok, socket_identity(stat)}
+    else
+      {:ok, _stat} ->
+        :gen_tcp.close(listen_socket)
+        remove_stale_socket(socket_path)
+        {:error, {:socket_path_exists, socket_path}}
+
+      {:error, reason} ->
+        :gen_tcp.close(listen_socket)
+        remove_stale_socket(socket_path)
+        {:error, reason}
+    end
   end
 
   @impl true
@@ -118,14 +190,18 @@ defmodule Mitos.Authority do
   def terminate(_reason, state) do
     if state.listen_socket, do: :gen_tcp.close(state.listen_socket)
     if state.acceptor, do: Process.exit(state.acceptor, :normal)
-    if state.socket_path, do: File.rm(state.socket_path)
+    if state.socket_path, do: remove_owned_socket(state.socket_path, state.socket_identity)
     :ok
   end
 
-  defp handle_request(%{"token" => token} = request, from, state) do
-    method = Map.get(request, "method", "tool_broker")
+  defp handle_request(%{"token" => raw_token} = request, from, state) do
+    raw_method = Map.get(request, "method", "tool_broker")
 
-    with :ok <- known_method(method),
+    with {:ok, method} <- normalize_method(raw_method),
+         {:ok, token} <- normalize_token(raw_token),
+         {:ok, action} <- normalize_action(Map.get(request, "action", method)),
+         {:ok, context} <- normalize_context(Map.get(request, "context", %{})),
+         :ok <- known_method(method),
          {:ok, scope} <- verify_token(token, state),
          :ok <- token_allows_method(scope, method) do
       GenServer.cast(
@@ -133,8 +209,8 @@ defmodule Mitos.Authority do
         {:authority_request,
          %Request{
            method: method,
-           action: Map.get(request, "action", method),
-           context: normalize_context(Map.get(request, "context", %{})),
+           action: action,
+           context: context,
            origin: :authority_socket,
            from: from
          }}
@@ -190,6 +266,9 @@ defmodule Mitos.Authority do
   end
 
   defp decode_request(""), do: {:error, "empty_request"}
+
+  defp decode_request(line) when byte_size(line) > @max_socket_line_bytes,
+    do: {:error, "request_too_large"}
 
   defp decode_request(line) do
     case Jason.decode(line) do
@@ -289,9 +368,34 @@ defmodule Mitos.Authority do
     end
   end
 
-  defp normalize_context(%{} = context), do: context
-  defp normalize_context(context) when is_binary(context), do: context
-  defp normalize_context(context), do: %{"value" => context}
+  defp normalize_method(method) when is_binary(method), do: {:ok, method}
+  defp normalize_method(_method), do: {:error, "method_must_be_string"}
+
+  defp normalize_token(token) when is_binary(token) do
+    cond do
+      token == "" -> {:error, "invalid_token"}
+      byte_size(token) > @max_token_bytes -> {:error, "invalid_token"}
+      String.contains?(token, <<0>>) -> {:error, "invalid_token"}
+      true -> {:ok, token}
+    end
+  end
+
+  defp normalize_token(_token), do: {:error, "invalid_token"}
+
+  defp normalize_action(action) when is_binary(action) do
+    cond do
+      action == "" -> {:error, "action_empty"}
+      byte_size(action) > @max_action_bytes -> {:error, "action_too_large"}
+      String.contains?(action, <<0>>) -> {:error, "action_contains_nul"}
+      true -> {:ok, action}
+    end
+  end
+
+  defp normalize_action(_action), do: {:error, "action_must_be_string"}
+
+  defp normalize_context(%{} = context), do: {:ok, context}
+  defp normalize_context(context) when is_binary(context), do: {:ok, context}
+  defp normalize_context(context), do: {:ok, %{"value" => context}}
 
   defp default_socket_path(run_id) do
     safe_id = Regex.replace(~r/[^A-Za-z0-9_.-]/, run_id, "_")

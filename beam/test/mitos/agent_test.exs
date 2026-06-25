@@ -99,6 +99,33 @@ defmodule Mitos.AgentTest do
     assert Mitos.Trace.fold_events(events)["pending_decisions"] == []
   end
 
+  test "agent start rejects cwd paths containing symlinked parents" do
+    trace_base_dir = unique_tmp_dir("agent-cwd-symlink-trace")
+    outside = unique_tmp_dir("agent-cwd-symlink-outside")
+    link = unique_tmp_dir("agent-cwd-symlink-link")
+    session_id = "agent-cwd-symlink-" <> Integer.to_string(System.unique_integer([:positive]))
+
+    File.mkdir_p!(Path.join(outside, "workspace"))
+    File.ln_s!(outside, link)
+
+    on_exit(fn ->
+      File.rm_rf!(trace_base_dir)
+      File.rm_rf!(outside)
+      File.rm(link)
+    end)
+
+    assert {:error, {:invalid_cwd, :symlink}} =
+             Mitos.Agent.start(
+               provider: "fake",
+               task: "hello",
+               session_id: session_id,
+               cwd: Path.join(link, "workspace"),
+               trace_base_dir: trace_base_dir
+             )
+
+    refute File.exists?(Path.join([trace_base_dir, ".runs", session_id]))
+  end
+
   test "refuses launch when the decision budget exceeds remaining budget" do
     session_id = "agent-" <> Integer.to_string(System.unique_integer([:positive]))
     trace_base_dir = unique_tmp_dir("agent-budget-abort")
@@ -570,7 +597,24 @@ defmodule Mitos.AgentTest do
                      }}},
                    5_000
 
+    oversized = :binary.copy("y", Mitos.Session.max_authority_response_bytes() + 1)
+
+    assert {:error, {:invalid_authority_resolution, {:token, :too_large}}} =
+             Mitos.Session.authorize(run.pid, request_id, oversized)
+
     Mitos.Session.authorize(run.pid, request_id, "y\n")
+
+    assert_receive {:mitos, ^session_id,
+                    {:event,
+                     %{
+                       "type" => "AUTHORITY_VERDICT",
+                       "origin" => "terminal_scrape",
+                       "request_id" => ^request_id,
+                       "action_id" => ^request_id,
+                       "decision" => "authorize",
+                       "payload" => %{"token" => "[redacted]"}
+                     }}},
+                   5_000
 
     assert_receive {:mitos, ^session_id,
                     {:event,
@@ -581,7 +625,7 @@ defmodule Mitos.AgentTest do
                        "request_id" => ^request_id,
                        "action_id" => ^request_id,
                        "decision" => "allow",
-                       "token" => "y\n"
+                       "token" => "[REDACTED]"
                      }}},
                    5_000
   end

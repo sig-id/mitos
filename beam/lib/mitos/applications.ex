@@ -14,7 +14,7 @@ defmodule Mitos.Applications do
   def dir do
     Application.get_env(:mitos, :apps_dir) ||
       System.get_env("MITOS_APPS_DIR") ||
-      Path.expand("../../../../apps", __DIR__)
+      Path.expand("../../../apps", __DIR__)
   end
 
   @doc "Directory containing local OCI image-layout application packages."
@@ -24,10 +24,52 @@ defmodule Mitos.Applications do
       Path.join(dir(), ".packages")
   end
 
+  @doc """
+  Add an application to the local registry from a directory or git URL.
+
+  Local directories are copied into the configured application registry. Git
+  URLs are cloned into a temporary directory first, then installed through the
+  same path so manifest validation and identity are identical for both sources.
+  """
+  def add_source(source, install_id \\ nil, opts \\ [])
+
+  def add_source(source, install_id, opts) when is_binary(source) and is_list(opts) do
+    source = String.trim(source)
+
+    with {:ok, source} <- source_string(source),
+         {:ok, kind, materialized_source} <- materialize_source(source, opts) do
+      {source_dir, cleanup} = materialized_source
+
+      try do
+        with {:ok, app} <- Mitos.AppManifest.load(source_dir),
+             {:ok, install_id} <- source_install_id(install_id, app, source),
+             app_dir <- Path.join(dir(), install_id),
+             :ok <- ensure_install_target_available(app_dir),
+             :ok <- ensure_app_registry_dir(),
+             {:ok, _files} <- copy_app_source(source_dir, app_dir),
+             {:ok, installed_app} <- Mitos.AppManifest.load(app_dir) do
+          {:ok,
+           %{
+             "install_id" => install_id,
+             "app_dir" => Path.expand(app_dir),
+             "source" => source,
+             "source_kind" => kind,
+             "app_id" => installed_app.app_id,
+             "app" => public_view(installed_app, local_id: install_id)
+           }}
+        end
+      after
+        cleanup.()
+      end
+    end
+  end
+
+  def add_source(_source, _install_id, _opts),
+    do: {:error, {:invalid_application_source, "source must be a string"}}
+
   @doc "List loadable local applications, sorted by name."
   def list do
-    dir()
-    |> app_dirs()
+    app_dirs()
     |> Enum.flat_map(fn app_dir ->
       case Mitos.AppManifest.load(app_dir) do
         {:ok, app} -> [public_view(app, local_id: Path.basename(app_dir))]
@@ -40,8 +82,20 @@ defmodule Mitos.Applications do
   @doc "Fetch one application by local directory id, manifest name, or app_id."
   def fetch(id) when is_binary(id) do
     cond do
-      safe_id?(id) and File.dir?(Path.join(dir(), id)) ->
-        Mitos.AppManifest.load(Path.join(dir(), id))
+      safe_id?(id) ->
+        case trusted_app_registry_dir() do
+          {:ok, root} ->
+            app_dir = Path.join(root, id)
+
+            if regular_dir?(app_dir) do
+              Mitos.AppManifest.load(app_dir)
+            else
+              find_loaded(id)
+            end
+
+          {:error, _reason} ->
+            {:error, :not_found}
+        end
 
       true ->
         find_loaded(id)
@@ -230,8 +284,9 @@ defmodule Mitos.Applications do
       when is_binary(package_id) and is_list(opts) do
     with {:ok, package_id} <- package_dir_id(package_id),
          {:ok, install_id} <- install_id(install_id, package_id),
-         package_dir <- Path.join(packages_dir(), package_id),
-         true <- File.dir?(package_dir),
+         {:ok, packages_root} <- trusted_packages_dir(),
+         package_dir <- Path.join(packages_root, package_id),
+         true <- regular_dir?(package_dir),
          app_dir <- Path.join(dir(), install_id),
          {:ok, install} <- Mitos.AppPackage.install_local(package_dir, app_dir, opts),
          {:ok, app} <- Mitos.AppManifest.load(app_dir) do
@@ -244,6 +299,9 @@ defmodule Mitos.Applications do
       false ->
         {:error, {:application_package_not_found, package_id}}
 
+      {:error, :untrusted_directory} ->
+        {:error, {:application_package_not_found, package_id}}
+
       {:error, _reason} = error ->
         error
     end
@@ -251,6 +309,222 @@ defmodule Mitos.Applications do
 
   def install_package(_package_id, _install_id, _opts),
     do: {:error, {:invalid_application_package, "package_id must be a string"}}
+
+  defp source_string(""), do: {:error, {:invalid_application_source, "source is required"}}
+  defp source_string(source), do: {:ok, source}
+
+  defp materialize_source(source, opts) do
+    local_path = local_source_path(source)
+
+    cond do
+      regular_dir?(local_path) and no_symlink_absolute_path?(local_path) ->
+        {:ok, "directory", {local_path, fn -> :ok end}}
+
+      regular_dir?(local_path) or symlink_path?(local_path) ->
+        {:error, {:invalid_application_source, "source directory must not contain symlinks"}}
+
+      git_source?(source) ->
+        clone_git_source(source, opts)
+
+      true ->
+        {:error, {:application_source_not_found, source}}
+    end
+  end
+
+  defp local_source_path("file://" <> _rest = source) do
+    source
+    |> URI.parse()
+    |> Map.get(:path, "")
+    |> URI.decode()
+    |> Path.expand()
+  end
+
+  defp local_source_path(source), do: Path.expand(source)
+
+  defp git_source?(source) do
+    String.starts_with?(source, ["https://", "http://", "ssh://", "git://", "git@"]) or
+      String.ends_with?(source, ".git")
+  end
+
+  defp clone_git_source(source, opts) do
+    tmp_root =
+      Keyword.get(opts, :tmp_dir) ||
+        Path.join(System.tmp_dir!(), "mitos-app-source-#{unique_suffix()}")
+
+    app_dir = Path.join(tmp_root, "app")
+
+    with :ok <- mkdir_regular_p(tmp_root),
+         {output, 0} <-
+           System.cmd("git", ["clone", "--depth", "1", "--", source, app_dir],
+             stderr_to_stdout: true
+           ) do
+      _ = output
+      {:ok, "git", {app_dir, fn -> File.rm_rf(tmp_root) end}}
+    else
+      {output, status} when is_binary(output) and is_integer(status) ->
+        File.rm_rf(tmp_root)
+        {:error, {:invalid_application_source, "git clone failed with status #{status}"}}
+
+      {:error, reason} ->
+        File.rm_rf(tmp_root)
+        {:error, {:invalid_application_source, "git clone failed: #{inspect(reason)}"}}
+    end
+  end
+
+  defp unique_suffix do
+    Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
+  end
+
+  defp source_install_id(nil, app, source) do
+    [source_basename(source), app.name]
+    |> Enum.find_value(fn candidate ->
+      candidate = string_or(candidate, nil)
+      if candidate && safe_id?(candidate), do: candidate
+    end)
+    |> case do
+      nil -> {:error, {:invalid_application_source, "install_id must be provided"}}
+      install_id -> {:ok, install_id}
+    end
+  end
+
+  defp source_install_id(install_id, _app, _source) when is_binary(install_id) do
+    install_id = String.trim(install_id)
+
+    if safe_id?(install_id) do
+      {:ok, install_id}
+    else
+      {:error, {:invalid_application_source, "install_id must be a safe identifier"}}
+    end
+  end
+
+  defp source_install_id(_install_id, _app, _source),
+    do: {:error, {:invalid_application_source, "install_id must be a string"}}
+
+  defp source_basename(source) do
+    source
+    |> String.trim_trailing("/")
+    |> Path.basename()
+    |> String.replace_suffix(".git", "")
+  end
+
+  defp ensure_install_target_available(app_dir) do
+    case File.lstat(app_dir) do
+      {:error, :enoent} -> :ok
+      {:error, _reason} -> :ok
+      {:ok, _stat} -> {:error, {:application_source_conflict, Path.basename(app_dir)}}
+    end
+  end
+
+  defp ensure_app_registry_dir do
+    case mkdir_regular_p(dir()) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         {:invalid_application_source, "could not create app registry: #{inspect(reason)}"}}
+    end
+  end
+
+  defp copy_app_source(source_dir, app_dir) do
+    case copy_app_source_tree(source_dir, source_dir, app_dir) do
+      :ok ->
+        {:ok, [app_dir]}
+
+      {:error, reason} ->
+        File.rm_rf(app_dir)
+        {:error, reason}
+    end
+  end
+
+  defp copy_app_source_tree(root, path, target) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        with :ok <- mkdir_regular_p(target),
+             {:ok, entries} <- File.ls(path) do
+          Enum.reduce_while(entries, :ok, fn entry, :ok ->
+            case copy_app_source_tree(root, Path.join(path, entry), Path.join(target, entry)) do
+              :ok -> {:cont, :ok}
+              {:error, _reason} = error -> {:halt, error}
+            end
+          end)
+        else
+          {:error, {:mkdir_failed, failed_path, reason}} ->
+            {:error,
+             {:invalid_application_source, "copy failed at #{failed_path}: #{inspect(reason)}"}}
+
+          {:error, reason} ->
+            {:error,
+             {:invalid_application_source,
+              "could not inspect source tree at #{source_relative_path(root, path)}: #{inspect(reason)}"}}
+        end
+
+      {:ok, %{type: :regular}} ->
+        copy_app_source_file(root, path, target)
+
+      {:ok, %{type: :symlink}} ->
+        {:error,
+         {:invalid_application_source,
+          "source tree must not contain symlinks: #{source_relative_path(root, path)}"}}
+
+      {:ok, stat} ->
+        {:error,
+         {:invalid_application_source,
+          "source tree entry must be a regular file or directory: #{source_relative_path(root, path)} (#{inspect(stat.type)})"}}
+
+      {:error, reason} ->
+        {:error,
+         {:invalid_application_source,
+          "could not inspect source tree at #{source_relative_path(root, path)}: #{inspect(reason)}"}}
+    end
+  end
+
+  defp copy_app_source_file(root, path, target) do
+    relative = source_relative_path(root, path)
+
+    with {:ok, bytes} <- read_stable_regular_source(path),
+         :ok <- write_new_regular_target(target, bytes) do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, {:invalid_application_source, "copy failed at #{relative}: #{inspect(reason)}"}}
+    end
+  end
+
+  defp read_stable_regular_source(path) do
+    with {:ok, before_stat = %{type: :regular}} <- File.lstat(path),
+         {:ok, bytes} <- File.read(path),
+         {:ok, after_stat = %{type: :regular}} <- File.lstat(path),
+         true <- stable_file_read?(before_stat, after_stat, byte_size(bytes)) do
+      {:ok, bytes}
+    else
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      false -> {:error, :changed_during_copy}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp stable_file_read?(before_stat, after_stat, byte_size) do
+    before_stat.size == byte_size and
+      before_stat.size == after_stat.size and
+      before_stat.inode == after_stat.inode and
+      before_stat.mtime == after_stat.mtime
+  end
+
+  defp write_new_regular_target(target, bytes) do
+    case File.open(target, [:write, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp source_relative_path(root, path) do
+    case Path.relative_to(path, root) do
+      "." -> Path.basename(root)
+      relative -> relative
+    end
+  end
 
   defp select_input_binding(app, connector, path) do
     connector = String.trim(connector)
@@ -372,7 +646,7 @@ defmodule Mitos.Applications do
       idempotency_key ->
         duplicate_trace_events(opts)
         |> Enum.find_value(fn event ->
-          if duplicate_signal_event?(event, app, connector, entrypoint_id, idempotency_key) do
+          if duplicate_signal_event?(event, app, connector, entrypoint_id, idempotency_key, opts) do
             event
           end
         end)
@@ -400,7 +674,7 @@ defmodule Mitos.Applications do
     case File.ls(runs_dir) do
       {:ok, entries} ->
         entries
-        |> Enum.filter(&File.dir?(Path.join(runs_dir, &1)))
+        |> Enum.filter(&regular_dir?(Path.join(runs_dir, &1)))
 
       {:error, _reason} ->
         []
@@ -417,16 +691,66 @@ defmodule Mitos.Applications do
              "entrypoint" => entrypoint_id,
              "idempotency_key" => idempotency_key
            }
-         },
+         } = event,
          app,
          connector,
          entrypoint_id,
-         idempotency_key
+         idempotency_key,
+         opts
        ),
-       do: app_id == app.app_id
+       do: app_id == app.app_id and trace_tenant_matches?(event, app, opts)
 
-  defp duplicate_signal_event?(_event, _app, _connector, _entrypoint_id, _idempotency_key),
+  defp duplicate_signal_event?(_event, _app, _connector, _entrypoint_id, _idempotency_key, _opts),
     do: false
+
+  defp trace_tenant_matches?(%{"tenant" => %{} = tenant}, app, opts) do
+    tenant_scope(tenant) == tenant_scope(expected_trace_tenant(app, opts))
+  end
+
+  defp trace_tenant_matches?(_event, app, opts) do
+    tenant_scope(expected_trace_tenant(app, opts)) == tenant_scope(default_trace_tenant())
+  end
+
+  defp expected_trace_tenant(app, opts) do
+    if Keyword.has_key?(opts, :tenant) do
+      expected_trace_tenant(Keyword.get(opts, :tenant))
+    else
+      expected_trace_tenant(%{"org" => "default", "project" => app.name})
+    end
+  end
+
+  defp expected_trace_tenant(%{} = tenant) do
+    default_trace_tenant()
+    |> Map.put("org_id", tenant_value(tenant, ["org", "org_id", :org, :org_id]) || "default")
+    |> Map.put(
+      "project_id",
+      tenant_value(tenant, ["project", "project_id", :project, :project_id]) || "default"
+    )
+    |> Map.put(
+      "actor_id",
+      tenant_value(tenant, ["actor", "actor_id", :actor, :actor_id]) || "system"
+    )
+  end
+
+  defp expected_trace_tenant(_tenant), do: default_trace_tenant()
+
+  defp default_trace_tenant do
+    %{"org_id" => "default", "project_id" => "default", "actor_id" => "system"}
+  end
+
+  defp tenant_scope(%{} = tenant) do
+    {tenant["org_id"], tenant["project_id"]}
+  end
+
+  defp tenant_value(tenant, keys) do
+    keys
+    |> Enum.find_value(fn key ->
+      case Map.get(tenant, key) do
+        value when is_binary(value) and value != "" -> value
+        _other -> nil
+      end
+    end)
+  end
 
   defp duplicate_trace_response(app, binding, entrypoint_id, signal, opts) do
     run_id = signal["run_id"]
@@ -810,12 +1134,19 @@ defmodule Mitos.Applications do
     end)
   end
 
+  defp app_dirs do
+    case trusted_app_registry_dir() do
+      {:ok, root} -> app_dirs(root)
+      {:error, _reason} -> []
+    end
+  end
+
   defp app_dirs(root) do
     case File.ls(root) do
       {:ok, entries} ->
         entries
         |> Enum.map(&Path.join(root, &1))
-        |> Enum.filter(&File.dir?/1)
+        |> Enum.filter(&regular_dir?/1)
 
       {:error, _reason} ->
         []
@@ -823,8 +1154,7 @@ defmodule Mitos.Applications do
   end
 
   defp find_loaded(id) do
-    dir()
-    |> app_dirs()
+    app_dirs()
     |> Enum.find_value({:error, :not_found}, fn app_dir ->
       with {:ok, app} <- Mitos.AppManifest.load(app_dir),
            true <- id in [app.name, app.app_id] do
@@ -837,8 +1167,20 @@ defmodule Mitos.Applications do
 
   defp app_dir(id) do
     cond do
-      safe_id?(id) and File.dir?(Path.join(dir(), id)) ->
-        {:ok, Path.join(dir(), id)}
+      safe_id?(id) ->
+        case trusted_app_registry_dir() do
+          {:ok, root} ->
+            path = Path.join(root, id)
+
+            if regular_dir?(path) do
+              {:ok, path}
+            else
+              find_app_dir(id)
+            end
+
+          {:error, _reason} ->
+            {:error, :not_found}
+        end
 
       true ->
         find_app_dir(id)
@@ -846,8 +1188,7 @@ defmodule Mitos.Applications do
   end
 
   defp find_app_dir(id) do
-    dir()
-    |> app_dirs()
+    app_dirs()
     |> Enum.find_value({:error, :not_found}, fn app_dir ->
       with {:ok, app} <- Mitos.AppManifest.load(app_dir),
            true <- id in [app.name, app.app_id] do
@@ -859,6 +1200,95 @@ defmodule Mitos.Applications do
   end
 
   defp safe_id?(id), do: Regex.match?(@id_pattern, id)
+
+  defp regular_dir?(path), do: match?({:ok, %{type: :directory}}, File.lstat(path))
+  defp symlink_path?(path), do: match?({:ok, %{type: :symlink}}, File.lstat(path))
+
+  defp trusted_app_registry_dir, do: trusted_directory(dir())
+
+  defp trusted_packages_dir, do: trusted_directory(packages_dir())
+
+  defp trusted_directory(path) do
+    path = Path.expand(path)
+
+    with true <- regular_dir?(path),
+         true <- no_symlink_absolute_path?(path) do
+      {:ok, path}
+    else
+      _ -> {:error, :untrusted_directory}
+    end
+  end
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp mkdir_regular_p(path) do
+    path = Path.expand(path)
+    parent = Path.dirname(path)
+
+    if path == parent do
+      ensure_existing_regular_dir(path)
+    else
+      with :ok <- mkdir_regular_p(parent) do
+        ensure_regular_dir(path)
+      end
+    end
+  end
+
+  defp ensure_existing_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} -> :ok
+      {:ok, %{type: :symlink}} -> {:error, {:mkdir_failed, path, :symlink}}
+      {:ok, _stat} -> {:error, {:mkdir_failed, path, :not_directory}}
+      {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp ensure_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        :ok
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:mkdir_failed, path, :symlink}}
+
+      {:ok, _stat} ->
+        {:error, {:mkdir_failed, path, :not_directory}}
+
+      {:error, :enoent} ->
+        case File.mkdir(path) do
+          :ok -> :ok
+          {:error, :eexist} -> ensure_regular_dir(path)
+          {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:mkdir_failed, path, reason}}
+    end
+  end
 
   defp package_id(nil, app), do: {:ok, app.name}
 

@@ -47,6 +47,9 @@ defmodule Mitos.Capability do
   )
   @egress_policy_keys ~w(id dest destination credential credential_id requires_approval)
   @injected_runtime_fields ~w(harness input model prompt provider workspace)
+  @credential_id_pattern ~r/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/
+  @secret_token_value_pattern ~r/^(sk-|sk_live_|sk_test_|rk_live_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xoxb-|xoxp-|xoxa-|xoxc-|xapp-|glpat-|ya29\.|AKIA)/i
+  @secret_url_query_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
   @secret_field_names ~w(
     api_key
     apikey
@@ -278,6 +281,7 @@ defmodule Mitos.Capability do
       %{} = rule ->
         keys = rule |> normalize() |> Map.keys()
         unknown = Enum.find(keys, &(&1 not in @egress_policy_keys))
+        credential = field(rule, "credential_id") || field(rule, "credential")
 
         cond do
           unknown != nil ->
@@ -286,8 +290,17 @@ defmodule Mitos.Capability do
           not present?(field(rule, "dest")) and not present?(field(rule, "destination")) ->
             "egress_policy entries require dest"
 
-          not present?(field(rule, "credential")) and not present?(field(rule, "credential_id")) ->
+          not present?(credential) ->
             "egress_policy entries require credential or credential_id"
+
+          not is_binary(credential) ->
+            "egress_policy credential must be an id string"
+
+          credential_secret_material?(credential) ->
+            "egress_policy credential must reference a credential id, not secret material"
+
+          not Regex.match?(@credential_id_pattern, credential) ->
+            "egress_policy credential id contains unsupported characters"
 
           true ->
             nil
@@ -299,6 +312,12 @@ defmodule Mitos.Capability do
   end
 
   defp egress_policy_error(_policy), do: "egress_policy must be a list"
+
+  defp credential_secret_material?(credential) do
+    credential_url?(credential) or
+      credential_url_query?(credential) or
+      Regex.match?(@secret_token_value_pattern, credential)
+  end
 
   defp runtime_binding_error(%{} = json) do
     json
@@ -462,7 +481,59 @@ defmodule Mitos.Capability do
     |> Enum.find_value(fn {value, index} -> secret_error(value, path ++ [index]) end)
   end
 
+  defp secret_error(value, path) when is_binary(value) do
+    cond do
+      credential_url?(value) ->
+        "capability manifests must not contain credential-bearing URL field #{format_path(path)}"
+
+      credential_url_query?(value) ->
+        "capability manifests must not contain credential-bearing URL query field #{format_path(path)}"
+
+      true ->
+        nil
+    end
+  end
+
   defp secret_error(_value, _path), do: nil
+
+  defp credential_url?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, userinfo: userinfo}
+      when is_binary(scheme) and is_binary(host) and is_binary(userinfo) ->
+        userinfo != ""
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, query: query}
+      when is_binary(scheme) and is_binary(host) and is_binary(query) ->
+        query
+        |> String.split("&", trim: true)
+        |> Enum.any?(&credential_url_query_pair?/1)
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query_pair?(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+    Regex.match?(@secret_url_query_key_pattern, safe_form_decode(key))
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
+  end
 
   defp adapt_directives(overlays) do
     overlays
@@ -731,22 +802,31 @@ defmodule Mitos.Capability do
   defp package_content_digest(_package_root, _path), do: nil
 
   defp content_digest(path) do
-    cond do
-      File.regular?(path) ->
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
         case File.read(path) do
           {:ok, bytes} -> "sha256:" <> digest_bytes(bytes)
           {:error, reason} -> %{"unavailable" => inspect(reason)}
         end
 
-      File.dir?(path) ->
+      {:ok, %{type: :directory}} ->
         path
         |> content_tree_entries(path)
         |> canonical_json()
         |> digest_bytes()
         |> then(&("sha256:" <> &1))
 
-      true ->
+      {:ok, %{type: :symlink}} ->
+        %{"unavailable" => ":symlink"}
+
+      {:ok, _stat} ->
         %{"unavailable" => ":missing"}
+
+      {:error, :enoent} ->
+        %{"unavailable" => ":missing"}
+
+      {:error, reason} ->
+        %{"unavailable" => inspect(reason)}
     end
   end
 
@@ -759,8 +839,8 @@ defmodule Mitos.Capability do
           child = Path.join(path, entry)
           relative = Path.relative_to(child, root)
 
-          cond do
-            File.regular?(child) ->
+          case File.lstat(child) do
+            {:ok, %{type: :regular}} ->
               case File.read(child) do
                 {:ok, bytes} ->
                   [%{"path" => relative, "sha256" => "sha256:" <> digest_bytes(bytes)}]
@@ -769,11 +849,17 @@ defmodule Mitos.Capability do
                   [%{"path" => relative, "unavailable" => inspect(reason)}]
               end
 
-            File.dir?(child) ->
+            {:ok, %{type: :directory}} ->
               content_tree_entries(root, child)
 
-            true ->
-              []
+            {:ok, %{type: :symlink}} ->
+              [%{"path" => relative, "unavailable" => ":symlink"}]
+
+            {:ok, _stat} ->
+              [%{"path" => relative, "unavailable" => ":unsupported_file_type"}]
+
+            {:error, reason} ->
+              [%{"path" => relative, "unavailable" => inspect(reason)}]
           end
         end)
 
@@ -792,11 +878,47 @@ defmodule Mitos.Capability do
         Path.expand(path, root)
       end
 
-    if expanded == root or String.starts_with?(expanded, root <> "/") do
-      {:ok, expanded}
+    if inside_root?(expanded, root) do
+      case no_symlink_path?(expanded, root) do
+        true -> {:ok, expanded}
+        false -> {:error, :path_escape}
+        {:error, reason} when reason in [:enoent, :enotdir] -> {:ok, expanded}
+        {:error, reason} -> {:error, reason}
+      end
     else
       {:error, :path_escape}
     end
+  end
+
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    end
+  end
+
+  defp inside_root?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    path == root or String.starts_with?(path, root <> "/")
   end
 
   defp hooks_or(%{} = hooks, _default) do

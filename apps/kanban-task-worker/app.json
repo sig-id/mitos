@@ -1,0 +1,116 @@
+{
+  "name": "kanban-task-worker",
+  "version": "1.0.0",
+  "description": "Chief Wiggum style worker for executing tasks from a markdown kanban.",
+  "authors": ["mitos"],
+  "license": "Apache-2.0",
+  "capabilities": [
+    {
+      "ref": "capabilities/task-worker/workload.json",
+      "as": "task-worker"
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "work-kanban-task",
+      "file": "pipelines/work-kanban-task.md"
+    }
+  ],
+  "entrypoints": [
+    {
+      "id": "work-task",
+      "pipeline": "work-kanban-task",
+      "title": "Work a kanban task",
+      "description": "Select or execute one Chief Wiggum formatted kanban task in a repository workspace.",
+      "workspace": { "kind": "repo" },
+      "inputs": {
+        "schema": {
+          "type": "object",
+          "required": ["kanban_path", "task_id"],
+          "additionalProperties": false,
+          "properties": {
+            "kanban_path": {
+              "type": "string",
+              "description": "Path to the markdown kanban file, relative to the workspace or absolute."
+            },
+            "task_id": {
+              "type": "string",
+              "description": "Task ID to execute, or AUTO to select the first eligible pending task."
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "name": "task_policy",
+          "type": "string",
+          "default": "default",
+          "description": "Worker policy: fast, default, readonly-plan, or fix-only."
+        },
+        {
+          "name": "validation_command",
+          "type": "string",
+          "default": "none",
+          "description": "Command to run for final validation, or none."
+        },
+        {
+          "name": "max_workers",
+          "type": "integer",
+          "default": 1,
+          "description": "Number of worker tasks permitted to run in parallel."
+        }
+      ],
+      "defaults": {
+        "budget": {
+          "usd": 2,
+          "wall_ms": 1800000
+        },
+        "constraints": [
+          "Respect kanban dependencies; only [x] tasks satisfy dependencies.",
+          "Work on one task only.",
+          "Do not commit or stage; leave changes for the orchestrator."
+        ],
+        "success_criteria": [
+          "One eligible task is completed or a blocker is reported.",
+          "The kanban task status and RESULT artifact reflect the final state.",
+          "Validation evidence is included when a validation command is provided."
+        ]
+      }
+    }
+  ],
+  "io": {
+    "inputs": [
+      {
+        "connector": "webhook",
+        "path": "/apps/kanban-task-worker/tasks",
+        "entrypoint": "work-task",
+        "select": {
+          "mode": "explicit",
+          "pipeline": "work-kanban-task"
+        }
+      }
+    ],
+    "outputs": [
+      {
+        "sink": "web",
+        "on": "run.done",
+        "entrypoint": "work-task",
+        "render": "result.summary + artifacts"
+      }
+    ]
+  },
+  "services": {
+    "requires": ["local-agent-runner"],
+    "wants": ["usage-meter", "work-pool"]
+  },
+  "requirements": {
+    "harnesses": ["opencode", "codex", "claude", "gemini"],
+    "connectors": ["webhook"],
+    "egress": [],
+    "trust_tier": "T1",
+    "resources": {
+      "cpu": 2,
+      "mem": "4Gi"
+    }
+  }
+}

@@ -39,6 +39,15 @@ defmodule Mitos.Session do
   # can ask for `snapshot` for a structured view.
   @scrollback_cap 256 * 1024
   @authority_socket_timeout_ms 4_750
+  @max_terminal_cols 512
+  @max_terminal_rows 512
+  @max_signal_number 64
+  @max_shutdown_grace_ms 60_000
+  @max_sidecar_frame_bytes 16 * 1024 * 1024
+  @max_stdin_bytes @max_sidecar_frame_bytes - 1024
+  @max_authority_response_bytes 1 * 1024 * 1024
+  @max_steer_text_bytes 1 * 1024 * 1024
+  @max_request_id_bytes 4 * 1024
 
   defstruct [
     :session_id,
@@ -89,10 +98,27 @@ defmodule Mitos.Session do
   @doc "Address a Session GenServer by session id."
   def via(session_id), do: {:via, Registry, {Mitos.SessionRegistry, session_id}}
 
-  def write_stdin(server, bytes) when is_binary(bytes),
-    do: GenServer.cast(server, {:write_stdin, bytes})
+  @doc false
+  def max_stdin_bytes, do: @max_stdin_bytes
 
-  @steer_interactions [:approve, :deny, :answer, :prompt, :interrupt, :select_option]
+  @doc false
+  def max_authority_response_bytes, do: @max_authority_response_bytes
+
+  @doc false
+  def max_steer_text_bytes, do: @max_steer_text_bytes
+
+  @doc false
+  def max_sidecar_frame_bytes, do: @max_sidecar_frame_bytes
+
+  def write_stdin(server, bytes) do
+    case normalize_stdin(bytes) do
+      {:ok, bytes} -> GenServer.cast(server, {:write_stdin, bytes})
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @steer_no_payload_interactions [:approve, :deny, :interrupt]
+  @steer_text_interactions [:answer, :prompt]
 
   @doc """
   Steer the interactive agent without knowing its keymap: the sidecar
@@ -102,30 +128,47 @@ defmodule Mitos.Session do
       Mitos.Session.steer(pid, :approve)
       Mitos.Session.steer(pid, :prompt, text: "now run the tests")
   """
-  def steer(server, interaction, opts \\ [])
-      when interaction in @steer_interactions and is_list(opts),
-      do: GenServer.cast(server, {:steer, interaction, opts})
+  def steer(server, interaction, opts \\ []) do
+    case normalize_steer(interaction, opts) do
+      {:ok, interaction, opts} -> GenServer.cast(server, {:steer, interaction, opts})
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @doc "Reply to a question the agent asked through its input box."
-  def answer(server, text) when is_binary(text), do: steer(server, :answer, text: text)
+  def answer(server, text), do: steer(server, :answer, text: text)
 
   @doc "Send a new instruction to the agent's input box."
-  def prompt(server, text) when is_binary(text), do: steer(server, :prompt, text: text)
+  def prompt(server, text), do: steer(server, :prompt, text: text)
 
-  def resize(server, cols, rows) when is_integer(cols) and is_integer(rows),
-    do: GenServer.cast(server, {:resize, cols, rows})
+  def resize(server, cols, rows) do
+    case normalize_session_size(cols, rows) do
+      {:ok, cols, rows} -> GenServer.cast(server, {:resize, cols, rows})
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-  def signal(server, signum) when is_integer(signum),
-    do: GenServer.cast(server, {:signal, signum})
+  def signal(server, signum) do
+    case normalize_signal(signum) do
+      {:ok, signum} -> GenServer.cast(server, {:signal, signum})
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-  def resolve(server, request_id, decision, payload \\ %{})
-      when is_binary(request_id) and decision in [:authorize, :deny] and is_map(payload),
-      do: GenServer.cast(server, {:resolve, request_id, decision, payload})
+  def resolve(server, request_id, decision, payload \\ %{}) do
+    case normalize_authority_resolution(request_id, decision, payload) do
+      {:ok, request_id, decision, payload} ->
+        GenServer.cast(server, {:resolve, request_id, decision, payload})
 
-  def authorize(server, action_id, token) when is_binary(action_id) and is_binary(token),
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def authorize(server, action_id, token),
     do: resolve(server, action_id, :authorize, %{"token" => token})
 
-  def deny(server, action_id, reason) when is_binary(action_id) and is_binary(reason),
+  def deny(server, action_id, reason),
     do: resolve(server, action_id, :deny, %{"reason" => reason})
 
   @doc """
@@ -138,7 +181,12 @@ defmodule Mitos.Session do
   @doc "Harvest workspace diff, RESULT, and registered artifacts for a session."
   def harvest(server, timeout \\ 5_000), do: GenServer.call(server, :harvest, timeout)
 
-  def shutdown(server, grace_ms \\ 100), do: GenServer.cast(server, {:shutdown, grace_ms})
+  def shutdown(server, grace_ms \\ 100) do
+    case normalize_shutdown_grace_ms(grace_ms) do
+      {:ok, grace_ms} -> GenServer.cast(server, {:shutdown, grace_ms})
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   def session_id(server), do: GenServer.call(server, :session_id)
 
@@ -148,30 +196,51 @@ defmodule Mitos.Session do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    state = %__MODULE__{
-      session_id: Keyword.fetch!(opts, :session_id),
-      sidecar_path: Keyword.fetch!(opts, :sidecar_path),
-      launch_spec: opts[:launch_spec],
-      argv: opts[:argv],
-      cwd: opts[:cwd],
-      env: opts[:env],
-      cols: Keyword.get(opts, :cols, 80),
-      rows: Keyword.get(opts, :rows, 24),
-      idle_ms: Keyword.get(opts, :idle_ms, 250),
-      trace: opts[:trace],
-      schema_root: opts[:schema_root],
-      opening_decision_seq: opts[:opening_decision_seq],
-      project_id: Keyword.get(opts, :project_id, "default")
-    }
+    with :ok <- validate_session_cwd(opts[:cwd]),
+         {:ok, env} <- normalize_session_env(opts[:env]),
+         {:ok, cols, rows} <-
+           normalize_session_size(Keyword.get(opts, :cols, 80), Keyword.get(opts, :rows, 24)),
+         {:ok, idle_ms} <- normalize_session_idle_ms(Keyword.get(opts, :idle_ms, 250)) do
+      state = %__MODULE__{
+        session_id: Keyword.fetch!(opts, :session_id),
+        sidecar_path: Keyword.fetch!(opts, :sidecar_path),
+        launch_spec: opts[:launch_spec],
+        argv: opts[:argv],
+        cwd: opts[:cwd],
+        env: env,
+        cols: cols,
+        rows: rows,
+        idle_ms: idle_ms,
+        trace: opts[:trace],
+        schema_root: opts[:schema_root],
+        opening_decision_seq: opts[:opening_decision_seq],
+        project_id: Keyword.get(opts, :project_id, "default")
+      }
 
-    state =
-      if state.trace,
-        do: state,
-        else: %{state | trace: Mitos.Trace.open!(trace_options(state, opts))}
+      case validate_open_control_frame(state) do
+        :ok ->
+          state = maybe_start_authority(state, opts)
 
-    state = maybe_start_authority(state, opts)
+          case validate_open_control_frame(state) do
+            :ok ->
+              state =
+                if state.trace,
+                  do: state,
+                  else: %{state | trace: Mitos.Trace.open!(trace_options(state, opts))}
 
-    {:ok, state, {:continue, :open_port}}
+              {:ok, state, {:continue, :open_port}}
+
+            {:error, reason} ->
+              stop_authority(state)
+              {:stop, reason}
+          end
+
+        {:error, reason} ->
+          {:stop, reason}
+      end
+    else
+      {:error, reason} -> {:stop, reason}
+    end
   end
 
   @impl true
@@ -289,22 +358,37 @@ defmodule Mitos.Session do
 
   @impl true
   def handle_cast({:write_stdin, bytes}, state) do
-    send_control(state.port, Protocol.input(bytes))
+    with {:ok, bytes} <- normalize_stdin(bytes) do
+      send_control(state.port, Protocol.input(bytes))
+    end
+
     {:noreply, state}
   end
 
   def handle_cast({:steer, interaction, opts}, state) do
-    send_control(state.port, Protocol.steer(interaction, opts))
+    with {:ok, interaction, opts} <- normalize_steer(interaction, opts) do
+      send_control(state.port, Protocol.steer(interaction, opts))
+    end
+
     {:noreply, state}
   end
 
   def handle_cast({:resize, cols, rows}, state) do
-    send_control(state.port, Protocol.resize(cols, rows))
-    {:noreply, %{state | cols: cols, rows: rows}}
+    case normalize_session_size(cols, rows) do
+      {:ok, cols, rows} ->
+        send_control(state.port, Protocol.resize(cols, rows))
+        {:noreply, %{state | cols: cols, rows: rows}}
+
+      {:error, _reason} ->
+        {:noreply, state}
+    end
   end
 
   def handle_cast({:signal, signum}, state) do
-    send_control(state.port, Protocol.signal(signum))
+    with {:ok, signum} <- normalize_signal(signum) do
+      send_control(state.port, Protocol.signal(signum))
+    end
+
     {:noreply, state}
   end
 
@@ -315,15 +399,27 @@ defmodule Mitos.Session do
   end
 
   def handle_cast({:resolve, request_id, decision, payload}, state) do
-    {:noreply,
-     resolve_pending_request(
-       %Verdict{id: request_id, decision: decision, payload: payload},
-       state
-     )}
+    state =
+      case normalize_authority_resolution(request_id, decision, payload) do
+        {:ok, request_id, decision, payload} ->
+          resolve_pending_request(
+            %Verdict{id: request_id, decision: decision, payload: payload},
+            state
+          )
+
+        {:error, _reason} ->
+          state
+      end
+
+    {:noreply, state}
   end
 
   def handle_cast({:shutdown, grace_ms}, state) do
-    if state.port, do: send_control(state.port, Protocol.shutdown(grace_ms))
+    with {:ok, grace_ms} <- normalize_shutdown_grace_ms(grace_ms),
+         true <- not is_nil(state.port) do
+      send_control(state.port, Protocol.shutdown(grace_ms))
+    end
+
     {:noreply, state}
   end
 
@@ -331,13 +427,7 @@ defmodule Mitos.Session do
   def terminate(_reason, state) do
     Mitos.KeyVault.revoke_run(state.session_id)
 
-    if state.authority do
-      try do
-        Mitos.Authority.stop(state.authority)
-      catch
-        :exit, _ -> :ok
-      end
-    end
+    stop_authority(state)
 
     if state.port && not state.exited? do
       try do
@@ -358,6 +448,16 @@ defmodule Mitos.Session do
     Port.command(port, Protocol.encode_control(command))
   rescue
     ArgumentError -> :ok
+  end
+
+  defp stop_authority(%{authority: nil}), do: :ok
+
+  defp stop_authority(%{authority: authority}) do
+    try do
+      Mitos.Authority.stop(authority)
+    catch
+      :exit, _ -> :ok
+    end
   end
 
   defp open_command(%{launch_spec: %{} = launch_spec} = state) do
@@ -381,6 +481,19 @@ defmodule Mitos.Session do
   end
 
   defp open_command(_state), do: raise(ArgumentError, "Session requires :launch_spec or :argv")
+
+  defp validate_open_control_frame(state) do
+    state
+    |> open_command()
+    |> Protocol.encode_control()
+    |> IO.iodata_length()
+    |> case do
+      bytes when bytes <= @max_sidecar_frame_bytes -> :ok
+      _bytes -> {:error, {:invalid_open_control, :too_large}}
+    end
+  rescue
+    _exception -> {:error, {:invalid_open_control, :invalid}}
+  end
 
   defp handle_event(%{"type" => "hello", "backend" => backend} = event, state) do
     state = trace_event(state, event)
@@ -851,9 +964,9 @@ defmodule Mitos.Session do
       "method" => request.method,
       "action" => request.action,
       "decision" => decision_string(verdict.decision),
-      "payload" => payload
+      "payload" => Mitos.Trace.redact_public_value(payload)
     }
-    |> maybe_put_event("reason", verdict.reason)
+    |> maybe_put_event("reason", Mitos.Trace.redact_public_text(verdict.reason))
   end
 
   defp auto_decision(%{"auto_decision" => decision} = event),
@@ -906,7 +1019,7 @@ defmodule Mitos.Session do
 
   defp execute_tool_broker(%Request{} = request, state) do
     context = context_map(request.context)
-    cwd = context_get(context, "cwd", state.cwd || File.cwd!())
+    cwd = validate_broker_cwd!(context_get(context, "cwd", state.cwd || File.cwd!()))
 
     {cmd, args, command_text} =
       case context_get(context, "argv") do
@@ -989,16 +1102,365 @@ defmodule Mitos.Session do
     {state, payload}
   end
 
+  defp validate_broker_cwd!(cwd) when is_binary(cwd) and cwd != "" do
+    path = Path.expand(cwd)
+
+    with {:ok, %{type: :directory}} <- File.lstat(path),
+         true <- no_symlink_absolute_path?(path) do
+      path
+    else
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "tool_broker cwd must not be a symlink"
+
+      {:ok, _stat} ->
+        raise ArgumentError, "tool_broker cwd must be a directory"
+
+      {:error, reason} ->
+        raise ArgumentError, "tool_broker cwd is unavailable: #{inspect(reason)}"
+
+      false ->
+        raise ArgumentError, "tool_broker cwd must not contain symlinks"
+    end
+  end
+
+  defp validate_broker_cwd!(_cwd),
+    do: raise(ArgumentError, "tool_broker cwd must be a non-empty string")
+
+  defp validate_session_cwd(nil), do: :ok
+
+  defp validate_session_cwd(cwd) when is_binary(cwd) do
+    path = Path.expand(cwd)
+
+    with {:ok, %{type: :directory}} <- File.lstat(path),
+         true <- no_symlink_absolute_path?(path) do
+      :ok
+    else
+      {:ok, %{type: :symlink}} -> {:error, {:invalid_cwd, :symlink}}
+      {:ok, _stat} -> {:error, {:invalid_cwd, :not_directory}}
+      {:error, reason} -> {:error, {:invalid_cwd, reason}}
+      false -> {:error, {:invalid_cwd, :symlink}}
+    end
+  end
+
+  defp validate_session_cwd(_cwd), do: {:error, {:invalid_cwd, :invalid}}
+
+  defp normalize_session_size(cols, rows) do
+    with {:ok, cols} <- normalize_terminal_dimension(cols, :cols, @max_terminal_cols),
+         {:ok, rows} <- normalize_terminal_dimension(rows, :rows, @max_terminal_rows) do
+      {:ok, cols, rows}
+    end
+  end
+
+  defp normalize_terminal_dimension(value, _field, max)
+       when is_integer(value) and value >= 1 and value <= max,
+       do: {:ok, value}
+
+  defp normalize_terminal_dimension(value, field, _max) when is_integer(value) and value < 1,
+    do: {:error, {:invalid_size, {field, :too_small}}}
+
+  defp normalize_terminal_dimension(value, field, max) when is_integer(value) and value > max,
+    do: {:error, {:invalid_size, {field, :too_large}}}
+
+  defp normalize_terminal_dimension(_value, field, _max),
+    do: {:error, {:invalid_size, {field, :invalid}}}
+
+  defp normalize_session_idle_ms(value) when is_integer(value) and value >= 0 and value <= 60_000,
+    do: {:ok, value}
+
+  defp normalize_session_idle_ms(value) when is_integer(value) and value < 0,
+    do: {:error, {:invalid_idle_ms, :too_small}}
+
+  defp normalize_session_idle_ms(value) when is_integer(value) and value > 60_000,
+    do: {:error, {:invalid_idle_ms, :too_large}}
+
+  defp normalize_session_idle_ms(_value), do: {:error, {:invalid_idle_ms, :invalid}}
+
+  defp normalize_stdin(bytes) when is_binary(bytes) and byte_size(bytes) <= @max_stdin_bytes,
+    do: {:ok, bytes}
+
+  defp normalize_stdin(bytes) when is_binary(bytes),
+    do: {:error, {:invalid_stdin, :too_large}}
+
+  defp normalize_stdin(_bytes), do: {:error, {:invalid_stdin, :invalid}}
+
+  defp normalize_authority_resolution(request_id, decision, payload) do
+    with {:ok, request_id} <- normalize_authority_request_id(request_id),
+         {:ok, decision} <- normalize_authority_decision(decision),
+         {:ok, payload} <- normalize_authority_payload(decision, payload) do
+      {:ok, request_id, decision, payload}
+    end
+  end
+
+  defp normalize_authority_request_id(request_id) when is_binary(request_id) do
+    cond do
+      request_id == "" ->
+        {:error, {:invalid_authority_resolution, {:request_id, :empty}}}
+
+      byte_size(request_id) > @max_request_id_bytes ->
+        {:error, {:invalid_authority_resolution, {:request_id, :too_large}}}
+
+      String.contains?(request_id, <<0>>) ->
+        {:error, {:invalid_authority_resolution, {:request_id, :nul}}}
+
+      true ->
+        {:ok, request_id}
+    end
+  end
+
+  defp normalize_authority_request_id(_request_id),
+    do: {:error, {:invalid_authority_resolution, {:request_id, :invalid}}}
+
+  defp normalize_authority_decision(decision) when decision in [:authorize, :deny],
+    do: {:ok, decision}
+
+  defp normalize_authority_decision(_decision),
+    do: {:error, {:invalid_authority_resolution, {:decision, :invalid}}}
+
+  defp normalize_authority_payload(decision, payload) when is_map(payload) do
+    case decision do
+      :authorize ->
+        case fetch_payload_value(payload, "token") do
+          {:ok, token} ->
+            with {:ok, token} <- normalize_authority_response_text(token, :token) do
+              {:ok, put_payload_value(payload, "token", token)}
+            end
+
+          :error ->
+            {:ok, payload}
+        end
+
+      :deny ->
+        case fetch_payload_value(payload, "reason") do
+          {:ok, reason} ->
+            with {:ok, reason} <- normalize_authority_response_text(reason, :reason) do
+              {:ok, put_payload_value(payload, "reason", reason)}
+            end
+
+          :error ->
+            {:ok, payload}
+        end
+    end
+  end
+
+  defp normalize_authority_payload(_decision, _payload),
+    do: {:error, {:invalid_authority_resolution, {:payload, :invalid}}}
+
+  defp fetch_payload_value(payload, key) do
+    cond do
+      Map.has_key?(payload, key) ->
+        {:ok, Map.fetch!(payload, key)}
+
+      Map.has_key?(payload, String.to_atom(key)) ->
+        {:ok, Map.fetch!(payload, String.to_atom(key))}
+
+      true ->
+        :error
+    end
+  end
+
+  defp put_payload_value(payload, key, value) do
+    payload
+    |> Map.delete(String.to_atom(key))
+    |> Map.put(key, value)
+  end
+
+  defp normalize_authority_response_text(value, field) when is_binary(value) do
+    cond do
+      byte_size(value) > @max_authority_response_bytes ->
+        {:error, {:invalid_authority_resolution, {field, :too_large}}}
+
+      String.contains?(value, <<0>>) ->
+        {:error, {:invalid_authority_resolution, {field, :nul}}}
+
+      true ->
+        {:ok, value}
+    end
+  end
+
+  defp normalize_authority_response_text(_value, field),
+    do: {:error, {:invalid_authority_resolution, {field, :invalid}}}
+
+  defp normalize_steer(interaction, opts) do
+    with :ok <- validate_steer_opts(opts) do
+      normalize_steer_interaction(interaction, opts)
+    end
+  end
+
+  defp validate_steer_opts(opts) when is_list(opts) do
+    if Enum.all?(opts, &match?({_key, _value}, &1)) do
+      :ok
+    else
+      {:error, {:invalid_steer, :invalid_options}}
+    end
+  end
+
+  defp validate_steer_opts(_opts), do: {:error, {:invalid_steer, :invalid_options}}
+
+  defp normalize_steer_interaction(interaction, _opts)
+       when interaction in @steer_no_payload_interactions,
+       do: {:ok, interaction, []}
+
+  defp normalize_steer_interaction(interaction, opts)
+       when interaction in @steer_text_interactions do
+    case fetch_steer_opt(opts, :text) do
+      {:ok, text} ->
+        with {:ok, text} <- normalize_steer_text(text) do
+          {:ok, interaction, [text: text]}
+        end
+
+      :error ->
+        {:error, {:invalid_steer, {:text, :required}}}
+    end
+  end
+
+  defp normalize_steer_interaction(:select_option, opts) do
+    case fetch_steer_opt(opts, :option) do
+      {:ok, option} ->
+        with {:ok, option} <- normalize_steer_option(option) do
+          {:ok, :select_option, [option: option]}
+        end
+
+      :error ->
+        {:error, {:invalid_steer, {:option, :required}}}
+    end
+  end
+
+  defp normalize_steer_interaction(_interaction, _opts),
+    do: {:error, {:invalid_steer, :invalid_interaction}}
+
+  defp fetch_steer_opt(opts, key) do
+    case Enum.find(opts, fn {opt_key, _value} -> opt_key == key end) do
+      {^key, value} -> {:ok, value}
+      nil -> :error
+    end
+  end
+
+  defp normalize_steer_text(text) when is_binary(text) do
+    cond do
+      byte_size(text) > @max_steer_text_bytes -> {:error, {:invalid_steer, {:text, :too_large}}}
+      not String.valid?(text) -> {:error, {:invalid_steer, {:text, :invalid}}}
+      String.contains?(text, <<0>>) -> {:error, {:invalid_steer, {:text, :nul}}}
+      String.trim(text) == "" -> {:error, {:invalid_steer, {:text, :empty}}}
+      true -> {:ok, text}
+    end
+  end
+
+  defp normalize_steer_text(_text), do: {:error, {:invalid_steer, {:text, :invalid}}}
+
+  defp normalize_steer_option(value) when is_integer(value) and value >= 1 and value <= 9,
+    do: {:ok, value}
+
+  defp normalize_steer_option(value) when is_integer(value) and value < 1,
+    do: {:error, {:invalid_steer, {:option, :too_small}}}
+
+  defp normalize_steer_option(value) when is_integer(value) and value > 9,
+    do: {:error, {:invalid_steer, {:option, :too_large}}}
+
+  defp normalize_steer_option(_value),
+    do: {:error, {:invalid_steer, {:option, :invalid}}}
+
+  defp normalize_signal(value)
+       when is_integer(value) and value >= 1 and value <= @max_signal_number,
+       do: {:ok, value}
+
+  defp normalize_signal(value) when is_integer(value) and value < 1,
+    do: {:error, {:invalid_signal, :too_small}}
+
+  defp normalize_signal(value) when is_integer(value) and value > @max_signal_number,
+    do: {:error, {:invalid_signal, :too_large}}
+
+  defp normalize_signal(_value), do: {:error, {:invalid_signal, :invalid}}
+
+  defp normalize_shutdown_grace_ms(value)
+       when is_integer(value) and value >= 0 and value <= @max_shutdown_grace_ms,
+       do: {:ok, value}
+
+  defp normalize_shutdown_grace_ms(value) when is_integer(value) and value < 0,
+    do: {:error, {:invalid_shutdown_grace_ms, :too_small}}
+
+  defp normalize_shutdown_grace_ms(value)
+       when is_integer(value) and value > @max_shutdown_grace_ms,
+       do: {:error, {:invalid_shutdown_grace_ms, :too_large}}
+
+  defp normalize_shutdown_grace_ms(_value),
+    do: {:error, {:invalid_shutdown_grace_ms, :invalid}}
+
+  defp normalize_session_env(nil), do: {:ok, nil}
+  defp normalize_session_env([]), do: {:ok, %{}}
+
+  defp normalize_session_env(%{} = env) do
+    env
+    |> Enum.reduce_while({:ok, %{}}, fn {key, value}, {:ok, acc} ->
+      case normalize_env_pair(key, value) do
+        {:ok, name, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        {:error, reason} -> {:halt, {:error, {:invalid_env, reason}}}
+      end
+    end)
+  end
+
+  defp normalize_session_env(env) when is_list(env) do
+    env
+    |> Enum.reduce_while({:ok, %{}}, fn entry, {:ok, acc} ->
+      case normalize_env_entry(entry) do
+        {:ok, name, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
+        {:error, reason} -> {:halt, {:error, {:invalid_env, reason}}}
+      end
+    end)
+  end
+
+  defp normalize_session_env(_env), do: {:error, {:invalid_env, :invalid}}
+
+  defp normalize_env_entry({key, value}), do: normalize_env_pair(key, value)
+
+  defp normalize_env_entry(%{"name" => key, "value" => value}),
+    do: normalize_env_pair(key, value)
+
+  defp normalize_env_entry(%{name: key, value: value}), do: normalize_env_pair(key, value)
+  defp normalize_env_entry(_entry), do: {:error, :invalid_entry}
+
+  defp normalize_env_pair(key, value) do
+    with {:ok, name} <- env_string(key),
+         {:ok, value} <- env_string(value),
+         :ok <- validate_env_name(name),
+         :ok <- validate_env_value(name, value) do
+      {:ok, name, value}
+    end
+  end
+
+  defp env_string(value) do
+    {:ok, to_string(value)}
+  rescue
+    Elixir.Protocol.UndefinedError -> {:error, :invalid_entry}
+  end
+
+  defp validate_env_name(""), do: {:error, :empty_name}
+
+  defp validate_env_name(name) do
+    cond do
+      String.contains?(name, <<0>>) -> {:error, {:invalid_name, name}}
+      String.contains?(name, "=") -> {:error, {:invalid_name, name}}
+      true -> :ok
+    end
+  end
+
+  defp validate_env_value(name, value) do
+    if String.contains?(value, <<0>>) do
+      {:error, {:invalid_value, name}}
+    else
+      :ok
+    end
+  end
+
   defp memory_fetch(%Request{} = request, state) do
     context = context_map(request.context)
     key = memory_key!(context)
-    path = memory_path!(state, key)
 
     payload =
-      case File.read(path) do
+      case read_memory_file(state, key) do
         {:ok, bytes} -> %{"key" => key, "found" => true, "bytes" => bytes}
         {:error, :enoent} -> %{"key" => key, "found" => false, "bytes" => nil}
-        {:error, reason} -> raise File.Error, reason: reason, action: "read file", path: path
+        {:error, :symlink} -> raise ArgumentError, "memory file must not be a symlink"
+        {:error, reason} -> raise File.Error, reason: reason, action: "read memory file"
       end
 
     {state, payload}
@@ -1011,8 +1473,8 @@ defmodule Mitos.Session do
     if not is_binary(bytes), do: raise(ArgumentError, "memory_put requires string bytes/value")
 
     path = memory_path!(state, key)
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, bytes)
+    ensure_memory_directory!(state)
+    write_memory_file!(path, bytes)
 
     payload = %{"key" => key, "bytes" => byte_size(bytes)}
 
@@ -1285,9 +1747,61 @@ defmodule Mitos.Session do
     end
   end
 
-  defp memory_path!(%{trace: %{dir: dir}, project_id: project_id}, key) do
-    safe_project = Regex.replace(~r/[^A-Za-z0-9_.-]/, project_id, "_")
-    base = Path.join([dir, "artifacts", "memory", safe_project])
+  defp read_memory_file(state, key) do
+    base = memory_base!(state)
+    path = memory_path!(state, key)
+
+    with true <- no_symlink_path?(path, base),
+         {:ok, bytes} <- read_regular_file(path) do
+      {:ok, bytes}
+    else
+      false -> {:error, :symlink}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_memory_directory!(%{trace: %{dir: dir}} = state) do
+    ensure_descendant_directory!(dir, memory_base!(state), "memory directory")
+  end
+
+  defp ensure_memory_directory!(_state),
+    do: raise(ArgumentError, "memory methods require an open trace")
+
+  defp write_memory_file!(path, bytes) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        File.rm!(path)
+        write_new_memory_file!(path, bytes)
+
+      {:error, :enoent} ->
+        write_new_memory_file!(path, bytes)
+
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "memory file must not be a symlink"
+
+      {:ok, stat} ->
+        raise ArgumentError, "memory file must be regular: #{inspect(stat.type)}"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect memory file", path: path
+    end
+  end
+
+  defp write_new_memory_file!(path, bytes) do
+    case File.open(path, [:write, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        raise File.Error, reason: reason, action: "write memory file", path: path
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "create memory file", path: path
+    end
+  end
+
+  defp memory_path!(state, key) do
+    base = memory_base!(state)
     path = Path.expand(Path.join(base, key))
     base = Path.expand(base)
 
@@ -1298,8 +1812,141 @@ defmodule Mitos.Session do
     end
   end
 
-  defp memory_path!(_state, _key),
-    do: raise(ArgumentError, "memory methods require an open trace")
+  defp memory_base!(%{trace: %{dir: dir}, project_id: project_id}) do
+    safe_project = Regex.replace(~r/[^A-Za-z0-9_.-]/, project_id, "_")
+    Path.join([dir, "artifacts", "memory", safe_project])
+  end
+
+  defp memory_base!(_state), do: raise(ArgumentError, "memory methods require an open trace")
+
+  defp ensure_descendant_directory!(root, path, label) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+
+    unless path == root or String.starts_with?(path, root <> "/") do
+      raise ArgumentError, "#{label} escapes root"
+    end
+
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: :directory}} <- File.lstat(root) do
+      Enum.reduce(parts, root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :directory}} ->
+            candidate
+
+          {:error, :enoent} ->
+            mkdir_regular!(candidate, label)
+            candidate
+
+          {:ok, %{type: :symlink}} ->
+            raise ArgumentError, "#{label} must not contain symlinks"
+
+          {:ok, stat} ->
+            raise ArgumentError, "#{label} component must be a directory: #{inspect(stat.type)}"
+
+          {:error, reason} ->
+            raise File.Error, reason: reason, action: "inspect #{label}", path: candidate
+        end
+      end)
+
+      :ok
+    else
+      {:ok, %{type: :symlink}} ->
+        raise ArgumentError, "#{label} root must not be a symlink"
+
+      {:ok, stat} ->
+        raise ArgumentError, "#{label} root must be a directory: #{inspect(stat.type)}"
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "inspect #{label} root", path: root
+    end
+  end
+
+  defp mkdir_regular!(path, label) do
+    case File.mkdir(path) do
+      :ok ->
+        :ok
+
+      {:error, :eexist} ->
+        unless match?({:ok, %{type: :directory}}, File.lstat(path)) do
+          raise ArgumentError, "#{label} component must be a directory"
+        end
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "create #{label}", path: path
+    end
+  end
+
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+
+    unless path == root or String.starts_with?(path, root <> "/") do
+      raise ArgumentError, "memory path escapes root"
+    end
+
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    else
+      false -> false
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp context_map(%{} = context), do: context
   defp context_map(context) when is_binary(context), do: %{"text" => context}
@@ -2028,14 +2675,8 @@ defmodule Mitos.Session do
 
   defp encode_env(nil), do: default_env()
   defp encode_env([]), do: default_env()
-
-  defp encode_env(env) when is_list(env) do
-    base = default_env()
-    overlay = Enum.into(env, %{}, fn {k, v} -> {to_string(k), to_string(v)} end)
-    Map.merge(base, overlay)
-  end
-
-  defp encode_env(env) when is_map(env), do: encode_env(Map.to_list(env))
+  defp encode_env(%{} = env) when map_size(env) == 0, do: default_env()
+  defp encode_env(%{} = env), do: Map.merge(default_env(), env)
 
   # Inherit the small whitelist plus force a known-good TERM/COLORTERM so
   # providers emit ANSI color consistently under mitos-term.

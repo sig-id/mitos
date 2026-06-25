@@ -5,14 +5,25 @@ pub const Sequence = u64;
 
 pub const RunIdError = error{
     EmptyRunId,
+    UnsafeRunId,
 };
 
 pub const RunId = struct {
     value: []const u8,
 
     pub fn init(value: []const u8) RunIdError!RunId {
-        if (value.len == 0) return error.EmptyRunId;
+        try validate(value);
         return .{ .value = value };
+    }
+
+    pub fn validate(value: []const u8) RunIdError!void {
+        if (value.len == 0) return error.EmptyRunId;
+        if (!std.ascii.isAlphanumeric(value[0])) return error.UnsafeRunId;
+
+        for (value) |byte| {
+            if (std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-') continue;
+            return error.UnsafeRunId;
+        }
     }
 
     pub fn eql(self: RunId, other: RunId) bool {
@@ -173,6 +184,19 @@ test "run id rejects empty values" {
     try std.testing.expectError(error.EmptyRunId, RunId.init(""));
     const run_id = try RunId.init("01HXYZ");
     try std.testing.expect(run_id.eql(.{ .value = "01HXYZ" }));
+}
+
+test "run id rejects path-like and non-segment values" {
+    try std.testing.expectError(error.UnsafeRunId, RunId.init("../escape"));
+    try std.testing.expectError(error.UnsafeRunId, RunId.init("run/escape"));
+    try std.testing.expectError(error.UnsafeRunId, RunId.init("run\\escape"));
+    try std.testing.expectError(error.UnsafeRunId, RunId.init(".hidden"));
+    try std.testing.expectError(error.UnsafeRunId, RunId.init("-leading"));
+    try std.testing.expectError(error.UnsafeRunId, RunId.init("run.with.dot"));
+    try std.testing.expectError(error.UnsafeRunId, RunId.init("run with space"));
+
+    const run_id = try RunId.init("run_SAFE-123");
+    try std.testing.expectEqualStrings("run_SAFE-123", run_id.value);
 }
 
 test "terminal states are classified" {

@@ -12,6 +12,7 @@ pub const ConfigError = error{
     InvalidEnumValue,
     InvalidSandboxProfile,
     MissingField,
+    SymlinkRejected,
 };
 
 pub const WorkspaceMode = enum {
@@ -171,9 +172,26 @@ pub fn loadProjectConfig(
     allocator: std.mem.Allocator,
     dir: std.fs.Dir,
 ) !LoadedProjectConfig {
-    const bytes = try dir.readFileAlloc(allocator, config_file_name, 1024 * 1024);
+    const bytes = try readConfigFileNoSymlink(allocator, dir);
     defer allocator.free(bytes);
     return parseProjectConfig(allocator, bytes);
+}
+
+fn readConfigFileNoSymlink(allocator: std.mem.Allocator, dir: std.fs.Dir) ![]u8 {
+    const fd = std.posix.openat(
+        dir.fd,
+        config_file_name,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true },
+        0,
+    ) catch |err| switch (err) {
+        error.SymLinkLoop => return error.SymlinkRejected,
+        else => |e| return e,
+    };
+
+    const file: std.fs.File = .{ .handle = fd };
+    defer file.close();
+
+    return file.readToEndAlloc(allocator, 1024 * 1024);
 }
 
 fn parseJsonConfig(arena: std.mem.Allocator, bytes: []const u8) !ProjectConfig {
@@ -794,6 +812,19 @@ test "project config loader reads default project file" {
 
     try std.testing.expectEqualStrings("main", loaded.value.workspace.base_branch);
     try std.testing.expectEqualStrings("fake", loaded.value.providers[0].name);
+}
+
+test "project config loader rejects symlinked project files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "outside.yaml", .data = "version: 1\n" });
+    try tmp.dir.symLink("outside.yaml", config_file_name, .{});
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        loadProjectConfig(std.testing.allocator, tmp.dir),
+    );
 }
 
 test "config validation rejects mismatched nucleus profile" {

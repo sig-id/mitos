@@ -39,6 +39,269 @@ defmodule Mitos.TraceTest do
     assert trace.seq == 1
   end
 
+  test "rejects unsafe run ids before joining trace paths" do
+    base_dir = unique_tmp_dir("trace-run-id")
+    on_exit(fn -> File.rm_rf!(base_dir) end)
+
+    assert_raise ArgumentError, ~r/run_id must be a safe trace identifier/, fn ->
+      Mitos.Trace.open!(run_id: "../escaped", base_dir: base_dir)
+    end
+
+    refute File.dir?(Path.join(base_dir, "escaped"))
+    assert Mitos.Trace.read_events("../escaped", base_dir: base_dir) == []
+    assert Mitos.Trace.fold_run("../escaped", base_dir: base_dir)["last_seq"] == -1
+
+    assert {:error, :not_found} =
+             Mitos.Trace.recover_run("../escaped", [base_dir: base_dir], fn _decision ->
+               flunk("unsafe run ids must not be recovered")
+             end)
+  end
+
+  test "rejects symlinked trace run directories and files" do
+    base_dir = unique_tmp_dir("trace-symlink")
+    outside = unique_tmp_dir("trace-symlink-outside")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    runs_dir = Path.join(base_dir, ".runs")
+    File.mkdir_p!(runs_dir)
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, Path.join(runs_dir, "run-linked-dir"))
+
+    assert_raise ArgumentError, ~r/trace directory must not be a symlink/, fn ->
+      Mitos.Trace.open!(run_id: "run-linked-dir", base_dir: base_dir)
+    end
+
+    assert Mitos.Trace.read_events("run-linked-dir", base_dir: base_dir) == []
+    refute File.exists?(Path.join(outside, "run.yaml"))
+
+    file_link_dir = Path.join(runs_dir, "run-linked-file")
+    File.mkdir_p!(file_link_dir)
+    outside_events = Path.join(outside, "events.jsonl")
+    File.write!(outside_events, Jason.encode!(%{"type" => "exit", "code" => 0}) <> "\n")
+    File.ln_s!(outside_events, Path.join(file_link_dir, "events.jsonl"))
+
+    assert_raise ArgumentError, ~r/trace file must not be a symlink/, fn ->
+      Mitos.Trace.open!(run_id: "run-linked-file", base_dir: base_dir)
+    end
+
+    assert Mitos.Trace.read_events("run-linked-file", base_dir: base_dir) == []
+    assert Mitos.Trace.fold_run("run-linked-file", base_dir: base_dir)["last_seq"] == -1
+
+    subdir_link_dir = Path.join(runs_dir, "run-linked-subdir")
+    File.mkdir_p!(subdir_link_dir)
+    File.ln_s!(outside, Path.join(subdir_link_dir, "artifacts"))
+
+    assert_raise ArgumentError, ~r/trace artifacts directory must not be a symlink/, fn ->
+      Mitos.Trace.open!(run_id: "run-linked-subdir", base_dir: base_dir)
+    end
+  end
+
+  test "rejects symlinked trace base directories" do
+    base_dir = unique_tmp_dir("trace-base-symlink")
+    outside = unique_tmp_dir("trace-base-symlink-outside")
+
+    on_exit(fn ->
+      File.rm(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, base_dir)
+
+    assert_raise ArgumentError, ~r/trace base must not be a symlink/, fn ->
+      Mitos.Trace.open!(run_id: "run-base-link", base_dir: base_dir)
+    end
+
+    refute File.exists?(Path.join([outside, ".runs", "run-base-link", "run.yaml"]))
+  end
+
+  test "read side refuses symlinked trace base directories" do
+    base_dir = unique_tmp_dir("trace-read-base-symlink")
+    outside = unique_tmp_dir("trace-read-base-symlink-outside")
+    run_dir = Path.join([outside, ".runs", "run-base-read-link"])
+
+    on_exit(fn ->
+      File.rm(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    File.mkdir_p!(run_dir)
+    File.write!(Path.join(run_dir, "events.jsonl"), Jason.encode!(%{"seq" => 0}) <> "\n")
+    File.ln_s!(outside, base_dir)
+
+    assert Mitos.Trace.read_events("run-base-read-link", base_dir: base_dir) == []
+    assert Mitos.Trace.fold_run("run-base-read-link", base_dir: base_dir)["last_seq"] == -1
+
+    assert {:error, :not_found} =
+             Mitos.Trace.recover_run("run-base-read-link", [base_dir: base_dir], fn _decision ->
+               flunk("symlinked trace bases must not be recovered")
+             end)
+  end
+
+  test "read side refuses symlinked trace runs directories" do
+    base_dir = unique_tmp_dir("trace-read-runs-symlink")
+    outside = unique_tmp_dir("trace-read-runs-symlink-outside")
+    outside_runs = Path.join(outside, ".runs")
+    run_dir = Path.join(outside_runs, "run-runs-read-link")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    File.mkdir_p!(base_dir)
+    File.mkdir_p!(run_dir)
+    File.write!(Path.join(run_dir, "events.jsonl"), Jason.encode!(%{"seq" => 0}) <> "\n")
+    File.ln_s!(outside_runs, Path.join(base_dir, ".runs"))
+
+    assert Mitos.Trace.read_events("run-runs-read-link", base_dir: base_dir) == []
+    assert Mitos.Trace.fold_run("run-runs-read-link", base_dir: base_dir)["last_seq"] == -1
+
+    assert {:error, :not_found} =
+             Mitos.Trace.recover_run("run-runs-read-link", [base_dir: base_dir], fn _decision ->
+               flunk("symlinked trace runs roots must not be recovered")
+             end)
+  end
+
+  test "append refuses trace files swapped to symlinks after open" do
+    base_dir = unique_tmp_dir("trace-append-symlink")
+    outside = unique_tmp_dir("trace-append-symlink-outside")
+
+    on_exit(fn ->
+      File.rm_rf!(base_dir)
+      File.rm_rf!(outside)
+    end)
+
+    trace = Mitos.Trace.open!(run_id: "run-append-symlink", base_dir: base_dir)
+    run_dir = Path.join([base_dir, ".runs", "run-append-symlink"])
+    outside_commands = Path.join(outside, "commands.jsonl")
+
+    File.mkdir_p!(outside)
+    File.write!(outside_commands, "outside\n")
+    File.rm!(Path.join(run_dir, "commands.jsonl"))
+    File.ln_s!(outside_commands, Path.join(run_dir, "commands.jsonl"))
+
+    _trace =
+      Mitos.Trace.append_command(trace, %{"type" => "TOOL_BROKER_COMMAND", "command" => "echo ok"})
+
+    assert File.read!(outside_commands) == "outside\n"
+
+    outside_events = Path.join(outside, "events.jsonl")
+    File.write!(outside_events, "outside-events\n")
+    File.rm!(Path.join(run_dir, "events.jsonl"))
+    File.ln_s!(outside_events, Path.join(run_dir, "events.jsonl"))
+
+    assert_raise ArgumentError, ~r/trace file must not be a symlink/, fn ->
+      Mitos.Trace.append_decision_checked(trace, %{
+        actor: "orchestrator",
+        type: "advance",
+        target: %{"stage" => "test"},
+        inputs_hash: "sha256:test",
+        rationale: "exercise symlink guard",
+        budget: %{}
+      })
+    end
+
+    assert File.read!(outside_events) == "outside-events\n"
+  end
+
+  test "redacts credential-shaped legacy event fields before durable trace write" do
+    base_dir = unique_tmp_dir("trace-redacted-event")
+    on_exit(fn -> File.rm_rf!(base_dir) end)
+
+    trace = Mitos.Trace.open!(run_id: "run-redacted-event", base_dir: base_dir)
+
+    _trace =
+      Mitos.Trace.append_event(trace, %{
+        "type" => "STRUCTURED_OUTPUT",
+        "kind" => "authorization",
+        "token" => "terminal-secret-token",
+        "tokens" => 12,
+        "credential_id" => "provider-key",
+        "url" => "https://user:pass@example.test/callback?signature=secret-sig&visible=ok",
+        "nested" => %{
+          "authorization" => "Bearer nested-secret",
+          "callback" => "https://api.example.test/path?api_key=nested-key&mode=ok"
+        }
+      })
+
+    [record] = Mitos.Trace.read_events("run-redacted-event", base_dir: base_dir)
+    event = record["event"]
+
+    assert event["token"] == "[redacted]"
+    assert event["tokens"] == 12
+    assert event["credential_id"] == "provider-key"
+
+    assert event["url"] ==
+             "https://example.test/callback?signature=[redacted]&visible=ok"
+
+    assert event["nested"]["authorization"] == "[redacted]"
+
+    assert event["nested"]["callback"] ==
+             "https://api.example.test/path?api_key=[redacted]&mode=ok"
+
+    refute inspect(record) =~ "terminal-secret-token"
+    refute inspect(record) =~ "user:pass"
+    refute inspect(record) =~ "secret-sig"
+    refute inspect(record) =~ "nested-secret"
+    refute inspect(record) =~ "nested-key"
+  end
+
+  test "redacts command and terminal snapshot artifacts before durable trace write" do
+    base_dir = unique_tmp_dir("trace-redacted-artifacts")
+    on_exit(fn -> File.rm_rf!(base_dir) end)
+
+    trace = Mitos.Trace.open!(run_id: "run-redacted-artifacts", base_dir: base_dir)
+
+    trace =
+      Mitos.Trace.append_command(trace, %{
+        "type" => "TOOL_BROKER_COMMAND",
+        "command" =>
+          "curl https://user:pass@example.test/path?token=command-token&visible=ok -H 'Authorization: Bearer command-secret' API_KEY=command-key",
+        "stdout" => "api_key=stdout-key\nBearer stdout-secret",
+        "stderr" => "Authorization: Bearer stderr-secret"
+      })
+
+    _trace =
+      Mitos.Trace.append_snapshot(trace, %{
+        "seq" => 1,
+        "title" => "API_KEY=title-key",
+        "cells" => [
+          %{"x" => 0, "y" => 0, "t" => "https://snap-user:snap-pass@example.test?sig=cell-sig"},
+          %{"x" => 1, "y" => 0, "t" => "Authorization: Bearer cell-secret"}
+        ]
+      })
+
+    run_dir = Path.join([base_dir, ".runs", "run-redacted-artifacts"])
+    commands = File.read!(Path.join(run_dir, "commands.jsonl"))
+    snapshots = File.read!(Path.join(run_dir, "terminal.snapshots.jsonl"))
+
+    refute commands =~ "user:pass"
+    refute commands =~ "command-token"
+    refute commands =~ "command-secret"
+    refute commands =~ "command-key"
+    refute commands =~ "stdout-key"
+    refute commands =~ "stdout-secret"
+    refute commands =~ "stderr-secret"
+
+    assert commands =~ "https://example.test/path?token=[redacted]&visible=ok"
+    assert commands =~ "API_KEY=[redacted]"
+    assert commands =~ "api_key=[redacted]"
+
+    refute snapshots =~ "title-key"
+    refute snapshots =~ "snap-user:snap-pass"
+    refute snapshots =~ "cell-sig"
+    refute snapshots =~ "cell-secret"
+
+    assert snapshots =~ "API_KEY=[redacted]"
+    assert snapshots =~ "https://example.test?sig=[redacted]"
+    assert snapshots =~ "Authorization: Bearer [redacted]"
+  end
+
   test "appends canonical Decision and Effect events" do
     base_dir = unique_tmp_dir("decision-effect")
     on_exit(fn -> File.rm_rf!(base_dir) end)
@@ -92,6 +355,75 @@ defmodule Mitos.TraceTest do
              "ref" => %{"sandbox" => "local"},
              "payload" => %{"harness" => "fake"}
            } = effect
+  end
+
+  test "redacts credential-shaped canonical decision and effect fields before durable write" do
+    base_dir = unique_tmp_dir("canonical-redaction")
+    on_exit(fn -> File.rm_rf!(base_dir) end)
+
+    trace = Mitos.Trace.open!(run_id: "run-canonical-redaction", base_dir: base_dir)
+
+    assert {:ok, trace, %{"seq" => decision_seq} = decision} =
+             Mitos.Trace.append_decision_checked(trace, %{
+               actor: "orchestrator",
+               type: "advance",
+               target: "https://target-user:target-pass@example.test/start?token=target-token",
+               params: %{
+                 "api_key" => "decision-key",
+                 "callback" => "https://api.example.test/hook?signature=decision-sig&ok=yes",
+                 "tokens" => 12,
+                 "credential_id" => "provider-key"
+               },
+               inputs_hash: "sha256:state",
+               rationale: "call Authorization: Bearer rationale-secret",
+               budget: %{"tokens" => 100, "usd" => 0, "wall_ms" => 1_000, "remaining" => %{}}
+             })
+
+    _trace =
+      Mitos.Trace.append_effect(trace, %{
+        type: "capability_started",
+        caused_by: decision_seq,
+        ref: %{
+          "url" => "https://ref-user:ref-pass@example.test/run?api_key=ref-key&visible=ok",
+          "credential_id" => "provider-key"
+        },
+        payload: %{
+          "authorization" => "Bearer payload-secret",
+          "stdout" => "access_token=payload-token",
+          "tokens" => 7
+        }
+      })
+
+    assert decision["target"] == "https://example.test/start?token=[redacted]"
+    assert decision["params"]["api_key"] == "[redacted]"
+
+    assert decision["params"]["callback"] ==
+             "https://api.example.test/hook?signature=[redacted]&ok=yes"
+
+    assert decision["params"]["tokens"] == 12
+    assert decision["params"]["credential_id"] == "provider-key"
+    assert decision["rationale"] == "call Authorization: Bearer [redacted]"
+
+    [logged_decision, logged_effect] =
+      Mitos.Trace.read_events("run-canonical-redaction", base_dir: base_dir)
+
+    assert logged_decision == decision
+    assert logged_effect["ref"]["url"] == "https://example.test/run?api_key=[redacted]&visible=ok"
+    assert logged_effect["ref"]["credential_id"] == "provider-key"
+    assert logged_effect["payload"]["authorization"] == "[redacted]"
+    assert logged_effect["payload"]["stdout"] == "access_token=[redacted]"
+    assert logged_effect["payload"]["tokens"] == 7
+
+    encoded = inspect([logged_decision, logged_effect])
+    refute encoded =~ "target-pass"
+    refute encoded =~ "target-token"
+    refute encoded =~ "decision-key"
+    refute encoded =~ "decision-sig"
+    refute encoded =~ "rationale-secret"
+    refute encoded =~ "ref-pass"
+    refute encoded =~ "ref-key"
+    refute encoded =~ "payload-secret"
+    refute encoded =~ "payload-token"
   end
 
   test "refuses decisions whose grant exceeds remaining budget" do

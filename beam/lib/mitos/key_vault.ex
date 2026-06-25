@@ -7,6 +7,10 @@ defmodule Mitos.KeyVault do
   has been checked.
   """
 
+  @credential_id_pattern ~r/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/
+  @secret_token_value_pattern ~r/^(sk-|sk_live_|sk_test_|rk_live_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xoxb-|xoxp-|xoxa-|xoxc-|xapp-|glpat-|ya29\.|AKIA)/i
+  @secret_url_query_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
+
   @doc """
   Register a seller-owned credential in the broker vault.
 
@@ -249,8 +253,24 @@ defmodule Mitos.KeyVault do
     value = field(attrs, "credential_id") || field(attrs, "id") || field(attrs, "name")
 
     case clean_string(value) do
-      nil -> {:error, "credential_id is required"}
-      credential_id -> {:ok, credential_id}
+      nil ->
+        {:error, "credential_id is required"}
+
+      credential_id ->
+        validate_credential_id(credential_id)
+    end
+  end
+
+  defp validate_credential_id(credential_id) do
+    cond do
+      credential_secret_material?(credential_id) ->
+        {:error, "credential_id must reference an id, not secret material"}
+
+      not Regex.match?(@credential_id_pattern, credential_id) ->
+        {:error, "credential_id contains unsupported characters"}
+
+      true ->
+        {:ok, credential_id}
     end
   end
 
@@ -276,9 +296,57 @@ defmodule Mitos.KeyVault do
       "*" in destinations ->
         {:error, "registered seller keys must be scoped to explicit destinations"}
 
+      Enum.any?(destinations, &credential_secret_material?/1) ->
+        {:error, "registered seller key destination must not contain secret material"}
+
       true ->
         {:ok, destinations}
     end
+  end
+
+  defp credential_secret_material?(value) do
+    credential_url?(value) or
+      credential_url_query?(value) or
+      Regex.match?(@secret_token_value_pattern, value)
+  end
+
+  defp credential_url?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, userinfo: userinfo}
+      when is_binary(scheme) and is_binary(host) and is_binary(userinfo) ->
+        userinfo != ""
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, query: query}
+      when is_binary(scheme) and is_binary(host) and is_binary(query) ->
+        query
+        |> String.split("&", trim: true)
+        |> Enum.any?(&credential_url_query_pair?/1)
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query_pair?(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+    Regex.match?(@secret_url_query_key_pattern, safe_form_decode(key))
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
   end
 
   defp required_string(attrs, key) do

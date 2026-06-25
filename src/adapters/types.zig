@@ -41,6 +41,26 @@ pub const AdapterCapabilities = struct {
     }
 };
 
+pub const TerminalObservationProfile = struct {
+    emit_raw_refs: bool = true,
+    suppress_title_events: bool = false,
+    extract_visible_text: bool = false,
+    raw_min_strong_chars: usize = 1,
+    chrome_line_markers: []const []const u8 = &.{},
+};
+
+pub const terminal_observation_generic_pty: TerminalObservationProfile = .{};
+
+pub fn terminalObservationProviderTui(chrome_line_markers: []const []const u8) TerminalObservationProfile {
+    return .{
+        .emit_raw_refs = false,
+        .suppress_title_events = true,
+        .extract_visible_text = true,
+        .raw_min_strong_chars = 3,
+        .chrome_line_markers = chrome_line_markers,
+    };
+}
+
 pub const AuthStatus = enum {
     unknown,
     authenticated,
@@ -170,4 +190,14 @@ test "adapter detection can narrow supported modes" {
 
     try std.testing.expect(detection.supportsTransport(.stdio_json));
     try std.testing.expect(!detection.supportsTransport(.pty));
+}
+
+test "terminal observation profiles separate generic pty from harness tui chrome" {
+    try std.testing.expect(terminal_observation_generic_pty.emit_raw_refs);
+    try std.testing.expect(!terminal_observation_generic_pty.extract_visible_text);
+    const provider_tui = terminalObservationProviderTui(&.{"Working"});
+    try std.testing.expect(!provider_tui.emit_raw_refs);
+    try std.testing.expect(provider_tui.suppress_title_events);
+    try std.testing.expect(provider_tui.extract_visible_text);
+    try std.testing.expectEqualStrings("Working", provider_tui.chrome_line_markers[0]);
 }

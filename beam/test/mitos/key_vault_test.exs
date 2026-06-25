@@ -139,6 +139,43 @@ defmodule Mitos.KeyVaultTest do
              })
   end
 
+  test "rejects secret-bearing credential ids and destinations without echoing secret material" do
+    assert {:error, id_error} =
+             Mitos.KeyVault.register(%{
+               seller_id: "seller-a",
+               credential_id: "sk-live-must-not-be-here",
+               destinations: ["api.provider.test"],
+               secret: "seller-a-secret"
+             })
+
+    assert id_error == "credential_id must reference an id, not secret material"
+    refute id_error =~ "sk-live-must-not-be-here"
+
+    assert {:error, url_error} =
+             Mitos.KeyVault.register(%{
+               seller_id: "seller-a",
+               credential_id: "provider-key",
+               destinations: ["https://user:pass@api.provider.test/callback"],
+               secret: "seller-a-secret"
+             })
+
+    assert url_error == "registered seller key destination must not contain secret material"
+    refute url_error =~ "user:pass"
+
+    assert {:error, query_error} =
+             Mitos.KeyVault.register(%{
+               seller_id: "seller-a",
+               credential_id: "provider-key",
+               destinations: ["https://api.provider.test/callback?signature=must-not-be-here"],
+               secret: "seller-a-secret"
+             })
+
+    assert query_error == "registered seller key destination must not contain secret material"
+    refute query_error =~ "must-not-be-here"
+
+    assert Mitos.KeyVault.list("seller-a") == []
+  end
+
   test "leases registered credentials per run and revokes them on completion" do
     assert {:ok, _ref} =
              Mitos.KeyVault.register(%{
@@ -523,6 +560,8 @@ defmodule Mitos.KeyVaultTest do
          Jason.encode!(%{
            ok: true,
            authorization: headers["authorization"],
+           api_key: headers["x-api-key"],
+           cookie: headers["cookie"],
            client: headers["x-client"],
            body: body
          })}
@@ -555,6 +594,8 @@ defmodule Mitos.KeyVaultTest do
         method: "POST",
         headers: %{
           "authorization" => "Bearer sandbox-supplied",
+          "cookie" => "session=sandbox-secret",
+          "x-api-key" => "sandbox-api-key",
           "x-client" => "backend-test"
         },
         body: %{"hello" => "world"},
@@ -562,12 +603,16 @@ defmodule Mitos.KeyVaultTest do
       })
 
     assert forwarded.status == 202
+    refute forwarded.resp_body =~ "sandbox-secret"
+    refute forwarded.resp_body =~ "sandbox-api-key"
     refute forwarded.resp_body =~ "seller-a-secret"
     refute forwarded.resp_body =~ "Bearer seller-a-secret"
 
     assert Jason.decode!(forwarded.resp_body) == %{
              "ok" => true,
              "authorization" => "Bearer [redacted]",
+             "api_key" => nil,
+             "cookie" => nil,
              "client" => "backend-test",
              "body" => Jason.encode!(%{"hello" => "world"})
            }
@@ -576,6 +621,8 @@ defmodule Mitos.KeyVaultTest do
 
     assert headers["authorization"] == "Bearer seller-a-secret"
     refute headers["authorization"] == "Bearer sandbox-supplied"
+    refute Map.has_key?(headers, "cookie")
+    refute Map.has_key?(headers, "x-api-key")
     assert headers["x-client"] == "backend-test"
     assert headers["content-type"] == "application/json"
     assert Jason.decode!(request_body) == %{"hello" => "world"}
@@ -625,6 +672,99 @@ defmodule Mitos.KeyVaultTest do
 
     assert mismatched.status == 403
     assert Jason.decode!(mismatched.resp_body)["reason"] == "broker forward destination mismatch"
+  end
+
+  test "broker egress route rejects and redacts credential-bearing forward URLs", %{
+    trace_base_dir: trace_base_dir
+  } do
+    parent = self()
+
+    upstream =
+      start_broker_upstream_server(fn method, path, headers, body ->
+        send(parent, {:broker_upstream_request, method, path, headers, body})
+        {200, [{"content-type", "application/json"}], %{"ok" => true}}
+      end)
+
+    uri = URI.parse(upstream)
+    dest = broker_upstream_dest(upstream)
+
+    assert {:ok, _ref} =
+             Mitos.KeyVault.register(%{
+               seller_id: "seller-a",
+               credential_id: "provider-key",
+               type: "bearer",
+               destinations: [dest],
+               secret: "seller-a-secret"
+             })
+
+    assert {:ok, [_lease]} =
+             Mitos.KeyVault.lease_run("run-broker-redacted-url", %{
+               seller_id: "seller-a",
+               egress_policy: [
+                 %{dest: dest, credential_id: "provider-key", requires_approval: false}
+               ]
+             })
+
+    credentialed_url =
+      "#{uri.scheme}://user:sandbox-pass@#{uri.host}:#{uri.port}/v1/echo?token=sandbox-token&visible=ok"
+
+    denied =
+      post_json("/broker/runs/run-broker-redacted-url/egress", %{
+        credential_id: "provider-key",
+        dest: dest,
+        url: credentialed_url,
+        request_id: "egress-redacted-url-1"
+      })
+
+    assert denied.status == 403
+
+    assert Jason.decode!(denied.resp_body)["reason"] ==
+             "broker forward URL must not contain credentials"
+
+    query_denied =
+      post_json("/broker/runs/run-broker-redacted-url/egress", %{
+        credential_id: "provider-key",
+        dest: dest,
+        url: upstream <> "/v1/echo?signature=sandbox-signature&visible=ok",
+        request_id: "egress-redacted-url-2"
+      })
+
+    assert query_denied.status == 403
+
+    assert Jason.decode!(query_denied.resp_body)["reason"] ==
+             "broker forward URL must not contain credential query parameters"
+
+    refute_receive {:broker_upstream_request, _method, _path, _headers, _body}, 100
+
+    events = Mitos.Trace.read_events("run-broker-redacted-url", base_dir: trace_base_dir)
+    refute inspect(events) =~ "sandbox-pass"
+    refute inspect(events) =~ "sandbox-token"
+    refute inspect(events) =~ "sandbox-signature"
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "egress_attempted",
+               "payload" => %{"url" => traced_url}
+             } ->
+               traced_url ==
+                 "#{uri.scheme}://#{uri.host}:#{uri.port}/v1/echo?token=[redacted]&visible=ok"
+
+             _event ->
+               false
+           end)
+
+    assert Enum.any?(events, fn
+             %{
+               "kind" => "effect",
+               "type" => "egress_attempted",
+               "payload" => %{"url" => traced_url}
+             } ->
+               traced_url == upstream <> "/v1/echo?signature=[redacted]&visible=ok"
+
+             _event ->
+               false
+           end)
   end
 
   test "HTTP key registration stores secrets server-side and returns redacted refs" do

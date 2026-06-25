@@ -303,6 +303,12 @@ Goal: run a two-step backend application pipeline.
                     "sink": "web",
                     "on": "run.done",
                     "render": "result.summary + artifacts",
+                },
+                {
+                    "entrypoint": "chain",
+                    "sink": "web",
+                    "on": "run.done",
+                    "render": "result.summary + artifacts",
                 }
             ],
         },
@@ -623,7 +629,7 @@ true = "#{app_activation_body["app_id"]} (wants)" in app_activation_active["usag
 true = "pipeline:backend-chain (requires)" in app_activation_active["chain-audit"]["why"]
 true = get_in(app_activation_body, ["io", "defaults_applied?"]) == false
 true = Enum.map(get_in(app_activation_body, ["io", "inputs"]), & &1["connector"]) == ["webhook"]
-true = Enum.map(get_in(app_activation_body, ["io", "outputs"]), & &1["sink"]) == ["web"]
+true = Enum.map(get_in(app_activation_body, ["io", "outputs"]), & &1["sink"]) == ["web", "web"]
 
 app_activation_missing_conn =
   Plug.Test.conn(
@@ -1679,7 +1685,7 @@ def verify_app_activation(app_activation: dict[str, Any]) -> None:
         {"pipeline": "backend-chain", "services": ["chain-audit"], "targets": []}
     ]
     assert app_activation["input_connectors"] == ["webhook"]
-    assert app_activation["output_sinks"] == ["web"]
+    assert app_activation["output_sinks"] == ["web", "web"]
     assert app_activation["defaults_applied"] is False
     assert app_activation["missing_detail"] == "missing required service backend-runner"
 

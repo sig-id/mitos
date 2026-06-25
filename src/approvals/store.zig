@@ -3,6 +3,10 @@ const policy = @import("../policy/types.zig");
 const runtime = @import("../runtime/types.zig");
 const trace = @import("../trace/types.zig");
 
+const ApprovalStoreError = error{
+    SymlinkRejected,
+};
+
 pub const ApprovalRecord = struct {
     id: policy.ApprovalId,
     run_id: runtime.RunId,
@@ -62,6 +66,7 @@ pub const FileApprovalStore = struct {
     }
 
     fn appendLine(self: *FileApprovalStore, line: []const u8) !void {
+        try rejectSymlink(self.run_dir, trace.defaultArtifactPath(.approvals));
         var file = try self.run_dir.createFile(trace.defaultArtifactPath(.approvals), .{
             .truncate = false,
         });
@@ -104,7 +109,8 @@ pub fn summarize(
     allocator: std.mem.Allocator,
     run_dir: std.fs.Dir,
 ) !ApprovalSummary {
-    const bytes = run_dir.readFileAlloc(
+    const bytes = readFileAllocNoSymlink(
+        run_dir,
         allocator,
         trace.defaultArtifactPath(.approvals),
         16 * 1024 * 1024,
@@ -146,6 +152,38 @@ pub fn summarize(
     }
     summary.pending = pending_ids.items.len;
     return summary;
+}
+
+fn readFileAllocNoSymlink(
+    dir: std.fs.Dir,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    max_bytes: usize,
+) ![]u8 {
+    const fd = std.posix.openat(
+        dir.fd,
+        path,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true },
+        0,
+    ) catch |err| switch (err) {
+        error.SymLinkLoop => return ApprovalStoreError.SymlinkRejected,
+        else => |e| return e,
+    };
+
+    const file: std.fs.File = .{ .handle = fd };
+    defer file.close();
+
+    return file.readToEndAlloc(allocator, max_bytes);
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return ApprovalStoreError.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
 }
 
 fn renderRequest(
@@ -281,6 +319,50 @@ test "approval store appends request and decision records" {
     try std.testing.expectEqual(@as(usize, 1), summary.requested);
     try std.testing.expectEqual(@as(usize, 1), summary.decided);
     try std.testing.expectEqual(@as(usize, 0), summary.pending);
+}
+
+test "approval store rejects symlinked approval logs" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "outside-approvals.jsonl", .data = "outside\n" });
+    try tmp.dir.symLink("outside-approvals.jsonl", trace.defaultArtifactPath(.approvals), .{});
+
+    const run_id = try runtime.RunId.init("01HAPPROVAL");
+    const approval_id = try policy.ApprovalId.init("approval-symlink");
+    var store: FileApprovalStore = .{
+        .allocator = allocator,
+        .run_dir = tmp.dir,
+    };
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        store.persistRequest(.{
+            .id = approval_id,
+            .run_id = run_id,
+            .action = .{ .network_access = .{ .destination = "api.example.com" } },
+            .source = .runtime,
+            .risk = .high,
+        }, 10),
+    );
+
+    const outside = try tmp.dir.readFileAlloc(allocator, "outside-approvals.jsonl", 4096);
+    defer allocator.free(outside);
+    try std.testing.expectEqualStrings("outside\n", outside);
+}
+
+test "approval summary rejects symlinked approval logs" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "outside-approvals.jsonl", .data = "outside\n" });
+    try tmp.dir.symLink("outside-approvals.jsonl", trace.defaultArtifactPath(.approvals), .{});
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        summarize(std.testing.allocator, tmp.dir),
+    );
 }
 
 test "approval summary reconstructs pending requests from append-only log" {

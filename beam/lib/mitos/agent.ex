@@ -55,7 +55,8 @@ defmodule Mitos.Agent do
       |> maybe_put(:knowledge, opts[:knowledge])
       |> maybe_put(:capability_runtime, opts[:capability_runtime])
 
-    with {:ok, trace, opening_decision_seq} <-
+    with :ok <- validate_cwd(opts[:cwd]),
+         {:ok, trace, opening_decision_seq} <-
            append_opening_decision(session_id, launch_spec, opts),
          {:ok, %{pid: pid, session_id: session_id}} <-
            SessionSupervisor.start_session(
@@ -220,6 +221,50 @@ defmodule Mitos.Agent do
   defp normalize_transport(:stdio_json), do: "stdio-json"
   defp normalize_transport(:stdio), do: "stdio-json"
   defp normalize_transport(_), do: nil
+
+  defp validate_cwd(nil), do: :ok
+
+  defp validate_cwd(cwd) when is_binary(cwd) do
+    path = Path.expand(cwd)
+
+    with {:ok, %{type: :directory}} <- File.lstat(path),
+         true <- no_symlink_absolute_path?(path) do
+      :ok
+    else
+      {:ok, %{type: :symlink}} -> {:error, {:invalid_cwd, :symlink}}
+      {:ok, _stat} -> {:error, {:invalid_cwd, :not_directory}}
+      {:error, reason} -> {:error, {:invalid_cwd, reason}}
+      false -> {:error, {:invalid_cwd, :symlink}}
+    end
+  end
+
+  defp validate_cwd(_cwd), do: {:error, {:invalid_cwd, :invalid}}
+
+  defp no_symlink_absolute_path?(path) do
+    root = Path.expand("/")
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, _reason} -> {:halt, false}
+        end
+      end)
+      |> case do
+        false -> false
+        _last_path -> true
+      end
+    else
+      _ -> false
+    end
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

@@ -233,6 +233,10 @@ pub const Decoder = struct {
         return .{ .bytes = bytes };
     }
 
+    pub fn finished(self: *const Decoder) bool {
+        return self.pos == self.bytes.len;
+    }
+
     fn need(self: *Decoder, n: usize) DecodeError!void {
         if (self.pos + n > self.bytes.len) return error.Truncated;
     }
@@ -316,6 +320,7 @@ pub const Decoder = struct {
 
     fn decodeArray(self: *Decoder, allocator: std.mem.Allocator, n: usize) DecodeError!Value {
         if (n == 0) return .{ .array = &.{} };
+        if (n > self.bytes.len - self.pos) return error.Truncated;
         const items = allocator.alloc(Value, n) catch return error.OutOfMemory;
         var filled: usize = 0;
         errdefer {
@@ -330,6 +335,7 @@ pub const Decoder = struct {
 
     fn decodeMap(self: *Decoder, allocator: std.mem.Allocator, n: usize) DecodeError!Value {
         if (n == 0) return .{ .map = &.{} };
+        if (n > (self.bytes.len - self.pos) / 2) return error.Truncated;
         const pairs = allocator.alloc(Value.Pair, n) catch return error.OutOfMemory;
         var filled: usize = 0;
         errdefer {
@@ -408,4 +414,30 @@ test "decoder rejects truncated input" {
     // 0xd2 declares an int32 but no bytes follow.
     var d = Decoder.init(&[_]u8{0xd2});
     try std.testing.expectError(error.Truncated, d.decode(arena.allocator()));
+}
+
+test "decoder rejects impossible container lengths before allocation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // array32 length 0xffff_ffff with no elements must fail as truncated
+    // without attempting to allocate that many Value entries.
+    var array_d = Decoder.init(&[_]u8{ 0xdd, 0xff, 0xff, 0xff, 0xff });
+    try std.testing.expectError(error.Truncated, array_d.decode(arena.allocator()));
+
+    // map32 length 0xffff_ffff with no key/value pairs is likewise impossible
+    // in the remaining buffer.
+    var map_d = Decoder.init(&[_]u8{ 0xdf, 0xff, 0xff, 0xff, 0xff });
+    try std.testing.expectError(error.Truncated, map_d.decode(arena.allocator()));
+}
+
+test "decoder exposes whether the whole buffer was consumed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var d = Decoder.init(&[_]u8{ 0xc0, 0xc0 });
+    _ = try d.decode(arena.allocator());
+    try std.testing.expect(!d.finished());
+    _ = try d.decode(arena.allocator());
+    try std.testing.expect(d.finished());
 }

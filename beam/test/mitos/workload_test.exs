@@ -268,6 +268,47 @@ defmodule Mitos.WorkloadTest do
       assert {:error, :not_found} = Workload.fetch("nope")
     end
 
+    test "rejects symlinked workload definition files", %{dir: dir} do
+      outside =
+        Path.join(
+          System.tmp_dir!(),
+          "mitos-workload-outside-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(outside)
+      outside_definition = Path.join(outside, "echo.json")
+      File.write!(outside_definition, Jason.encode!(%{provider: "fake", template: "outside"}))
+      File.ln_s!(outside_definition, Path.join(dir, "echo.json"))
+
+      on_exit(fn -> File.rm_rf!(outside) end)
+
+      assert {:error, {:invalid_workload, "unreadable definition: :symlink"}} =
+               Workload.fetch("echo")
+    end
+
+    test "does not read definitions through a symlinked workload directory" do
+      outside = unique_tmp_dir("workload-dir-symlink-target")
+      link = unique_tmp_dir("workload-dir-symlink")
+
+      File.mkdir_p!(outside)
+
+      File.write!(
+        Path.join(outside, "echo.json"),
+        Jason.encode!(%{provider: "fake", template: "outside"})
+      )
+
+      File.ln_s!(outside, link)
+      Application.put_env(:mitos, :workloads_dir, link)
+
+      on_exit(fn ->
+        File.rm(link)
+        File.rm_rf!(outside)
+      end)
+
+      assert Workload.list() == []
+      assert {:error, :not_found} = Workload.fetch("echo")
+    end
+
     test "definition without provider or template is invalid", %{dir: dir} do
       write_workload!(dir, "bad", %{template: "x"})
       assert {:error, {:invalid_workload, _}} = Workload.fetch("bad")
@@ -366,6 +407,70 @@ defmodule Mitos.WorkloadTest do
       assert {:error,
               {:invalid_workload, "capability env must not contain secret-like key API_KEY"}} =
                Workload.fetch("cap-secret-env")
+
+      write_workload!(dir, "cap-credential-url-env", %{
+        provider: "fake",
+        template: "{{objective}}",
+        env: %{CALLBACK_URL: "https://user:pass@example.test/callback"},
+        capability: %{
+          name: "cap-credential-url-env",
+          harnesses: ["fake"],
+          trust_tier: "T1"
+        }
+      })
+
+      assert {:error,
+              {:invalid_workload,
+               "capability env must not contain credential-bearing URL value for CALLBACK_URL"}} =
+               Workload.fetch("cap-credential-url-env")
+
+      write_workload!(dir, "cap-credential-query-env", %{
+        provider: "fake",
+        template: "{{objective}}",
+        env: %{CALLBACK_URL: "https://example.test/callback?signature=must-not-enter-sandbox"},
+        capability: %{
+          name: "cap-credential-query-env",
+          harnesses: ["fake"],
+          trust_tier: "T1"
+        }
+      })
+
+      assert {:error,
+              {:invalid_workload,
+               "capability env must not contain credential-bearing URL value for CALLBACK_URL"}} =
+               Workload.fetch("cap-credential-query-env")
+    end
+
+    test "rejects malformed workload env definitions", %{dir: dir} do
+      cases = [
+        {"bad-env-name", %{"PATH=/tmp" => "ignored"}, "env name must not contain ="},
+        {"bad-env-name-nul", %{"BAD\0NAME" => "ignored"}, "env name must not contain NUL"},
+        {"bad-env-value", %{"GOOD" => "bad\0value"},
+         ~s(env value for "GOOD" must not contain NUL)},
+        {"bad-env-value-type", %{"GOOD" => 1}, "env values must be strings"}
+      ]
+
+      for {id, env, detail} <- cases do
+        write_workload!(dir, id, %{
+          provider: "fake",
+          template: "{{objective}}",
+          env: env
+        })
+
+        assert {:error, {:invalid_workload, message}} = Workload.fetch(id)
+        assert message =~ detail
+      end
+    end
+
+    test "rejects malformed workload env passthrough definitions", %{dir: dir} do
+      write_workload!(dir, "bad-env-passthrough", %{
+        provider: "fake",
+        template: "{{objective}}",
+        env_passthrough: ["GOOD", "BAD=NAME"]
+      })
+
+      assert {:error, {:invalid_workload, detail}} = Workload.fetch("bad-env-passthrough")
+      assert detail =~ "env_passthrough entry must not contain ="
     end
 
     test "loads flat paid endpoint pricing", %{dir: dir} do
@@ -1086,6 +1191,44 @@ defmodule Mitos.WorkloadTest do
                Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
     end
 
+    test "local capability refuses symlinked skill files before launch", %{dir: dir} do
+      outside = unique_tmp_dir("outside-skill-symlink")
+      File.mkdir_p!(outside)
+
+      File.write!(Path.join(outside, "skill.md"), """
+      <!-- @skill:role -->
+      Outside role.
+      <!-- @skill:rules -->
+      Outside rule.
+      <!-- @skill:procedure -->
+      Outside procedure.
+      <!-- @skill:success -->
+      Outside success.
+      """)
+
+      File.ln_s!(Path.join(outside, "skill.md"), Path.join(dir, "skill.md"))
+
+      on_exit(fn -> writable_rm_rf!(outside) end)
+
+      write_workload!(dir, "skill-symlink-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "skill-symlink-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          skill: "skill.md",
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("skill-symlink-local")
+
+      assert {:error, {:runtime_prepare_failed, {:skill_unavailable, "skill.md", :symlink}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+    end
+
     test "local capability fails closed when declared skill lacks required anchors", %{dir: dir} do
       File.write!(Path.join(dir, "skill.md"), """
       <!-- @skill:role -->
@@ -1154,6 +1297,75 @@ defmodule Mitos.WorkloadTest do
 
       assert {:error,
               {:runtime_prepare_failed, {:data_unavailable, "../outside-data", :path_escape}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+    end
+
+    test "local capability refuses symlinks in data sources before launch", %{dir: dir} do
+      File.mkdir_p!(Path.join(dir, "data"))
+      outside = unique_tmp_dir("outside-data-symlink")
+      File.mkdir_p!(outside)
+      File.write!(Path.join(outside, "secret.txt"), "secret\n")
+      File.ln_s!(outside, Path.join([dir, "data", "linked"]))
+
+      on_exit(fn -> writable_rm_rf!(outside) end)
+
+      write_workload!(dir, "data-symlink-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "data-symlink-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          data: %{path: "data", mount: "/data", ro: true},
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("data-symlink-local")
+
+      assert {:error, {:runtime_prepare_failed, {:data_copy_failed, "linked", :symlink}}} =
+               Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
+    end
+
+    test "local capability refuses symlinked tool executables before launch", %{dir: dir} do
+      File.mkdir_p!(Path.join(dir, "tools"))
+      outside = unique_tmp_dir("outside-tool-symlink")
+      File.mkdir_p!(outside)
+      outside_tool = Path.join(outside, "linked.py")
+      File.write!(outside_tool, "print('secret tool')\n")
+      File.chmod!(outside_tool, 0o755)
+      File.ln_s!(outside_tool, Path.join([dir, "tools", "linked.py"]))
+
+      on_exit(fn -> writable_rm_rf!(outside) end)
+
+      write_workload!(dir, "tool-symlink-local", %{
+        provider: "fake",
+        template: "{{objective}}",
+        timeout_ms: 30_000,
+        capability: %{
+          name: "tool-symlink-local",
+          harnesses: ["fake"],
+          trust_tier: "T1",
+          tools: [
+            %{
+              name: "linked_tool",
+              exec: "tools/linked.py",
+              input: %{},
+              output: %{},
+              deterministic: true,
+              side_effects: []
+            }
+          ],
+          result: %{path: "RESULT"}
+        }
+      })
+
+      {:ok, workload} = Workload.fetch("tool-symlink-local")
+
+      assert {:error,
+              {:runtime_prepare_failed,
+               {:tool_exec_unavailable, "linked_tool", "tools/linked.py", :symlink}}} =
                Mitos.Workload.Runner.execute(workload, %{"objective" => "must fail"})
     end
 

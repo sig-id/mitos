@@ -90,6 +90,11 @@ defmodule Mitos.ApplicationsTest do
              %{
                "kind" => "effect",
                "type" => "signal_received",
+               "tenant" => %{
+                 "org_id" => "buyer-a",
+                 "project_id" => "design",
+                 "actor_id" => "system"
+               },
                "ref" => %{
                  "connector" => "webhook",
                  "idempotency_key" => "webhook-delivery-1",
@@ -193,6 +198,209 @@ defmodule Mitos.ApplicationsTest do
     assert get_in(step_task, ["provenance", "entrypoint"]) == "ship"
   end
 
+  test "adds a local app source through the app route", %{apps_dir: apps_dir} do
+    source_parent = unique_tmp_dir("app-source")
+    on_exit(fn -> File.rm_rf!(source_parent) end)
+    write_app!(source_parent, "ship-source")
+    source_dir = Path.join(source_parent, "ship-source")
+    File.mkdir_p!(Path.join(source_dir, "docs"))
+    File.write!(Path.join([source_dir, "docs", "readme.txt"]), "source docs\n")
+
+    install_conn =
+      json_conn(:post, "/apps", %{source: source_dir})
+      |> Mitos.Web.Router.call([])
+
+    assert install_conn.status == 201
+    install = decode_body(install_conn)["install"]
+    assert install["install_id"] == "ship-source"
+    assert install["source_kind"] == "directory"
+    assert install["source"] == source_dir
+    assert install["app"]["id"] == "ship-source"
+    assert install["app"]["name"] == "ship-app"
+    assert File.exists?(Path.join([apps_dir, "ship-source", "app.json"]))
+
+    assert File.read!(Path.join([apps_dir, "ship-source", "docs", "readme.txt"])) ==
+             "source docs\n"
+
+    list_conn = conn(:get, "/apps") |> Mitos.Web.Router.call([])
+    assert [%{"id" => "ship-source", "name" => "ship-app"}] = decode_body(list_conn)["apps"]
+
+    fetch_conn = conn(:get, "/apps/ship-source") |> Mitos.Web.Router.call([])
+    assert fetch_conn.status == 200
+    assert get_in(decode_body(fetch_conn), ["app", "name"]) == "ship-app"
+
+    conflict_conn =
+      json_conn(:post, "/apps", %{source: source_dir})
+      |> Mitos.Web.Router.call([])
+
+    assert conflict_conn.status == 409
+
+    assert decode_body(conflict_conn) == %{
+             "error" => "application already installed",
+             "install_id" => "ship-source"
+           }
+
+    missing_conn =
+      json_conn(:post, "/apps", %{source: Path.join(source_parent, "missing")})
+      |> Mitos.Web.Router.call([])
+
+    assert missing_conn.status == 404
+    assert decode_body(missing_conn)["error"] == "application source not found"
+  end
+
+  test "list and fetch ignore symlinked local app directories", %{apps_dir: apps_dir} do
+    outside = unique_tmp_dir("app-registry-symlink-target")
+    on_exit(fn -> File.rm_rf!(outside) end)
+
+    write_app!(outside, "ship-linked")
+    File.ln_s!(Path.join(outside, "ship-linked"), Path.join(apps_dir, "ship-linked"))
+
+    assert Mitos.Applications.list() == []
+    assert {:error, :not_found} = Mitos.Applications.fetch("ship-linked")
+  end
+
+  test "list and fetch refuse a symlinked app registry root" do
+    outside = unique_tmp_dir("app-registry-root-symlink-target")
+    registry_link = unique_tmp_dir("app-registry-root-symlink")
+
+    on_exit(fn ->
+      File.rm(registry_link)
+      File.rm_rf!(outside)
+    end)
+
+    write_app!(outside, "ship-linked")
+    File.ln_s!(outside, registry_link)
+    Application.put_env(:mitos, :apps_dir, registry_link)
+
+    assert Mitos.Applications.list() == []
+    assert {:error, :not_found} = Mitos.Applications.fetch("ship-linked")
+    assert {:error, :not_found} = Mitos.Applications.fetch("ship-app")
+    assert {:error, :not_found} = Mitos.Applications.publish_local("ship-linked", "ship-release")
+  end
+
+  test "add source treats preexisting symlink install targets as conflicts", %{apps_dir: apps_dir} do
+    source_parent = unique_tmp_dir("app-source-symlink-conflict")
+    outside = unique_tmp_dir("app-source-symlink-conflict-target")
+
+    on_exit(fn ->
+      File.rm_rf!(source_parent)
+      File.rm_rf!(outside)
+    end)
+
+    write_app!(source_parent, "ship-source")
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, Path.join(apps_dir, "ship-source"))
+
+    assert {:error, {:application_source_conflict, "ship-source"}} =
+             Mitos.Applications.add_source(Path.join(source_parent, "ship-source"))
+
+    refute File.exists?(Path.join(outside, "app.json"))
+  end
+
+  test "add source rejects symlinks inside copied app sources", %{apps_dir: apps_dir} do
+    source_parent = unique_tmp_dir("app-source-tree-symlink")
+    outside = unique_tmp_dir("app-source-tree-symlink-target")
+
+    on_exit(fn ->
+      File.rm_rf!(source_parent)
+      File.rm_rf!(outside)
+    end)
+
+    write_app!(source_parent, "ship-source")
+    source_dir = Path.join(source_parent, "ship-source")
+    File.mkdir_p!(outside)
+    File.write!(Path.join(outside, "secret.txt"), "outside")
+    File.ln_s!(Path.join(outside, "secret.txt"), Path.join(source_dir, "extra-link"))
+
+    assert {:error, {:invalid_application_source, detail}} =
+             Mitos.Applications.add_source(source_dir)
+
+    assert detail == "source tree must not contain symlinks: extra-link"
+    refute File.exists?(Path.join([apps_dir, "ship-source", "extra-link"]))
+    refute File.exists?(Path.join([apps_dir, "ship-source", "app.json"]))
+  end
+
+  test "add source rejects local app sources reached through symlinked parents", %{
+    apps_dir: apps_dir
+  } do
+    outside = unique_tmp_dir("app-source-parent-symlink-target")
+    link = unique_tmp_dir("app-source-parent-symlink")
+
+    on_exit(fn ->
+      File.rm(link)
+      File.rm_rf!(outside)
+    end)
+
+    write_app!(outside, "ship-source")
+    File.ln_s!(outside, link)
+
+    assert {:error, {:invalid_application_source, detail}} =
+             Mitos.Applications.add_source(Path.join(link, "ship-source"))
+
+    assert detail == "source directory must not contain symlinks"
+    refute File.exists?(Path.join([apps_dir, "ship-source", "app.json"]))
+  end
+
+  test "add source passes git source after an option terminator" do
+    fake_bin = unique_tmp_dir("app-source-fake-git-bin")
+    tmp_root = unique_tmp_dir("app-source-fake-git-tmp")
+    args_log = Path.join(fake_bin, "args.log")
+    source = "--upload-pack=/tmp/should-not-be-an-option.git"
+    old_path = System.get_env("PATH")
+    old_args_log = System.get_env("MITOS_FAKE_GIT_ARGS")
+
+    on_exit(fn ->
+      restore_system_env("PATH", old_path)
+      restore_system_env("MITOS_FAKE_GIT_ARGS", old_args_log)
+      File.rm_rf!(fake_bin)
+      File.rm_rf!(tmp_root)
+    end)
+
+    File.mkdir_p!(fake_bin)
+
+    File.write!(Path.join(fake_bin, "git"), """
+    #!/bin/sh
+    printf '%s\n' "$@" > "$MITOS_FAKE_GIT_ARGS"
+    exit 1
+    """)
+
+    File.chmod!(Path.join(fake_bin, "git"), 0o755)
+    System.put_env("MITOS_FAKE_GIT_ARGS", args_log)
+    System.put_env("PATH", fake_bin <> path_separator() <> (old_path || ""))
+
+    assert {:error, {:invalid_application_source, "git clone failed with status 1"}} =
+             Mitos.Applications.add_source(source, nil, tmp_dir: tmp_root)
+
+    assert ["clone", "--depth", "1", "--", ^source, _app_dir] =
+             args_log
+             |> File.read!()
+             |> String.split("\n", trim: true)
+  end
+
+  test "add source refuses a symlinked app registry root" do
+    source_parent = unique_tmp_dir("app-source-registry-symlink-source")
+    outside = unique_tmp_dir("app-source-registry-symlink-target")
+    registry_link = unique_tmp_dir("app-source-registry-symlink")
+
+    on_exit(fn ->
+      File.rm(registry_link)
+      File.rm_rf!(source_parent)
+      File.rm_rf!(outside)
+    end)
+
+    write_app!(source_parent, "ship-source")
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, registry_link)
+    Application.put_env(:mitos, :apps_dir, registry_link)
+
+    assert {:error, {:invalid_application_source, detail}} =
+             Mitos.Applications.add_source(Path.join(source_parent, "ship-source"))
+
+    assert detail =~ "could not create app registry"
+    assert detail =~ ":symlink"
+    refute File.exists?(Path.join([outside, "ship-source", "app.json"]))
+  end
+
   test "publishes a local app package through the app route", %{
     apps_dir: apps_dir,
     packages_dir: packages_dir,
@@ -262,6 +470,34 @@ defmodule Mitos.ApplicationsTest do
     assert run["task_id"] == "installed-route-1"
     assert run["deliverable_summary"] =~ "FAKE_FINAL: Catalog from installed package for Ada"
     assert [%{"capability_id" => "ship-cap"}] = run["pipeline"]["steps"]
+  end
+
+  test "app package install refuses a symlinked package registry root", %{apps_dir: apps_dir} do
+    write_app!(apps_dir, "ship-app")
+
+    outside_packages = unique_tmp_dir("app-packages-root-symlink-target")
+    packages_link = unique_tmp_dir("app-packages-root-symlink")
+
+    on_exit(fn ->
+      File.rm(packages_link)
+      File.rm_rf!(outside_packages)
+    end)
+
+    File.mkdir_p!(outside_packages)
+
+    assert {:ok, _package} =
+             Mitos.AppPackage.publish_local(
+               Path.join(apps_dir, "ship-app"),
+               Path.join(outside_packages, "ship-release")
+             )
+
+    File.ln_s!(outside_packages, packages_link)
+    Application.put_env(:mitos, :app_packages_dir, packages_link)
+
+    assert {:error, {:application_package_not_found, "ship-release"}} =
+             Mitos.Applications.install_package("ship-release", "ship-installed")
+
+    refute File.exists?(Path.join([apps_dir, "ship-installed", "app.json"]))
   end
 
   test "package publish route reports the frozen manifest without tenant binding sidecars", %{
@@ -547,6 +783,11 @@ defmodule Mitos.ApplicationsTest do
              %{
                "kind" => "effect",
                "type" => "signal_received",
+               "tenant" => %{
+                 "org_id" => "buyer-a",
+                 "project_id" => "design",
+                 "actor_id" => "system"
+               },
                "ref" => %{
                  "connector" => "webhook",
                  "idempotency_key" => "evt-ship-1",
@@ -647,6 +888,105 @@ defmodule Mitos.ApplicationsTest do
                "kind" => "effect",
                "type" => "task_enqueued",
                "payload" => %{"task" => %{"id" => "webhook-route-duplicate"}}
+             } ->
+               true
+
+             _event ->
+               false
+           end)
+  end
+
+  test "connector signal idempotency is scoped by tenant", %{
+    apps_dir: apps_dir,
+    trace_dir: trace_dir
+  } do
+    write_app!(apps_dir, "ship-app",
+      io: %{
+        inputs: [
+          %{
+            connector: "webhook",
+            path: "/incoming/ship",
+            entrypoint: "ship",
+            select: %{mode: "explicit", pipeline: "ship-flow"}
+          }
+        ],
+        outputs: [%{sink: "web", on: "run.done", entrypoint: "ship"}]
+      }
+    )
+
+    assert {:ok, first} =
+             Mitos.Applications.run_connector(
+               "ship-app",
+               "webhook",
+               %{"objective" => "from tenant a", "name" => "Ada"},
+               path: "/incoming/ship",
+               delivery_id: "evt-shared-tenant-scope",
+               task_id: "tenant-a-route",
+               tenant: %{"org" => "buyer-a", "project" => "design", "actor" => "worker-a"},
+               trace_base_dir: trace_dir
+             )
+
+    assert {:ok, same_project_duplicate} =
+             Mitos.Applications.run_connector(
+               "ship-app",
+               "webhook",
+               %{"objective" => "from tenant a duplicate", "name" => "Ann"},
+               path: "/incoming/ship",
+               delivery_id: "evt-shared-tenant-scope",
+               task_id: "tenant-a-other-actor-route",
+               tenant: %{"org" => "buyer-a", "project" => "design", "actor" => "worker-b"},
+               trace_base_dir: trace_dir
+             )
+
+    assert {:ok, second} =
+             Mitos.Applications.run_connector(
+               "ship-app",
+               "webhook",
+               %{"objective" => "from tenant b", "name" => "Bea"},
+               path: "/incoming/ship",
+               delivery_id: "evt-shared-tenant-scope",
+               task_id: "tenant-b-route",
+               tenant: %{"org" => "buyer-b", "project" => "design"},
+               trace_base_dir: trace_dir
+             )
+
+    assert same_project_duplicate["duplicate?"] == true
+    assert same_project_duplicate["app_run_id"] == first["app_run_id"]
+    assert same_project_duplicate["task_id"] == "tenant-a-route"
+    refute same_project_duplicate["deliverable_summary"] =~ "Ann"
+    refute Map.get(second, "duplicate?")
+    refute second["app_run_id"] == first["app_run_id"]
+    assert first["task_id"] == "tenant-a-route"
+    assert second["task_id"] == "tenant-b-route"
+    assert first["deliverable_summary"] =~ "tenant a"
+    assert second["deliverable_summary"] =~ "tenant b"
+
+    first_events = Mitos.Trace.read_events(first["app_run_id"], base_dir: trace_dir)
+    second_events = Mitos.Trace.read_events(second["app_run_id"], base_dir: trace_dir)
+
+    assert Enum.any?(first_events, fn
+             %{
+               "kind" => "effect",
+               "type" => "signal_received",
+               "tenant" => %{
+                 "org_id" => "buyer-a",
+                 "project_id" => "design",
+                 "actor_id" => "worker-a"
+               },
+               "ref" => %{"idempotency_key" => "evt-shared-tenant-scope"}
+             } ->
+               true
+
+             _event ->
+               false
+           end)
+
+    assert Enum.any?(second_events, fn
+             %{
+               "kind" => "effect",
+               "type" => "signal_received",
+               "tenant" => %{"org_id" => "buyer-b", "project_id" => "design"},
+               "ref" => %{"idempotency_key" => "evt-shared-tenant-scope"}
              } ->
                true
 
@@ -1188,9 +1528,14 @@ defmodule Mitos.ApplicationsTest do
   defp decode_body(conn), do: Jason.decode!(conn.resp_body)
 
   defp unique_tmp_dir(prefix) do
-    path = Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{System.unique_integer([:positive])}")
+    path = Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{tmp_suffix()}")
     File.rm_rf!(path)
     path
+  end
+
+  defp tmp_suffix do
+    random = :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
+    "#{System.unique_integer([:positive, :monotonic])}-#{random}"
   end
 
   defp writable_rm_rf(path) do
@@ -1213,6 +1558,16 @@ defmodule Mitos.ApplicationsTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:mitos, key)
   defp restore_env(key, value), do: Application.put_env(:mitos, key, value)
+
+  defp restore_system_env(key, nil), do: System.delete_env(key)
+  defp restore_system_env(key, value), do: System.put_env(key, value)
+
+  defp path_separator do
+    case :os.type() do
+      {:win32, _name} -> ";"
+      _other -> ":"
+    end
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

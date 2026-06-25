@@ -4,6 +4,10 @@ const redaction = @import("../redaction/redactor.zig");
 const trace_file = @import("../trace/file_store.zig");
 const trace = @import("../trace/types.zig");
 
+const ReportError = error{
+    SymlinkRejected,
+};
+
 const Summary = struct {
     run_id: ?[]u8 = null,
     final_state: ?[]u8 = null,
@@ -100,10 +104,7 @@ pub fn generate(
     const redacted = try redactor.redactAlloc(allocator, .report, report);
     defer allocator.free(redacted);
 
-    try run_dir.writeFile(.{
-        .sub_path = trace.defaultArtifactPath(.report),
-        .data = redacted,
-    });
+    try writeFileNoSymlink(run_dir, trace.defaultArtifactPath(.report), redacted);
     return .{ .kind = .report, .path = trace.defaultArtifactPath(.report) };
 }
 
@@ -127,10 +128,54 @@ fn readOptional(
     dir: std.fs.Dir,
     path: []const u8,
 ) ![]u8 {
-    return dir.readFileAlloc(allocator, path, 16 * 1024 * 1024) catch |err| switch (err) {
+    return readFileAllocNoSymlink(dir, allocator, path, 16 * 1024 * 1024) catch |err| switch (err) {
         error.FileNotFound => try allocator.dupe(u8, ""),
         else => err,
     };
+}
+
+fn readFileAllocNoSymlink(
+    dir: std.fs.Dir,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    max_bytes: usize,
+) ![]u8 {
+    const fd = std.posix.openat(
+        dir.fd,
+        path,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true },
+        0,
+    ) catch |err| switch (err) {
+        error.SymLinkLoop => return ReportError.SymlinkRejected,
+        else => |e| return e,
+    };
+
+    const file: std.fs.File = .{ .handle = fd };
+    defer file.close();
+
+    return file.readToEndAlloc(allocator, max_bytes);
+}
+
+fn writeFileNoSymlink(dir: std.fs.Dir, path: []const u8, bytes: []const u8) !void {
+    try rejectSymlink(dir, path);
+    dir.deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
+    };
+
+    var file = try dir.createFile(path, .{ .exclusive = true });
+    defer file.close();
+    try file.writeAll(bytes);
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return ReportError.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
 }
 
 fn summarizeEvents(allocator: std.mem.Allocator, bytes: []const u8, summary: *Summary) !void {
@@ -277,4 +322,45 @@ test "report is generated from trace artifacts and redacted" {
     try std.testing.expect(std.mem.containsAtLeast(u8, report, 1, "Commands: 1"));
     try std.testing.expect(std.mem.containsAtLeast(u8, report, 1, "Sandbox errors: 1"));
     try std.testing.expect(!std.mem.containsAtLeast(u8, report, 1, "SECRET_TOKEN"));
+}
+
+test "report generation rejects symlinked input artifacts" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "outside-final.md", .data = "outside secret\n" });
+    try tmp.dir.symLink("outside-final.md", trace.defaultArtifactPath(.final_output), .{});
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        generate(allocator, tmp.dir, .{}),
+    );
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(trace.defaultArtifactPath(.report), .{}));
+}
+
+test "report generation rejects symlinked output targets" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = trace.defaultArtifactPath(.events),
+        .data =
+        \\{"run_id":"01HXYZ","type":"run_created"}
+        \\
+        ,
+    });
+    try tmp.dir.writeFile(.{ .sub_path = "outside-report.md", .data = "outside\n" });
+    try tmp.dir.symLink("outside-report.md", trace.defaultArtifactPath(.report), .{});
+
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        generate(allocator, tmp.dir, .{}),
+    );
+
+    const outside = try tmp.dir.readFileAlloc(allocator, "outside-report.md", 4096);
+    defer allocator.free(outside);
+    try std.testing.expectEqualStrings("outside\n", outside);
 }

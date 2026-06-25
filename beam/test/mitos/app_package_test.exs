@@ -106,6 +106,67 @@ defmodule Mitos.AppPackageTest do
     refute second["app_id"] == first["app_id"]
   end
 
+  test "publish rejects local capability refs that resolve outside the app root through symlinks",
+       %{
+         root: root,
+         package_dir: package_dir
+       } do
+    write_app!(root)
+    outside = unique_tmp_dir("app-package-outside-capability")
+    File.mkdir_p!(outside)
+    File.write!(Path.join(outside, "workload.json"), Jason.encode!(workload_json([])))
+    File.rm_rf!(Path.join([root, "capabilities", "ship"]))
+    File.ln_s!(outside, Path.join([root, "capabilities", "ship"]))
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error, {:invalid_application_package, "capability ref escapes the application root"}} =
+             Mitos.AppPackage.publish_local(root, package_dir)
+  end
+
+  test "publish rejects local capability refs that are symlinked files", %{
+    root: root,
+    package_dir: package_dir
+  } do
+    write_app!(root)
+    outside = unique_tmp_dir("app-package-outside-capability-file")
+    File.mkdir_p!(outside)
+
+    outside_workload = Path.join(outside, "workload.json")
+    File.write!(outside_workload, Jason.encode!(workload_json([])))
+    File.rm!(Path.join([root, "capabilities", "ship", "workload.json"]))
+    File.ln_s!(outside_workload, Path.join([root, "capabilities", "ship", "workload.json"]))
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error, {:invalid_application_package, "capability ref escapes the application root"}} =
+             Mitos.AppPackage.publish_local(root, package_dir)
+  end
+
+  test "publish rejects directory capability refs with symlinked default workload before alias fallback",
+       %{
+         root: root,
+         package_dir: package_dir
+       } do
+    write_app!(root, cap_ref: "capabilities/ship")
+
+    workload_path = Path.join([root, "capabilities", "ship", "workload.json"])
+    File.rm!(workload_path)
+
+    File.ln_s!(
+      Path.join(unique_tmp_dir("app-package-missing-capability-file"), "missing.json"),
+      workload_path
+    )
+
+    File.write!(
+      Path.join([root, "capabilities", "ship", "ship-cap.json"]),
+      Jason.encode!(workload_json([]))
+    )
+
+    assert {:error, {:invalid_application_package, "capability ref escapes the application root"}} =
+             Mitos.AppPackage.publish_local(root, package_dir)
+  end
+
   test "installs a local OCI layout back into an app directory with frozen refs", %{
     root: root,
     package_dir: package_dir,
@@ -361,6 +422,63 @@ defmodule Mitos.AppPackageTest do
              )
 
     refute File.exists?(Path.join(install_dir, "bindings.json"))
+
+    assert {:error,
+            {:invalid_application_package,
+             "application manifests must not contain secret field io.outputs.0.headers.authorization"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir,
+               io: %{
+                 inputs: [],
+                 outputs: [
+                   %{
+                     sink: "webhook",
+                     entrypoint: "ship",
+                     on: "run.done",
+                     headers: %{authorization: "Bearer must-not-enter-sidecar"}
+                   }
+                 ]
+               }
+             )
+
+    refute File.exists?(Path.join(install_dir, "bindings.json"))
+
+    assert {:error,
+            {:invalid_application_package,
+             "application manifests must not contain credential-bearing URL field io.outputs.0.url"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir,
+               io: %{
+                 inputs: [],
+                 outputs: [
+                   %{
+                     sink: "webhook",
+                     entrypoint: "ship",
+                     on: "run.done",
+                     url: "https://hook-user:hook-pass@hooks.example.test/deliver"
+                   }
+                 ]
+               }
+             )
+
+    refute File.exists?(Path.join(install_dir, "bindings.json"))
+
+    assert {:error,
+            {:invalid_application_package,
+             "application manifests must not contain credential-bearing URL query field io.outputs.0.url"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir,
+               io: %{
+                 inputs: [],
+                 outputs: [
+                   %{
+                     sink: "webhook",
+                     entrypoint: "ship",
+                     on: "run.done",
+                     url: "https://hooks.example.test/deliver?signature=must-not-enter-sidecar"
+                   }
+                 ]
+               }
+             )
+
+    refute File.exists?(Path.join(install_dir, "bindings.json"))
   end
 
   test "installed app runs with pinned OCI refs resolved from the local catalog", %{
@@ -408,6 +526,217 @@ defmodule Mitos.AppPackageTest do
              Mitos.AppPackage.install_local(package_dir, install_dir)
 
     refute File.exists?(Path.join(install_dir, "app.json"))
+  end
+
+  test "install rejects non-canonical descriptor digests before building blob paths", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+    File.write!(Path.join(package_dir, "outside.json"), ~s({"schemaVersion":2}))
+
+    index_path = Path.join(package_dir, "index.json")
+
+    index =
+      index_path
+      |> File.read!()
+      |> Jason.decode!()
+      |> put_in(["manifests", Access.at(0), "digest"], "sha256:../../outside.json")
+
+    File.write!(index_path, Jason.encode!(index))
+
+    assert {:error, {:invalid_application_package, "descriptor digest must be canonical sha256"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    refute File.exists?(Path.join(install_dir, "app.json"))
+  end
+
+  test "install rejects symlinked OCI layout control files", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    outside = unique_tmp_dir("app-package-symlinked-index")
+    File.mkdir_p!(outside)
+    index_path = Path.join(package_dir, "index.json")
+    outside_index = Path.join(outside, "index.json")
+    File.write!(outside_index, File.read!(index_path))
+    File.rm!(index_path)
+    File.ln_s!(outside_index, index_path)
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error, {:invalid_application_package, "could not read index.json: :symlink"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    refute File.exists?(Path.join(install_dir, "app.json"))
+  end
+
+  test "install rejects symlinked OCI descriptor blobs", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, package} = Mitos.AppPackage.publish_local(root, package_dir)
+    [pipeline_descriptor] = package["blobs"]["pipelines"]
+
+    outside = unique_tmp_dir("app-package-symlinked-blob")
+    File.mkdir_p!(outside)
+    blob = blob_path(package_dir, pipeline_descriptor["digest"])
+    outside_blob = Path.join(outside, "pipeline-blob")
+    File.write!(outside_blob, File.read!(blob))
+    File.rm!(blob)
+    File.ln_s!(outside_blob, blob)
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error, {:invalid_application_package, detail}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    assert detail == "could not read blob #{inspect(pipeline_descriptor["digest"])}: :symlink"
+    refute File.exists?(Path.join(install_dir, "app.json"))
+  end
+
+  test "install rejects symlinked OCI layout directories", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    layout_link = unique_tmp_dir("app-package-layout-link")
+    File.ln_s!(package_dir, layout_link)
+
+    on_exit(fn -> File.rm(layout_link) end)
+
+    assert {:error, {:invalid_application_package, "layout directory must not be a symlink"}} =
+             Mitos.AppPackage.install_local(layout_link, install_dir)
+
+    refute File.exists?(Path.join(install_dir, "app.json"))
+  end
+
+  test "install rejects symlinked OCI blob directories", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    outside = unique_tmp_dir("app-package-symlinked-blob-dir")
+    File.mkdir_p!(outside)
+    blob_dir = Path.join(package_dir, "blobs")
+    outside_blob_dir = Path.join(outside, "blobs")
+    File.rename!(blob_dir, outside_blob_dir)
+    File.ln_s!(outside_blob_dir, blob_dir)
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error,
+            {:invalid_application_package, "descriptor blob path must not contain symlinks"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    refute File.exists?(Path.join(install_dir, "app.json"))
+  end
+
+  test "install writes atomically when a late pipeline file write fails", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    index_path = Path.join(package_dir, "index.json")
+    index = index_path |> File.read!() |> Jason.decode!()
+    [manifest_descriptor] = index["manifests"]
+    oci_manifest = decode_blob!(package_dir, manifest_descriptor)
+    [app_manifest_descriptor, pipeline_descriptor] = oci_manifest["layers"]
+    too_long_file = String.duplicate("a", 300)
+
+    frozen_manifest =
+      package_dir
+      |> decode_blob!(app_manifest_descriptor)
+      |> put_in(["pipelines", Access.at(0), "file"], too_long_file)
+
+    app_id = app_id_for(frozen_manifest)
+
+    app_manifest_descriptor =
+      rewrite_descriptor!(package_dir, app_manifest_descriptor, frozen_manifest)
+
+    pipeline_descriptor =
+      put_in(
+        pipeline_descriptor,
+        ["annotations", "dev.mitos.pipeline.path"],
+        too_long_file
+      )
+
+    oci_manifest =
+      oci_manifest
+      |> put_in(["annotations", "dev.mitos.app_id"], app_id)
+      |> Map.put("layers", [app_manifest_descriptor, pipeline_descriptor])
+
+    manifest_descriptor =
+      package_dir
+      |> rewrite_descriptor!(manifest_descriptor, oci_manifest)
+      |> put_in(["annotations", "dev.mitos.app_id"], app_id)
+
+    File.write!(index_path, Jason.encode!(Map.put(index, "manifests", [manifest_descriptor])))
+
+    assert {:error,
+            {:invalid_application_package, "could not write installed app: :enametoolong"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    refute File.exists?(Path.join(install_dir, "app.json"))
+
+    assert [] ==
+             Path.wildcard(
+               Path.join(
+                 Path.dirname(install_dir),
+                 ".#{Path.basename(install_dir)}.install-*"
+               )
+             )
+  end
+
+  test "install does not follow preexisting staging symlinks", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    staging_target = unique_tmp_dir("app-package-install-symlink-target")
+    File.mkdir_p!(staging_target)
+
+    parent = Path.dirname(install_dir)
+    name = Path.basename(install_dir)
+    base = System.unique_integer([:positive, :monotonic])
+
+    decoys =
+      for offset <- 1..64 do
+        path = Path.join(parent, ".#{name}.install-#{base + offset}")
+        File.rm_rf!(path)
+        File.ln_s!(staging_target, path)
+        path
+      end
+
+    try do
+      assert {:ok, _install} = Mitos.AppPackage.install_local(package_dir, install_dir)
+
+      refute File.exists?(Path.join(staging_target, "app.json"))
+      assert File.regular?(Path.join(install_dir, "app.json"))
+    after
+      Enum.each(decoys, &File.rm_rf/1)
+      writable_rm_rf(staging_target)
+    end
   end
 
   test "install requires pipeline layer id and path annotations to match", %{
@@ -486,6 +815,56 @@ defmodule Mitos.AppPackageTest do
     refute File.exists?(Path.join(install_dir, "app.json"))
   end
 
+  test "install validates the staged frozen manifest before committing", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    index_path = Path.join(package_dir, "index.json")
+    index = index_path |> File.read!() |> Jason.decode!()
+    [manifest_descriptor] = index["manifests"]
+    oci_manifest = decode_blob!(package_dir, manifest_descriptor)
+    [app_manifest_descriptor, pipeline_descriptor] = oci_manifest["layers"]
+
+    frozen_manifest =
+      package_dir
+      |> decode_blob!(app_manifest_descriptor)
+      |> Map.put("x-extra", true)
+
+    app_id = app_id_for(frozen_manifest)
+
+    app_manifest_descriptor =
+      rewrite_descriptor!(package_dir, app_manifest_descriptor, frozen_manifest)
+
+    oci_manifest =
+      oci_manifest
+      |> put_in(["annotations", "dev.mitos.app_id"], app_id)
+      |> Map.put("layers", [app_manifest_descriptor, pipeline_descriptor])
+
+    manifest_descriptor =
+      package_dir
+      |> rewrite_descriptor!(manifest_descriptor, oci_manifest)
+      |> put_in(["annotations", "dev.mitos.app_id"], app_id)
+
+    File.write!(index_path, Jason.encode!(Map.put(index, "manifests", [manifest_descriptor])))
+
+    assert {:error, {:invalid_application_package, ~s(unsupported field "x-extra")}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    refute File.exists?(Path.join(install_dir, "app.json"))
+
+    assert [] ==
+             Path.wildcard(
+               Path.join(
+                 Path.dirname(install_dir),
+                 ".#{Path.basename(install_dir)}.install-*"
+               )
+             )
+  end
+
   test "install refuses an existing non-empty destination", %{
     root: root,
     package_dir: package_dir,
@@ -498,6 +877,52 @@ defmodule Mitos.AppPackageTest do
 
     assert {:error, {:invalid_application_package, "destination must be empty"}} =
              Mitos.AppPackage.install_local(package_dir, install_dir)
+  end
+
+  test "install refuses a symlinked destination", %{
+    root: root,
+    package_dir: package_dir,
+    install_dir: install_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    outside = unique_tmp_dir("app-package-install-dest-symlink-target")
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, install_dir)
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error, {:invalid_application_package, "destination must not be a symlink"}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    refute File.exists?(Path.join(outside, "app.json"))
+  end
+
+  test "install refuses a missing destination under a symlinked parent", %{
+    root: root,
+    package_dir: package_dir
+  } do
+    write_app!(root)
+    assert {:ok, _package} = Mitos.AppPackage.publish_local(root, package_dir)
+
+    outside = unique_tmp_dir("app-package-install-parent-symlink-target")
+    link_parent = unique_tmp_dir("app-package-install-parent-symlink")
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, link_parent)
+    install_dir = Path.join(link_parent, "ship-app")
+
+    on_exit(fn ->
+      File.rm(link_parent)
+      writable_rm_rf(outside)
+    end)
+
+    assert {:error, {:invalid_application_package, detail}} =
+             Mitos.AppPackage.install_local(package_dir, install_dir)
+
+    assert detail =~ "could not write installed app"
+    assert detail =~ ":symlink"
+    refute File.exists?(Path.join(outside, "ship-app"))
   end
 
   test "install fails closed when declared connectors or harnesses are unavailable", %{
@@ -544,6 +969,45 @@ defmodule Mitos.AppPackageTest do
 
     assert {:error, {:invalid_application_package, "destination must be empty"}} =
              Mitos.AppPackage.publish_local(root, package_dir)
+  end
+
+  test "publish refuses a symlinked destination", %{root: root, package_dir: package_dir} do
+    write_app!(root)
+
+    outside = unique_tmp_dir("app-package-publish-dest-symlink-target")
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, package_dir)
+
+    on_exit(fn -> writable_rm_rf(outside) end)
+
+    assert {:error, {:invalid_application_package, "destination must not be a symlink"}} =
+             Mitos.AppPackage.publish_local(root, package_dir)
+
+    refute File.exists?(Path.join(outside, "oci-layout"))
+  end
+
+  test "publish refuses a missing destination under a symlinked parent", %{
+    root: root
+  } do
+    write_app!(root)
+
+    outside = unique_tmp_dir("app-package-publish-parent-symlink-target")
+    link_parent = unique_tmp_dir("app-package-publish-parent-symlink")
+    File.mkdir_p!(outside)
+    File.ln_s!(outside, link_parent)
+    package_dir = Path.join(link_parent, "ship-release")
+
+    on_exit(fn ->
+      File.rm(link_parent)
+      writable_rm_rf(outside)
+    end)
+
+    assert {:error, {:invalid_application_package, detail}} =
+             Mitos.AppPackage.publish_local(root, package_dir)
+
+    assert detail =~ "could not create OCI layout"
+    assert detail =~ ":symlink"
+    refute File.exists?(Path.join(outside, "ship-release"))
   end
 
   test "rejects mutable OCI capability refs", %{root: root, package_dir: package_dir} do
@@ -671,9 +1135,14 @@ defmodule Mitos.AppPackageTest do
   defp canonical_json(value), do: Jason.encode!(value)
 
   defp unique_tmp_dir(prefix) do
-    path = Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{System.unique_integer([:positive])}")
+    path = Path.join(System.tmp_dir!(), "mitos-#{prefix}-#{tmp_suffix()}")
     File.rm_rf!(path)
     path
+  end
+
+  defp tmp_suffix do
+    random = :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
+    "#{System.unique_integer([:positive, :monotonic])}-#{random}"
   end
 
   defp writable_rm_rf(path) do

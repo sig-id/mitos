@@ -358,6 +358,8 @@ fn windowsPathExts(allocator: std.mem.Allocator) ![][]u8 {
 /// Resolve `bin` to an absolute path by walking `searchDirs`. On Windows each
 /// PATHEXT extension is tried. Returns an owned path, or null when not found.
 pub fn resolveOnPath(allocator: std.mem.Allocator, bin: []const u8) !?[]u8 {
+    if (arg0UsesPath(bin)) return null;
+
     const dirs = try searchDirs(allocator);
     defer freeDirList(allocator, dirs);
 
@@ -370,22 +372,54 @@ pub fn resolveOnPath(allocator: std.mem.Allocator, bin: []const u8) !?[]u8 {
                 const name = try std.fmt.allocPrint(allocator, "{s}{s}", .{ bin, ext });
                 defer allocator.free(name);
                 const full = try std.fs.path.join(allocator, &.{ dir, name });
-                std.fs.cwd().access(full, .{}) catch {
+                if (!executableFileAvailable(full)) {
                     allocator.free(full);
                     continue;
-                };
+                }
                 return full;
             }
         } else {
             const full = try std.fs.path.join(allocator, &.{ dir, bin });
-            std.fs.cwd().access(full, .{}) catch {
+            if (!executableFileAvailable(full)) {
                 allocator.free(full);
                 continue;
-            };
+            }
             return full;
         }
     }
     return null;
+}
+
+pub fn resolveCommandArg0(allocator: std.mem.Allocator, arg0: []const u8) !?[]u8 {
+    if (arg0.len == 0 or arg0UsesPath(arg0)) return null;
+
+    const dirs = try searchDirs(allocator);
+    defer freeDirList(allocator, dirs);
+    return try resolveArg0FromDirs(allocator, arg0, dirs);
+}
+
+fn resolveArg0FromDirs(
+    allocator: std.mem.Allocator,
+    arg0: []const u8,
+    dirs: []const []const u8,
+) !?[]u8 {
+    if (arg0.len == 0 or arg0UsesPath(arg0)) return null;
+
+    for (dirs) |dir| {
+        const full = try std.fs.path.join(allocator, &.{ dir, arg0 });
+        if (!executableFileAvailable(full)) {
+            allocator.free(full);
+            continue;
+        }
+        return full;
+    }
+
+    return null;
+}
+
+fn arg0UsesPath(arg0: []const u8) bool {
+    return std.mem.indexOfScalar(u8, arg0, '/') != null or
+        (is_windows and std.mem.indexOfScalar(u8, arg0, '\\') != null);
 }
 
 fn looksExecutableOnWindows(file_path: []const u8) bool {
@@ -396,6 +430,18 @@ fn looksExecutableOnWindows(file_path: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(ext, candidate)) return true;
     }
     return false;
+}
+
+pub fn executableFileAvailable(file_path: []const u8) bool {
+    const stat = std.fs.cwd().statFile(file_path) catch return false;
+    if (stat.kind != .file) return false;
+
+    if (is_windows) {
+        return looksExecutableOnWindows(file_path);
+    }
+
+    std.posix.access(file_path, std.posix.X_OK) catch return false;
+    return true;
 }
 
 /// Validate a `*_BIN`-style override: it must expand to an absolute path that
@@ -409,24 +455,9 @@ fn executableFilePath(allocator: std.mem.Allocator, raw: []const u8, home: []con
         allocator.free(expanded);
         return null;
     }
-    const stat = std.fs.cwd().statFile(expanded) catch {
+    if (!executableFileAvailable(expanded)) {
         allocator.free(expanded);
         return null;
-    };
-    if (stat.kind != .file) {
-        allocator.free(expanded);
-        return null;
-    }
-    if (is_windows) {
-        if (!looksExecutableOnWindows(expanded)) {
-            allocator.free(expanded);
-            return null;
-        }
-    } else {
-        std.posix.access(expanded, std.posix.X_OK) catch {
-            allocator.free(expanded);
-            return null;
-        };
     }
     return expanded;
 }
@@ -523,7 +554,10 @@ pub fn commandOutputContains(
     argv: []const []const u8,
     needle: []const u8,
 ) !bool {
-    const output = try commandOutputAlloc(allocator, argv);
+    const output = commandOutputAlloc(allocator, argv) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
     defer allocator.free(output);
 
     return std.mem.indexOf(u8, output, needle) != null;
@@ -533,9 +567,27 @@ pub fn commandOutputAlloc(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
 ) ![]u8 {
+    var owned_arg0: ?[]u8 = null;
+    defer if (owned_arg0) |arg0| allocator.free(arg0);
+
+    var owned_argv: ?[][]const u8 = null;
+    defer if (owned_argv) |copy| allocator.free(copy);
+
+    const run_argv = if (argv.len > 0) argv: {
+        owned_arg0 = try resolveCommandArg0(allocator, argv[0]);
+        if (owned_arg0) |arg0| {
+            const copy = try allocator.alloc([]const u8, argv.len);
+            @memcpy(copy, argv);
+            copy[0] = arg0;
+            owned_argv = copy;
+            break :argv copy;
+        }
+        break :argv argv;
+    } else argv;
+
     const result = try std.process.Child.run(.{
         .allocator = allocator,
-        .argv = argv,
+        .argv = run_argv,
         .max_output_bytes = 64 * 1024,
     });
     defer allocator.free(result.stdout);
@@ -582,6 +634,37 @@ test "command output detection scans stdout" {
     ));
 }
 
+test "command output detection treats missing commands as unsupported" {
+    try std.testing.expect(!try commandOutputContains(
+        std.testing.allocator,
+        &.{"mitos-definitely-missing-command-output-helper"},
+        "feature-json",
+    ));
+}
+
+test "command output detection treats non-executable targets as unsupported" {
+    if (is_windows) return;
+
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var file = try tmp.dir.createFile("not-executable", .{});
+    try file.writeAll("#!/bin/sh\nprintf feature-json\n");
+    file.close();
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const target = try std.fs.path.join(allocator, &.{ base, "not-executable" });
+    defer allocator.free(target);
+
+    try std.testing.expect(!try commandOutputContains(
+        allocator,
+        &.{target},
+        "feature-json",
+    ));
+}
+
 test "command output helper returns trimmed output" {
     const output = try commandOutputTrimmedAlloc(
         std.testing.allocator,
@@ -590,6 +673,103 @@ test "command output helper returns trimmed output" {
     defer std.testing.allocator.free(output);
 
     try std.testing.expectEqualStrings("version 1", output);
+}
+
+test "command arg resolver finds binaries in a supplied search dir" {
+    if (is_windows) return;
+
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("bin");
+    var file = try tmp.dir.createFile("bin/mitos-detect-tool", .{});
+    try file.writeAll(
+        \\#!/bin/sh
+        \\printf 'detect-ok'
+        \\
+    );
+    try file.chmod(0o755);
+    file.close();
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const bin_dir = try std.fs.path.join(allocator, &.{ base, "bin" });
+    defer allocator.free(bin_dir);
+
+    const dirs = [_][]const u8{bin_dir};
+    const resolved = try resolveArg0FromDirs(allocator, "mitos-detect-tool", &dirs);
+    defer if (resolved) |path| allocator.free(path);
+
+    try std.testing.expect(resolved != null);
+    try std.testing.expect(std.mem.endsWith(u8, resolved.?, "mitos-detect-tool"));
+}
+
+test "command arg resolver skips non-executable shadows" {
+    if (is_windows) return;
+
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("bad");
+    try tmp.dir.makePath("good");
+    var bad_file = try tmp.dir.createFile("bad/mitos-detect-tool", .{});
+    try bad_file.writeAll("#!/bin/sh\nprintf bad\n");
+    bad_file.close();
+
+    var good_file = try tmp.dir.createFile("good/mitos-detect-tool", .{});
+    try good_file.writeAll("#!/bin/sh\nprintf good\n");
+    try good_file.chmod(0o755);
+    good_file.close();
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const bad_dir = try std.fs.path.join(allocator, &.{ base, "bad" });
+    defer allocator.free(bad_dir);
+    const good_dir = try std.fs.path.join(allocator, &.{ base, "good" });
+    defer allocator.free(good_dir);
+
+    const dirs = [_][]const u8{ bad_dir, good_dir };
+    const resolved = try resolveArg0FromDirs(allocator, "mitos-detect-tool", &dirs);
+    defer if (resolved) |path| allocator.free(path);
+
+    try std.testing.expect(resolved != null);
+    try std.testing.expect(std.mem.indexOf(u8, resolved.?, "/good/") != null);
+}
+
+test "command arg resolver skips directory shadows" {
+    if (is_windows) return;
+
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("bad/mitos-detect-tool");
+    try tmp.dir.makePath("good");
+    var good_file = try tmp.dir.createFile("good/mitos-detect-tool", .{});
+    try good_file.writeAll("#!/bin/sh\nprintf good\n");
+    try good_file.chmod(0o755);
+    good_file.close();
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const bad_dir = try std.fs.path.join(allocator, &.{ base, "bad" });
+    defer allocator.free(bad_dir);
+    const good_dir = try std.fs.path.join(allocator, &.{ base, "good" });
+    defer allocator.free(good_dir);
+
+    const dirs = [_][]const u8{ bad_dir, good_dir };
+    const resolved = try resolveArg0FromDirs(allocator, "mitos-detect-tool", &dirs);
+    defer if (resolved) |path| allocator.free(path);
+
+    try std.testing.expect(resolved != null);
+    try std.testing.expect(std.mem.indexOf(u8, resolved.?, "/good/") != null);
+}
+
+test "command arg resolver leaves path-like argv zero untouched" {
+    const dirs = [_][]const u8{"/bin"};
+    try std.testing.expect(try resolveArg0FromDirs(std.testing.allocator, "./sh", &dirs) == null);
 }
 
 test "auth status helper leaves missing env-based auth unknown" {
@@ -664,4 +844,10 @@ test "version probe reads the first line of a spawned binary" {
         },
         .not_invocable => return error.TestUnexpectedResult,
     }
+}
+
+fn tmpDirPath(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+    return try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", sub_path });
 }

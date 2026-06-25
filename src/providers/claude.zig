@@ -11,8 +11,16 @@ pub const claudecode_print_adapter_id = adapters.AdapterId{ .value = "claudecode
 pub const pty_adapter_id = adapters.AdapterId{ .value = "claude.pty" };
 pub const claudecode_pty_adapter_id = adapters.AdapterId{ .value = "claudecode.pty" };
 
+const pty_terminal_chrome_markers = [_][]const u8{
+    "MCP startup",
+    "Working",
+    "Thinking",
+    "esc to interrupt",
+};
+pub const pty_terminal_observation = adapters.terminalObservationProviderTui(&pty_terminal_chrome_markers);
+
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const unavailable_warnings = [_][]const u8{"claude binary was not found on PATH"};
+const unavailable_warnings = [_][]const u8{"claude binary was not found on PATH or common toolchain directories"};
 const unsupported_warnings = [_][]const u8{"claude does not advertise --print stream-json support"};
 
 pub fn initPrintAdapter() adapters.AgentAdapter {

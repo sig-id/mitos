@@ -17,6 +17,7 @@ defmodule Mitos.AppPackage do
   @app_manifest_media_type "application/vnd.mitos.application.manifest.v1+json"
   @pipeline_media_type "text/markdown; charset=utf-8"
   @id_pattern ~r/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
+  @sha256_hex_pattern ~r/\A[0-9a-f]{64}\z/
   @path_ref_prefixes ["./", "app/", "apps/", "capabilities/", "workloads/"]
   @reserved_app_files ~w(app.json app.yaml app.yml bindings.json)
 
@@ -71,7 +72,7 @@ defmodule Mitos.AppPackage do
          {:ok, binding_sidecar} <- install_binding_sidecar(frozen_manifest, app_id, opts),
          {:ok, files} <- install_files(layout_dir, frozen_manifest, oci_manifest),
          :ok <- prepare_install_dest(dest_dir),
-         :ok <- write_install(dest_dir, frozen_manifest, files, binding_sidecar),
+         :ok <- write_install(dest_dir, frozen_manifest, files, binding_sidecar, app_id),
          {:ok, app} <- Mitos.AppManifest.load(dest_dir),
          :ok <- verify_loaded_app_id(app, app_id) do
       install =
@@ -92,12 +93,25 @@ defmodule Mitos.AppPackage do
     do: {:error, {:invalid_application_package, "paths must be strings"}}
 
   defp prepare_dest(dest_dir) do
-    case File.ls(dest_dir) do
-      {:ok, []} ->
-        mkdir_layout(dest_dir)
+    case File.lstat(dest_dir) do
+      {:ok, %{type: :directory}} ->
+        case File.ls(dest_dir) do
+          {:ok, []} ->
+            mkdir_layout(dest_dir)
 
-      {:ok, _entries} ->
-        {:error, {:invalid_application_package, "destination must be empty"}}
+          {:ok, _entries} ->
+            {:error, {:invalid_application_package, "destination must be empty"}}
+
+          {:error, reason} ->
+            {:error,
+             {:invalid_application_package, "could not inspect destination: #{inspect(reason)}"}}
+        end
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:invalid_application_package, "destination must not be a symlink"}}
+
+      {:ok, _stat} ->
+        {:error, {:invalid_application_package, "destination must be a directory"}}
 
       {:error, :enoent} ->
         mkdir_layout(dest_dir)
@@ -109,12 +123,25 @@ defmodule Mitos.AppPackage do
   end
 
   defp prepare_install_dest(dest_dir) do
-    case File.ls(dest_dir) do
-      {:ok, []} ->
-        :ok
+    case File.lstat(dest_dir) do
+      {:ok, %{type: :directory}} ->
+        case File.ls(dest_dir) do
+          {:ok, []} ->
+            :ok
 
-      {:ok, _entries} ->
-        {:error, {:invalid_application_package, "destination must be empty"}}
+          {:ok, _entries} ->
+            {:error, {:invalid_application_package, "destination must be empty"}}
+
+          {:error, reason} ->
+            {:error,
+             {:invalid_application_package, "could not inspect destination: #{inspect(reason)}"}}
+        end
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:invalid_application_package, "destination must not be a symlink"}}
+
+      {:ok, _stat} ->
+        {:error, {:invalid_application_package, "destination must be a directory"}}
 
       {:error, :enoent} ->
         :ok
@@ -126,7 +153,7 @@ defmodule Mitos.AppPackage do
   end
 
   defp mkdir_layout(dest_dir) do
-    with :ok <- File.mkdir_p(Path.join([dest_dir, "blobs", "sha256"])) do
+    with :ok <- mkdir_regular_p(Path.join([dest_dir, "blobs", "sha256"])) do
       :ok
     else
       {:error, reason} ->
@@ -187,8 +214,10 @@ defmodule Mitos.AppPackage do
     with :ok <- safe_relative_path(ref),
          path <- Path.expand(ref, root),
          true <- inside_root?(path, root),
+         true <- no_symlink_path?(path, root),
          {:ok, workload_path} <- workload_path(path, alias),
-         {:ok, raw} <- File.read(workload_path),
+         true <- no_symlink_path?(workload_path, root),
+         {:ok, raw} <- read_regular_file(workload_path),
          {:ok, json} <- Jason.decode(strip_json_comments(raw)),
          {:ok, %Mitos.Workload{capability: %Mitos.Capability{id: capability_id}}} <-
            Mitos.Workload.from_json(alias, json, package_root: Path.dirname(workload_path)) do
@@ -236,7 +265,7 @@ defmodule Mitos.AppPackage do
     app.pipelines
     |> Enum.reduce_while({:ok, []}, fn pipeline, {:ok, acc} ->
       with {:ok, path} <- pipeline_path(app, pipeline),
-           {:ok, bytes} <- File.read(path),
+           {:ok, bytes} <- read_regular_file(path),
            {:ok, descriptor} <- write_blob(dest_dir, bytes, @pipeline_media_type) do
         descriptor =
           descriptor
@@ -257,10 +286,22 @@ defmodule Mitos.AppPackage do
        when is_binary(root) and is_binary(file) do
     path = Path.expand(file, root)
 
-    if inside_root?(path, root) do
-      {:ok, path}
-    else
-      {:error, {:invalid_application_package, "pipeline file escapes the application root"}}
+    cond do
+      not inside_root?(path, root) ->
+        {:error, {:invalid_application_package, "pipeline file escapes the application root"}}
+
+      true ->
+        case no_symlink_path?(path, root) do
+          true ->
+            {:ok, path}
+
+          false ->
+            {:error, {:invalid_application_package, "pipeline file escapes the application root"}}
+
+          {:error, reason} ->
+            {:error,
+             {:invalid_application_package, "could not read pipeline file: #{inspect(reason)}"}}
+        end
     end
   end
 
@@ -303,12 +344,12 @@ defmodule Mitos.AppPackage do
     }
 
     with :ok <-
-           File.write(
+           write_regular_file(
              Path.join(dest_dir, "oci-layout"),
              Jason.encode!(%{"imageLayoutVersion" => "1.0.0"}) <> "\n"
            ),
          :ok <-
-           File.write(
+           write_regular_file(
              Path.join(dest_dir, "index.json"),
              Jason.encode!(index, pretty: true) <> "\n"
            ) do
@@ -327,7 +368,7 @@ defmodule Mitos.AppPackage do
     digest = sha256(bytes)
     path = blob_path(dest_dir, digest)
 
-    with :ok <- File.write(path, bytes) do
+    with :ok <- write_regular_file(path, bytes) do
       {:ok, %{"mediaType" => media_type, "digest" => digest, "size" => byte_size(bytes)}}
     else
       {:error, reason} ->
@@ -336,7 +377,8 @@ defmodule Mitos.AppPackage do
   end
 
   defp read_oci_manifest(layout_dir, opts) do
-    with {:ok, %{"imageLayoutVersion" => "1.0.0"}} <-
+    with :ok <- ensure_layout_dir(layout_dir),
+         {:ok, %{"imageLayoutVersion" => "1.0.0"}} <-
            read_json_file(Path.join(layout_dir, "oci-layout")),
          {:ok, index} <- read_json_file(Path.join(layout_dir, "index.json")),
          {:ok, descriptor} <- select_manifest_descriptor(index, opts),
@@ -364,7 +406,7 @@ defmodule Mitos.AppPackage do
     do: {:error, {:invalid_application_package, "OCI manifest layers must be a list"}}
 
   defp read_json_file(path) do
-    with {:ok, bytes} <- File.read(path),
+    with {:ok, bytes} <- read_regular_file(path),
          {:ok, json} <- Jason.decode(bytes) do
       {:ok, json}
     else
@@ -442,14 +484,21 @@ defmodule Mitos.AppPackage do
     end
   end
 
-  defp read_descriptor_blob(layout_dir, %{"digest" => "sha256:" <> _hex = digest} = descriptor) do
-    with {:ok, bytes} <- File.read(blob_path(layout_dir, digest)),
+  defp read_descriptor_blob(layout_dir, %{"digest" => digest} = descriptor)
+       when is_binary(digest) do
+    with :ok <- verify_descriptor_digest_ref(digest),
+         path <- blob_path(layout_dir, digest),
+         true <- no_symlink_path?(Path.dirname(path), layout_dir),
+         {:ok, bytes} <- read_regular_file(path),
          :ok <- verify_descriptor_digest(bytes, digest),
          :ok <- verify_descriptor_size(bytes, descriptor) do
       {:ok, bytes}
     else
       {:error, {:invalid_application_package, _detail}} = error ->
         error
+
+      false ->
+        {:error, {:invalid_application_package, "descriptor blob path must not contain symlinks"}}
 
       {:error, reason} ->
         {:error,
@@ -459,6 +508,34 @@ defmodule Mitos.AppPackage do
   end
 
   defp read_descriptor_blob(_layout_dir, _descriptor),
+    do: {:error, {:invalid_application_package, "descriptor digest must be sha256"}}
+
+  defp ensure_layout_dir(layout_dir) do
+    case File.lstat(layout_dir) do
+      {:ok, %{type: :directory}} ->
+        :ok
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:invalid_application_package, "layout directory must not be a symlink"}}
+
+      {:ok, _stat} ->
+        {:error, {:invalid_application_package, "layout path must be a directory"}}
+
+      {:error, reason} ->
+        {:error,
+         {:invalid_application_package, "could not inspect layout directory: #{inspect(reason)}"}}
+    end
+  end
+
+  defp verify_descriptor_digest_ref("sha256:" <> hex) do
+    if Regex.match?(@sha256_hex_pattern, hex) do
+      :ok
+    else
+      {:error, {:invalid_application_package, "descriptor digest must be canonical sha256"}}
+    end
+  end
+
+  defp verify_descriptor_digest_ref(_digest),
     do: {:error, {:invalid_application_package, "descriptor digest must be sha256"}}
 
   defp verify_descriptor_digest(bytes, digest) do
@@ -528,27 +605,124 @@ defmodule Mitos.AppPackage do
     end
   end
 
-  defp write_install(dest_dir, frozen_manifest, files, binding_sidecar) do
-    with :ok <- File.mkdir_p(dest_dir),
-         :ok <-
-           File.write(
-             Path.join(dest_dir, "app.json"),
-             Jason.encode!(frozen_manifest, pretty: true) <> "\n"
-           ),
-         :ok <- write_binding_sidecar(dest_dir, binding_sidecar),
-         :ok <- write_install_files(dest_dir, files) do
-      :ok
+  defp write_install(dest_dir, frozen_manifest, files, binding_sidecar, app_id) do
+    with {:ok, tmp_dir} <- create_install_tmp_dir(dest_dir) do
+      result =
+        with :ok <- write_install_tree(tmp_dir, frozen_manifest, files, binding_sidecar),
+             :ok <- validate_install_tree(tmp_dir, app_id),
+             :ok <- commit_install(dest_dir, tmp_dir) do
+          :ok
+        end
+
+      case result do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          File.rm_rf(tmp_dir)
+          install_write_error(reason)
+      end
     else
       {:error, reason} ->
-        {:error,
-         {:invalid_application_package, "could not write installed app: #{inspect(reason)}"}}
+        install_write_error(reason)
+    end
+  end
+
+  defp validate_install_tree(tmp_dir, app_id) do
+    with {:ok, app} <- Mitos.AppManifest.load(tmp_dir),
+         :ok <- verify_loaded_app_id(app, app_id) do
+      :ok
+    else
+      {:error, {:invalid_application, detail}} ->
+        {:error, {:invalid_application_package, detail}}
+
+      {:error, {:invalid_application_input, detail}} ->
+        {:error, {:invalid_application_package, detail}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp install_write_error({:invalid_application_package, _detail} = reason), do: {:error, reason}
+
+  defp install_write_error(reason) do
+    {:error, {:invalid_application_package, "could not write installed app: #{inspect(reason)}"}}
+  end
+
+  defp write_install_tree(tmp_dir, frozen_manifest, files, binding_sidecar) do
+    with :ok <-
+           write_regular_file(
+             Path.join(tmp_dir, "app.json"),
+             Jason.encode!(frozen_manifest, pretty: true) <> "\n"
+           ),
+         :ok <- write_binding_sidecar(tmp_dir, binding_sidecar),
+         :ok <- write_install_files(tmp_dir, files) do
+      :ok
+    end
+  end
+
+  defp create_install_tmp_dir(dest_dir) do
+    dest_dir = Path.expand(dest_dir)
+    parent = Path.dirname(dest_dir)
+    name = Path.basename(dest_dir)
+
+    with :ok <- mkdir_regular_p(parent) do
+      create_install_tmp_dir(parent, name, 0)
+    end
+  end
+
+  defp create_install_tmp_dir(_parent, _name, 16), do: {:error, :eexist}
+
+  defp create_install_tmp_dir(parent, name, attempts) do
+    path = Path.join(parent, ".#{name}.install-#{install_tmp_suffix()}")
+
+    case File.mkdir(path) do
+      :ok -> {:ok, path}
+      {:error, :eexist} -> create_install_tmp_dir(parent, name, attempts + 1)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp install_tmp_suffix do
+    random = :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
+    "#{System.unique_integer([:positive, :monotonic])}-#{random}"
+  end
+
+  defp commit_install(dest_dir, tmp_dir) do
+    case File.lstat(dest_dir) do
+      {:ok, %{type: :directory}} ->
+        case File.ls(dest_dir) do
+          {:ok, []} ->
+            with :ok <- File.rmdir(dest_dir) do
+              File.rename(tmp_dir, dest_dir)
+            end
+
+          {:ok, _entries} ->
+            {:error, :destination_not_empty}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:ok, %{type: :symlink}} ->
+        {:error, :destination_symlink}
+
+      {:error, :enoent} ->
+        File.rename(tmp_dir, dest_dir)
+
+      {:ok, _stat} ->
+        {:error, :destination_not_directory}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp write_binding_sidecar(_dest_dir, nil), do: :ok
 
   defp write_binding_sidecar(dest_dir, %{} = binding_sidecar) do
-    File.write(
+    write_regular_file(
       Path.join(dest_dir, "bindings.json"),
       Jason.encode!(binding_sidecar, pretty: true) <> "\n"
     )
@@ -557,8 +731,7 @@ defmodule Mitos.AppPackage do
   defp write_install_files(dest_dir, files) do
     Enum.reduce_while(files, :ok, fn {relative, bytes}, :ok ->
       with {:ok, path} <- install_path(dest_dir, relative),
-           :ok <- File.mkdir_p(Path.dirname(path)),
-           :ok <- File.write(path, bytes) do
+           :ok <- write_regular_file(path, bytes) do
         {:cont, :ok}
       else
         {:error, _reason} = error -> {:halt, error}
@@ -753,7 +926,15 @@ defmodule Mitos.AppPackage do
 
   defp app_id(frozen_manifest), do: "app:" <> sha256(canonical_json(frozen_manifest))
 
-  defp blob_path(dest_dir, "sha256:" <> hex), do: Path.join([dest_dir, "blobs", "sha256", hex])
+  defp blob_path(dest_dir, "sha256:" <> hex = digest) do
+    case verify_descriptor_digest_ref(digest) do
+      :ok ->
+        Path.join([dest_dir, "blobs", "sha256", hex])
+
+      {:error, {:invalid_application_package, detail}} ->
+        raise ArgumentError, detail
+    end
+  end
 
   defp sha256(bytes) when is_binary(bytes) do
     digest =
@@ -800,13 +981,13 @@ defmodule Mitos.AppPackage do
   end
 
   defp workload_path(path, alias) do
-    cond do
-      File.regular?(path) ->
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
         {:ok, path}
 
-      File.dir?(path) ->
+      {:ok, %{type: :directory}} ->
         [Path.join(path, "workload.json"), Path.join(path, alias <> ".json")]
-        |> Enum.find(&File.regular?/1)
+        |> Enum.find_value(&workload_file_candidate/1)
         |> case do
           nil ->
             {:error,
@@ -816,8 +997,21 @@ defmodule Mitos.AppPackage do
             {:ok, workload_path}
         end
 
-      true ->
+      {:ok, %{type: :symlink}} ->
+        {:ok, path}
+
+      {:ok, _stat} ->
         {:error, {:invalid_application_package, "capability ref is unavailable"}}
+
+      {:error, _reason} ->
+        {:error, {:invalid_application_package, "capability ref is unavailable"}}
+    end
+  end
+
+  defp workload_file_candidate(path) do
+    case File.lstat(path) do
+      {:ok, %{type: type}} when type in [:regular, :symlink] -> path
+      _other -> nil
     end
   end
 
@@ -825,6 +1019,123 @@ defmodule Mitos.AppPackage do
     root = Path.expand(root)
     path = Path.expand(path)
     path == root or String.starts_with?(path, root <> "/")
+  end
+
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp mkdir_regular_p(path) do
+    path = Path.expand(path)
+    parent = Path.dirname(path)
+
+    if path == parent do
+      ensure_existing_regular_dir(path)
+    else
+      with :ok <- mkdir_regular_p(parent) do
+        ensure_regular_dir(path)
+      end
+    end
+  end
+
+  defp ensure_existing_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} -> :ok
+      {:ok, %{type: :symlink}} -> {:error, {:mkdir_failed, path, :symlink}}
+      {:ok, _stat} -> {:error, {:mkdir_failed, path, :not_directory}}
+      {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp ensure_regular_dir(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        :ok
+
+      {:ok, %{type: :symlink}} ->
+        {:error, {:mkdir_failed, path, :symlink}}
+
+      {:ok, _stat} ->
+        {:error, {:mkdir_failed, path, :not_directory}}
+
+      {:error, :enoent} ->
+        case File.mkdir(path) do
+          :ok -> :ok
+          {:error, :eexist} -> ensure_regular_dir(path)
+          {:error, reason} -> {:error, {:mkdir_failed, path, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:mkdir_failed, path, reason}}
+    end
+  end
+
+  defp write_regular_file(path, bytes) when is_binary(bytes) do
+    path = Path.expand(path)
+
+    with :ok <- mkdir_regular_p(Path.dirname(path)) do
+      write_regular_file_leaf(path, bytes)
+    end
+  end
+
+  defp write_regular_file_leaf(path, bytes) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} ->
+        with :ok <- File.rm(path) do
+          write_new_regular_file(path, bytes)
+        end
+
+      {:error, :enoent} ->
+        write_new_regular_file(path, bytes)
+
+      {:ok, %{type: :symlink}} ->
+        {:error, :symlink}
+
+      {:ok, _stat} ->
+        {:error, :not_regular}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp write_new_regular_file(path, bytes) do
+    case File.open(path, [:write, :binary, :exclusive], fn io -> IO.binwrite(io, bytes) end) do
+      {:ok, :ok} -> :ok
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, :eexist} -> write_regular_file_leaf(path, bytes)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp strip_json_comments(raw) do

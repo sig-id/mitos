@@ -1,11 +1,45 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { writable } from "svelte/store";
-  import { themeContract, themeSwatches, type ThemeMode } from "./theme";
 
   type JsonMap = Record<string, any>;
-  type DrawerKind = "none" | "run" | "pipeline" | "capability" | "task" | "advanced";
-  type ViewKey = "overview" | "workflows" | "runs" | "capabilities" | "work-pool" | "evidence" | "settings";
+  type ThemeMode = "light" | "dark";
+  type SurfaceKey = "run" | "build" | "fleet";
+
+  type WorkspaceDecl = { kind?: string; ref?: string; refspec?: string } | string | undefined;
+
+  type Parameter = {
+    name: string;
+    type?: string;
+    default?: unknown;
+    description?: string;
+  };
+
+  type Entrypoint = {
+    id: string;
+    pipeline?: string;
+    title?: string;
+    description?: string;
+    workspace?: WorkspaceDecl;
+    inputs?: JsonMap;
+    parameters?: Parameter[];
+    defaults?: JsonMap;
+  };
+
+  type Application = {
+    id: string;
+    app_id?: string;
+    name: string;
+    version?: string;
+    description?: string;
+    authors?: string[];
+    license?: string;
+    entrypoints?: Entrypoint[];
+    pipelines?: JsonMap[];
+    capabilities?: JsonMap[];
+    io?: JsonMap;
+    services?: JsonMap;
+    requirements?: JsonMap;
+  };
 
   type RunSummary = {
     run_id: string;
@@ -19,185 +53,114 @@
     last_event_ms?: number;
   };
 
-  type Pipeline = {
-    id: string;
-    title?: string;
-    description?: string;
-    provider?: string;
-    pipeline_id?: string;
-    workflow?: JsonMap;
-    tasks?: JsonMap;
-    executions?: JsonMap[];
-    recent_runs?: string[];
-    template?: string;
-    cwd?: string;
-    approvals?: string;
-    transport_order?: string[];
-    env_passthrough?: string[];
-  };
-
-  type Capability = {
-    id: string;
-    title?: string;
-    description?: string;
-    provider?: string;
-    capability?: JsonMap;
-    runtime?: JsonMap;
-    setup?: JsonMap;
-    files?: JsonMap[];
-    env?: JsonMap;
-    sandbox?: JsonMap;
-    work?: JsonMap;
-    template?: string;
-    timeout_ms?: number;
-  };
-
-  type Task = {
-    id: string;
-    status?: string;
-    pool?: string;
-    pipeline?: string;
-    source?: string;
-    priority?: number;
-    runs?: string[];
-    input_keys?: string[];
-    payload?: JsonMap;
-    status_reason?: string;
-    created_at?: string;
-    updated_at?: string;
-  };
-
-  type SetupCheck = {
+  type TimelineRow = {
+    seq: number | string;
+    kind: string;
+    type: string;
     label: string;
     detail: string;
-    state: "ready" | "warning" | "blocked";
+    status: string;
+    event: JsonMap;
   };
 
-  type StepDraft = {
-    id: string;
-    name: string;
-    capability_id: string;
+  type VerificationRow = {
+    seq: number | string;
+    phase: string;
+    tier: string;
+    verdict: string;
+    reason: string;
+    failedHooks: string;
+    criteria: string;
   };
 
-  type CapabilityDraft = {
-    id: string;
-    title: string;
-    description: string;
-    provider: string;
-    cwd: string;
-    template: string;
-    timeout_ms: string;
-    approvals: string;
-    transport_order: string;
-    env_passthrough: string;
-    trust_tier: string;
-    skill: string;
-    result_json: string;
-  };
-
-  const navItems: Array<{ key: ViewKey; label: string; short: string }> = [
-    { key: "overview", label: "Command", short: "CM" },
-    { key: "workflows", label: "Workflows", short: "WF" },
-    { key: "runs", label: "Runs", short: "RN" },
-    { key: "capabilities", label: "Capabilities", short: "CP" },
-    { key: "work-pool", label: "Work pool", short: "WP" },
-    { key: "evidence", label: "Evidence", short: "EV" },
-    { key: "settings", label: "Settings", short: "ST" }
+  const surfaces: Array<{ key: SurfaceKey; label: string; short: string; deck: string }> = [
+    {
+      key: "run",
+      label: "Run & Watch",
+      short: "RW",
+      deck: "Run an application entrypoint and follow the pipeline fold."
+    },
+    {
+      key: "build",
+      label: "Build & Test",
+      short: "BT",
+      deck: "Mirror the local authoring contract, harness checks, and publish step."
+    },
+    {
+      key: "fleet",
+      label: "Fleet",
+      short: "FL",
+      deck: "Operate applications, I/O bindings, services, and task lifecycle."
+    }
   ];
 
-  const statusOrder = ["blocked", "queued", "scheduled", "running", "parked", "done", "failed", "cancelled"];
-  const initialBoard = { statuses: statusOrder, columns: {}, tasks: [], totals: {} };
-  const defaultPipelineDraft = {
-    id: "repo-review",
-    title: "Repository review",
-    description: "Agent workflow for a concrete repo task",
-    provider: "fake",
-    cwd: "",
-    template: "Work on {{objective}}. Return {{expected_output}}.",
-    env_passthrough: "",
-    timeout_ms: "120000"
-  };
-
-  const defaultPipelineSteps: StepDraft[] = [
-    { id: "inspect", name: "Inspect", capability_id: "repo-review" },
-    { id: "summarize", name: "Summarize", capability_id: "repo-review" }
-  ];
-
-  const defaultCapabilityDraft: CapabilityDraft = {
-    id: "repo-review",
-    title: "Repository review",
-    description: "Smallest runnable runtime wrapper",
-    provider: "fake",
-    cwd: "",
-    template: "Work on {{objective}}. Return {{expected_output}}.",
-    timeout_ms: "120000",
-    approvals: "deny",
-    transport_order: "stdio-json, pty",
-    env_passthrough: "",
-    trust_tier: "T1",
-    skill: "",
-    result_json: ""
-  };
-
-  let activeView: ViewKey = routeFromHash();
+  let activeSurface: SurfaceKey = routeFromHash();
   let activeTheme: ThemeMode = (localStorage.getItem("mitos-theme") as ThemeMode) || "light";
   let search = "";
   let loading = true;
-  let toast = "";
   let error = "";
-  let drawerKind: DrawerKind = "none";
-  let drawerTab = "summary";
-  let selectedRunId = "";
-  let selectedPipelineId = "";
-  let selectedCapabilityId = "";
-  let selectedTaskId = "";
-  let selectedRunDetail: JsonMap | null = null;
-  let runDetailLoading = false;
-  let runInputJson = '{\n  "objective": "Run the smallest testable wrapper",\n  "expected_output": "Evidence and a concise result"\n}';
-  let executionInputJson = '{\n  "objective": "Execute the workflow with traceable evidence",\n  "expected_output": "Step results and proof events"\n}';
-  let pipelineDraft = { ...defaultPipelineDraft };
-  let pipelineSteps: StepDraft[] = defaultPipelineSteps.map((step) => ({ ...step }));
-  let capabilityDraft: CapabilityDraft = { ...defaultCapabilityDraft };
+  let toast = "";
 
+  let apps: Application[] = [];
   let runs: RunSummary[] = [];
-  let pipelines: Pipeline[] = [];
-  let capabilities: Capability[] = [];
-  const workBoard = writable<JsonMap>(initialBoard);
-  let setupTotals: JsonMap = {};
-  let pipelineTotals: JsonMap = {};
+  let appTotals: JsonMap = {};
+  let activationPlans: Record<string, JsonMap> = {};
 
-  $: filteredRuns = runs.filter((run) => matchesQuery([run.run_id, run.provider, run.task, run.status], search));
-  $: filteredPipelines = pipelines.filter((pipeline) =>
-    matchesQuery([pipeline.id, pipeline.title, pipeline.description, pipeline.provider], search)
+  let selectedAppId = "";
+  let selectedEntrypointId = "";
+  let selectedRunId = "";
+  let selectedRunDetail: JsonMap | null = null;
+  let selectedTimelineSeq: number | string | null = null;
+  let workspaceRef = "";
+  let inputValues: Record<string, string> = {};
+  let parameterValues: Record<string, string> = {};
+  let promptText = "";
+  let selectedOption = "1";
+  let appSource = "";
+  let packageTag = "";
+
+  $: surface = surfaces.find((item) => item.key === activeSurface) || surfaces[0];
+  $: filteredApps = apps.filter((app) =>
+    matchesQuery([app.name, app.id, app.description, app.version, app.app_id], search)
   );
-  $: filteredCapabilities = capabilities.filter((capability) =>
-    matchesQuery([capability.id, capability.title, capability.description, capability.provider, capability.setup?.status], search)
+  $: appRuns = runs.filter(isAppRunSummary);
+  $: filteredRuns = appRuns.filter((run) =>
+    matchesQuery([run.run_id, run.task, run.provider, run.status], search)
   );
-  $: selectedPipeline = pipelines.find((pipeline) => pipeline.id === selectedPipelineId) || pipelines[0] || null;
-  $: selectedCapability = capabilities.find((capability) => capability.id === selectedCapabilityId) || capabilities[0] || null;
-  $: selectedCapabilitySetup = selectedCapability?.setup || {};
-  $: selectedCapabilityWork = selectedCapability?.work || {};
-  $: selectedCapabilityTasks = selectedCapabilityWork.tasks || {};
-  $: selectedCapabilityRecentTasks = (selectedCapabilityWork.recent_tasks || []) as Task[];
-  $: capabilityCanRun = Boolean(selectedCapabilitySetup.can_run);
-  $: capabilitySetupChecks = setupChecksFor(selectedCapability);
-  $: capabilitySetupProgress = setupProgressPercent(capabilitySetupChecks);
-  $: capabilityTemplateKeys = templateKeys(capabilityDraft.template);
-  $: boardTotals = $workBoard.totals || {};
-  $: boardTasks = ($workBoard.tasks || []) as Task[];
-  $: boardColumns = $workBoard.columns || {};
-  $: boardStatuses = $workBoard.statuses || statusOrder;
-  $: boardTotalTasks = boardTotals.all || boardTasks.length || 0;
-  $: boardBlockedTasks = (boardTotals.blocked || 0) + (boardTotals.failed || 0);
-  $: boardQueueHealth = boardTotalTasks
-    ? Math.max(0, Math.round(((boardTotalTasks - boardBlockedTasks) / boardTotalTasks) * 100))
-    : 100;
-  $: selectedTask = boardTasks.find((task: Task) => task.id === selectedTaskId) || null;
-  $: workflowSteps = workflowStepsFor(selectedPipeline);
-  $: selectedWorkflowSteps = workflowSteps.length > 0 ? workflowSteps : pipelineSteps;
-  $: capabilityOptionIds = capabilities.map((capability) => capability.id).filter(Boolean);
-  $: activeExecutions = selectedPipeline?.executions || [];
-  $: dashboardTotals = summarize(runs, pipelines, capabilities, $workBoard, setupTotals, pipelineTotals);
+  $: selectedApp = apps.find((app) => app.id === selectedAppId) || apps[0] || null;
+  $: selectedEntrypoint =
+    selectedApp?.entrypoints?.find((entrypoint) => entrypoint.id === selectedEntrypointId) ||
+    selectedApp?.entrypoints?.[0] ||
+    null;
+  $: selectedRunSummary = appRuns.find((run) => run.run_id === selectedRunId) || appRuns[0] || null;
+  $: selectedAppPipelines = selectedApp?.pipelines || [];
+  $: selectedAppCapabilities = selectedApp?.capabilities || [];
+  $: runEvents = normalizeEvents(selectedRunDetail?.events || []);
+  $: timelineRows = runEvents.map(timelineRowFor);
+  $: selectedProof = selectedRunDetail?.proof || {};
+  $: proofDelivery = selectedProof.delivery || {};
+  $: proofResult = proofDelivery.result || {};
+  $: proofArtifacts = proofArtifactsFor(selectedProof);
+  $: proofTimeline = Array.isArray(selectedProof.timeline) ? selectedProof.timeline : [];
+  $: proofUrl = selectedRunDetail?.run_id ? `/runs/${encodeURIComponent(selectedRunDetail.run_id)}/proof.html` : "";
+  $: verificationRows = runEvents.filter(isVerificationEvent).map(verificationRowFor);
+  $: selectedTimelineRow =
+    timelineRows.find((row) => row.seq === selectedTimelineSeq) ||
+    timelineRows.find((row) => row.type === "capability_started") ||
+    timelineRows[0] ||
+    null;
+  $: innerTraceRows = innerTraceFor(runEvents, selectedTimelineRow);
+  $: selectedActivation = selectedApp ? activationPlans[selectedApp.id] : null;
+  $: ioActivity = timelineRows.filter((row) =>
+    ["signal_received", "delivery_sent", "delivery_skipped", "egress_attempted", "egress_allowed", "egress_denied"].includes(row.type)
+  );
+  $: dashboard = {
+    apps: appTotals.apps || apps.length,
+    entrypoints: apps.reduce((count, app) => count + (app.entrypoints?.length || 0), 0),
+    runs: appRuns.length,
+    running: appRuns.filter((run) => run.live || run.status === "running").length,
+    blocked: appRuns.filter((run) => ["failed", "error", "interrupted"].includes(run.status || "")).length
+  };
   $: document.documentElement.dataset.theme = activeTheme;
 
   onMount(() => {
@@ -208,18 +171,18 @@
     return () => window.removeEventListener("hashchange", syncRoute);
   });
 
-  function routeFromHash(): ViewKey {
-    const key = window.location.hash.replace(/^#\/?/, "") || "overview";
-    return navItems.some((item) => item.key === key) ? (key as ViewKey) : "overview";
+  function routeFromHash(): SurfaceKey {
+    const key = window.location.hash.replace(/^#\/?/, "") || "run";
+    return surfaces.some((item) => item.key === key) ? (key as SurfaceKey) : "run";
   }
 
   function syncRoute() {
-    activeView = routeFromHash();
+    activeSurface = routeFromHash();
   }
 
-  function navigate(view: ViewKey) {
-    activeView = view;
-    window.location.hash = view === "overview" ? "#/" : `#/${view}`;
+  function navigate(key: SurfaceKey) {
+    activeSurface = key;
+    window.location.hash = key === "run" ? "#/" : `#/${key}`;
   }
 
   async function requestJson<T = JsonMap>(pathName: string, init: RequestInit = {}): Promise<T> {
@@ -229,11 +192,11 @@
     }
 
     const response = await fetch(pathName, { cache: "no-store", ...init, headers });
-    const body = await response.text();
-    const parsed = body ? JSON.parse(body) : {};
+    const raw = await response.text();
+    const parsed = raw ? JSON.parse(raw) : {};
 
     if (!response.ok) {
-      throw new Error(parsed.error || `${response.status} ${response.statusText}`);
+      throw new Error(parsed.error || parsed.detail || `${response.status} ${response.statusText}`);
     }
 
     return parsed as T;
@@ -244,10 +207,8 @@
     error = "";
 
     const results = await Promise.allSettled([
+      loadApps(),
       loadRuns(),
-      loadPipelines(),
-      loadCapabilities(),
-      loadWorkPool()
     ]);
 
     const failed = results.find((result) => result.status === "rejected") as PromiseRejectedResult | undefined;
@@ -255,7 +216,23 @@
       error = failed.reason instanceof Error ? failed.reason.message : String(failed.reason);
     }
 
+    const selectableRuns = runs.filter(isAppRunSummary);
+    if (!selectedRunId || !selectableRuns.some((run) => run.run_id === selectedRunId)) {
+      selectedRunId = selectableRuns[0]?.run_id || "";
+    }
+    if (selectedRunId) await loadRunDetail(selectedRunId);
+    if (!selectedRunId) selectedRunDetail = null;
     loading = false;
+  }
+
+  async function loadApps() {
+    const data = await requestJson<JsonMap>("/apps");
+    apps = data.apps || [];
+    appTotals = data.totals || {};
+
+    if (!selectedAppId && apps[0]) {
+      chooseApp(apps[0], false);
+    }
   }
 
   async function loadRuns() {
@@ -263,356 +240,168 @@
     runs = data.runs || [];
   }
 
-  async function loadPipelines() {
-    const data = await requestJson<JsonMap>("/pipelines");
-    pipelines = data.pipelines || [];
-    pipelineTotals = data.totals || {};
-    if (!selectedPipelineId && pipelines[0]) {
-      selectedPipelineId = pipelines[0].id;
-      copyPipelineToDraft(pipelines[0]);
-    }
-  }
-
-  async function loadCapabilities() {
-    const data = await requestJson<JsonMap>("/capabilities/setup");
-    capabilities = data.capabilities || [];
-    setupTotals = data.totals || {};
-    if (!selectedCapabilityId && capabilities[0]) {
-      selectedCapabilityId = capabilities[0].id;
-      copyCapabilityToDraft(capabilities[0]);
-    }
-  }
-
-  async function loadWorkPool() {
-    workBoard.set(await requestJson<JsonMap>("/work-pool"));
-  }
-
-  async function openRun(run: RunSummary | string) {
-    const runId = typeof run === "string" ? run : run.run_id;
-    drawerKind = "run";
-    drawerTab = "summary";
-    selectedRunId = runId;
-    selectedRunDetail = null;
-    runDetailLoading = true;
+  async function loadRunDetail(runId: string) {
+    if (!runId) return;
 
     try {
       selectedRunDetail = await requestJson<JsonMap>(`/runs/${encodeURIComponent(runId)}`);
+      selectedTimelineSeq = null;
     } catch (err) {
+      selectedRunDetail = null;
       error = err instanceof Error ? err.message : String(err);
-    } finally {
-      runDetailLoading = false;
     }
   }
 
-  function openPipeline(pipeline: Pipeline, tab = "summary") {
-    selectedPipelineId = pipeline.id;
-    copyPipelineToDraft(pipeline);
-    drawerKind = "pipeline";
-    drawerTab = tab;
+  async function openRun(runId: string) {
+    selectedRunId = runId;
+    await loadRunDetail(runId);
   }
 
-  function openCapability(capability: Capability, tab = "summary") {
-    selectedCapabilityId = capability.id;
-    copyCapabilityToDraft(capability);
-    drawerKind = "capability";
-    drawerTab = tab;
+  function chooseApp(app: Application, resetInput = true) {
+    selectedAppId = app.id;
+    selectedEntrypointId = app.entrypoints?.[0]?.id || "";
+    packageTag = app.name || app.id || "";
+
+    if (resetInput) {
+      resetRunForm(app.entrypoints?.[0] || null);
+    }
   }
 
-  function selectCapability(capability: Capability) {
-    selectedCapabilityId = capability.id;
-    copyCapabilityToDraft(capability);
+  function chooseEntrypoint(entrypoint: Entrypoint) {
+    selectedEntrypointId = entrypoint.id;
+    resetRunForm(entrypoint);
   }
 
-  function openTask(task: Task) {
-    selectedTaskId = task.id;
-    drawerKind = "task";
-    drawerTab = "summary";
-  }
+  async function runEntrypoint() {
+    if (!selectedApp || !selectedEntrypoint) return;
 
-  function openAdvanced() {
-    drawerKind = "advanced";
-    drawerTab = "sandbox";
-  }
-
-  function closeDrawer() {
-    drawerKind = "none";
-  }
-
-  async function savePipeline() {
     try {
-      const payload = pipelinePayload();
-      const exists = pipelines.some((pipeline) => pipeline.id === payload.id);
-      const pathName = exists ? `/pipelines/${encodeURIComponent(payload.id)}` : "/pipelines";
-      const method = exists ? "PUT" : "POST";
-      const data = await requestJson<JsonMap>(pathName, {
-        method,
-        body: JSON.stringify(payload)
-      });
-      const pipeline = data.pipeline || data.capability;
-      selectedPipelineId = pipeline?.id || payload.id;
-      toast = exists ? "Workflow updated" : "Workflow created";
+      const inputs: JsonMap = {};
+      for (const [name, schema] of entrypointInputFields(selectedEntrypoint)) {
+        const value = castFieldValue(inputValues[name] ?? "", schema?.type);
+        if (value !== undefined) inputs[name] = value;
+      }
+
+      const parameters: JsonMap = {};
+      for (const param of selectedEntrypoint.parameters || []) {
+        const value = castFieldValue(parameterValues[param.name] ?? "", param.type);
+        if (value !== undefined) parameters[param.name] = value;
+      }
+
+      const workspace = workspacePayload(selectedEntrypoint, workspaceRef);
+
+      const result = await requestJson<JsonMap>(
+        `/apps/${encodeURIComponent(selectedApp.id)}/entrypoints/${encodeURIComponent(selectedEntrypoint.id)}/runs`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            inputs,
+            parameters,
+            workspace,
+            connector: "web",
+            reply_ref: "web"
+          })
+        }
+      );
+
+      const runId = result.app_run_id || result.pipeline?.execution_id || result.run_id;
+      toast = `Run ${runId || result.task_id || "accepted"}`;
       await refreshAll();
-      const saved = pipelines.find((item) => item.id === selectedPipelineId);
-      if (saved) copyPipelineToDraft(saved);
+      if (runId) await openRun(runId);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  async function executePipeline(pipeline = selectedPipeline) {
-    if (!pipeline) return;
+  async function resolveActivation(app = selectedApp) {
+    if (!app) return;
 
     try {
-      const inputs = parseJsonInput(executionInputJson);
-      const result = await requestJson<JsonMap>(`/pipelines/${encodeURIComponent(pipeline.id)}/execute`, {
+      const data = await requestJson<JsonMap>(`/apps/${encodeURIComponent(app.id)}/activations`, {
         method: "POST",
-        body: JSON.stringify({ inputs })
+        body: JSON.stringify({})
       });
-      toast = `Execution ${result.execution_id || "started"}`;
-      await refreshAll();
-      openPipeline(pipeline, "executions");
+      activationPlans = { ...activationPlans, [app.id]: data.activation };
+      toast = `Active set resolved for ${app.name || app.id}`;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  async function executeCapability(capability = selectedCapability) {
-    if (!capability) return;
+  async function publishApp(app = selectedApp) {
+    if (!app) return;
 
     try {
-      const inputs = parseJsonInput(runInputJson);
-      await requestJson<JsonMap>(`/workloads/${encodeURIComponent(capability.id)}/execute`, {
+      const data = await requestJson<JsonMap>(`/apps/${encodeURIComponent(app.id)}/packages`, {
         method: "POST",
-        body: JSON.stringify({ inputs })
+        body: JSON.stringify({ tag: packageTag || app.name || app.id })
       });
-      toast = `Wrapper ${capability.id} executed`;
-      await refreshAll();
-      openCapability(capability, "work");
+      toast = `Package ${data.package?.package_id || data.package?.digest || "created"}`;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  async function saveCapabilitySetup() {
+  async function redriveDeliveries() {
+    const runId = selectedRunDetail?.run_id || selectedRunSummary?.run_id;
+    if (!runId) return;
+
     try {
-      const payload = capabilityPayload();
-      const exists = capabilities.some((capability) => capability.id === payload.id);
-      const pathName = exists ? `/capabilities/setup/${encodeURIComponent(payload.id)}` : "/capabilities/setup";
-      const method = exists ? "PUT" : "POST";
-      const data = await requestJson<JsonMap>(pathName, {
-        method,
-        body: JSON.stringify(payload)
+      const data = await requestJson<JsonMap>(`/app-runs/${encodeURIComponent(runId)}/deliveries/redrive`, {
+        method: "POST"
       });
-      selectedCapabilityId = data.capability?.id || payload.id;
-      toast = exists ? "Runtime wrapper updated" : "Runtime wrapper created";
-      await refreshAll();
-      const saved = capabilities.find((capability) => capability.id === selectedCapabilityId);
-      if (saved) copyCapabilityToDraft(saved);
+      toast = `Delivery redrive: ${data.redrive?.new_deliveries || 0} new`;
+      await loadRunDetail(runId);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  function newCapabilitySetup() {
-    capabilityDraft = { ...defaultCapabilityDraft, id: uniqueDraftId("wrapper") };
-    selectedCapabilityId = "";
-  }
-
-  function pipelinePayload() {
-    const steps = pipelineSteps
-      .map((step, index) => normalizeStepDraft(step, index))
-      .filter((step) => step.capability_id);
-
-    if (steps.length === 0) {
-      throw new Error("Add at least one workflow step with a capability");
-    }
-
-    return {
-      id: pipelineDraft.id.trim(),
-      title: pipelineDraft.title.trim(),
-      description: pipelineDraft.description.trim(),
-      provider: pipelineDraft.provider.trim(),
-      cwd: pipelineDraft.cwd.trim() || undefined,
-      template: pipelineDraft.template,
-      timeout_ms: Number(pipelineDraft.timeout_ms) || undefined,
-      env_passthrough: pipelineDraft.env_passthrough
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-      workflow: {
-        trigger: { type: "manual" },
-        allowed_capabilities: [...new Set(steps.map((step) => step.capability_id))],
-        steps
-      },
-      capability: {
-        name: pipelineDraft.title.trim() || pipelineDraft.id.trim(),
-        trust_tier: "T1",
-        harnesses: [pipelineDraft.provider.trim()].filter(Boolean)
-      }
-    };
-  }
-
-  function capabilityPayload() {
-    const id = capabilityDraft.id.trim();
-    if (!id) throw new Error("Capability id is required");
-
-    const provider = capabilityDraft.provider.trim();
-    const result = parseOptionalJsonObject(capabilityDraft.result_json, "Result schema");
-    const capability: JsonMap = {
-      name: capabilityDraft.title.trim() || id,
-      harnesses: provider ? [provider] : [],
-      trust_tier: capabilityDraft.trust_tier.trim() || "T1"
-    };
-
-    if (capabilityDraft.skill.trim()) capability.skill = capabilityDraft.skill.trim();
-    if (result) capability.result = result;
-
-    return {
-      id,
-      title: capabilityDraft.title.trim(),
-      description: capabilityDraft.description.trim(),
-      provider,
-      cwd: capabilityDraft.cwd.trim() || undefined,
-      template: capabilityDraft.template,
-      timeout_ms: Number(capabilityDraft.timeout_ms) || undefined,
-      approvals: capabilityDraft.approvals,
-      transport_order: splitList(capabilityDraft.transport_order),
-      env_passthrough: splitList(capabilityDraft.env_passthrough),
-      capability
-    };
-  }
-
-  function copyPipelineToDraft(pipeline: Pipeline) {
-    pipelineDraft = {
-      id: pipeline.id || "",
-      title: pipeline.title || pipeline.id || "",
-      description: pipeline.description || "",
-      provider: pipeline.provider || "fake",
-      cwd: pipeline.cwd || "",
-      template: pipeline.template || "Work on {{objective}}. Return {{expected_output}}.",
-      env_passthrough: (pipeline.env_passthrough || []).join(", "),
-      timeout_ms: String(pipeline.tasks?.timeout_ms || "120000")
-    };
-    pipelineSteps = draftStepsFromPipeline(pipeline);
-  }
-
-  function copyCapabilityToDraft(capability: Capability) {
-    capabilityDraft = {
-      id: capability.id || "",
-      title: capability.title || capability.capability?.name || capability.id || "",
-      description: capability.description || "",
-      provider: capability.runtime?.provider || capability.provider || "fake",
-      cwd: capability.runtime?.cwd || "",
-      template: capability.template || "Work on {{objective}}. Return {{expected_output}}.",
-      timeout_ms: String(capability.runtime?.timeout_ms || capability.timeout_ms || "120000"),
-      approvals: capability.runtime?.approvals || "deny",
-      transport_order: (capability.runtime?.transport_order || ["stdio-json", "pty"]).join(", "),
-      env_passthrough: (capability.env?.passthrough || []).map((item: JsonMap) => item.name).join(", "),
-      trust_tier: capability.capability?.trust_tier || capability.sandbox?.trust_tier || "T1",
-      skill: capability.capability?.skill || "",
-      result_json: capability.capability?.result ? JSON.stringify(capability.capability.result, null, 2) : ""
-    };
-  }
-
-  function draftStepsFromPipeline(pipeline: Pipeline): StepDraft[] {
-    const steps = workflowStepsFor(pipeline)
-      .map((step, index) => ({
-        id: String(step.id || `step-${index + 1}`),
-        name: String(step.name || step.id || step.capability_id || `Step ${index + 1}`),
-        capability_id: String(step.capability_id || step.id || pipeline.id || "")
-      }))
-      .filter((step) => step.capability_id || step.id || step.name);
-
-    if (steps.length > 0) return steps;
-
-    return [
-      {
-        id: "run",
-        name: "Run",
-        capability_id: pipeline.id || pipelineDraft.id || ""
-      }
-    ];
-  }
-
-  function normalizeStepDraft(step: StepDraft, index: number) {
-    const capabilityId = step.capability_id.trim();
-    const id = (step.id.trim() || capabilityId || `step-${index + 1}`).replace(/\s+/g, "-");
-
-    return {
-      id,
-      name: step.name.trim() || humanize(id),
-      capability_id: capabilityId
-    };
-  }
-
-  function updatePipelineStep(index: number, key: keyof StepDraft, value: string) {
-    pipelineSteps = pipelineSteps.map((step, stepIndex) =>
-      stepIndex === index ? { ...step, [key]: value } : step
-    );
-  }
-
-  function addPipelineStep() {
-    const nextIndex = pipelineSteps.length + 1;
-    const fallbackCapability = pipelineSteps.at(-1)?.capability_id || selectedCapability?.id || pipelineDraft.id;
-    pipelineSteps = [
-      ...pipelineSteps,
-      {
-        id: `step-${nextIndex}`,
-        name: `Step ${nextIndex}`,
-        capability_id: fallbackCapability || ""
-      }
-    ];
-  }
-
-  function removePipelineStep(index: number) {
-    if (pipelineSteps.length <= 1) return;
-    pipelineSteps = pipelineSteps.filter((_step, stepIndex) => stepIndex !== index);
-  }
-
-  function parseJsonInput(raw: string) {
-    try {
-      const parsed = JSON.parse(raw || "{}");
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("JSON input must be an object");
-      }
-      return parsed;
-    } catch (err) {
-      throw new Error(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  function parseOptionalJsonObject(raw: string, label: string) {
-    const trimmed = raw.trim();
-    if (!trimmed) return undefined;
+  async function steer(interaction: string) {
+    const runId = selectedRunSummary?.run_id;
+    if (!runId) return;
 
     try {
-      const parsed = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON object`);
-      }
-      return parsed;
+      const option = Number(selectedOption);
+      await requestJson<JsonMap>(`/sessions/${encodeURIComponent(runId)}/steer`, {
+        method: "POST",
+        body: JSON.stringify({
+          interaction,
+          text: promptText || undefined,
+          option: interaction === "select_option" && Number.isFinite(option) ? option : undefined
+        })
+      });
+      toast = `${displayStatus(interaction)} sent`;
+      if (interaction !== "select_option") promptText = "";
     } catch (err) {
-      throw new Error(err instanceof Error ? err.message : String(err));
+      error = err instanceof Error ? err.message : String(err);
     }
   }
 
-  function updateDraft(key: keyof typeof pipelineDraft, value: string) {
-    pipelineDraft = { ...pipelineDraft, [key]: value };
-  }
+  async function refreshRegistryFromSource() {
+    const source = appSource.trim();
 
-  function updateCapabilityDraft(key: keyof CapabilityDraft, value: string) {
-    capabilityDraft = { ...capabilityDraft, [key]: value };
-  }
+    if (!source) {
+      toast = "Application registry refreshed";
+      await refreshAll();
+      return;
+    }
 
-  function splitList(value: string) {
-    return value
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
+    try {
+      const data = await requestJson<JsonMap>("/apps", {
+        method: "POST",
+        body: JSON.stringify({ source })
+      });
+      const installId = data.install?.install_id || data.install?.app?.id;
+      toast = `Application ${installId || "installed"}`;
+      appSource = "";
+      await refreshAll();
 
-  function uniqueDraftId(prefix: string) {
-    return `${prefix}-${Date.now().toString(36).slice(-6)}`;
+      const installed = installId ? apps.find((app) => app.id === installId) : null;
+      if (installed) chooseApp(installed);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
   }
 
   function setTheme(mode: ThemeMode) {
@@ -625,54 +414,220 @@
     return (event.currentTarget as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
   }
 
+  function entrypointWorkspaceKind(entrypoint: Entrypoint | null | undefined): string {
+    const workspace = entrypoint?.workspace;
+    if (!workspace) return "none";
+    if (typeof workspace === "string") return workspace;
+    return workspace.kind || "none";
+  }
+
+  function workspacePayload(entrypoint: Entrypoint, ref: string): JsonMap | undefined {
+    const kind = entrypointWorkspaceKind(entrypoint);
+    if (kind === "none") return undefined;
+    const payload: JsonMap = { kind };
+    if (ref.trim()) payload.ref = ref.trim();
+    return payload;
+  }
+
+  function entrypointInputFields(entrypoint: Entrypoint | null | undefined): Array<[string, JsonMap]> {
+    const schema = entrypoint?.inputs?.schema || entrypoint?.inputs || {};
+    const properties = schema.properties || schema.schema || schema;
+    if (!properties || typeof properties !== "object" || Array.isArray(properties)) return [];
+    return Object.entries(properties).filter(
+      ([key]) => !["type", "required", "additionalProperties", "description", "title"].includes(key)
+    );
+  }
+
+  function requiredInputs(entrypoint: Entrypoint | null | undefined): string[] {
+    const schema = entrypoint?.inputs?.schema || entrypoint?.inputs || {};
+    const required = schema.required;
+    return Array.isArray(required) ? required.map(String) : [];
+  }
+
+  function fieldKind(type: string | undefined): "number" | "boolean" | "text" {
+    if (type === "integer" || type === "int" || type === "number") return "number";
+    if (type === "boolean" || type === "bool") return "boolean";
+    return "text";
+  }
+
+  function castFieldValue(raw: string, type: string | undefined): unknown {
+    switch (fieldKind(type)) {
+      case "number": {
+        if (raw.trim() === "") return undefined;
+        const value = Number(raw);
+        return Number.isFinite(value) ? value : undefined;
+      }
+      case "boolean":
+        return raw === "true" || raw === "1";
+      default:
+        return raw;
+    }
+  }
+
+  function parameterDefault(param: Parameter): string {
+    const value = param.default;
+    if (value === undefined || value === null) return "";
+    return typeof value === "boolean" ? (value ? "true" : "false") : String(value);
+  }
+
+  function resetRunForm(entrypoint: Entrypoint | null) {
+    workspaceRef = "";
+    const inputs: Record<string, string> = {};
+
+    for (const [name, schema] of entrypointInputFields(entrypoint)) {
+      inputs[name] = "";
+    }
+
+    inputValues = inputs;
+
+    const parameters: Record<string, string> = {};
+    for (const param of entrypoint?.parameters || []) {
+      parameters[param.name] = parameterDefault(param);
+    }
+    parameterValues = parameters;
+  }
+
+  function normalizeEvents(events: JsonMap[]) {
+    return events.map((record) => record.event || record);
+  }
+
+  function timelineRowFor(event: JsonMap): TimelineRow {
+    const kind = event.kind || (event.event ? "event" : "event");
+    const type = event.type || event.event_type || "event";
+    const payload = event.payload || event.params || event;
+    const seq = event.seq ?? event.sequence ?? "?";
+    const status = eventStatus(type, payload);
+    const label = labelForEvent(event, payload);
+    const detail = detailForEvent(event, payload);
+
+    return { seq, kind, type, label, detail, status, event };
+  }
+
+  function labelForEvent(event: JsonMap, payload: JsonMap) {
+    if (event.kind === "decision") return `${humanize(event.type)} decision`;
+    if (event.type === "task_status_changed") return `${payload.task_id || payload.id || "Task"} ${displayStatus(payload.status)}`;
+    if (event.type === "task_enqueued") return `${payload.id || payload.task_id || "Task"} queued`;
+    if (event.type === "capability_started") return `${payload.capability_id || payload.capability_ref || "Capability"} started`;
+    if (event.type === "capability_finished") return `${payload.capability_id || payload.capability_ref || "Capability"} finished`;
+    if (event.type === "signal_received") return `${payload.connector || "Connector"} signal`;
+    if (event.type === "delivery_sent") return `${payload.sink || "Sink"} delivery`;
+    if (event.type === "verification_recorded") return "Verification recorded";
+    return humanize(event.type || event.event_type || "event");
+  }
+
+  function detailForEvent(event: JsonMap, payload: JsonMap) {
+    const detail =
+      event.rationale ||
+      payload.reason ||
+      payload.status ||
+      payload.pipeline_id ||
+      payload.pipeline ||
+      payload.entrypoint ||
+      payload.summary ||
+      event.detail ||
+      "";
+
+    return typeof detail === "string" ? detail : JSON.stringify(detail);
+  }
+
+  function eventStatus(type: string, payload: JsonMap) {
+    if (type === "verification_recorded") return statusClass(payload.verdict || payload.status);
+    if (type.includes("failed") || type.includes("denied") || payload.status === "failed") return "danger";
+    if (type.includes("approval") || type.includes("parked") || payload.status === "parked") return "warning";
+    if (type.includes("finished") || type.includes("done") || type.includes("sent") || payload.status === "done") return "success";
+    if (type.includes("started") || type.includes("running") || payload.status === "running") return "info";
+    return "neutral";
+  }
+
+  function innerTraceFor(events: JsonMap[], row: TimelineRow | null) {
+    if (!row) return [];
+    const seq = row.event.seq ?? row.event.sequence;
+    const caused = events.filter((event) => event.caused_by === seq);
+    const sidecar = events.filter((event) =>
+      ["assistant_text", "tool_use", "tool_result", "token_usage", "status", "terminal_snapshot"].includes(
+        event.type || event.event_type
+      )
+    );
+
+    return caused.length ? caused : sidecar.length ? sidecar : [row.event];
+  }
+
+  function proofArtifactsFor(proof: JsonMap) {
+    const artifacts = proof?.artifacts;
+    if (Array.isArray(artifacts)) return artifacts;
+
+    const delivered = proof?.delivery?.artifacts;
+    return Array.isArray(delivered) ? delivered : [];
+  }
+
+  function proofResultSummary(result: JsonMap) {
+    if (!result || typeof result !== "object") return "No structured result recorded";
+    return result.summary || result.signal || result.path || result.status || "Structured result recorded";
+  }
+
+  function isVerificationEvent(event: JsonMap) {
+    return (event.type || event.event_type) === "verification_recorded";
+  }
+
+  function verificationRowFor(event: JsonMap): VerificationRow {
+    const payload = event.payload || {};
+    const ref = event.ref || payload.ref || {};
+    const failedHooks = listText(payload.failed_hooks || payload.failures || payload.errors);
+    const criteria = listText(payload.success_criteria || payload.criteria || payload.expectations);
+    const reason = listText(payload.reason || payload.summary || payload.detail) || failedHooks || criteria;
+
+    return {
+      seq: event.seq ?? event.sequence ?? "?",
+      phase: ref.phase || payload.phase || "post",
+      tier: payload.tier || ref.tier || "verification",
+      verdict: payload.verdict || payload.status || payload.result || "recorded",
+      reason,
+      failedHooks,
+      criteria
+    };
+  }
+
+  function listText(value: unknown) {
+    if (!value) return "";
+    if (Array.isArray(value)) return value.map(listText).filter(Boolean).join(", ");
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+  }
+
+  function isAppRunSummary(run: RunSummary) {
+    return run.provider === "app" || run.run_id?.startsWith("app-");
+  }
+
+  function activationUnits(plan: JsonMap | null) {
+    const active = plan?.services?.active_set;
+    if (Array.isArray(active)) return active;
+    if (active && typeof active === "object") return Object.values(active);
+    return [];
+  }
+
+  function ioBindings(app: Application | null, side: "inputs" | "outputs") {
+    const values = app?.io?.[side];
+    return Array.isArray(values) ? values : [];
+  }
+
+  function requirementList(app: Application | null, key: string) {
+    const values = app?.requirements?.[key];
+    return Array.isArray(values) ? values : values ? [values] : [];
+  }
+
+  function statusClass(status?: string) {
+    const value = (status || "").toLowerCase();
+    if (["completed", "done", "ready", "success", "verified", "passed", "pass"].includes(value)) return "success";
+    if (["running", "scheduled", "queued", "info"].includes(value)) return "info";
+    if (["parked", "warning", "needs setup", "needs_env"].includes(value)) return "warning";
+    if (["failed", "blocked", "cancelled", "danger", "error", "unverified", "rejected"].includes(value)) return "danger";
+    return "neutral";
+  }
+
   function matchesQuery(values: Array<string | number | boolean | undefined | null>, query: string) {
     const needle = query.trim().toLowerCase();
     if (!needle) return true;
     return values.some((value) => String(value || "").toLowerCase().includes(needle));
-  }
-
-  function workflowStepsFor(pipeline: Pipeline | null) {
-    const steps = pipeline?.workflow?.steps;
-    return Array.isArray(steps) ? steps : [];
-  }
-
-  function summarize(
-    runList: RunSummary[],
-    pipelineList: Pipeline[],
-    capabilityList: Capability[],
-    workBoard: JsonMap,
-    capabilityTotals: JsonMap,
-    authoredPipelineTotals: JsonMap
-  ) {
-    return {
-      runs: runList.length,
-      running: runList.filter((run) => run.live || run.status === "running").length,
-      pipelines: authoredPipelineTotals.pipelines || pipelineList.length,
-      activePipelines: authoredPipelineTotals.active || 0,
-      capabilities: capabilityTotals.capabilities || capabilityList.length,
-      readyCapabilities: capabilityTotals.runnable || 0,
-      queued: workBoard.totals?.queued || 0,
-      activeTasks: workBoard.totals?.active || 0,
-      failedTasks: workBoard.totals?.failed || 0
-    };
-  }
-
-  function statusColor(status?: string) {
-    if (["completed", "done", "ready"].includes(status || "")) return "success";
-    if (["running", "scheduled", "queued"].includes(status || "")) return "info";
-    if (["blocked", "needs_env", "parked"].includes(status || "")) return "warning";
-    if (["failed", "error", "cancelled"].includes(status || "")) return "danger";
-    return "ghost";
-  }
-
-  function setupCheckColor(state: SetupCheck["state"]) {
-    if (state === "ready") return "success";
-    if (state === "warning") return "warning";
-    return "danger";
-  }
-
-  function displayStatus(status?: string) {
-    return (status || "unknown").replaceAll("_", " ");
   }
 
   function formatDate(value?: string | number) {
@@ -684,7 +639,7 @@
 
   function compactId(value?: string) {
     if (!value) return "n/a";
-    return value.length > 22 ? `${value.slice(0, 10)}...${value.slice(-8)}` : value;
+    return value.length > 24 ? `${value.slice(0, 11)}...${value.slice(-8)}` : value;
   }
 
   function humanize(value?: string) {
@@ -693,1071 +648,808 @@
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
+  function displayStatus(value?: string) {
+    return humanize(value || "unknown");
+  }
+
   function jsonPreview(value: unknown) {
     return JSON.stringify(value || {}, null, 2);
-  }
-
-  function columnTasksFor(columns: JsonMap, status: string): Task[] {
-    return (columns?.[status] || []) as Task[];
-  }
-
-  function setupChecksFor(capability: Capability | null): SetupCheck[] {
-    const files = capability?.files || [];
-    const definition = files.find((file) => file.kind === "workload_definition");
-    const manifest = files.find((file) => file.kind === "capability_manifest");
-    const missingEnv = capability?.env?.missing_passthrough || [];
-    const passThrough = capability?.env?.passthrough || [];
-    const storedKeys = capability?.env?.stored_keys || [];
-    const provider = capability?.runtime?.provider || capability?.provider || "";
-    const transport = capability?.runtime?.transport_order || [];
-    const sandboxStatus = capability?.sandbox?.status || "ready";
-
-    return [
-      {
-        label: "Definition",
-        detail: definition?.present ? definition.path : "Missing workload JSON",
-        state: definition?.present ? "ready" : "blocked"
-      },
-      {
-        label: "Runtime",
-        detail: provider ? `${provider}${transport.length ? ` / ${transport.join(", ")}` : ""}` : "Missing provider",
-        state: provider ? "ready" : "blocked"
-      },
-      {
-        label: "Host env",
-        detail: missingEnv.length
-          ? missingEnv.join(", ")
-          : passThrough.length || storedKeys.length
-            ? `${passThrough.length} passthrough / ${storedKeys.length} stored`
-            : "No host env required",
-        state: missingEnv.length ? "blocked" : "ready"
-      },
-      {
-        label: "Capability",
-        detail: capability?.capability
-          ? `${capability.capability.trust_tier || capability.sandbox?.trust_tier || "T1"} / ${(capability.capability.harnesses || []).join(", ") || "harness"}`
-          : "Derived from workload",
-        state: manifest?.present || capability?.capability ? "ready" : "warning"
-      },
-      {
-        label: "Sandbox",
-        detail: displayStatus(sandboxStatus),
-        state: ["failed", "blocked", "needs_env"].includes(sandboxStatus) ? "blocked" : "ready"
-      }
-    ];
-  }
-
-  function setupProgressPercent(checks: SetupCheck[]) {
-    if (!checks.length) return 0;
-    const ready = checks.filter((check) => check.state === "ready").length;
-    return Math.round((ready / checks.length) * 100);
-  }
-
-  function templateKeys(template: string) {
-    const keys = Array.from(template.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g), (match) => match[1]);
-    return [...new Set(keys)].filter(Boolean);
-  }
-
-  function runById(id: string) {
-    return runs.find((run) => run.run_id === id);
-  }
-
-  function taskLatestRun(task: Task) {
-    const latestRunId = task.runs?.[task.runs.length - 1];
-    return latestRunId ? runById(latestRunId) : undefined;
-  }
-
-  function taskTimestamp(task: Task) {
-    return formatDate(task.updated_at || task.created_at);
   }
 </script>
 
 <svelte:head>
-  <title>Mitos Operations Console</title>
+  <title>Mitos</title>
 </svelte:head>
 
-<sg-sidebar-layout class="app-shell" data-drawer-open={drawerKind !== "none"}>
-  <sg-sidebar-layout-sidebar class="layout-sidebar">
-  <sg-sidebar-root class="sidebar" aria-label="Primary navigation" width="248px" collapsed-width="76px">
-    <sg-sidebar-header class="brand">
+<div class="app-shell">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <div class="brand">
       <div class="brand-mark">MT</div>
       <div>
         <strong>Mitos</strong>
-        <span>Operations Console</span>
+        <span>Agentic applications</span>
       </div>
-    </sg-sidebar-header>
+    </div>
 
-    <sg-sidebar-content class="nav-list">
-      <sg-sidebar-section title="Operations">
-      {#each navItems as item}
-        <sg-sidebar-item
-          class="nav-item"
-          class:is-active={activeView === item.key}
-          active={activeView === item.key ? true : undefined}
-          aria-current={activeView === item.key ? "page" : undefined}
+    <nav class="nav-list" aria-label="Surfaces">
+      {#each surfaces as item}
+        <button
+          class:active={activeSurface === item.key}
+          type="button"
+          aria-current={activeSurface === item.key ? "page" : undefined}
           onclick={() => navigate(item.key)}
         >
-          <span class="sg-sidebar-item-icon">{item.short}</span>
-          <span class="sg-sidebar-item-label">{item.label}</span>
-        </sg-sidebar-item>
+          <span>{item.short}</span>
+          <strong>{item.label}</strong>
+        </button>
       {/each}
-      </sg-sidebar-section>
-    </sg-sidebar-content>
+    </nav>
 
-    <sg-sidebar-footer class="sidebar-status">
-      <div>
-        <span>Runtime</span>
-        <strong>{dashboardTotals.running > 0 ? "Active" : "Idle"}</strong>
-      </div>
-      <sg-badge color={dashboardTotals.failedTasks > 0 ? "danger" : "success"} size="sm">
-        {dashboardTotals.failedTasks > 0 ? `${dashboardTotals.failedTasks} failed` : "healthy"}
-      </sg-badge>
-    </sg-sidebar-footer>
-  </sg-sidebar-root>
-  </sg-sidebar-layout-sidebar>
+    <div class="sidebar-meter">
+      <span>Local runner</span>
+      <strong>{dashboard.running > 0 ? "Active" : "Idle"}</strong>
+      <small>{dashboard.apps} apps / {dashboard.runs} app runs</small>
+    </div>
+  </aside>
 
-  <sg-sidebar-layout-content class="workspace">
-    <sg-stack class="topbar" direction="horizontal" gap="grouped" align="center" justify="space-between">
+  <main class="workspace">
+    <header class="topbar">
       <div>
-        <span class="eyebrow">{activeView === "overview" ? "Command" : humanize(activeView)}</span>
-        <sg-heading level={1} size="2xl">{activeView === "overview" ? "Agent Operations" : navItems.find((item) => item.key === activeView)?.label}</sg-heading>
+        <span class="eyebrow">{surface.label}</span>
+        <h1>{surface.deck}</h1>
       </div>
-      <sg-stack class="topbar-actions" direction="horizontal" gap="related" align="center" justify="end" wrap>
-        <div class="sg-search-input-wrapper search-wrapper" data-max-width="full">
+      <div class="topbar-actions">
+        <label class="search-box">
+          <span>Search</span>
           <input
-            class="sg-search-input search-input"
             type="search"
-            placeholder="Search runs, workflows, capabilities"
-            aria-label="Search runs, workflows, capabilities"
+            placeholder="Apps, runs, pipelines"
             value={search}
             oninput={(event) => (search = inputValue(event))}
           />
-          {#if search}
-            <button class="sg-search-clear" type="button" aria-label="Clear search" onclick={() => (search = "")}>x</button>
-          {/if}
-        </div>
-        <button class="sg-button" data-color="outline" type="button" onclick={refreshAll} disabled={loading}>
-          {loading ? "Loading" : "Refresh"}
+        </label>
+        <button class="icon-button" type="button" title="Refresh" aria-label="Refresh" onclick={refreshAll} disabled={loading}>
+          {loading ? "..." : "R"}
         </button>
         <button
-          class="theme-toggle"
+          class="icon-button"
           type="button"
+          title="Toggle theme"
           aria-label="Toggle theme"
           onclick={() => setTheme(activeTheme === "light" ? "dark" : "light")}
         >
-          {activeTheme === "light" ? "Dark" : "Light"}
+          {activeTheme === "light" ? "D" : "L"}
         </button>
-      </sg-stack>
-    </sg-stack>
+      </div>
+    </header>
 
     {#if error}
-      <sg-callout class="notice danger" role="alert">
+      <div class="notice danger" role="alert">
         <strong>Request failed</strong>
-        <sg-text color="secondary">{error}</sg-text>
+        <span>{error}</span>
         <button type="button" onclick={() => (error = "")}>Dismiss</button>
-      </sg-callout>
+      </div>
     {/if}
 
     {#if toast}
-      <sg-callout class="notice success" role="status">
+      <div class="notice success" role="status">
         <strong>{toast}</strong>
         <button type="button" onclick={() => (toast = "")}>Dismiss</button>
-      </sg-callout>
-    {/if}
-
-    {#if activeView === "overview"}
-      <sg-stack class="dashboard-grid" gap="grouped">
-        <sg-grid class="metric-strip" columns="4" gap="grouped" collapse="md">
-          <sg-card elevation={0}>
-            <sg-card-body>
-              <span>Runs</span>
-              <strong>{dashboardTotals.runs}</strong>
-              <small>{dashboardTotals.running} running</small>
-            </sg-card-body>
-          </sg-card>
-          <sg-card elevation={0}>
-            <sg-card-body>
-              <span>Workflows</span>
-              <strong>{dashboardTotals.pipelines}</strong>
-              <small>{dashboardTotals.activePipelines} active</small>
-            </sg-card-body>
-          </sg-card>
-          <sg-card elevation={0}>
-            <sg-card-body>
-              <span>Capabilities</span>
-              <strong>{dashboardTotals.readyCapabilities}/{dashboardTotals.capabilities}</strong>
-              <small>ready</small>
-            </sg-card-body>
-          </sg-card>
-          <sg-card elevation={0}>
-            <sg-card-body>
-              <span>Work queue</span>
-              <strong>{dashboardTotals.activeTasks}</strong>
-              <small>{dashboardTotals.queued} queued</small>
-            </sg-card-body>
-          </sg-card>
-        </sg-grid>
-
-        <sg-card class="surface main-panel" elevation={0}>
-          <sg-card-header class="section-head">
-            <div>
-              <span class="eyebrow">Live surface</span>
-              <sg-card-title as="h2">Runs and workflow executions</sg-card-title>
-            </div>
-            <button class="sg-button" data-color="primary" type="button" onclick={() => navigate("workflows")}>
-              New workflow
-            </button>
-          </sg-card-header>
-
-          <sg-card-body>
-          <sg-grid class="split-layout" columns="2" gap="grouped" collapse="lg">
-            <sg-stack class="run-list" gap="related">
-              {#each filteredRuns.slice(0, 8) as run}
-                <button class="run-row" type="button" onclick={() => openRun(run)}>
-                  <div>
-                    <strong>{run.task || run.run_id}</strong>
-                    <span>{compactId(run.run_id)} / {run.provider || "provider"}</span>
-                  </div>
-                  <sg-badge color={statusColor(run.status)} size="sm">{displayStatus(run.status)}</sg-badge>
-                </button>
-              {:else}
-                <sg-empty class="empty-state" title="No runs recorded" description="Run traces will appear here."></sg-empty>
-              {/each}
-            </sg-stack>
-
-            <sg-card class="execution-panel" elevation={0}>
-              <sg-card-header>
-                <sg-card-title as="h3">{selectedPipeline?.title || selectedPipeline?.id || "Workflow"}</sg-card-title>
-              </sg-card-header>
-              <sg-card-body>
-              <sg-stack class="step-list" gap="related">
-                {#each workflowSteps as step, index}
-                  <div class="step-row">
-                    <span>{index + 1}</span>
-                    <div>
-                      <strong>{step.name || step.id}</strong>
-                      <small>{step.capability_id || step.id}</small>
-                    </div>
-                  </div>
-                {:else}
-                  <sg-empty class="empty-state" title="No steps" description="Define workflow steps to execute a pipeline."></sg-empty>
-                {/each}
-              </sg-stack>
-              </sg-card-body>
-              <sg-card-footer class="execution-actions">
-                <button class="sg-button" data-color="primary" type="button" onclick={() => executePipeline()}>
-                  Execute
-                </button>
-                <button class="sg-button" data-color="outline" type="button" onclick={() => selectedPipeline && openPipeline(selectedPipeline)}>
-                  Details
-                </button>
-              </sg-card-footer>
-            </sg-card>
-          </sg-grid>
-          </sg-card-body>
-        </sg-card>
-
-        <sg-card class="surface queue-panel" elevation={0}>
-          <sg-card-header class="section-head compact">
-            <div>
-              <span class="eyebrow">Work pool</span>
-              <sg-card-title as="h2">Queue health</sg-card-title>
-            </div>
-            <button class="link-button" type="button" onclick={() => navigate("work-pool")}>Open board</button>
-          </sg-card-header>
-          <sg-card-body>
-          <sg-scroller class="queue-scroller compact" axis="x" label="Queue health lanes">
-            <div class="queue-columns compact-board">
-              {#each boardStatuses.slice(0, 5) as status}
-                {@const tasks = columnTasksFor(boardColumns, status)}
-                <sg-card class="queue-column compact-column" elevation={0}>
-                  <div class="column-title">
-                    <span>{humanize(status)}</span>
-                    <strong>{tasks.length}</strong>
-                  </div>
-                  {#each tasks.slice(0, 3) as task}
-                    {@const latest = taskLatestRun(task)}
-                    <button class="task-card compact-task" type="button" onclick={() => openTask(task)}>
-                      <div class="task-card-head">
-                        <strong>{compactId(task.id)}</strong>
-                        <sg-badge color={statusColor(latest?.status || task.status)} size="sm">{displayStatus(latest?.status || task.status)}</sg-badge>
-                      </div>
-                      <span>{task.pipeline || task.pool || "interactive"}</span>
-                    </button>
-                  {:else}
-                    <sg-empty class="empty-lane" title="Empty"></sg-empty>
-                  {/each}
-                </sg-card>
-              {/each}
-            </div>
-          </sg-scroller>
-          </sg-card-body>
-        </sg-card>
-      </sg-stack>
-    {:else if activeView === "workflows"}
-      <sg-grid class="workflow-layout" columns="2" gap="grouped" collapse="lg">
-        <sg-card class="surface workflow-builder" elevation={0}>
-          <sg-card-header class="section-head">
-            <div>
-              <span class="eyebrow">Workflow builder</span>
-              <sg-card-title as="h2">Pipeline definition</sg-card-title>
-            </div>
-            <sg-button-group class="button-row">
-              <button class="sg-button" data-color="outline" type="button" onclick={openAdvanced}>
-                Advanced
-              </button>
-              <button class="sg-button" data-color="primary" type="button" onclick={savePipeline}>
-                Save
-              </button>
-            </sg-button-group>
-          </sg-card-header>
-
-          <sg-card-body>
-          <form class="definition-form" onsubmit={(event) => { event.preventDefault(); void savePipeline(); }}>
-            <sg-field label="ID" html-for="pipeline-id">
-              <input id="pipeline-id" class="sg-input" value={pipelineDraft.id} oninput={(event) => updateDraft("id", inputValue(event))} />
-            </sg-field>
-            <sg-field label="Title" html-for="pipeline-title">
-              <input id="pipeline-title" class="sg-input" value={pipelineDraft.title} oninput={(event) => updateDraft("title", inputValue(event))} />
-            </sg-field>
-            <sg-field class="wide" label="Description" html-for="pipeline-description">
-              <input id="pipeline-description" class="sg-input" value={pipelineDraft.description} oninput={(event) => updateDraft("description", inputValue(event))} />
-            </sg-field>
-            <sg-field label="Provider" html-for="pipeline-provider">
-              <input id="pipeline-provider" class="sg-input" value={pipelineDraft.provider} oninput={(event) => updateDraft("provider", inputValue(event))} />
-            </sg-field>
-            <sg-field label="Working directory" html-for="pipeline-cwd">
-              <input id="pipeline-cwd" class="sg-input" value={pipelineDraft.cwd} oninput={(event) => updateDraft("cwd", inputValue(event))} />
-            </sg-field>
-            <sg-field label="Timeout ms" html-for="pipeline-timeout">
-              <input id="pipeline-timeout" class="sg-input" type="number" value={pipelineDraft.timeout_ms} oninput={(event) => updateDraft("timeout_ms", inputValue(event))} />
-            </sg-field>
-            <sg-field label="Host env keys" html-for="pipeline-env" description="Comma-separated environment keys passed through to the runner.">
-              <input id="pipeline-env" class="sg-input" value={pipelineDraft.env_passthrough} oninput={(event) => updateDraft("env_passthrough", inputValue(event))} />
-            </sg-field>
-            <sg-field class="wide" label="Prompt template" html-for="pipeline-template" description="Use execution input keys such as objective and expected_output.">
-              <textarea id="pipeline-template" class="sg-textarea" rows="5" value={pipelineDraft.template} oninput={(event) => updateDraft("template", inputValue(event))}></textarea>
-            </sg-field>
-            <fieldset class="sg-fieldset workflow-step-field wide">
-              <legend class="sg-legend">Workflow steps</legend>
-              <sg-stack class="step-editor" gap="related">
-                {#each pipelineSteps as step, index}
-                  <sg-grid class="step-editor-row" columns="4" gap="related" collapse="md">
-                    <sg-field label="Step ID" html-for={`workflow-step-${index}-id`}>
-                      <input
-                        id={`workflow-step-${index}-id`}
-                        class="sg-input mono"
-                        value={step.id}
-                        oninput={(event) => updatePipelineStep(index, "id", inputValue(event))}
-                      />
-                    </sg-field>
-                    <sg-field label="Name" html-for={`workflow-step-${index}-name`}>
-                      <input
-                        id={`workflow-step-${index}-name`}
-                        class="sg-input"
-                        value={step.name}
-                        oninput={(event) => updatePipelineStep(index, "name", inputValue(event))}
-                      />
-                    </sg-field>
-                    <sg-field label="Capability" html-for={`workflow-step-${index}-capability`}>
-                      <input
-                        id={`workflow-step-${index}-capability`}
-                        class="sg-input mono"
-                        list="workflow-capability-options"
-                        value={step.capability_id}
-                        oninput={(event) => updatePipelineStep(index, "capability_id", inputValue(event))}
-                      />
-                    </sg-field>
-                    <div class="step-editor-actions">
-                      <sg-badge color="ghost" size="sm">Step {index + 1}</sg-badge>
-                      <button
-                        class="sg-button"
-                        data-color="outline"
-                        data-size="sm"
-                        type="button"
-                        onclick={() => removePipelineStep(index)}
-                        disabled={pipelineSteps.length <= 1}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </sg-grid>
-                {/each}
-                <button class="sg-button add-step-button" data-color="outline" type="button" onclick={addPipelineStep}>
-                  Add step
-                </button>
-              </sg-stack>
-              <datalist id="workflow-capability-options">
-                {#each capabilityOptionIds as capabilityId}
-                  <option value={capabilityId}></option>
-                {/each}
-              </datalist>
-            </fieldset>
-          </form>
-          </sg-card-body>
-        </sg-card>
-
-        <sg-card class="surface workflow-side" elevation={0}>
-          <sg-card-header class="section-head compact">
-            <div>
-              <span class="eyebrow">Registry</span>
-              <sg-card-title as="h2">Defined pipelines</sg-card-title>
-            </div>
-          </sg-card-header>
-          <sg-card-body>
-          <sg-stack class="pipeline-list" gap="related">
-            {#each filteredPipelines as pipeline}
-              <button
-                class="pipeline-row"
-                class:is-active={selectedPipelineId === pipeline.id}
-                type="button"
-                onclick={() => openPipeline(pipeline)}
-              >
-                <div>
-                  <strong>{pipeline.title || pipeline.id}</strong>
-                  <span>{pipeline.provider || "provider"} / {pipeline.tasks?.active || 0} active</span>
-                </div>
-                <sg-badge color={pipeline.tasks?.failed ? "danger" : pipeline.tasks?.active ? "info" : "ghost"} size="sm">
-                  {pipeline.executions?.length || 0} exec
-                </sg-badge>
-              </button>
-            {:else}
-              <sg-empty class="empty-state" title="No matching pipelines" description="Create or refine the search to see workflows."></sg-empty>
-            {/each}
-          </sg-stack>
-
-          <sg-section class="selected-pipeline-section" title="Selected workflow" level="3" gap="related">
-            {#if selectedPipeline}
-              <sg-grid class="pipeline-summary-grid" columns="2" gap="related" collapse="sm">
-                <div>
-                  <span>Provider</span>
-                  <strong>{selectedPipeline.provider || pipelineDraft.provider || "n/a"}</strong>
-                </div>
-                <div>
-                  <span>Executions</span>
-                  <strong>{selectedPipeline.executions?.length || 0}</strong>
-                </div>
-                <div>
-                  <span>Active tasks</span>
-                  <strong>{selectedPipeline.tasks?.active || 0}</strong>
-                </div>
-                <div>
-                  <span>Failed tasks</span>
-                  <strong>{selectedPipeline.tasks?.failed || 0}</strong>
-                </div>
-              </sg-grid>
-              <sg-stack class="selected-step-list" gap="related">
-                {#each selectedWorkflowSteps as step, index}
-                  <div class="selected-step-row">
-                    <sg-badge color="ghost" size="sm">{index + 1}</sg-badge>
-                    <div>
-                      <strong>{step.name || step.id}</strong>
-                      <span>{step.capability_id || "capability"}</span>
-                    </div>
-                  </div>
-                {:else}
-                  <sg-empty class="empty-state" title="No workflow steps" description="The selected pipeline needs at least one step."></sg-empty>
-                {/each}
-              </sg-stack>
-            {:else}
-              <sg-empty class="empty-state" title="No workflow selected" description="Select or save a pipeline before executing."></sg-empty>
-            {/if}
-          </sg-section>
-
-          <sg-section class="launch-box" title="Execute workflow" level="3" gap="grouped">
-            <sg-field label="Execution input" html-for="pipeline-execution-input" description="JSON object sent to the selected pipeline.">
-              <textarea id="pipeline-execution-input" class="sg-textarea mono" rows="8" value={executionInputJson} oninput={(event) => (executionInputJson = inputValue(event))}></textarea>
-            </sg-field>
-            <button class="sg-button" data-color="primary" type="button" onclick={() => executePipeline()}>
-              Execute selected
-            </button>
-          </sg-section>
-          </sg-card-body>
-        </sg-card>
-      </sg-grid>
-    {:else if activeView === "runs"}
-      <sg-card class="surface" elevation={0}>
-        <sg-card-header class="section-head">
-          <div>
-            <span class="eyebrow">Runs overview</span>
-            <sg-card-title as="h2">Trace-backed runs</sg-card-title>
-          </div>
-          <sg-badge color="info">{filteredRuns.length} shown</sg-badge>
-        </sg-card-header>
-        <sg-card-body>
-        <sg-data-table-root class="ops-table" density="compact" page-size="12" sort-column="created" sort-direction="desc" striped aria-label="Trace-backed runs">
-          <sg-data-table-header>
-            <sg-data-table-row>
-              <sg-data-table-head column="run">Run</sg-data-table-head>
-              <sg-data-table-head column="provider">Provider</sg-data-table-head>
-              <sg-data-table-head column="status">Status</sg-data-table-head>
-              <sg-data-table-head column="events">Events</sg-data-table-head>
-              <sg-data-table-head column="approvals">Approvals</sg-data-table-head>
-              <sg-data-table-head column="created">Created</sg-data-table-head>
-            </sg-data-table-row>
-          </sg-data-table-header>
-          <sg-data-table-body>
-            {#each filteredRuns as run}
-              <sg-data-table-row class="clickable" onclick={() => openRun(run)}>
-                <sg-data-table-cell>
-                    <strong>{run.task || compactId(run.run_id)}</strong>
-                    <span>{compactId(run.run_id)}</span>
-                </sg-data-table-cell>
-                <sg-data-table-cell>{run.provider || "n/a"}</sg-data-table-cell>
-                <sg-data-table-cell><sg-badge color={statusColor(run.status)} size="sm">{displayStatus(run.status)}</sg-badge></sg-data-table-cell>
-                <sg-data-table-cell>{run.events || 0}</sg-data-table-cell>
-                <sg-data-table-cell>{run.approvals || 0}</sg-data-table-cell>
-                <sg-data-table-cell>{formatDate(run.created_at_ms)}</sg-data-table-cell>
-              </sg-data-table-row>
-            {:else}
-              <sg-data-table-row>
-                <sg-data-table-cell class="empty-table-cell">
-                  <sg-empty title="No runs recorded" description="Run traces will appear after an agent or wrapper executes."></sg-empty>
-                </sg-data-table-cell>
-              </sg-data-table-row>
-            {/each}
-          </sg-data-table-body>
-          <sg-data-table-pagination aria-label="Runs pagination"></sg-data-table-pagination>
-        </sg-data-table-root>
-        </sg-card-body>
-      </sg-card>
-    {:else if activeView === "capabilities"}
-      <sg-grid class="capability-grid" columns="2" gap="grouped" collapse="lg">
-        <sg-card class="surface" elevation={0}>
-          <sg-card-header class="section-head">
-            <div>
-              <span class="eyebrow">Runtime wrappers</span>
-              <sg-card-title as="h2">Capability setup</sg-card-title>
-            </div>
-            <sg-badge color={setupTotals.needs_setup ? "warning" : "success"}>
-              {setupTotals.runnable || 0} ready
-            </sg-badge>
-          </sg-card-header>
-
-          <sg-card-body>
-          <sg-stack class="capability-list" gap="related">
-            {#each filteredCapabilities as capability}
-              <button
-                class="capability-card"
-                class:is-active={selectedCapabilityId === capability.id}
-                type="button"
-                onclick={() => selectCapability(capability)}
-              >
-                <div>
-                  <strong>{capability.title || capability.id}</strong>
-                  <span>{capability.runtime?.provider || capability.provider || "provider"} / {capability.sandbox?.trust_tier || "T1"}</span>
-                </div>
-                <sg-badge color={statusColor(capability.setup?.status)} size="sm">
-                  {displayStatus(capability.setup?.status)}
-                </sg-badge>
-              </button>
-            {:else}
-              <sg-empty class="empty-state" title="No matching capabilities" description="Runtime wrappers will appear here."></sg-empty>
-            {/each}
-          </sg-stack>
-          </sg-card-body>
-        </sg-card>
-
-        <sg-card class="surface runner-panel" elevation={0}>
-          <sg-card-header class="section-head compact">
-            <div>
-              <span class="eyebrow">Smallest runnable unit</span>
-              <sg-card-title as="h2">{selectedCapability?.title || selectedCapability?.id || "Capability"}</sg-card-title>
-            </div>
-            <sg-button-group class="button-row">
-              <button class="sg-button" data-color="outline" type="button" onclick={newCapabilitySetup}>
-                New
-              </button>
-              <button class="sg-button" data-color="primary" type="button" onclick={saveCapabilitySetup}>
-                Save setup
-              </button>
-            </sg-button-group>
-          </sg-card-header>
-
-          <sg-card-body>
-          <sg-grid class="capability-command-grid" columns="2" gap="grouped" collapse="lg">
-            <section class="setup-status-panel" aria-labelledby="setup-readiness-title">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Setup readiness</span>
-                  <h3 id="setup-readiness-title">{displayStatus(selectedCapabilitySetup.status || "draft")}</h3>
-                </div>
-                <sg-badge color={statusColor(selectedCapabilitySetup.status)} size="sm">
-                  {capabilitySetupProgress}%
-                </sg-badge>
-              </div>
-              <progress
-                class="sg-progress"
-                data-size="sm"
-                data-color={capabilityCanRun ? "success" : "warning"}
-                value={capabilitySetupProgress}
-                max="100"
-                aria-label="Capability setup progress"
-              ></progress>
-              <div class="setup-checklist">
-                {#each capabilitySetupChecks as check}
-                  <div>
-                    <sg-badge color={setupCheckColor(check.state)} size="sm">{check.state}</sg-badge>
-                    <div>
-                      <strong>{check.label}</strong>
-                      <span>{check.detail}</span>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            </section>
-
-            <section class="run-console-panel" aria-labelledby="wrapper-run-title">
-              <div class="panel-head">
-                <div>
-                  <span class="eyebrow">Execution console</span>
-                  <h3 id="wrapper-run-title">{selectedCapability?.id ? `/workloads/${selectedCapability.id}/execute` : "Draft wrapper"}</h3>
-                </div>
-                <sg-badge color={capabilityCanRun ? "success" : "warning"} size="sm">
-                  {capabilityCanRun ? "ready" : "blocked"}
-                </sg-badge>
-              </div>
-              <sg-field label="Wrapper input" html-for="capability-run-input">
-                <textarea id="capability-run-input" class="sg-textarea mono" rows="6" value={runInputJson} oninput={(event) => (runInputJson = inputValue(event))}></textarea>
-              </sg-field>
-              <div class="template-key-row" aria-label="Template input keys">
-                {#each capabilityTemplateKeys as key}
-                  <sg-badge color="ghost" size="sm">{key}</sg-badge>
-                {:else}
-                  <sg-badge color="ghost" size="sm">no template keys</sg-badge>
-                {/each}
-              </div>
-              <sg-button-group class="button-row full">
-                <button class="sg-button" data-color="primary" type="button" onclick={() => executeCapability()} disabled={!selectedCapability || !capabilityCanRun}>
-                  Execute wrapper
-                </button>
-                <button class="sg-button" data-color="outline" type="button" onclick={() => selectedCapability && openCapability(selectedCapability)} disabled={!selectedCapability}>
-                  Details
-                </button>
-              </sg-button-group>
-            </section>
-          </sg-grid>
-
-          <sg-section class="capability-history-section" title="Recent work" level="3" gap="related">
-            <sg-grid class="capability-work-metrics" columns="4" gap="related" collapse="md">
-              <div>
-                <span>Total</span>
-                <strong>{selectedCapabilityTasks.total || 0}</strong>
-              </div>
-              <div>
-                <span>Active</span>
-                <strong>{selectedCapabilityTasks.active || 0}</strong>
-              </div>
-              <div>
-                <span>Done</span>
-                <strong>{selectedCapabilityTasks.done || 0}</strong>
-              </div>
-              <div>
-                <span>Failed</span>
-                <strong>{selectedCapabilityTasks.failed || 0}</strong>
-              </div>
-            </sg-grid>
-            <div class="recent-task-list">
-              {#each selectedCapabilityRecentTasks as task}
-                {@const latest = taskLatestRun(task)}
-                <button class="recent-task-row" type="button" onclick={() => openTask(task)}>
-                  <div>
-                    <strong>{compactId(task.id)}</strong>
-                    <span>{(task.payload?.input_keys || task.input_keys || []).join(", ") || task.pool || "interactive"}</span>
-                  </div>
-                  <sg-badge color={statusColor(latest?.status || task.status)} size="sm">
-                    {displayStatus(latest?.status || task.status)}
-                  </sg-badge>
-                </button>
-              {:else}
-                <sg-empty class="empty-state" title="No wrapper work yet"></sg-empty>
-              {/each}
-            </div>
-          </sg-section>
-
-          <sg-section class="setup-editor-section" title="Setup definition" level="3" gap="grouped">
-            <form class="capability-setup-form" onsubmit={(event) => { event.preventDefault(); void saveCapabilitySetup(); }}>
-              <sg-field label="ID" html-for="capability-id">
-                <input id="capability-id" class="sg-input mono" value={capabilityDraft.id} oninput={(event) => updateCapabilityDraft("id", inputValue(event))} />
-              </sg-field>
-              <sg-field label="Title" html-for="capability-title">
-                <input id="capability-title" class="sg-input" value={capabilityDraft.title} oninput={(event) => updateCapabilityDraft("title", inputValue(event))} />
-              </sg-field>
-              <sg-field class="wide" label="Description" html-for="capability-description">
-                <input id="capability-description" class="sg-input" value={capabilityDraft.description} oninput={(event) => updateCapabilityDraft("description", inputValue(event))} />
-              </sg-field>
-              <sg-field label="Provider" html-for="capability-provider">
-                <input id="capability-provider" class="sg-input mono" value={capabilityDraft.provider} oninput={(event) => updateCapabilityDraft("provider", inputValue(event))} />
-              </sg-field>
-              <sg-field label="Trust tier" html-for="capability-trust-tier">
-                <select id="capability-trust-tier" class="sg-native-select" value={capabilityDraft.trust_tier} oninput={(event) => updateCapabilityDraft("trust_tier", inputValue(event))}>
-                  <option value="T0">T0</option>
-                  <option value="T1">T1</option>
-                  <option value="T2">T2</option>
-                </select>
-              </sg-field>
-              <sg-field label="Approvals" html-for="capability-approvals">
-                <select id="capability-approvals" class="sg-native-select" value={capabilityDraft.approvals} oninput={(event) => updateCapabilityDraft("approvals", inputValue(event))}>
-                  <option value="deny">deny</option>
-                  <option value="ask">ask</option>
-                  <option value="allow">allow</option>
-                </select>
-              </sg-field>
-              <sg-field label="Timeout ms" html-for="capability-timeout">
-                <input id="capability-timeout" class="sg-input" type="number" value={capabilityDraft.timeout_ms} oninput={(event) => updateCapabilityDraft("timeout_ms", inputValue(event))} />
-              </sg-field>
-              <sg-field class="wide" label="Prompt template" html-for="capability-template" description="Template variables are bound from the JSON input below.">
-                <textarea id="capability-template" class="sg-textarea" rows="4" value={capabilityDraft.template} oninput={(event) => updateCapabilityDraft("template", inputValue(event))}></textarea>
-              </sg-field>
-              <sg-field label="Working directory" html-for="capability-cwd">
-                <input id="capability-cwd" class="sg-input" value={capabilityDraft.cwd} oninput={(event) => updateCapabilityDraft("cwd", inputValue(event))} />
-              </sg-field>
-              <sg-field label="Transport order" html-for="capability-transport" description="Comma-separated transport preference.">
-                <input id="capability-transport" class="sg-input mono" value={capabilityDraft.transport_order} oninput={(event) => updateCapabilityDraft("transport_order", inputValue(event))} />
-              </sg-field>
-              <sg-field label="Host env keys" html-for="capability-env" description="Comma-separated host env names. Secret values stay outside the UI.">
-                <input id="capability-env" class="sg-input mono" value={capabilityDraft.env_passthrough} oninput={(event) => updateCapabilityDraft("env_passthrough", inputValue(event))} />
-              </sg-field>
-              <sg-field label="Skill reference" html-for="capability-skill">
-                <input id="capability-skill" class="sg-input mono" value={capabilityDraft.skill} oninput={(event) => updateCapabilityDraft("skill", inputValue(event))} />
-              </sg-field>
-              <sg-field class="wide" label="Result schema" html-for="capability-result">
-                <textarea id="capability-result" class="sg-textarea mono" rows="4" value={capabilityDraft.result_json} oninput={(event) => updateCapabilityDraft("result_json", inputValue(event))}></textarea>
-              </sg-field>
-            </form>
-          </sg-section>
-
-          {#if selectedCapability}
-            <sg-section class="required-files-section" title="Required files" level="3" gap="related">
-              <div class="file-list compact">
-                {#each selectedCapability.files || [] as file}
-                  <div>
-                    <strong>{file.label || file.kind}</strong>
-                    <span>{file.path}</span>
-                    <sg-badge color={file.present ? "success" : file.required ? "danger" : "ghost"} size="sm">
-                      {file.present ? "present" : "missing"}
-                    </sg-badge>
-                  </div>
-                {/each}
-              </div>
-            </sg-section>
-          {/if}
-          </sg-card-body>
-        </sg-card>
-      </sg-grid>
-    {:else if activeView === "work-pool"}
-      <sg-card class="surface board-surface" elevation={0}>
-        <sg-card-header class="section-head">
-          <div>
-            <span class="eyebrow">Kanban queue</span>
-            <sg-card-title as="h2">Work pool</sg-card-title>
-          </div>
-          <sg-badge color="info">{boardTotalTasks} tasks</sg-badge>
-        </sg-card-header>
-
-        <sg-card-body>
-        <sg-grid class="board-summary-grid" columns="4" gap="related" collapse="md">
-          <div>
-            <span>Queued</span>
-            <strong>{boardTotals.queued || 0}</strong>
-          </div>
-          <div>
-            <span>Active</span>
-            <strong>{boardTotals.active || 0}</strong>
-          </div>
-          <div>
-            <span>Blocked / failed</span>
-            <strong>{boardBlockedTasks}</strong>
-          </div>
-          <div class="board-health">
-            <span id="queue-health-label">Queue health</span>
-            <strong>{boardQueueHealth}%</strong>
-            <progress
-              class="sg-progress"
-              data-size="sm"
-              data-color={boardQueueHealth < 75 ? "warning" : "success"}
-              value={boardQueueHealth}
-              max="100"
-              aria-labelledby="queue-health-label"
-            ></progress>
-          </div>
-        </sg-grid>
-
-        <sg-scroller class="queue-scroller" axis="x" label="Work pool lanes">
-          <div class="queue-columns">
-            {#each boardStatuses as status}
-              {@const tasks = columnTasksFor(boardColumns, status)}
-              <sg-card class="queue-column" elevation={0}>
-                <div class="column-title">
-                  <span>{humanize(status)}</span>
-                  <strong>{tasks.length}</strong>
-                </div>
-                {#each tasks as task}
-                  {@const latest = taskLatestRun(task)}
-                  <button class="task-card" type="button" onclick={() => openTask(task)}>
-                    <div class="task-card-head">
-                      <strong>{compactId(task.id)}</strong>
-                      <sg-badge color={statusColor(latest?.status || task.status)} size="sm">
-                        {displayStatus(latest?.status || task.status)}
-                      </sg-badge>
-                    </div>
-                    <span>{task.pipeline || task.pool || "interactive"}</span>
-                    <div class="task-meta-grid">
-                      <small>Priority <strong>{task.priority ?? "n/a"}</strong></small>
-                      <small>Source <strong>{task.source || "manual"}</strong></small>
-                      <small>Runs <strong>{task.runs?.length || 0}</strong></small>
-                      <small>Updated <strong>{taskTimestamp(task)}</strong></small>
-                    </div>
-                  </button>
-                {:else}
-                  <sg-empty class="empty-lane" title="Empty"></sg-empty>
-                {/each}
-              </sg-card>
-            {/each}
-          </div>
-        </sg-scroller>
-        </sg-card-body>
-      </sg-card>
-    {:else if activeView === "evidence"}
-      <sg-card class="surface" elevation={0}>
-        <sg-card-header class="section-head">
-          <div>
-            <span class="eyebrow">Proof and evidence</span>
-            <sg-card-title as="h2">Run artifacts</sg-card-title>
-          </div>
-        </sg-card-header>
-
-        <sg-card-body>
-        <sg-grid class="evidence-grid" columns="auto-fill" gap="grouped">
-          {#each runs as run}
-            <button class="evidence-card" type="button" onclick={() => openRun(run)}>
-              <div>
-                <strong>{run.task || compactId(run.run_id)}</strong>
-                <span>{compactId(run.run_id)}</span>
-              </div>
-              <div class="evidence-stats">
-                <sg-badge color={statusColor(run.status)} size="sm">{displayStatus(run.status)}</sg-badge>
-                <span>{run.events || 0} events</span>
-                <span>{run.approvals || 0} approvals</span>
-              </div>
-            </button>
-          {:else}
-            <sg-empty class="empty-state" title="No evidence artifacts" description="Proof pages are generated from run traces."></sg-empty>
-          {/each}
-        </sg-grid>
-        </sg-card-body>
-      </sg-card>
-    {:else if activeView === "settings"}
-      <sg-grid class="settings-grid" columns="2" gap="grouped" collapse="lg">
-        <sg-card class="surface" elevation={0}>
-          <sg-card-header class="section-head">
-            <div>
-              <span class="eyebrow">Theme</span>
-              <sg-card-title as="h2">GitHub preset tokens</sg-card-title>
-            </div>
-            <sg-button-group class="segmented">
-              <button class="sg-button" class:is-active={activeTheme === "light"} data-color="outline" type="button" onclick={() => setTheme("light")}>Light</button>
-              <button class="sg-button" class:is-active={activeTheme === "dark"} data-color="outline" type="button" onclick={() => setTheme("dark")}>Dark</button>
-            </sg-button-group>
-          </sg-card-header>
-
-          <sg-card-body>
-          <sg-stack class="swatch-grid" gap="related">
-            {#each themeSwatches(activeTheme) as swatch}
-              <div class="swatch-row">
-                <span style={`--swatch:${swatch.value}`}></span>
-                <strong>{swatch.name}</strong>
-                <code>{swatch.value}</code>
-              </div>
-            {/each}
-          </sg-stack>
-          </sg-card-body>
-        </sg-card>
-
-        <sg-card class="surface" elevation={0}>
-          <sg-card-header class="section-head compact">
-            <div>
-              <span class="eyebrow">SigUI contract</span>
-              <sg-card-title as="h2">Resolved system</sg-card-title>
-            </div>
-          </sg-card-header>
-          <sg-card-body>
-          <pre class="json-block">{jsonPreview({
-            preset: themeContract.theme?.name,
-            density: themeContract.density,
-            depth: themeContract.depth,
-            shape: themeContract.shape,
-            motion: themeContract.motion
-          })}</pre>
-          </sg-card-body>
-        </sg-card>
-      </sg-grid>
-    {/if}
-  </sg-sidebar-layout-content>
-
-  <sg-sheet-root class="detail-drawer-root" open={drawerKind !== "none" ? true : undefined} side="right" size="md">
-  <sg-sheet-content class="detail-drawer" aria-hidden={drawerKind === "none"}>
-    <sg-sheet-header class="drawer-header">
-      <div>
-        <span class="eyebrow">{humanize(drawerKind)}</span>
-        <sg-sheet-title>
-          {#if drawerKind === "run"}
-            {compactId(selectedRunId)}
-          {:else if drawerKind === "pipeline"}
-            {selectedPipeline?.title || selectedPipeline?.id || "Pipeline"}
-          {:else if drawerKind === "capability"}
-            {selectedCapability?.title || selectedCapability?.id || "Capability"}
-          {:else if drawerKind === "task"}
-            {compactId(selectedTask?.id)}
-          {:else if drawerKind === "advanced"}
-            Advanced execution
-          {:else}
-            Details
-          {/if}
-        </sg-sheet-title>
       </div>
-      <sg-sheet-close placement="corner">
-        <button class="drawer-close" type="button" aria-label="Close drawer" onclick={closeDrawer}>Close</button>
-      </sg-sheet-close>
-    </sg-sheet-header>
-
-    {#if drawerKind !== "none"}
-      <sg-tabs-root class="drawer-tabs" value={drawerTab} oninput={(event) => (drawerTab = (event.currentTarget as HTMLElement).getAttribute("value") || drawerTab)}>
-        <sg-tabs-list aria-label="Detail sections">
-        {#each drawerTabs(drawerKind) as tab}
-          <sg-tabs-trigger value={tab} class:is-active={drawerTab === tab} onclick={() => (drawerTab = tab)}>
-            {humanize(tab)}
-          </sg-tabs-trigger>
-        {/each}
-        </sg-tabs-list>
-      </sg-tabs-root>
     {/if}
 
-    <sg-scroll-area-root class="drawer-scroll" type="hover">
-    <sg-scroll-area-viewport>
-    <sg-stack class="drawer-body" gap="grouped">
-      {#if drawerKind === "run"}
-        {#if runDetailLoading}
-          <sg-empty class="empty-state" title="Loading run detail"></sg-empty>
-        {:else if selectedRunDetail}
-          {#if drawerTab === "summary"}
-            <dl class="detail-list">
-              <div><dt>Status</dt><dd><sg-badge color={statusColor(selectedRunDetail.status)}>{displayStatus(selectedRunDetail.status)}</sg-badge></dd></div>
-              <div><dt>Events</dt><dd>{selectedRunDetail.event_count || 0}</dd></div>
-              <div><dt>Live</dt><dd>{selectedRunDetail.live ? "Yes" : "No"}</dd></div>
-              <div><dt>Provider</dt><dd>{selectedRunDetail.manifest?.provider || runById(selectedRunId)?.provider || "n/a"}</dd></div>
-            </dl>
-            <pre class="json-block">{jsonPreview(selectedRunDetail.manifest)}</pre>
-          {:else if drawerTab === "evidence"}
-            <pre class="json-block">{jsonPreview(selectedRunDetail.proof)}</pre>
-          {:else if drawerTab === "trace"}
-            <div class="event-list">
-              {#each selectedRunDetail.events || [] as event}
-                <pre>{jsonPreview(event)}</pre>
+    <section class="metric-strip" aria-label="Runtime summary">
+      <div>
+        <span>Applications</span>
+        <strong>{dashboard.apps}</strong>
+      </div>
+      <div>
+        <span>Entrypoints</span>
+        <strong>{dashboard.entrypoints}</strong>
+      </div>
+      <div>
+        <span>Runs</span>
+        <strong>{dashboard.runs}</strong>
+      </div>
+      <div>
+        <span>Run health</span>
+        <strong>{dashboard.blocked ? `${dashboard.blocked} blocked` : "clear"}</strong>
+      </div>
+    </section>
+
+    {#if activeSurface === "run"}
+      <section class="surface-grid run-grid">
+        <div class="panel app-picker">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Applications</span>
+              <h2>Pick an app</h2>
+            </div>
+          </div>
+
+          <form class="add-source" onsubmit={(event) => { event.preventDefault(); void refreshRegistryFromSource(); }}>
+            <input
+              aria-label="Application source"
+              placeholder="git URL or local app directory"
+              value={appSource}
+              oninput={(event) => (appSource = inputValue(event))}
+            />
+            <button type="submit">Refresh</button>
+          </form>
+
+          <div class="list-stack">
+            {#each filteredApps as app}
+              <button class:active={selectedApp?.id === app.id} class="app-card" type="button" onclick={() => chooseApp(app)}>
+                <div>
+                  <strong>{app.name || app.id}</strong>
+                  <span>{app.version || "local"} / {app.entrypoints?.length || 0} entrypoints</span>
+                </div>
+                <span class="badge neutral">{app.pipelines?.length || 0} pipelines</span>
+              </button>
+            {:else}
+              <div class="empty-state">
+                <strong>No applications installed</strong>
+                <span>Local manifests from the application registry will appear here.</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div class="panel launch-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Run</span>
+              <h2>{selectedApp?.name || "Application entrypoint"}</h2>
+            </div>
+            {#if selectedApp}
+              <span class="badge info">{compactId(selectedApp.app_id || selectedApp.id)}</span>
+            {/if}
+          </div>
+
+          {#if selectedApp}
+            <p class="muted">{selectedApp.description || "An agentic application bundle with runnable entrypoints."}</p>
+
+            <div class="entrypoint-tabs" role="tablist" aria-label="Entrypoints">
+              {#each selectedApp.entrypoints || [] as entrypoint}
+                <button
+                  class:active={selectedEntrypoint?.id === entrypoint.id}
+                  type="button"
+                  onclick={() => chooseEntrypoint(entrypoint)}
+                >
+                  {entrypoint.title || entrypoint.id}
+                </button>
+              {:else}
+                <span class="muted">No entrypoints declared.</span>
               {/each}
             </div>
-          {:else}
-            <pre class="json-block">{jsonPreview(selectedRunDetail.approvals)}</pre>
-          {/if}
-        {:else}
-          <sg-empty class="empty-state" title="Run detail unavailable"></sg-empty>
-        {/if}
-      {:else if drawerKind === "pipeline" && selectedPipeline}
-        {#if drawerTab === "summary"}
-          <dl class="detail-list">
-            <div><dt>ID</dt><dd>{selectedPipeline.id}</dd></div>
-            <div><dt>Provider</dt><dd>{selectedPipeline.provider || "n/a"}</dd></div>
-            <div><dt>Tasks</dt><dd>{selectedPipeline.tasks?.total || 0}</dd></div>
-            <div><dt>Active</dt><dd>{selectedPipeline.tasks?.active || 0}</dd></div>
-          </dl>
-          <pre class="json-block">{jsonPreview(selectedPipeline.workflow)}</pre>
-        {:else if drawerTab === "executions"}
-          <div class="execution-list">
-            {#each activeExecutions as execution}
-              <div class="execution-card">
-                <div>
-                  <strong>{compactId(execution.id)}</strong>
-                  <sg-badge color={statusColor(execution.status)} size="sm">{displayStatus(execution.status)}</sg-badge>
+
+            <div class="entrypoint-detail">
+              <div>
+                <span>Pipeline</span>
+                <strong>{selectedEntrypoint?.pipeline || "n/a"}</strong>
+              </div>
+              <div>
+                <span>Workspace</span>
+                <strong>{entrypointWorkspaceKind(selectedEntrypoint)}</strong>
+              </div>
+              <div>
+                <span>Budget</span>
+                <strong>{selectedEntrypoint?.defaults?.budget ? jsonPreview(selectedEntrypoint.defaults.budget) : "tenant default"}</strong>
+              </div>
+            </div>
+
+            <div class="run-form">
+              {#if entrypointWorkspaceKind(selectedEntrypoint) !== "none"}
+                <label class="json-field">
+                  <span>Repository {entrypointWorkspaceKind(selectedEntrypoint) === "dataset" ? "/ dataset" : ""}</span>
+                  <input
+                    type="text"
+                    placeholder="git URL or local path (resolved server-side)"
+                    value={workspaceRef}
+                    oninput={(event) => (workspaceRef = inputValue(event))}
+                  />
+                  <small class="muted">Cloned and checked out by the backend — no git login needed in the browser.</small>
+                </label>
+              {/if}
+
+              {#if entrypointInputFields(selectedEntrypoint).length > 0}
+                <div class="form-section">
+                  <span class="eyebrow">Inputs</span>
+                  {#each entrypointInputFields(selectedEntrypoint) as [name, schema] (name)}
+                    <label class="json-field">
+                      <span>{name}{requiredInputs(selectedEntrypoint).includes(name) ? " *" : ""}</span>
+                      {#if fieldKind(schema?.type) === "number"}
+                        <input
+                          type="number"
+                          value={inputValues[name] ?? ""}
+                          oninput={(event) => (inputValues = { ...inputValues, [name]: inputValue(event) })}
+                        />
+                      {:else if fieldKind(schema?.type) === "boolean"}
+                        <select
+                          value={inputValues[name] ?? "false"}
+                          oninput={(event) => (inputValues = { ...inputValues, [name]: inputValue(event) })}
+                        >
+                          <option value="false">false</option>
+                          <option value="true">true</option>
+                        </select>
+                      {:else}
+                        <input
+                          type="text"
+                          placeholder={schema?.description || ""}
+                          value={inputValues[name] ?? ""}
+                          oninput={(event) => (inputValues = { ...inputValues, [name]: inputValue(event) })}
+                        />
+                      {/if}
+                      {#if schema?.description}<small class="muted">{schema.description}</small>{/if}
+                    </label>
+                  {/each}
                 </div>
-                {#each execution.steps || [] as step}
-                  <div class="mini-step">
-                    <span>{step.name || step.id}</span>
-                    <sg-badge color={statusColor(step.status)} size="sm">{displayStatus(step.status)}</sg-badge>
+              {/if}
+
+              {#if (selectedEntrypoint?.parameters || []).length > 0}
+                <div class="form-section">
+                  <span class="eyebrow">Parameters</span>
+                  {#each selectedEntrypoint?.parameters || [] as param (param.name)}
+                    <label class="json-field">
+                      <span>{param.name}</span>
+                      {#if fieldKind(param.type) === "number"}
+                        <input
+                          type="number"
+                          value={parameterValues[param.name] ?? ""}
+                          oninput={(event) => (parameterValues = { ...parameterValues, [param.name]: inputValue(event) })}
+                        />
+                      {:else if fieldKind(param.type) === "boolean"}
+                        <select
+                          value={parameterValues[param.name] ?? "false"}
+                          oninput={(event) => (parameterValues = { ...parameterValues, [param.name]: inputValue(event) })}
+                        >
+                          <option value="false">false</option>
+                          <option value="true">true</option>
+                        </select>
+                      {:else}
+                        <input
+                          type="text"
+                          placeholder={param.description || ""}
+                          value={parameterValues[param.name] ?? ""}
+                          oninput={(event) => (parameterValues = { ...parameterValues, [param.name]: inputValue(event) })}
+                        />
+                      {/if}
+                      {#if param.description}
+                        <small class="muted">{param.description}{param.default !== undefined && param.default !== "" ? ` (default: ${parameterDefault(param)})` : ""}</small>
+                      {/if}
+                    </label>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            <div class="button-row">
+              <button class="primary" type="button" onclick={runEntrypoint} disabled={!selectedEntrypoint}>Run entrypoint</button>
+              <button type="button" onclick={() => selectedEntrypoint && resetRunForm(selectedEntrypoint)}>
+                Reset
+              </button>
+            </div>
+          {:else}
+            <div class="empty-state">
+              <strong>Add an application to run a pipeline.</strong>
+              <span>The frontend expects the app manifest hierarchy from the application spec.</span>
+            </div>
+          {/if}
+        </div>
+
+        <div class="panel watch-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Watch</span>
+              <h2>{selectedRunSummary?.task || selectedRunSummary?.run_id || "Pipeline timeline"}</h2>
+            </div>
+            <span class={`badge ${statusClass(selectedRunSummary?.status)}`}>{displayStatus(selectedRunSummary?.status)}</span>
+          </div>
+
+          <div class="watch-layout">
+            <div class="run-rail">
+              {#each filteredRuns.slice(0, 12) as run}
+                <button class:active={selectedRunId === run.run_id} class="run-row" type="button" onclick={() => openRun(run.run_id)}>
+                  <strong>{run.task || compactId(run.run_id)}</strong>
+                  <span>{run.events || 0} events / {formatDate(run.last_event_ms || run.created_at_ms)}</span>
+                </button>
+              {:else}
+                <div class="empty-state compact">
+                  <strong>No runs</strong>
+                  <span>Completed and live traces will appear here.</span>
+                </div>
+              {/each}
+            </div>
+
+            <div class="timeline">
+              <div class="timeline-head">
+                <strong>Outer pipeline timeline</strong>
+                <span>{selectedRunDetail?.event_count || timelineRows.length} events</span>
+              </div>
+              {#each timelineRows as row}
+                <button
+                  class:active={selectedTimelineRow?.seq === row.seq}
+                  class="timeline-row"
+                  type="button"
+                  onclick={() => (selectedTimelineSeq = row.seq)}
+                >
+                  <span class={`event-dot ${statusClass(row.status)}`}></span>
+                  <span class="seq">{row.seq}</span>
+                  <div>
+                    <strong>{row.label}</strong>
+                    <span>{row.kind} / {row.detail || row.type}</span>
+                  </div>
+                </button>
+              {:else}
+                <div class="empty-state compact">
+                  <strong>No event log loaded</strong>
+                  <span>Select a run or start an entrypoint.</span>
+                </div>
+              {/each}
+            </div>
+
+            <div class="inner-trace">
+              <div class="timeline-head">
+                <strong>Inner capability trace</strong>
+                <span>{selectedTimelineRow?.type || "idle"}</span>
+              </div>
+              <div class="trace-actions">
+                <button type="button" onclick={() => steer("approve")} disabled={!selectedRunSummary?.live}>Approve</button>
+                <button type="button" onclick={() => steer("interrupt")} disabled={!selectedRunSummary?.live}>Stop</button>
+              </div>
+              <label class="prompt-box">
+                <span>Steer prompt</span>
+                <input value={promptText} oninput={(event) => (promptText = inputValue(event))} placeholder="Answer or instruction" />
+              </label>
+              <div class="trace-actions">
+                <button type="button" onclick={() => steer("answer")} disabled={!selectedRunSummary?.live || !promptText.trim()}>Answer</button>
+                <button type="button" onclick={() => steer("prompt")} disabled={!selectedRunSummary?.live || !promptText.trim()}>Prompt</button>
+              </div>
+              <label class="prompt-box">
+                <span>Select option</span>
+                <input value={selectedOption} inputmode="numeric" oninput={(event) => (selectedOption = inputValue(event))} />
+              </label>
+              <button type="button" onclick={() => steer("select_option")} disabled={!selectedRunSummary?.live || !selectedOption.trim()}>
+                Select
+              </button>
+              <div class="trace-list">
+                {#each innerTraceRows as event}
+                  <pre>{jsonPreview(event)}</pre>
+                {:else}
+                  <span class="muted">No inner trace events for this selection.</span>
+                {/each}
+              </div>
+            </div>
+          </div>
+
+          <div class="output-receipt">
+            <div class="panel-head">
+              <div>
+                <span class="eyebrow">Output</span>
+                <h2>Result and proof receipt</h2>
+              </div>
+              {#if proofUrl}
+                <a class="text-link" href={proofUrl} target="_blank" rel="noreferrer">Proof page</a>
+              {/if}
+            </div>
+
+            <div class="receipt-grid">
+              <div>
+                <span>Result</span>
+                <strong>{proofResultSummary(proofResult)}</strong>
+              </div>
+              <div>
+                <span>Effects</span>
+                <strong>{selectedProof.effect_count || proofTimeline.length || 0}</strong>
+              </div>
+              <div>
+                <span>Proof hash</span>
+                <strong>{selectedProof.effect_log_sha256 || "pending"}</strong>
+              </div>
+            </div>
+
+            <div class="receipt-split">
+              <div>
+                <h3>Artifacts</h3>
+                <div class="artifact-list">
+                  {#each proofArtifacts as artifact}
+                    <div class="artifact-row">
+                      <strong>{artifact.path || artifact.artifact || artifact.kind || "artifact"}</strong>
+                      <span>{artifact.sha256 || artifact.bytes || artifact.missing || "recorded"}</span>
+                    </div>
+                  {:else}
+                    <span class="muted">No artifacts recorded for this run.</span>
+                  {/each}
+                </div>
+              </div>
+
+              <div>
+                <h3>Result payload</h3>
+                <pre class="code-panel">{jsonPreview(proofResult)}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    {:else if activeSurface === "build"}
+      <section class="surface-grid build-grid">
+        <div class="panel contract-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">CLI-first</span>
+              <h2>Application contract</h2>
+            </div>
+          </div>
+
+          <div class="contract-grid">
+            <div>
+              <h3>Developer provides</h3>
+              <ul>
+                <li>Anchored skill markdown</li>
+                <li>Typed tools and optional data</li>
+                <li>Manifest entrypoints and result schema</li>
+                <li>Declared harness, trust tier, egress</li>
+              </ul>
+            </div>
+            <div>
+              <h3>Runtime guarantees</h3>
+              <ul>
+                <li>Injected harness</li>
+                <li>Workspace RW and data snapshot RO</li>
+                <li>Deny-all except broker egress</li>
+                <li>Event log, harvest, proof delivery</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel manifest-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Manifest mirror</span>
+              <h2>{selectedApp?.name || "No selected app"}</h2>
+            </div>
+            {#if selectedApp}
+              <button type="button" onclick={() => publishApp()}>Publish local OCI</button>
+            {/if}
+          </div>
+
+          {#if selectedApp}
+            <div class="publish-row">
+              <label>
+                <span>Package tag</span>
+                <input value={packageTag} oninput={(event) => (packageTag = inputValue(event))} />
+              </label>
+              <span class="badge neutral">{selectedApp.license || "unlicensed"}</span>
+            </div>
+
+            <div class="hierarchy">
+              <div>
+                <span>Application</span>
+                <strong>{selectedApp.name}</strong>
+                <small>{compactId(selectedApp.app_id)}</small>
+              </div>
+              <div>
+                <span>Pipelines</span>
+                <strong>{selectedApp.pipelines?.length || 0}</strong>
+                <small>{(selectedApp.pipelines || []).map((item) => item.id).join(", ") || "none"}</small>
+              </div>
+              <div>
+                <span>Capabilities</span>
+                <strong>{selectedApp.capabilities?.length || 0}</strong>
+                <small>{(selectedApp.capabilities || []).map((item) => item.as || item.ref).join(", ") || "none"}</small>
+              </div>
+            </div>
+
+            <div class="requirements">
+              {#each ["harnesses", "connectors", "egress"] as key}
+                <div>
+                  <span>{humanize(key)}</span>
+                  <strong>{requirementList(selectedApp, key).join(", ") || "not declared"}</strong>
+                </div>
+              {/each}
+              <div>
+                <span>Trust tier</span>
+                <strong>{selectedApp.requirements?.trust_tier || "per capability"}</strong>
+              </div>
+            </div>
+
+            <pre class="code-panel">{jsonPreview(selectedApp)}</pre>
+          {:else}
+            <div class="empty-state">
+              <strong>No application manifest loaded</strong>
+              <span>The build mirror activates once a local app is present.</span>
+            </div>
+          {/if}
+        </div>
+
+        <div class="panel harness-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Registry mirror</span>
+              <h2>Harness declarations</h2>
+            </div>
+          </div>
+
+          <div class="capability-grid">
+            {#each requirementList(selectedApp, "harnesses") as harness}
+              <div class="capability-card">
+                <div>
+                  <strong>{harness}</strong>
+                  <span>{selectedApp?.name || "application"} compatible harness</span>
+                </div>
+                <span class="badge neutral">declared</span>
+              </div>
+            {:else}
+              <div class="empty-state">
+                <strong>No harness declarations</strong>
+                <span>Select an application with declared runtime requirements.</span>
+              </div>
+            {/each}
+          </div>
+
+          <div class="pipeline-registry">
+            <h3>Application pipelines</h3>
+            {#each selectedAppPipelines as pipeline}
+              <div class="registry-row">
+                <strong>{pipeline.id}</strong>
+                <span>{pipeline.file || "bundled markdown"} / {compactId(pipeline.sha256)}</span>
+              </div>
+            {:else}
+              <span class="muted">No bundled application pipelines.</span>
+            {/each}
+          </div>
+
+          <div class="pipeline-registry">
+            <h3>Capability refs</h3>
+            {#each selectedAppCapabilities as capability}
+              <div class="registry-row">
+                <strong>{capability.as || "capability"}</strong>
+                <span>{capability.ref || "local ref"}</span>
+              </div>
+            {:else}
+              <span class="muted">No capability refs declared.</span>
+            {/each}
+          </div>
+        </div>
+
+        <div class="panel verdict-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Judge trace</span>
+              <h2>Test verdicts</h2>
+            </div>
+            <div class="panel-actions">
+              {#if selectedApp && selectedEntrypoint}
+                <button type="button" onclick={runEntrypoint}>Run entrypoint</button>
+              {/if}
+              {#if proofUrl}
+                <a class="text-link" href={proofUrl} target="_blank" rel="noreferrer">Open proof</a>
+              {/if}
+            </div>
+          </div>
+
+          <div class="verdict-layout">
+            <div class="test-run-list">
+              <h3>Recent runs</h3>
+              {#each filteredRuns.slice(0, 8) as run}
+                <button class:active={selectedRunSummary?.run_id === run.run_id} class="test-run-row" type="button" onclick={() => openRun(run.run_id)}>
+                  <div>
+                    <strong>{compactId(run.run_id)}</strong>
+                    <span>{run.task || run.provider || "application run"}</span>
+                  </div>
+                  <span class={`badge ${statusClass(run.status)}`}>{displayStatus(run.status)}</span>
+                </button>
+              {:else}
+                <div class="empty-state compact">
+                  <strong>No runs recorded</strong>
+                  <span>Run history is empty.</span>
+                </div>
+              {/each}
+            </div>
+
+            <div class="verdict-detail">
+              <div class="verdict-grid">
+                <div>
+                  <span>Selected run</span>
+                  <strong>{compactId(selectedRunSummary?.run_id)}</strong>
+                </div>
+                <div>
+                  <span>Run status</span>
+                  <strong>{displayStatus(selectedRunSummary?.status)}</strong>
+                </div>
+                <div>
+                  <span>Verdicts</span>
+                  <strong>{verificationRows.length}</strong>
+                </div>
+                <div>
+                  <span>Proof hash</span>
+                  <strong>{selectedProof.effect_log_sha256 || "pending"}</strong>
+                </div>
+              </div>
+
+              <div class="verdict-list">
+                {#each verificationRows as row}
+                  <div class="verdict-row">
+                    <div class="verdict-row-head">
+                      <span class={`event-dot ${statusClass(row.verdict)}`}></span>
+                      <div>
+                        <strong>{displayStatus(row.verdict)}</strong>
+                        <span>{row.phase} / {row.tier} / seq {row.seq}</span>
+                      </div>
+                    </div>
+                    {#if row.reason}
+                      <p>{row.reason}</p>
+                    {/if}
+                    {#if row.failedHooks}
+                      <small>Failed hooks: {row.failedHooks}</small>
+                    {/if}
+                    {#if row.criteria}
+                      <small>Criteria: {row.criteria}</small>
+                    {/if}
+                  </div>
+                {:else}
+                  <div class="empty-state compact">
+                    <strong>No verification event</strong>
+                    <span>{selectedRunSummary ? "Selected run has no recorded verdict." : "No selected run."}</span>
                   </div>
                 {/each}
               </div>
-            {:else}
-              <sg-empty class="empty-state" title="No executions" description="Execute the workflow to populate this tab."></sg-empty>
-            {/each}
+            </div>
           </div>
-        {:else}
-          <pre class="json-block">{jsonPreview(selectedPipeline)}</pre>
-        {/if}
-      {:else if drawerKind === "capability" && selectedCapability}
-        {#if drawerTab === "summary"}
-          <dl class="detail-list">
-            <div><dt>Status</dt><dd><sg-badge color={statusColor(selectedCapability.setup?.status)}>{displayStatus(selectedCapability.setup?.status)}</sg-badge></dd></div>
-            <div><dt>Provider</dt><dd>{selectedCapability.runtime?.provider || selectedCapability.provider || "n/a"}</dd></div>
-            <div><dt>Sandbox</dt><dd>{displayStatus(selectedCapability.sandbox?.status)}</dd></div>
-            <div><dt>Trust tier</dt><dd>{selectedCapability.sandbox?.trust_tier || "T1"}</dd></div>
-          </dl>
-          <pre class="json-block">{jsonPreview(selectedCapability.setup)}</pre>
-        {:else if drawerTab === "files"}
-          <div class="file-list">
-            {#each selectedCapability.files || [] as file}
-              <div>
-                <strong>{file.label || file.kind}</strong>
-                <span>{file.path}</span>
-                <sg-badge color={file.present ? "success" : file.required ? "danger" : "ghost"} size="sm">
-                  {file.present ? "present" : "missing"}
-                </sg-badge>
+        </div>
+      </section>
+    {:else}
+      <section class="surface-grid fleet-grid">
+        <div class="panel fleet-apps">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Fleet</span>
+              <h2>Applications doing work</h2>
+            </div>
+            {#if selectedApp}
+              <button type="button" onclick={() => resolveActivation()}>Resolve active set</button>
+            {/if}
+          </div>
+
+          <div class="fleet-list">
+            {#each filteredApps as app}
+              <button class:active={selectedApp?.id === app.id} class="fleet-row" type="button" onclick={() => chooseApp(app, false)}>
+                <div>
+                  <strong>{app.name || app.id}</strong>
+                  <span>{ioBindings(app, "inputs").length} inputs / {ioBindings(app, "outputs").length} outputs</span>
+                </div>
+                <span class="badge neutral">{app.services?.requires?.length || 0} requires</span>
+              </button>
+            {:else}
+              <div class="empty-state">
+                <strong>No fleet applications</strong>
+                <span>Installed applications will appear as operable units.</span>
               </div>
             {/each}
           </div>
-        {:else if drawerTab === "work"}
-          <pre class="json-block">{jsonPreview(selectedCapability.work)}</pre>
-        {:else}
-          <pre class="json-block">{jsonPreview(selectedCapability)}</pre>
-        {/if}
-      {:else if drawerKind === "task" && selectedTask}
-        <dl class="detail-list">
-          <div><dt>Status</dt><dd><sg-badge color={statusColor(selectedTask.status)}>{displayStatus(selectedTask.status)}</sg-badge></dd></div>
-          <div><dt>Pool</dt><dd>{selectedTask.pool || "n/a"}</dd></div>
-          <div><dt>Pipeline</dt><dd>{selectedTask.pipeline || "n/a"}</dd></div>
-          <div><dt>Runs</dt><dd>{selectedTask.runs?.length || 0}</dd></div>
-        </dl>
-        <pre class="json-block">{jsonPreview(selectedTask)}</pre>
-      {:else if drawerKind === "advanced"}
-        {#if drawerTab === "sandbox"}
-          <dl class="detail-list">
-            <div><dt>Provider</dt><dd>{selectedCapability?.sandbox?.provider || "policy selected"}</dd></div>
-            <div><dt>Trust tier</dt><dd>{selectedCapability?.sandbox?.trust_tier || "T1"}</dd></div>
-            <div><dt>Status</dt><dd>{displayStatus(selectedCapability?.sandbox?.status || "ready")}</dd></div>
-          </dl>
-        {:else if drawerTab === "authority"}
-          <pre class="json-block">{jsonPreview({ approvals: pipelineDraft.provider === "fake" ? "none" : "provider default", host_env: pipelineDraft.env_passthrough })}</pre>
-        {:else if drawerTab === "evidence"}
-          <pre class="json-block">{jsonPreview({ proof_endpoint: "/runs/:id/proof", proof_html: "/runs/:id/proof.html", trace_store: ".runs/<run-id>/events.jsonl" })}</pre>
-        {:else}
-          <pre class="json-block">{jsonPreview({ timeout_ms: pipelineDraft.timeout_ms, retry: "manual", queue: "interactive" })}</pre>
-        {/if}
-      {:else}
-        <sg-empty class="empty-state" title="Select an item" description="Details open here."></sg-empty>
-      {/if}
-    </sg-stack>
-    </sg-scroll-area-viewport>
-    <sg-scroll-area-scrollbar orientation="vertical" />
-    </sg-scroll-area-root>
-  </sg-sheet-content>
-  </sg-sheet-root>
-</sg-sidebar-layout>
+        </div>
 
-<script lang="ts" context="module">
-  function drawerTabs(kind: string) {
-    if (kind === "run") return ["summary", "evidence", "trace", "approvals"];
-    if (kind === "pipeline") return ["summary", "executions", "definition"];
-    if (kind === "capability") return ["summary", "files", "work", "runtime"];
-    if (kind === "advanced") return ["sandbox", "authority", "evidence", "retry"];
-    return ["summary"];
-  }
-</script>
+        <div class="panel io-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">I/O</span>
+              <h2>{selectedApp?.name || "Bindings"}</h2>
+            </div>
+            <button type="button" onclick={redriveDeliveries} disabled={!selectedRunSummary}>Redrive sink</button>
+          </div>
+
+          <div class="binding-columns">
+            <div>
+              <h3>Inputs</h3>
+              {#each ioBindings(selectedApp, "inputs") as binding}
+                <div class="binding-row">
+                  <strong>{binding.connector || "manual"}</strong>
+                  <span>{binding.entrypoint || "entrypoint"} / {binding.path || "web"}</span>
+                </div>
+              {:else}
+                <span class="muted">Manual web input only.</span>
+              {/each}
+            </div>
+            <div>
+              <h3>Outputs</h3>
+              {#each ioBindings(selectedApp, "outputs") as binding}
+                <div class="binding-row">
+                  <strong>{binding.sink || "web"}</strong>
+                  <span>{binding.on || "run.done"} / {binding.entrypoint || "all"}</span>
+                </div>
+              {:else}
+                <span class="muted">Web receipt output only.</span>
+              {/each}
+            </div>
+          </div>
+
+          <div class="activity-list">
+            <h3>Recent I/O activity</h3>
+            {#each ioActivity as row}
+              <div class="activity-row">
+                <span class={`event-dot ${statusClass(row.status)}`}></span>
+                <strong>{row.label}</strong>
+                <span>{row.detail || row.type}</span>
+              </div>
+            {:else}
+              <span class="muted">Select an app run with connector or delivery effects.</span>
+            {/each}
+          </div>
+        </div>
+
+        <div class="panel service-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Why is it on</span>
+              <h2>Services and active set</h2>
+            </div>
+          </div>
+
+          <div class="service-summary">
+            <div>
+              <span>Requires</span>
+              <strong>{selectedActivation?.services?.requires?.join(", ") || selectedApp?.services?.requires?.join(", ") || "none"}</strong>
+            </div>
+            <div>
+              <span>Wants</span>
+              <strong>{selectedActivation?.services?.wants?.join(", ") || selectedApp?.services?.wants?.join(", ") || "none"}</strong>
+            </div>
+          </div>
+
+          <div class="active-set">
+            {#each activationUnits(selectedActivation) as unit}
+              <div class="unit-row">
+                <strong>{unit.id || unit.name || jsonPreview(unit)}</strong>
+                <span>{unit.kind || unit.type || unit.reason || "active"}</span>
+              </div>
+            {:else}
+              <div class="empty-state compact">
+                <strong>No active-set projection</strong>
+                <span>Resolve the selected app to inspect service dependencies.</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div class="panel board-panel">
+          <div class="panel-head">
+            <div>
+              <span class="eyebrow">Default app registry</span>
+              <h2>Installed applications</h2>
+            </div>
+            <span class="badge neutral">{filteredApps.length} apps</span>
+          </div>
+
+          <div class="registry-grid">
+            {#each filteredApps as app}
+              <button class:active={selectedApp?.id === app.id} class="registry-app-row" type="button" onclick={() => chooseApp(app, false)}>
+                <div>
+                  <strong>{app.name || app.id}</strong>
+                  <span>{app.description || app.app_id || "local application"}</span>
+                </div>
+                <div>
+                  <span>Entrypoints</span>
+                  <strong>{(app.entrypoints || []).map((entrypoint) => entrypoint.id).join(", ") || "none"}</strong>
+                </div>
+                <div>
+                  <span>Pipelines</span>
+                  <strong>{(app.pipelines || []).map((pipeline) => pipeline.id).join(", ") || "none"}</strong>
+                </div>
+                <div>
+                  <span>Harnesses</span>
+                  <strong>{requirementList(app, "harnesses").join(", ") || "not declared"}</strong>
+                </div>
+              </button>
+            {:else}
+              <div class="empty-state compact">
+                <strong>No applications in registry</strong>
+                <span>Add an app source or check the default registry directory.</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </section>
+    {/if}
+  </main>
+</div>

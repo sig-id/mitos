@@ -17,6 +17,7 @@ const adapters = @import("../adapters/types.zig");
 const prompt = @import("../prompt/root.zig");
 const headless = @import("../providers/headless.zig");
 const provider_launch = @import("../providers/launch.zig");
+const redaction = @import("../redaction/redactor.zig");
 const steer = @import("../steer/root.zig");
 const terminal = @import("../terminal/core.zig");
 const ghostty = @import("../terminal/ghostty.zig");
@@ -31,6 +32,16 @@ const pty_read_buffer_bytes: usize = 32 * 1024;
 /// Default idle threshold (ms). After this many milliseconds of PTY silence,
 /// we emit one `idle` EVENT. Configurable via the `open` command.
 const default_idle_ms: i64 = 250;
+const max_terminal_cols: u16 = 512;
+const max_terminal_rows: u16 = 512;
+const max_signal_number: u8 = 64;
+const max_shutdown_grace_ms: u32 = 60_000;
+const max_authority_id_bytes: usize = 4 * 1024;
+const max_authority_origin_bytes: usize = 4 * 1024;
+const max_authority_response_bytes: usize = 1024 * 1024;
+const max_stdin_bytes: usize = protocol.max_frame_bytes - 1024;
+const max_steer_text_bytes: usize = 1024 * 1024;
+const max_encode_key_text_bytes: usize = 1024 * 1024;
 
 const protocol_version: u32 = transport.protocol_version;
 
@@ -89,6 +100,7 @@ const State = struct {
     provider: adapters.ProviderId = .{ .value = "generic-pty" },
     adapter: adapters.AdapterId = .{ .value = "generic-pty.terminal" },
     selected_transport: transport.TransportName = .pty,
+    terminal_observation: adapters.TerminalObservationProfile = adapters.terminal_observation_generic_pty,
     tier2_fast_path_rules: []const []const u8 = &.{},
     redaction_patterns: []const []const u8 = &.{},
     next_producer_request_id: u64 = 1,
@@ -132,7 +144,10 @@ const State = struct {
         self.terminal = null;
         if (self.raw_spool_file) |file| file.close();
         self.raw_spool_file = null;
-        if (self.raw_spool_path) |path| self.allocator.free(path);
+        if (self.raw_spool_path) |path| {
+            std.fs.deleteFileAbsolute(path) catch {};
+            self.allocator.free(path);
+        }
         self.raw_spool_path = null;
     }
 
@@ -218,10 +233,10 @@ const State = struct {
             if (n == 0) return;
             const bytes = buf[0..n];
             // Forward to the BEAM as opaque RAW — display path.
-            const boundary_bytes = redactPatternsAlloc(self.allocator, bytes, self.redaction_patterns) catch return error.OutOfMemory;
-            defer boundary_bytes.deinit(self.allocator);
-            self.writer.writeFrame(.raw, boundary_bytes.bytes) catch return error.IoError;
-            try self.appendRawSpool(bytes);
+            const redacted_bytes = try self.redactForScope(.terminal_text, bytes);
+            defer redacted_bytes.deinit(self.allocator);
+            self.writer.writeFrame(.raw, redacted_bytes.bytes) catch return error.IoError;
+            try self.appendRawSpool(redacted_bytes.bytes);
             // Feed the libghostty tap so snapshots are coherent. Any
             // terminal-response bytes (e.g. cursor-position report) go back to
             // the PTY synchronously.
@@ -238,7 +253,7 @@ const State = struct {
 
         const offset = self.raw_spool_offset;
         const len: u64 = @intCast(bytes.len);
-        const emit_raw_ref = self.raw_ref_filter.shouldEmit(self.provider, bytes);
+        const emit_raw_ref = self.raw_ref_filter.shouldEmit(self.terminal_observation, bytes);
         var file = self.raw_spool_file.?;
         file.writeAll(bytes) catch |err| {
             self.emitError("raw_spool", @errorName(err)) catch {};
@@ -269,6 +284,7 @@ const State = struct {
         const file = std.fs.createFileAbsolute(path, .{
             .truncate = true,
             .exclusive = true,
+            .mode = 0o600,
         }) catch |err| {
             self.emitError("raw_spool", @errorName(err)) catch {};
             return error.IoError;
@@ -318,6 +334,10 @@ const State = struct {
             try self.emitError("decode", @errorName(err));
             return;
         };
+        if (!dec.finished()) {
+            try self.emitError("decode", "TrailingBytes");
+            return;
+        }
 
         try self.dispatchCommand(value, arena.allocator());
     }
@@ -345,8 +365,11 @@ const State = struct {
         if (std.ascii.eqlIgnoreCase(cmd, "cancel")) return self.handleCancel();
         if (std.mem.eql(u8, cmd, "encode_key")) return self.handleEncodeKey(value, arena);
         if (std.mem.eql(u8, cmd, "shutdown")) {
-            const grace_ms = if (value.mapGet("grace_ms")) |g| (g.asUint() orelse 100) else 100;
-            try self.shutdownChild(@intCast(grace_ms));
+            const grace_ms = shutdownGraceMilliseconds(value.mapGet("grace_ms"), 100) catch |err| {
+                try self.emitError("protocol", @errorName(err));
+                return;
+            };
+            try self.shutdownChild(grace_ms);
             return error.OrderlyShutdown;
         }
 
@@ -374,11 +397,18 @@ const State = struct {
         const launch_value = value.mapGet("launch_spec") orelse value.mapGet("launch") orelse value.mapGet("spec");
         const control = launch_value orelse value;
 
-        const cols: u16 = if (control.mapGet("cols")) |v| @intCast(v.asUint() orelse 80) else 80;
-        const rows: u16 = if (control.mapGet("rows")) |v| @intCast(v.asUint() orelse 24) else 24;
-        if (control.mapGet("idle_ms")) |v| {
-            if (v.asUint()) |ms| self.idle_ms = @intCast(ms);
-        }
+        const cols = terminalDimension(control.mapGet("cols"), 80, max_terminal_cols) catch |err| {
+            try self.emitError("protocol", @errorName(err));
+            return;
+        };
+        const rows = terminalDimension(control.mapGet("rows"), 24, max_terminal_rows) catch |err| {
+            try self.emitError("protocol", @errorName(err));
+            return;
+        };
+        self.idle_ms = idleMilliseconds(control.mapGet("idle_ms"), self.idle_ms) catch |err| {
+            try self.emitError("protocol", @errorName(err));
+            return;
+        };
 
         var resolved_launch: ?provider_launch.ResolvedLaunch = null;
         defer if (resolved_launch) |resolved| resolved.deinit(self.allocator);
@@ -400,6 +430,7 @@ const State = struct {
             self.provider = resolved.provider;
             self.adapter = resolved.adapter;
             self.selected_transport = resolved.transport_name;
+            self.terminal_observation = resolved.terminal_observation;
             self.tier2_fast_path_rules = spec.policy.tier2_fast_path_rules;
             self.redaction_patterns = spec.policy.redaction_patterns;
             authority = spec.authority;
@@ -421,13 +452,18 @@ const State = struct {
                 return;
             };
 
-            cwd_opt = if (value.mapGet("cwd")) |v|
-                (if (v == .str) v.str else null)
-            else
-                null;
+            cwd_opt = if (value.mapGet("cwd")) |v| cwd: {
+                if (v != .str) break :cwd null;
+                validateCString(v.str) catch |err| {
+                    try self.emitError("protocol", @errorName(err));
+                    return;
+                };
+                break :cwd v.str;
+            } else null;
             self.provider = .{ .value = "generic-pty" };
             self.adapter = .{ .value = "generic-pty.terminal" };
             self.selected_transport = .pty;
+            self.terminal_observation = adapters.terminal_observation_generic_pty;
         }
 
         const env_list = collectEnvWithAuthority(arena, control.mapGet("env"), authority) catch |err| {
@@ -558,10 +594,12 @@ const State = struct {
         defer result.deinit(self.allocator);
 
         if (result.stdout.len > 0) {
+            const stdout = try self.redactForScope(.provider_event, result.stdout);
+            defer stdout.deinit(self.allocator);
             try self.emitMap(.event, &.{
                 .{ "type", .{ .str = "STRUCTURED_OUTPUT" } },
                 .{ "stream", .{ .str = "stdout" } },
-                .{ "bytes", .{ .bin = result.stdout } },
+                .{ "bytes", .{ .bin = stdout.bytes } },
             });
             var sink_context = SidecarAdapterSink{
                 .state = self,
@@ -577,10 +615,12 @@ const State = struct {
             };
         }
         if (result.stderr.len > 0) {
+            const stderr = try self.redactForScope(.provider_event, result.stderr);
+            defer stderr.deinit(self.allocator);
             try self.emitMap(.event, &.{
                 .{ "type", .{ .str = "STRUCTURED_OUTPUT" } },
                 .{ "stream", .{ .str = "stderr" } },
-                .{ "bytes", .{ .bin = result.stderr } },
+                .{ "bytes", .{ .bin = stderr.bytes } },
             });
         }
 
@@ -590,15 +630,20 @@ const State = struct {
         };
         defer self.allocator.free(final_output);
         if (final_output.len > 0) {
+            const redacted_final = try self.redactForScope(.provider_event, final_output);
+            defer redacted_final.deinit(self.allocator);
             try self.emitMap(.event, &.{
                 .{ "type", .{ .str = "FINAL_OUTPUT" } },
-                .{ "text", .{ .str = final_output } },
+                .{ "text", .{ .str = redacted_final.bytes } },
             });
             try self.emitPromptsFromText(final_output);
         }
 
         if (result.status() != .completed) {
-            try self.emitError("process", if (result.stderr.len > 0) result.stderr else "stdio-json provider command failed");
+            const detail = if (result.stderr.len > 0) result.stderr else "stdio-json provider command failed";
+            const redacted_detail = try self.redactForScope(.provider_event, detail);
+            defer redacted_detail.deinit(self.allocator);
+            try self.emitError("process", redacted_detail.bytes);
         }
 
         if (result.exit_code) |code| {
@@ -633,10 +678,6 @@ const State = struct {
     }
 
     fn handleWriteStdin(self: *State, value: msgpack.Value) LoopError!void {
-        const session = if (self.session) |*s| s else {
-            try self.emitError("state", "no session");
-            return;
-        };
         const bytes_value = value.mapGet("bytes") orelse {
             try self.emitError("protocol", "write_stdin: missing bytes");
             return;
@@ -649,6 +690,15 @@ const State = struct {
                 return;
             },
         };
+        if (bytes.len > max_stdin_bytes) {
+            try self.emitError("protocol", "write_stdin: bytes too large");
+            return;
+        }
+
+        const session = if (self.session) |*s| s else {
+            try self.emitError("state", "no session");
+            return;
+        };
         session.pty.writeAll(bytes) catch |err| {
             try self.emitError("pty_write", @errorName(err));
         };
@@ -659,9 +709,14 @@ const State = struct {
             try self.emitError("state", "no session");
             return;
         };
-        const cols: u16 = if (value.mapGet("cols")) |v| @intCast(v.asUint() orelse self.cols) else self.cols;
-        const rows: u16 = if (value.mapGet("rows")) |v| @intCast(v.asUint() orelse self.rows) else self.rows;
-        if (cols == 0 or rows == 0) return;
+        const cols = terminalDimension(value.mapGet("cols"), self.cols, max_terminal_cols) catch |err| {
+            try self.emitError("protocol", @errorName(err));
+            return;
+        };
+        const rows = terminalDimension(value.mapGet("rows"), self.rows, max_terminal_rows) catch |err| {
+            try self.emitError("protocol", @errorName(err));
+            return;
+        };
         session.pty.resize(.{ .cols = cols, .rows = rows }) catch |err| {
             try self.emitError("pty_resize", @errorName(err));
             return;
@@ -679,7 +734,10 @@ const State = struct {
             try self.emitError("state", "no session");
             return;
         };
-        const sig: u8 = if (value.mapGet("signum")) |v| @intCast(v.asUint() orelse 15) else 15;
+        const sig = signalNumber(value.mapGet("signum"), 15) catch |err| {
+            try self.emitError("protocol", @errorName(err));
+            return;
+        };
         session.kill(sig) catch |err| {
             try self.emitError("signal", @errorName(err));
         };
@@ -696,15 +754,44 @@ const State = struct {
     }
 
     fn handleAuthorize(self: *State, value: msgpack.Value) LoopError!void {
-        const request_id = stringField(value, "request_id") orelse stringField(value, "action_id") orelse {
+        const request_id_value = value.mapGet("request_id") orelse value.mapGet("action_id") orelse {
             try self.emitError("protocol", "authorize: missing request_id");
             return;
         };
-        const token = stringField(value, "token") orelse {
+        if (request_id_value != .str) {
+            try self.emitError("protocol", "authorize: request_id must be string");
+            return;
+        }
+        const request_id = request_id_value.str;
+        if (controlTextError(request_id, max_authority_id_bytes, true)) |err| {
+            try self.emitControlTextError("authorize", "request_id", err);
+            return;
+        }
+
+        const token_value = value.mapGet("token") orelse {
             try self.emitError("protocol", "authorize: missing token");
             return;
         };
-        const origin = stringField(value, "origin") orelse "terminal_scrape";
+        if (token_value != .str) {
+            try self.emitError("protocol", "authorize: token must be string");
+            return;
+        }
+        if (controlTextError(token_value.str, max_authority_response_bytes, false)) |err| {
+            try self.emitControlTextError("authorize", "token", err);
+            return;
+        }
+
+        const origin = if (value.mapGet("origin")) |origin_value| origin: {
+            if (origin_value != .str) {
+                try self.emitError("protocol", "authorize: origin must be string");
+                return;
+            }
+            if (controlTextError(origin_value.str, max_authority_origin_bytes, false)) |err| {
+                try self.emitControlTextError("authorize", "origin", err);
+                return;
+            }
+            break :origin origin_value.str;
+        } else "terminal_scrape";
 
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = "STRUCTURED_OUTPUT" } },
@@ -713,20 +800,52 @@ const State = struct {
             .{ "action_id", .{ .str = request_id } },
             .{ "origin", .{ .str = origin } },
             .{ "decision", .{ .str = "allow" } },
-            .{ "token", .{ .str = token } },
+            .{ "token", .{ .str = "[REDACTED]" } },
         });
     }
 
     fn handleDeny(self: *State, value: msgpack.Value) LoopError!void {
-        const request_id = stringField(value, "request_id") orelse stringField(value, "action_id") orelse {
+        const request_id_value = value.mapGet("request_id") orelse value.mapGet("action_id") orelse {
             try self.emitError("protocol", "deny: missing request_id");
             return;
         };
-        const reason = stringField(value, "reason") orelse {
+        if (request_id_value != .str) {
+            try self.emitError("protocol", "deny: request_id must be string");
+            return;
+        }
+        const request_id = request_id_value.str;
+        if (controlTextError(request_id, max_authority_id_bytes, true)) |err| {
+            try self.emitControlTextError("deny", "request_id", err);
+            return;
+        }
+
+        const reason_value = value.mapGet("reason") orelse {
             try self.emitError("protocol", "deny: missing reason");
             return;
         };
-        const origin = stringField(value, "origin") orelse "terminal_scrape";
+        if (reason_value != .str) {
+            try self.emitError("protocol", "deny: reason must be string");
+            return;
+        }
+        const reason = reason_value.str;
+        if (controlTextError(reason, max_authority_response_bytes, false)) |err| {
+            try self.emitControlTextError("deny", "reason", err);
+            return;
+        }
+
+        const origin = if (value.mapGet("origin")) |origin_value| origin: {
+            if (origin_value != .str) {
+                try self.emitError("protocol", "deny: origin must be string");
+                return;
+            }
+            if (controlTextError(origin_value.str, max_authority_origin_bytes, false)) |err| {
+                try self.emitControlTextError("deny", "origin", err);
+                return;
+            }
+            break :origin origin_value.str;
+        } else "terminal_scrape";
+        const redacted_reason = try self.redactForScope(.provider_event, reason);
+        defer redacted_reason.deinit(self.allocator);
 
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = "STRUCTURED_OUTPUT" } },
@@ -735,7 +854,7 @@ const State = struct {
             .{ "action_id", .{ .str = request_id } },
             .{ "origin", .{ .str = origin } },
             .{ "decision", .{ .str = "deny" } },
-            .{ "reason", .{ .str = reason } },
+            .{ "reason", .{ .str = redacted_reason.bytes } },
         });
     }
 
@@ -745,19 +864,51 @@ const State = struct {
     /// The provider keymap chosen at `open` decides the byte sequence, so the
     /// brain never has to know which keys a given provider's dialogs expect.
     fn handleSteer(self: *State, value: msgpack.Value) LoopError!void {
-        const session = if (self.session) |*s| s else {
-            try self.emitError("state", "no session");
-            return;
-        };
-        const name = stringField(value, "interaction") orelse {
+        const name_value = value.mapGet("interaction") orelse {
             try self.emitError("protocol", "steer: missing interaction");
             return;
         };
-        const text = stringField(value, "text") orelse "";
-        const option: ?u64 = if (value.mapGet("option")) |v| v.asUint() else null;
+        if (name_value != .str) {
+            try self.emitError("protocol", "steer: interaction must be string");
+            return;
+        }
+        const name = name_value.str;
+        const requires_text = steerInteractionRequiresText(name);
+        const text = if (value.mapGet("text")) |text_v| text: {
+            if (text_v != .str) {
+                try self.emitError("protocol", "steer: text must be string");
+                return;
+            }
+            if (steerTextError(text_v.str, requires_text)) |detail| {
+                try self.emitError("protocol", detail);
+                return;
+            }
+            break :text text_v.str;
+        } else text: {
+            if (requires_text) {
+                try self.emitError("protocol", "steer: text required");
+                return;
+            }
+            break :text "";
+        };
+        const option: ?u64 = if (value.mapGet("option")) |v| option: {
+            const raw = v.asUint() orelse {
+                try self.emitError("protocol", "steer: option must be integer");
+                return;
+            };
+            if (raw == 0 or raw > 9) {
+                try self.emitError("protocol", "steer: option out of range");
+                return;
+            }
+            break :option raw;
+        } else null;
 
         const interaction = steer.parseInteraction(name, text, option) orelse {
             try self.emitError("steer", "unknown interaction");
+            return;
+        };
+        const session = if (self.session) |*s| s else {
+            try self.emitError("state", "no session");
             return;
         };
         const bytes = self.steering.encode(interaction, self.allocator) catch |err| switch (err) {
@@ -808,7 +959,15 @@ const State = struct {
 
         const input: terminal.KeyInput = blk: {
             if (value.mapGet("text")) |text_v| {
-                if (text_v == .str) break :blk .{ .text = text_v.str };
+                if (text_v != .str) {
+                    try self.emitError("protocol", "encode_key: text must be string");
+                    return;
+                }
+                if (encodeKeyTextError(text_v.str)) |detail| {
+                    try self.emitError("protocol", detail);
+                    return;
+                }
+                break :blk .{ .text = text_v.str };
             }
             const key_v = value.mapGet("key") orelse {
                 try self.emitError("protocol", "encode_key: missing key/text");
@@ -921,11 +1080,13 @@ const State = struct {
     }
 
     fn emitTitleEvent(self: *State, title: []const u8) LoopError!void {
-        if (!self.title_filter.shouldEmit(self.provider, title)) return;
+        const redacted_title = try self.redactForScope(.terminal_text, title);
+        defer redacted_title.deinit(self.allocator);
+        if (!self.title_filter.shouldEmit(self.terminal_observation, redacted_title.bytes)) return;
 
         try self.emitMap(.event, &.{
             .{ "type", .{ .str = "title" } },
-            .{ "text", .{ .str = title } },
+            .{ "text", .{ .str = redacted_title.bytes } },
         });
     }
 
@@ -998,26 +1159,32 @@ const State = struct {
 
         switch (event) {
             .approval_requested => |approval| {
+                const redacted_text = try self.redactForScope(.terminal_text, approval.text);
+                defer redacted_text.deinit(self.allocator);
                 try self.emitMap(.event, &.{
                     .{ "type", .{ .str = "PROMPT_DETECTED" } },
                     .{ "prompt_kind", .{ .str = "approval_requested" } },
-                    .{ "text", .{ .str = approval.text } },
+                    .{ "text", .{ .str = redacted_text.bytes } },
                     .{ "risk", .{ .str = @tagName(approval.risk) } },
                 });
-                try self.emitActionRequestUnlessFastPath(approval.text, @tagName(approval.risk));
+                try self.emitActionRequestUnlessFastPath(approval.text, redacted_text.bytes, @tagName(approval.risk));
             },
             .question_asked => |question| {
+                const redacted_text = try self.redactForScope(.terminal_text, question.text);
+                defer redacted_text.deinit(self.allocator);
                 try self.emitMap(.event, &.{
                     .{ "type", .{ .str = "PROMPT_DETECTED" } },
                     .{ "prompt_kind", .{ .str = "question_asked" } },
-                    .{ "text", .{ .str = question.text } },
+                    .{ "text", .{ .str = redacted_text.bytes } },
                 });
             },
             .final_answer_candidate => |text| {
+                const redacted_text = try self.redactForScope(.terminal_text, text);
+                defer redacted_text.deinit(self.allocator);
                 try self.emitMap(.event, &.{
                     .{ "type", .{ .str = "PROMPT_DETECTED" } },
                     .{ "prompt_kind", .{ .str = "final_answer_candidate" } },
-                    .{ "text", .{ .str = text } },
+                    .{ "text", .{ .str = redacted_text.bytes } },
                 });
             },
             .idle_detected => {
@@ -1028,10 +1195,12 @@ const State = struct {
                 });
             },
             .error_detected => |text| {
+                const redacted_text = try self.redactForScope(.terminal_text, text);
+                defer redacted_text.deinit(self.allocator);
                 try self.emitMap(.event, &.{
                     .{ "type", .{ .str = "PROMPT_DETECTED" } },
                     .{ "prompt_kind", .{ .str = "error_detected" } },
-                    .{ "text", .{ .str = text } },
+                    .{ "text", .{ .str = redacted_text.bytes } },
                     .{ "risk", .{ .str = "high" } },
                 });
             },
@@ -1041,6 +1210,7 @@ const State = struct {
     fn emitActionRequestUnlessFastPath(
         self: *State,
         prompt_text: []const u8,
+        redacted_prompt_text: []const u8,
         risk: []const u8,
     ) LoopError!void {
         const fast_path = matchesAnyPattern(prompt_text, self.tier2_fast_path_rules);
@@ -1060,7 +1230,7 @@ const State = struct {
                 .{ "origin", .{ .str = "terminal_scrape" } },
                 .{ "action", .{ .str = "terminal_input" } },
                 .{ "risk", .{ .str = risk } },
-                .{ "context", .{ .str = prompt_text } },
+                .{ "context", .{ .str = redacted_prompt_text } },
                 .{ "auto_decision", .{ .str = "authorize" } },
                 .{ "decided_by", .{ .str = "policy" } },
                 .{ "fast_path", .{ .boolean = true } },
@@ -1072,7 +1242,7 @@ const State = struct {
                 .{ "origin", .{ .str = "terminal_scrape" } },
                 .{ "action", .{ .str = "terminal_input" } },
                 .{ "risk", .{ .str = risk } },
-                .{ "context", .{ .str = prompt_text } },
+                .{ "context", .{ .str = redacted_prompt_text } },
             });
         }
     }
@@ -1083,6 +1253,23 @@ const State = struct {
             .{ "kind", .{ .str = kind } },
             .{ "detail", .{ .str = detail } },
         });
+    }
+
+    fn emitControlTextError(
+        self: *State,
+        command: []const u8,
+        field: []const u8,
+        err: ControlTextError,
+    ) LoopError!void {
+        var detail_buf: [128]u8 = undefined;
+        const reason = switch (err) {
+            .too_large => "too large",
+            .nul => "contains NUL",
+            .invalid_utf8 => "must be valid UTF-8",
+            .empty => "empty",
+        };
+        const detail = std.fmt.bufPrint(&detail_buf, "{s}: {s} {s}", .{ command, field, reason }) catch "invalid control text";
+        try self.emitError("protocol", detail);
     }
 
     fn emitTerminalOutputFromCurrentScreen(self: *State) LoopError!void {
@@ -1098,11 +1285,11 @@ const State = struct {
     }
 
     fn emitTerminalOutputFromText(self: *State, rendered_text: []const u8) LoopError!void {
-        const output = terminalOutputTextAlloc(self.allocator, self.provider, rendered_text) catch return error.OutOfMemory;
+        const output = terminalOutputTextAlloc(self.allocator, self.terminal_observation, rendered_text) catch return error.OutOfMemory;
         defer self.allocator.free(output);
         if (output.len == 0) return;
 
-        const redacted = redactPatternsAlloc(self.allocator, output, self.redaction_patterns) catch return error.OutOfMemory;
+        const redacted = try self.redactForScope(.terminal_text, output);
         defer redacted.deinit(self.allocator);
         if (!self.terminal_output_filter.shouldEmit(redacted.bytes)) return;
 
@@ -1192,7 +1379,24 @@ const State = struct {
             }
         }
 
+        if (buf.items.len + 1 > protocol.max_frame_bytes) {
+            try self.emitError("snapshot", "FrameTooLarge");
+            return;
+        }
         self.writer.writeFrame(.snapshot, buf.items) catch return error.IoError;
+    }
+
+    fn redactForScope(
+        self: *State,
+        scope: redaction.RedactionScope,
+        bytes: []const u8,
+    ) LoopError!BoundaryBytes {
+        return redactForScopeAlloc(
+            self.allocator,
+            scope,
+            bytes,
+            self.redaction_patterns,
+        ) catch return error.OutOfMemory;
     }
 };
 
@@ -1209,10 +1413,12 @@ const SidecarAdapterSink = struct {
         switch (event) {
             .structured => |bytes| {
                 if (self.skip_token_usage and isNormalizedTokenUsage(bytes)) return;
+                const redacted = try self.state.redactForScope(.provider_event, bytes);
+                defer redacted.deinit(self.state.allocator);
                 try self.state.emitMap(.event, &.{
                     .{ "type", .{ .str = transport.TypedEventName.structured_output.wireName() } },
                     .{ "stream", .{ .str = "normalized" } },
-                    .{ "bytes", .{ .bin = bytes } },
+                    .{ "bytes", .{ .bin = redacted.bytes } },
                 });
             },
             else => {},
@@ -1250,12 +1456,10 @@ const PtyRawRefFilter = struct {
 
     fn shouldEmit(
         self: *PtyRawRefFilter,
-        provider: adapters.ProviderId,
+        profile: adapters.TerminalObservationProfile,
         bytes: []const u8,
     ) bool {
-        if (usesProviderTuiChrome(provider)) return false;
-
-        const signature = rawSemanticSignature(provider, bytes) orelse return false;
+        const signature = rawSemanticSignature(profile, bytes) orelse return false;
         if (self.last_signature_valid and self.last_signature == signature) return false;
 
         self.last_signature = signature;
@@ -1286,10 +1490,10 @@ const TitleEventFilter = struct {
 
     fn shouldEmit(
         self: *TitleEventFilter,
-        provider: adapters.ProviderId,
+        profile: adapters.TerminalObservationProfile,
         title: []const u8,
     ) bool {
-        if (usesProviderTuiChrome(provider)) return false;
+        if (profile.suppress_title_events) return false;
 
         const signature = titleSignature(title) orelse return false;
         if (self.last_signature_valid and self.last_signature == signature) return false;
@@ -1314,8 +1518,8 @@ const TerminalOutputFilter = struct {
     }
 };
 
-fn rawSemanticSignature(provider: adapters.ProviderId, bytes: []const u8) ?u64 {
-    if (!rawRefEligibleProvider(provider)) return null;
+fn rawSemanticSignature(profile: adapters.TerminalObservationProfile, bytes: []const u8) ?u64 {
+    if (!profile.emit_raw_refs) return null;
 
     var hash = fnv64_offset;
     var semantic_chars: usize = 0;
@@ -1359,17 +1563,17 @@ fn rawSemanticSignature(provider: adapters.ProviderId, bytes: []const u8) ?u64 {
         i += width;
     }
 
-    const min_strong: usize = if (usesProviderTuiChrome(provider)) 3 else 1;
+    const min_strong = profile.raw_min_strong_chars;
     if (strong_chars < min_strong or semantic_chars < min_strong) return null;
     return hash;
 }
 
 fn terminalOutputTextAlloc(
     allocator: std.mem.Allocator,
-    provider: adapters.ProviderId,
+    profile: adapters.TerminalObservationProfile,
     rendered_text: []const u8,
 ) ![]u8 {
-    if (!usesProviderTuiChrome(provider)) return allocator.dupe(u8, "");
+    if (!profile.extract_visible_text) return allocator.dupe(u8, "");
 
     var fallback: std.ArrayList(u8) = .empty;
     defer fallback.deinit(allocator);
@@ -1380,11 +1584,11 @@ fn terminalOutputTextAlloc(
     while (lines.next()) |raw_line| {
         const clean = try cleanTerminalLineAlloc(allocator, raw_line);
         defer allocator.free(clean);
-        if (clean.len == 0 or isTerminalChromeLine(clean)) continue;
+        if (clean.len == 0 or isTerminalChromeLine(profile, clean)) continue;
 
         if (terminalBulletText(clean)) |bullet_text| {
             const trimmed = stripTrailingOrdinal(std.mem.trim(u8, bullet_text, " \t\r\n"));
-            if (trimmed.len > 0 and !isTerminalChromeLine(trimmed)) {
+            if (trimmed.len > 0 and !isTerminalChromeLine(profile, trimmed)) {
                 try appendOutputLine(allocator, &bullets, trimmed);
             }
         }
@@ -1468,34 +1672,9 @@ fn stripTrailingOrdinal(text: []const u8) []const u8 {
     return std.mem.trimRight(u8, text[0 .. digits_start - 1], " \t\r\n");
 }
 
-fn isTerminalChromeLine(line: []const u8) bool {
+fn isTerminalChromeLine(profile: adapters.TerminalObservationProfile, line: []const u8) bool {
     if (!containsAlnum(line)) return true;
-    return containsAny(line, &.{
-        "OpenAI Codex",
-        "model:",
-        "directory:",
-        "Tip:",
-        "Context ",
-        "% used",
-        "gpt-",
-        "/model to change",
-        "esc to interrupt",
-        "Booting MCP",
-        "MCP startup",
-        "Working",
-        "Thinking",
-        "OpenCode",
-        "opencode",
-        "Pi",
-        "steering",
-        "follow-up",
-        "loading",
-        "connected",
-        "transport:",
-        "Mitos Runtime",
-        "bubblewrap",
-        "sandbox prerequisites",
-    });
+    return containsAny(line, profile.chrome_line_markers);
 }
 
 fn containsAlnum(text: []const u8) bool {
@@ -1674,21 +1853,6 @@ fn isTerminalFrameCodepoint(codepoint: u21) bool {
         (codepoint >= 0x2580 and codepoint <= 0x259f); // block elements
 }
 
-fn usesProviderTuiChrome(provider: adapters.ProviderId) bool {
-    return std.mem.eql(u8, provider.value, "codex") or
-        std.mem.eql(u8, provider.value, "claude") or
-        std.mem.eql(u8, provider.value, "claudecode") or
-        std.mem.eql(u8, provider.value, "gemini") or
-        std.mem.eql(u8, provider.value, "opencode") or
-        std.mem.eql(u8, provider.value, "pi");
-}
-
-fn rawRefEligibleProvider(provider: adapters.ProviderId) bool {
-    return std.mem.eql(u8, provider.value, "generic-pty") or
-        std.mem.eql(u8, provider.value, "generic") or
-        std.mem.eql(u8, provider.value, "fake");
-}
-
 fn hashSlice(hash: *u64, bytes: []const u8) void {
     for (bytes) |byte| hashByte(hash, byte);
     hashByte(hash, 0);
@@ -1707,6 +1871,14 @@ const BoundaryBytes = struct {
         if (self.owned) |owned| allocator.free(owned);
     }
 };
+
+const test_terminal_chrome_markers = [_][]const u8{
+    "StatusChrome",
+    "ProgressChrome",
+    "Boot server",
+    "interrupt",
+};
+const test_terminal_observation_provider_tui = adapters.terminalObservationProviderTui(&test_terminal_chrome_markers);
 
 fn redactPatternsAlloc(
     allocator: std.mem.Allocator,
@@ -1728,6 +1900,20 @@ fn redactPatternsAlloc(
     }
 
     return .{ .bytes = current, .owned = owned };
+}
+
+fn redactForScopeAlloc(
+    allocator: std.mem.Allocator,
+    scope: redaction.RedactionScope,
+    bytes: []const u8,
+    patterns: []const []const u8,
+) !BoundaryBytes {
+    const literal = try redactPatternsAlloc(allocator, bytes, patterns);
+    defer literal.deinit(allocator);
+
+    const default_redactor: redaction.Redactor = .{};
+    const redacted = try default_redactor.redactAlloc(allocator, scope, literal.bytes);
+    return .{ .bytes = redacted, .owned = redacted };
 }
 
 fn backendName(b: Backend) []const u8 {
@@ -1773,9 +1959,38 @@ fn collectStringArray(arena: std.mem.Allocator, items: []const msgpack.Value) ![
     const out = try arena.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
         if (item != .str) return error.InvalidArgument;
+        try validateCString(item.str);
         out[i] = item.str;
     }
     return out;
+}
+
+fn terminalDimension(value: ?msgpack.Value, default: u16, max: u16) !u16 {
+    const v = value orelse return default;
+    const raw = v.asUint() orelse return error.InvalidSize;
+    if (raw == 0 or raw > max) return error.InvalidSize;
+    return @intCast(raw);
+}
+
+fn idleMilliseconds(value: ?msgpack.Value, default: i64) !i64 {
+    const v = value orelse return default;
+    const raw = v.asUint() orelse return error.InvalidIdleMs;
+    if (raw > 60_000) return error.InvalidIdleMs;
+    return @intCast(raw);
+}
+
+fn signalNumber(value: ?msgpack.Value, default: u8) !u8 {
+    const v = value orelse return default;
+    const raw = v.asUint() orelse return error.InvalidSignal;
+    if (raw == 0 or raw > max_signal_number) return error.InvalidSignal;
+    return @intCast(raw);
+}
+
+fn shutdownGraceMilliseconds(value: ?msgpack.Value, default: u32) !u32 {
+    const v = value orelse return default;
+    const raw = v.asUint() orelse return error.InvalidShutdownGraceMs;
+    if (raw > max_shutdown_grace_ms) return error.InvalidShutdownGraceMs;
+    return @intCast(raw);
 }
 
 /// env may be encoded two ways: a map {"KEY": "VAL"} or an array of {name,
@@ -1789,6 +2004,7 @@ fn collectEnv(arena: std.mem.Allocator, value: ?msgpack.Value) ![][]const u8 {
         try list.ensureTotalCapacity(arena, v.map.len);
         for (v.map) |pair| {
             if (pair.key != .str or pair.value != .str) return error.InvalidArgument;
+            try validateEnvPair(pair.key.str, pair.value.str);
             const joined = try std.fmt.allocPrint(arena, "{s}={s}", .{ pair.key.str, pair.value.str });
             try list.append(arena, joined);
         }
@@ -1799,6 +2015,7 @@ fn collectEnv(arena: std.mem.Allocator, value: ?msgpack.Value) ![][]const u8 {
             const name = item.mapGet("name") orelse return error.InvalidArgument;
             const val = item.mapGet("value") orelse return error.InvalidArgument;
             if (name != .str or val != .str) return error.InvalidArgument;
+            try validateEnvPair(name.str, val.str);
             const joined = try std.fmt.allocPrint(arena, "{s}={s}", .{ name.str, val.str });
             try list.append(arena, joined);
         }
@@ -1818,6 +2035,8 @@ fn parseLaunchSpec(arena: std.mem.Allocator, value: msgpack.Value) !transport.La
     const provider_value = value.mapGet("provider") orelse return error.MissingProvider;
     const task_value = value.mapGet("task") orelse return error.MissingTask;
     if (provider_value != .str or task_value != .str) return error.InvalidArgument;
+    try validateCString(provider_value.str);
+    try validateCString(task_value.str);
 
     const order_value = value.mapGet("transport_order") orelse value.mapGet("adapter_order");
     const order = try collectTransportOrder(arena, order_value);
@@ -1829,13 +2048,14 @@ fn parseLaunchSpec(arena: std.mem.Allocator, value: msgpack.Value) !transport.La
         break :argv try collectStringArray(arena, argv_value.array);
     } else &.{};
 
-    const cols: u16 = if (value.mapGet("cols")) |v| @intCast(v.asUint() orelse 80) else 80;
-    const rows: u16 = if (value.mapGet("rows")) |v| @intCast(v.asUint() orelse 24) else 24;
-    const idle_ms: i64 = if (value.mapGet("idle_ms")) |v| @intCast(v.asUint() orelse default_idle_ms) else default_idle_ms;
-    const cwd: ?[]const u8 = if (value.mapGet("cwd")) |v|
-        (if (v == .str) v.str else null)
-    else
-        null;
+    const cols = try terminalDimension(value.mapGet("cols"), 80, max_terminal_cols);
+    const rows = try terminalDimension(value.mapGet("rows"), 24, max_terminal_rows);
+    const idle_ms = try idleMilliseconds(value.mapGet("idle_ms"), default_idle_ms);
+    const cwd: ?[]const u8 = if (value.mapGet("cwd")) |v| cwd: {
+        if (v != .str) break :cwd null;
+        try validateCString(v.str);
+        break :cwd v.str;
+    } else null;
 
     return .{
         .version = transport.protocol_version,
@@ -1922,6 +2142,7 @@ fn collectEnvVars(arena: std.mem.Allocator, value: ?msgpack.Value) ![]const tran
         try list.ensureTotalCapacity(arena, v.map.len);
         for (v.map) |pair| {
             if (pair.key != .str or pair.value != .str) return error.InvalidArgument;
+            try validateEnvPair(pair.key.str, pair.value.str);
             list.appendAssumeCapacity(.{ .name = pair.key.str, .value = pair.value.str });
         }
     } else if (v == .array) {
@@ -1931,6 +2152,7 @@ fn collectEnvVars(arena: std.mem.Allocator, value: ?msgpack.Value) ![]const tran
             const name = item.mapGet("name") orelse return error.InvalidArgument;
             const val = item.mapGet("value") orelse return error.InvalidArgument;
             if (name != .str or val != .str) return error.InvalidArgument;
+            try validateEnvPair(name.str, val.str);
             list.appendAssumeCapacity(.{ .name = name.str, .value = val.str });
         }
     } else return error.InvalidArgument;
@@ -1973,8 +2195,19 @@ fn collectAdapterEnvVarsWithAuthority(
     for (base) |entry| {
         list.appendAssumeCapacity(.{ .name = entry.name, .value = entry.value });
     }
-    appendAuthorityAdapterEnv(&list, authority);
+    try appendAuthorityAdapterEnv(&list, authority);
     return list.toOwnedSlice(arena);
+}
+
+fn validateCString(value: []const u8) !void {
+    if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidCString;
+}
+
+fn validateEnvPair(name: []const u8, value: []const u8) !void {
+    if (name.len == 0) return error.InvalidEnvName;
+    if (std.mem.indexOfScalar(u8, name, 0) != null) return error.InvalidEnvName;
+    if (std.mem.indexOfScalar(u8, name, '=') != null) return error.InvalidEnvName;
+    if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidEnvValue;
 }
 
 fn authorityEnvCount(authority: transport.AuthorityPlane) usize {
@@ -1992,15 +2225,19 @@ fn appendAuthorityEnvStrings(
     authority: transport.AuthorityPlane,
 ) !void {
     if (authority.socket_path) |socket_path| {
+        try validateCString(socket_path);
         try list.append(arena, try std.fmt.allocPrint(arena, "OD_DAEMON_URL=unix://{s}", .{socket_path}));
     }
     if (authority.project_id) |project_id| {
+        try validateCString(project_id);
         try list.append(arena, try std.fmt.allocPrint(arena, "OD_PROJECT_ID={s}", .{project_id}));
     }
     if (authority.run_id) |run_id| {
+        try validateCString(run_id);
         try list.append(arena, try std.fmt.allocPrint(arena, "OD_RUN_ID={s}", .{run_id}));
     }
     if (authority.token) |token| {
+        try validateCString(token);
         try list.append(arena, try std.fmt.allocPrint(arena, "OD_TOKEN={s}", .{token}));
     }
 }
@@ -2008,17 +2245,21 @@ fn appendAuthorityEnvStrings(
 fn appendAuthorityAdapterEnv(
     list: *std.ArrayList(adapters.EnvVar),
     authority: transport.AuthorityPlane,
-) void {
+) !void {
     if (authority.socket_path) |socket_path| {
+        try validateCString(socket_path);
         list.appendAssumeCapacity(.{ .name = "OD_DAEMON_URL", .value = socket_path });
     }
     if (authority.project_id) |project_id| {
+        try validateCString(project_id);
         list.appendAssumeCapacity(.{ .name = "OD_PROJECT_ID", .value = project_id });
     }
     if (authority.run_id) |run_id| {
+        try validateCString(run_id);
         list.appendAssumeCapacity(.{ .name = "OD_RUN_ID", .value = run_id });
     }
     if (authority.token) |token| {
+        try validateCString(token);
         list.appendAssumeCapacity(.{ .name = "OD_TOKEN", .value = token });
     }
 }
@@ -2046,6 +2287,56 @@ fn matchesAnyPattern(text: []const u8, patterns: []const []const u8) bool {
         if (std.mem.indexOf(u8, text, pattern) != null) return true;
     }
     return false;
+}
+
+fn encodeKeyTextError(text: []const u8) ?[]const u8 {
+    const err = controlTextError(text, max_encode_key_text_bytes, false) orelse return null;
+    return switch (err) {
+        .too_large => "encode_key: text too large",
+        .nul => "encode_key: text contains NUL",
+        .invalid_utf8 => "encode_key: text must be valid UTF-8",
+        .empty => null,
+    };
+}
+
+fn steerTextError(text: []const u8, require_nonblank: bool) ?[]const u8 {
+    const err = controlTextError(text, max_steer_text_bytes, require_nonblank) orelse return null;
+    return switch (err) {
+        .too_large => "steer: text too large",
+        .nul => "steer: text contains NUL",
+        .invalid_utf8 => "steer: text must be valid UTF-8",
+        .empty => "steer: text empty",
+    };
+}
+
+const ControlTextError = enum {
+    too_large,
+    nul,
+    invalid_utf8,
+    empty,
+};
+
+fn controlTextError(text: []const u8, max_bytes: usize, require_nonblank: bool) ?ControlTextError {
+    if (text.len > max_bytes) return .too_large;
+    if (std.mem.indexOfScalar(u8, text, 0) != null) return .nul;
+    if (!validUtf8(text)) return .invalid_utf8;
+    if (require_nonblank and std.mem.trim(u8, text, " \t\r\n").len == 0) return .empty;
+    return null;
+}
+
+fn steerInteractionRequiresText(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "answer") or std.ascii.eqlIgnoreCase(name, "prompt");
+}
+
+fn validUtf8(bytes: []const u8) bool {
+    var i: usize = 0;
+    while (i < bytes.len) {
+        const width = std.unicode.utf8ByteSequenceLength(bytes[i]) catch return false;
+        if (i + width > bytes.len) return false;
+        _ = std.unicode.utf8Decode(bytes[i .. i + width]) catch return false;
+        i += width;
+    }
+    return true;
 }
 
 fn parseSpecialKey(name: []const u8) ?terminal.SpecialKey {
@@ -2091,6 +2382,424 @@ test "collectEnv handles map form" {
     try std.testing.expectEqualStrings("TERM=xterm-256color", env[1]);
 }
 
+test "control parser rejects c-string truncation in argv and launch spec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const argv = try a.alloc(msgpack.Value, 1);
+    argv[0] = .{ .str = "sh\x00ignored" };
+    try std.testing.expectError(error.InvalidCString, collectStringArray(a, argv));
+
+    var pairs = try a.alloc(msgpack.Value.Pair, 2);
+    pairs[0] = .{ .key = .{ .str = "provider" }, .value = .{ .str = "fake" } };
+    pairs[1] = .{ .key = .{ .str = "task" }, .value = .{ .str = "hello\x00ignored" } };
+    try std.testing.expectError(error.InvalidCString, parseLaunchSpec(a, .{ .map = pairs }));
+
+    pairs = try a.alloc(msgpack.Value.Pair, 3);
+    pairs[0] = .{ .key = .{ .str = "provider" }, .value = .{ .str = "fake" } };
+    pairs[1] = .{ .key = .{ .str = "task" }, .value = .{ .str = "hello" } };
+    pairs[2] = .{ .key = .{ .str = "cwd" }, .value = .{ .str = "/tmp\x00ignored" } };
+    try std.testing.expectError(error.InvalidCString, parseLaunchSpec(a, .{ .map = pairs }));
+}
+
+test "control parser rejects invalid environment names and values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var pairs = try a.alloc(msgpack.Value.Pair, 1);
+    pairs[0] = .{ .key = .{ .str = "BAD=NAME" }, .value = .{ .str = "value" } };
+    try std.testing.expectError(error.InvalidEnvName, collectEnv(a, .{ .map = pairs }));
+    try std.testing.expectError(error.InvalidEnvName, collectEnvVars(a, .{ .map = pairs }));
+
+    pairs = try a.alloc(msgpack.Value.Pair, 1);
+    pairs[0] = .{ .key = .{ .str = "BAD\x00NAME" }, .value = .{ .str = "value" } };
+    try std.testing.expectError(error.InvalidEnvName, collectEnv(a, .{ .map = pairs }));
+    try std.testing.expectError(error.InvalidEnvName, collectEnvVars(a, .{ .map = pairs }));
+
+    pairs = try a.alloc(msgpack.Value.Pair, 1);
+    pairs[0] = .{ .key = .{ .str = "GOOD" }, .value = .{ .str = "value\x00ignored" } };
+    try std.testing.expectError(error.InvalidEnvValue, collectEnv(a, .{ .map = pairs }));
+    try std.testing.expectError(error.InvalidEnvValue, collectEnvVars(a, .{ .map = pairs }));
+
+    const item_pairs = try a.alloc(msgpack.Value.Pair, 2);
+    item_pairs[0] = .{ .key = .{ .str = "name" }, .value = .{ .str = "" } };
+    item_pairs[1] = .{ .key = .{ .str = "value" }, .value = .{ .str = "value" } };
+    const items = try a.alloc(msgpack.Value, 1);
+    items[0] = .{ .map = item_pairs };
+    try std.testing.expectError(error.InvalidEnvName, collectEnv(a, .{ .array = items }));
+    try std.testing.expectError(error.InvalidEnvName, collectEnvVars(a, .{ .array = items }));
+}
+
+test "authority env injection rejects c-string truncation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const authority: transport.AuthorityPlane = .{ .socket_path = "/tmp/authority\x00ignored" };
+    try std.testing.expectError(error.InvalidCString, collectEnvWithAuthority(a, null, authority));
+    try std.testing.expectError(error.InvalidCString, collectAdapterEnvVarsWithAuthority(a, null, authority));
+}
+
+test "authorization control events redact tokens and denial secrets" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    var state = State.init(allocator, -1, fds[1]);
+    defer state.deinit();
+
+    var values_arena = std.heap.ArenaAllocator.init(allocator);
+    defer values_arena.deinit();
+    const a = values_arena.allocator();
+
+    const authorize_pairs = try a.alloc(msgpack.Value.Pair, 4);
+    authorize_pairs[0] = .{ .key = .{ .str = "request_id" }, .value = .{ .str = "request-1" } };
+    authorize_pairs[1] = .{ .key = .{ .str = "token" }, .value = .{ .str = "plain-secret-token" } };
+    authorize_pairs[2] = .{ .key = .{ .str = "origin" }, .value = .{ .str = "terminal_scrape" } };
+    authorize_pairs[3] = .{ .key = .{ .str = "cmd" }, .value = .{ .str = "AUTHORIZE" } };
+
+    try state.handleAuthorize(.{ .map = authorize_pairs });
+
+    var reader = protocol.FrameReader.init(allocator, fds[0]);
+    var authorize_frame = try reader.readFrame();
+    defer authorize_frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, authorize_frame.stream);
+
+    var decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer decode_arena.deinit();
+    var authorize_decoder = msgpack.Decoder.init(authorize_frame.body);
+    const authorize_event = try authorize_decoder.decode(decode_arena.allocator());
+    const token_value = authorize_event.mapGet("token").?;
+    try std.testing.expect(token_value == .str);
+    try std.testing.expectEqualStrings("[REDACTED]", token_value.str);
+
+    const deny_pairs = try a.alloc(msgpack.Value.Pair, 4);
+    deny_pairs[0] = .{ .key = .{ .str = "request_id" }, .value = .{ .str = "request-1" } };
+    deny_pairs[1] = .{ .key = .{ .str = "reason" }, .value = .{ .str = "blocked API_KEY=plainsecret" } };
+    deny_pairs[2] = .{ .key = .{ .str = "origin" }, .value = .{ .str = "terminal_scrape" } };
+    deny_pairs[3] = .{ .key = .{ .str = "cmd" }, .value = .{ .str = "DENY" } };
+
+    try state.handleDeny(.{ .map = deny_pairs });
+
+    var deny_frame = try reader.readFrame();
+    defer deny_frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, deny_frame.stream);
+
+    var deny_decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer deny_decode_arena.deinit();
+    var deny_decoder = msgpack.Decoder.init(deny_frame.body);
+    const deny_event = try deny_decoder.decode(deny_decode_arena.allocator());
+    const reason_value = deny_event.mapGet("reason").?;
+    try std.testing.expect(reason_value == .str);
+    try std.testing.expectEqualStrings("blocked API_KEY=[REDACTED]", reason_value.str);
+
+    const oversized_request_id = try allocator.alloc(u8, max_authority_id_bytes + 1);
+    defer allocator.free(oversized_request_id);
+    @memset(oversized_request_id, 'r');
+    const bad_authorize_pairs = try a.alloc(msgpack.Value.Pair, 2);
+    bad_authorize_pairs[0] = .{ .key = .{ .str = "request_id" }, .value = .{ .str = oversized_request_id } };
+    bad_authorize_pairs[1] = .{ .key = .{ .str = "token" }, .value = .{ .str = "token" } };
+
+    try state.handleAuthorize(.{ .map = bad_authorize_pairs });
+
+    var bad_authorize_frame = try reader.readFrame();
+    defer bad_authorize_frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, bad_authorize_frame.stream);
+
+    var bad_authorize_decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer bad_authorize_decode_arena.deinit();
+    var bad_authorize_decoder = msgpack.Decoder.init(bad_authorize_frame.body);
+    const bad_authorize_event = try bad_authorize_decoder.decode(bad_authorize_decode_arena.allocator());
+    const bad_authorize_detail = bad_authorize_event.mapGet("detail").?;
+    try std.testing.expect(bad_authorize_detail == .str);
+    try std.testing.expectEqualStrings("authorize: request_id too large", bad_authorize_detail.str);
+
+    const oversized_reason = try allocator.alloc(u8, max_authority_response_bytes + 1);
+    defer allocator.free(oversized_reason);
+    @memset(oversized_reason, 'd');
+    const bad_deny_pairs = try a.alloc(msgpack.Value.Pair, 2);
+    bad_deny_pairs[0] = .{ .key = .{ .str = "request_id" }, .value = .{ .str = "request-1" } };
+    bad_deny_pairs[1] = .{ .key = .{ .str = "reason" }, .value = .{ .str = oversized_reason } };
+
+    try state.handleDeny(.{ .map = bad_deny_pairs });
+
+    var bad_deny_frame = try reader.readFrame();
+    defer bad_deny_frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, bad_deny_frame.stream);
+
+    var bad_deny_decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer bad_deny_decode_arena.deinit();
+    var bad_deny_decoder = msgpack.Decoder.init(bad_deny_frame.body);
+    const bad_deny_event = try bad_deny_decoder.decode(bad_deny_decode_arena.allocator());
+    const bad_deny_detail = bad_deny_event.mapGet("detail").?;
+    try std.testing.expect(bad_deny_detail == .str);
+    try std.testing.expectEqualStrings("deny: reason too large", bad_deny_detail.str);
+}
+
+test "encode_key text emits bounded bytes and rejects unsafe text" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    var state = State.init(allocator, -1, fds[1]);
+    defer state.deinit();
+    state.terminal = try ghostty.ManagedTerminal.init(allocator, .{
+        .backend = .compat,
+        .terminal = .{ .cols = 80, .rows = 24 },
+    });
+
+    var values_arena = std.heap.ArenaAllocator.init(allocator);
+    defer values_arena.deinit();
+    const a = values_arena.allocator();
+
+    var text_pairs = try a.alloc(msgpack.Value.Pair, 1);
+    text_pairs[0] = .{ .key = .{ .str = "text" }, .value = .{ .str = "abc" } };
+
+    try state.handleEncodeKey(.{ .map = text_pairs }, a);
+
+    var reader = protocol.FrameReader.init(allocator, fds[0]);
+    var encoded_frame = try reader.readFrame();
+    defer encoded_frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, encoded_frame.stream);
+
+    var encoded_decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer encoded_decode_arena.deinit();
+    var encoded_decoder = msgpack.Decoder.init(encoded_frame.body);
+    const encoded_event = try encoded_decoder.decode(encoded_decode_arena.allocator());
+    const encoded_type = encoded_event.mapGet("type").?;
+    try std.testing.expect(encoded_type == .str);
+    try std.testing.expectEqualStrings("key_encoded", encoded_type.str);
+    const encoded_bytes = encoded_event.mapGet("bytes").?;
+    try std.testing.expect(encoded_bytes == .bin);
+    try std.testing.expectEqualStrings("abc", encoded_bytes.bin);
+
+    const oversized = try allocator.alloc(u8, max_encode_key_text_bytes + 1);
+    defer allocator.free(oversized);
+    @memset(oversized, 'x');
+    text_pairs[0] = .{ .key = .{ .str = "text" }, .value = .{ .str = oversized } };
+
+    try state.handleEncodeKey(.{ .map = text_pairs }, a);
+
+    var error_frame = try reader.readFrame();
+    defer error_frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, error_frame.stream);
+
+    var error_decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer error_decode_arena.deinit();
+    var error_decoder = msgpack.Decoder.init(error_frame.body);
+    const error_event = try error_decoder.decode(error_decode_arena.allocator());
+    const error_type = error_event.mapGet("type").?;
+    try std.testing.expect(error_type == .str);
+    try std.testing.expectEqualStrings(transport.TypedEventName.error_reported.wireName(), error_type.str);
+    const error_kind = error_event.mapGet("kind").?;
+    try std.testing.expect(error_kind == .str);
+    try std.testing.expectEqualStrings("protocol", error_kind.str);
+    const error_detail = error_event.mapGet("detail").?;
+    try std.testing.expect(error_detail == .str);
+    try std.testing.expectEqualStrings("encode_key: text too large", error_detail.str);
+
+    try std.testing.expectEqualStrings("encode_key: text contains NUL", encodeKeyTextError("a\x00b").?);
+    try std.testing.expectEqualStrings("encode_key: text must be valid UTF-8", encodeKeyTextError("\xff").?);
+}
+
+test "steer control validates text before session state" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    var state = State.init(allocator, -1, fds[1]);
+    defer state.deinit();
+
+    var values_arena = std.heap.ArenaAllocator.init(allocator);
+    defer values_arena.deinit();
+    const a = values_arena.allocator();
+
+    const oversized = try allocator.alloc(u8, max_steer_text_bytes + 1);
+    defer allocator.free(oversized);
+    @memset(oversized, 'x');
+
+    const pairs = try a.alloc(msgpack.Value.Pair, 2);
+    pairs[0] = .{ .key = .{ .str = "interaction" }, .value = .{ .str = "prompt" } };
+    pairs[1] = .{ .key = .{ .str = "text" }, .value = .{ .str = oversized } };
+
+    try state.handleSteer(.{ .map = pairs });
+
+    var reader = protocol.FrameReader.init(allocator, fds[0]);
+    var frame = try reader.readFrame();
+    defer frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, frame.stream);
+
+    var decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer decode_arena.deinit();
+    var decoder = msgpack.Decoder.init(frame.body);
+    const event = try decoder.decode(decode_arena.allocator());
+    const event_type = event.mapGet("type").?;
+    try std.testing.expect(event_type == .str);
+    try std.testing.expectEqualStrings(transport.TypedEventName.error_reported.wireName(), event_type.str);
+    const kind = event.mapGet("kind").?;
+    try std.testing.expect(kind == .str);
+    try std.testing.expectEqualStrings("protocol", kind.str);
+    const detail = event.mapGet("detail").?;
+    try std.testing.expect(detail == .str);
+    try std.testing.expectEqualStrings("steer: text too large", detail.str);
+
+    try std.testing.expectEqualStrings("steer: text empty", steerTextError("", true).?);
+    try std.testing.expectEqualStrings("steer: text contains NUL", steerTextError("a\x00b", true).?);
+    try std.testing.expectEqualStrings("steer: text must be valid UTF-8", steerTextError("\xff", true).?);
+    try std.testing.expect(steerTextError("", false) == null);
+}
+
+test "control frame rejects trailing msgpack values" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const input_fds = try std.posix.pipe();
+    defer std.posix.close(input_fds[0]);
+    defer std.posix.close(input_fds[1]);
+    const output_fds = try std.posix.pipe();
+    defer std.posix.close(output_fds[0]);
+    defer std.posix.close(output_fds[1]);
+
+    var control_body: std.ArrayList(u8) = .empty;
+    defer control_body.deinit(allocator);
+    var writer = msgpack.Writer.init(allocator, &control_body);
+    try writer.beginMap(1);
+    try writer.writeStr("cmd");
+    try writer.writeStr("hello");
+    try writer.writeNil();
+
+    var input_writer = protocol.FrameWriter.init(input_fds[1]);
+    try input_writer.writeFrame(.control, control_body.items);
+
+    var state = State.init(allocator, input_fds[0], output_fds[1]);
+    defer state.deinit();
+    try state.handleStdin();
+
+    var reader = protocol.FrameReader.init(allocator, output_fds[0]);
+    var frame = try reader.readFrame();
+    defer frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, frame.stream);
+
+    var decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer decode_arena.deinit();
+    var decoder = msgpack.Decoder.init(frame.body);
+    const event = try decoder.decode(decode_arena.allocator());
+    const event_type = event.mapGet("type").?;
+    try std.testing.expect(event_type == .str);
+    try std.testing.expectEqualStrings(transport.TypedEventName.error_reported.wireName(), event_type.str);
+    const kind = event.mapGet("kind").?;
+    try std.testing.expect(kind == .str);
+    try std.testing.expectEqualStrings("decode", kind.str);
+    const detail = event.mapGet("detail").?;
+    try std.testing.expect(detail == .str);
+    try std.testing.expectEqualStrings("TrailingBytes", detail.str);
+}
+
+test "write_stdin control enforces byte cap before session state" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    var state = State.init(allocator, -1, fds[1]);
+    defer state.deinit();
+
+    var values_arena = std.heap.ArenaAllocator.init(allocator);
+    defer values_arena.deinit();
+    const a = values_arena.allocator();
+
+    const oversized = try allocator.alloc(u8, max_stdin_bytes + 1);
+    defer allocator.free(oversized);
+    @memset(oversized, 'i');
+
+    const pairs = try a.alloc(msgpack.Value.Pair, 1);
+    pairs[0] = .{ .key = .{ .str = "bytes" }, .value = .{ .bin = oversized } };
+
+    try state.handleWriteStdin(.{ .map = pairs });
+
+    var reader = protocol.FrameReader.init(allocator, fds[0]);
+    var frame = try reader.readFrame();
+    defer frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, frame.stream);
+
+    var decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer decode_arena.deinit();
+    var decoder = msgpack.Decoder.init(frame.body);
+    const event = try decoder.decode(decode_arena.allocator());
+    const event_type = event.mapGet("type").?;
+    try std.testing.expect(event_type == .str);
+    try std.testing.expectEqualStrings(transport.TypedEventName.error_reported.wireName(), event_type.str);
+    const kind = event.mapGet("kind").?;
+    try std.testing.expect(kind == .str);
+    try std.testing.expectEqualStrings("protocol", kind.str);
+    const detail = event.mapGet("detail").?;
+    try std.testing.expect(detail == .str);
+    try std.testing.expectEqualStrings("write_stdin: bytes too large", detail.str);
+}
+
+test "oversized snapshot emits protocol error instead of failing frame write" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    const fds = try std.posix.pipe();
+    defer std.posix.close(fds[0]);
+    defer std.posix.close(fds[1]);
+
+    var state = State.init(allocator, -1, fds[1]);
+    defer state.deinit();
+
+    const huge_text = try allocator.alloc(u8, @as(usize, protocol.max_frame_bytes));
+    @memset(huge_text, 's');
+    const cells = try allocator.alloc(terminal.Cell, 1);
+    cells[0] = .{
+        .x = 0,
+        .y = 0,
+        .text = huge_text,
+    };
+    const snap: terminal.ScreenSnapshot = .{
+        .cols = 1,
+        .rows = 1,
+        .cursor = .{ .x = 0, .y = 0 },
+        .cells = cells,
+        .timestamp_ms = 1,
+    };
+    defer snap.deinit(allocator);
+
+    try state.emitSnapshotFrame(snap);
+
+    var reader = protocol.FrameReader.init(allocator, fds[0]);
+    var frame = try reader.readFrame();
+    defer frame.deinit(allocator);
+    try std.testing.expectEqual(protocol.Stream.event, frame.stream);
+
+    var decode_arena = std.heap.ArenaAllocator.init(allocator);
+    defer decode_arena.deinit();
+    var decoder = msgpack.Decoder.init(frame.body);
+    const event = try decoder.decode(decode_arena.allocator());
+    const event_type = event.mapGet("type").?;
+    try std.testing.expect(event_type == .str);
+    try std.testing.expectEqualStrings(transport.TypedEventName.error_reported.wireName(), event_type.str);
+    const kind = event.mapGet("kind").?;
+    try std.testing.expect(kind == .str);
+    try std.testing.expectEqualStrings("snapshot", kind.str);
+    const detail = event.mapGet("detail").?;
+    try std.testing.expect(detail == .str);
+    try std.testing.expectEqualStrings("FrameTooLarge", detail.str);
+}
+
 test "redactPatternsAlloc replaces configured exact patterns" {
     const redacted = try redactPatternsAlloc(
         std.testing.allocator,
@@ -2112,22 +2821,83 @@ test "redactPatternsAlloc replaces configured exact patterns" {
     try std.testing.expectEqualStrings("nothing sensitive", unchanged.bytes);
 }
 
-test "pty raw ref filter drops provider tui raw refs" {
-    const provider = adapters.ProviderId{ .value = "codex" };
-    const generic = adapters.ProviderId{ .value = "generic-pty" };
-    const fake = adapters.ProviderId{ .value = "fake" };
+test "redactForScopeAlloc applies configured patterns and generic secret masking" {
+    const redacted = try redactForScopeAlloc(
+        std.testing.allocator,
+        .provider_event,
+        "literal\nAuthorization: Bearer plain-secret-token\nAPI_KEY=plainsecret\nnormal=value",
+        &.{"literal"},
+    );
+    defer redacted.deinit(std.testing.allocator);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, redacted.bytes, 1, "literal"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, redacted.bytes, 1, "plain-secret-token"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, redacted.bytes, 1, "plainsecret"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, redacted.bytes, 3, "[REDACTED]"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, redacted.bytes, 1, "normal=value"));
+}
+
+test "redacted terminal output scrubber covers extracted provider text" {
+    const output = try terminalOutputTextAlloc(
+        std.testing.allocator,
+        test_terminal_observation_provider_tui,
+        "MM • API_KEY=plainsecret ghp_abcdefghijklmnopqrstuvwxyz 6 › prompt StatusChrome",
+    );
+    defer std.testing.allocator.free(output);
+
+    const redacted = try redactForScopeAlloc(
+        std.testing.allocator,
+        .terminal_text,
+        output,
+        &.{},
+    );
+    defer redacted.deinit(std.testing.allocator);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, redacted.bytes, 1, "plainsecret"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, redacted.bytes, 1, "ghp_abcdefghijklmnopqrstuvwxyz"));
+    try std.testing.expectEqualStrings("API_KEY=[REDACTED] [REDACTED]", redacted.bytes);
+}
+
+test "raw spool files are private to the sidecar user" {
+    var state = State.init(std.testing.allocator, -1, -1);
+    try state.ensureRawSpool();
+
+    const path = try std.testing.allocator.dupe(u8, state.raw_spool_path.?);
+    defer std.testing.allocator.free(path);
+    defer std.fs.deleteFileAbsolute(path) catch {};
+    defer state.deinit();
+
+    const stat = try state.raw_spool_file.?.stat();
+    try std.testing.expectEqual(@as(std.fs.File.Mode, 0o600), stat.mode & 0o777);
+}
+
+test "raw spool file is removed when sidecar state is deinitialized" {
+    var state = State.init(std.testing.allocator, -1, -1);
+    try state.ensureRawSpool();
+
+    const path = try std.testing.allocator.dupe(u8, state.raw_spool_path.?);
+    defer std.testing.allocator.free(path);
+
+    state.deinit();
+
+    try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(path, .{}));
+}
+
+test "pty raw ref filter follows adapter observation profile" {
+    const provider_tui = test_terminal_observation_provider_tui;
+    const generic = adapters.terminal_observation_generic_pty;
     const redraw_noise =
         "\x1b[39;49m\x1b[K\x1b[2m" ++
         "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80" ++
         "\x1b[39m\x1b[49m\x1b[0m\x1b[?25h\x1b[27;3H\x1b[?2026l";
-    try std.testing.expect(rawSemanticSignature(provider, redraw_noise) == null);
+    try std.testing.expect(rawSemanticSignature(provider_tui, redraw_noise) == null);
 
     var filter: PtyRawRefFilter = .{};
-    try std.testing.expect(!filter.shouldEmit(provider, "\x1b[39mhello from codex\n"));
+    try std.testing.expect(!filter.shouldEmit(provider_tui, "\x1b[39mhello from codex\n"));
     try std.testing.expect(filter.shouldEmit(generic, "\x1b[39mhello from shell\n"));
     try std.testing.expect(!filter.shouldEmit(generic, "\x1b[31mhello from shell\x1b[0m\r\n"));
     try std.testing.expect(filter.shouldEmit(generic, "\x1b[39mreal new output\n"));
-    try std.testing.expect(filter.shouldEmit(fake, "FAKE_FINAL: done\n"));
+    try std.testing.expect(filter.shouldEmit(generic, "FAKE_FINAL: done\n"));
 }
 
 test "prompt event filter suppresses consecutive duplicate prompts" {
@@ -2152,13 +2922,13 @@ test "prompt event filter suppresses consecutive duplicate prompts" {
     try std.testing.expect(!filter.shouldEmit(idle));
 }
 
-test "title event filter suppresses provider tui title spam" {
-    const codex = adapters.ProviderId{ .value = "codex" };
-    const generic = adapters.ProviderId{ .value = "generic-pty" };
+test "title event filter follows adapter observation profile" {
+    const provider_tui = test_terminal_observation_provider_tui;
+    const generic = adapters.terminal_observation_generic_pty;
 
     var filter: TitleEventFilter = .{};
-    try std.testing.expect(!filter.shouldEmit(codex, "mitos"));
-    try std.testing.expect(!filter.shouldEmit(codex, ": mitos"));
+    try std.testing.expect(!filter.shouldEmit(provider_tui, "mitos"));
+    try std.testing.expect(!filter.shouldEmit(provider_tui, ": mitos"));
     try std.testing.expect(filter.shouldEmit(generic, "mitos"));
     try std.testing.expect(!filter.shouldEmit(generic, ": mitos"));
     try std.testing.expect(!filter.shouldEmit(generic, "::. mitos"));
@@ -2168,8 +2938,8 @@ test "title event filter suppresses provider tui title spam" {
 test "terminal output extraction keeps codex answer from rendered status line" {
     const output = try terminalOutputTextAlloc(
         std.testing.allocator,
-        .{ .value = "codex" },
-        "MM • Hello. 6 › Explain this codebase gpt-5.5 xhigh · /media/data/proj/mitos/beam · Context 6% used",
+        test_terminal_observation_provider_tui,
+        "MM • Hello. 6 › Explain this codebase StatusChrome",
     );
     defer std.testing.allocator.free(output);
 
@@ -2179,8 +2949,8 @@ test "terminal output extraction keeps codex answer from rendered status line" {
 test "terminal output extraction suppresses provider progress chrome" {
     const output = try terminalOutputTextAlloc(
         std.testing.allocator,
-        .{ .value = "codex" },
-        "• Working 5 Working\nBooting MCP server: codex_apps(0s • esc to interrupt)\n",
+        test_terminal_observation_provider_tui,
+        "• ProgressChrome 5 ProgressChrome\nBoot server: runtime(0s • interrupt)\n",
     );
     defer std.testing.allocator.free(output);
 
@@ -2190,7 +2960,7 @@ test "terminal output extraction suppresses provider progress chrome" {
 test "terminal output extraction is disabled for generic raw sessions" {
     const output = try terminalOutputTextAlloc(
         std.testing.allocator,
-        .{ .value = "generic-pty" },
+        adapters.terminal_observation_generic_pty,
         "mitos OK\n",
     );
     defer std.testing.allocator.free(output);
@@ -2248,6 +3018,48 @@ test "parseLaunchSpec accepts provider task and transport order" {
     try std.testing.expectEqualStrings("/tmp/authority.sock", spec.authority.socket_path.?);
     try std.testing.expectEqualStrings("tok", spec.authority.token.?);
     try std.testing.expect(matchesAnyPattern("Run tests? [y/N]", spec.policy.tier2_fast_path_rules));
+}
+
+test "parseLaunchSpec rejects invalid terminal size and idle values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var pairs = try a.alloc(msgpack.Value.Pair, 4);
+    pairs[0] = .{ .key = .{ .str = "provider" }, .value = .{ .str = "fake" } };
+    pairs[1] = .{ .key = .{ .str = "task" }, .value = .{ .str = "hello" } };
+    pairs[2] = .{ .key = .{ .str = "cols" }, .value = .{ .uint = max_terminal_cols + 1 } };
+    pairs[3] = .{ .key = .{ .str = "rows" }, .value = .{ .uint = 24 } };
+    try std.testing.expectError(error.InvalidSize, parseLaunchSpec(a, .{ .map = pairs }));
+
+    pairs = try a.alloc(msgpack.Value.Pair, 4);
+    pairs[0] = .{ .key = .{ .str = "provider" }, .value = .{ .str = "fake" } };
+    pairs[1] = .{ .key = .{ .str = "task" }, .value = .{ .str = "hello" } };
+    pairs[2] = .{ .key = .{ .str = "cols" }, .value = .{ .uint = 80 } };
+    pairs[3] = .{ .key = .{ .str = "rows" }, .value = .{ .uint = 0 } };
+    try std.testing.expectError(error.InvalidSize, parseLaunchSpec(a, .{ .map = pairs }));
+
+    pairs = try a.alloc(msgpack.Value.Pair, 3);
+    pairs[0] = .{ .key = .{ .str = "provider" }, .value = .{ .str = "fake" } };
+    pairs[1] = .{ .key = .{ .str = "task" }, .value = .{ .str = "hello" } };
+    pairs[2] = .{ .key = .{ .str = "idle_ms" }, .value = .{ .uint = 60_001 } };
+    try std.testing.expectError(error.InvalidIdleMs, parseLaunchSpec(a, .{ .map = pairs }));
+}
+
+test "signalNumber rejects invalid signal values" {
+    try std.testing.expectEqual(@as(u8, 15), try signalNumber(null, 15));
+    try std.testing.expectEqual(@as(u8, 9), try signalNumber(.{ .uint = 9 }, 15));
+    try std.testing.expectError(error.InvalidSignal, signalNumber(.{ .uint = 0 }, 15));
+    try std.testing.expectError(error.InvalidSignal, signalNumber(.{ .uint = max_signal_number + 1 }, 15));
+    try std.testing.expectError(error.InvalidSignal, signalNumber(.{ .str = "TERM" }, 15));
+}
+
+test "shutdownGraceMilliseconds rejects invalid grace values" {
+    try std.testing.expectEqual(@as(u32, 100), try shutdownGraceMilliseconds(null, 100));
+    try std.testing.expectEqual(@as(u32, 0), try shutdownGraceMilliseconds(.{ .uint = 0 }, 100));
+    try std.testing.expectEqual(@as(u32, max_shutdown_grace_ms), try shutdownGraceMilliseconds(.{ .uint = max_shutdown_grace_ms }, 100));
+    try std.testing.expectError(error.InvalidShutdownGraceMs, shutdownGraceMilliseconds(.{ .uint = max_shutdown_grace_ms + 1 }, 100));
+    try std.testing.expectError(error.InvalidShutdownGraceMs, shutdownGraceMilliseconds(.{ .str = "now" }, 100));
 }
 
 test "envValue finds exact KEY=VALUE entries only" {

@@ -194,6 +194,13 @@ pub const UnixPtySession = struct {
 
 pub fn spawn(allocator: std.mem.Allocator, config: SpawnConfig) core.PtyError!UnixPtySession {
     if (config.argv.len == 0) return error.ExecFailed;
+    if (config.cwd) |path| {
+        try validateCString(path);
+        validateCwdNoSymlink(path) catch |err| switch (err) {
+            error.SymlinkRejected => return error.SymlinkRejected,
+            else => return error.SpawnFailed,
+        };
+    }
 
     var pair = try UnixPty.open(allocator, config.size);
     errdefer pair.deinit();
@@ -248,6 +255,45 @@ pub fn spawn(allocator: std.mem.Allocator, config: SpawnConfig) core.PtyError!Un
     return session;
 }
 
+fn validateCwdNoSymlink(path: []const u8) !void {
+    if (path.len == 0) return error.FileNotFound;
+
+    var it = try std.fs.path.componentIterator(path);
+    var current: std.fs.Dir = undefined;
+    var current_owned = false;
+    if (it.root()) |root| {
+        current = try std.fs.openDirAbsolute(root, .{ .no_follow = true });
+        current_owned = true;
+    } else {
+        current = std.fs.cwd();
+    }
+    defer if (current_owned) current.close();
+
+    var component = it.next() orelse return;
+    while (true) {
+        try rejectSymlink(current, component.name);
+        const child = current.openDir(component.name, .{ .no_follow = true }) catch |err| switch (err) {
+            error.SymLinkLoop => return error.SymlinkRejected,
+            else => |e| return e,
+        };
+        if (current_owned) current.close();
+        current = child;
+        current_owned = true;
+
+        component = it.next() orelse return;
+    }
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return error.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
+}
+
 const CStringVector = struct {
     allocator: std.mem.Allocator,
     owned: [][:0]u8,
@@ -262,6 +308,7 @@ const CStringVector = struct {
             for (owned[0..initialized]) |item| allocator.free(item);
         }
         for (values, 0..) |value, index_| {
+            try validateCString(value);
             owned[index_] = allocator.dupeZ(u8, value) catch return error.OutOfMemory;
             initialized += 1;
         }
@@ -289,6 +336,10 @@ const CStringVector = struct {
         self.* = undefined;
     }
 };
+
+fn validateCString(value: []const u8) core.PtyError!void {
+    if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidCString;
+}
 
 fn childExec(
     master_fd: std.posix.fd_t,
@@ -402,4 +453,75 @@ test "unix pty wrapper exposes stable size metadata" {
     const pty = try UnixPty.init(0, .{ .cols = 80, .rows = 24 });
     try std.testing.expectEqual(@as(u16, 80), pty.size.cols);
     try std.testing.expectEqual(@as(u16, 24), pty.size.rows);
+}
+
+test "unix pty spawn rejects embedded nul c-string inputs before forking" {
+    const allocator = std.testing.allocator;
+
+    const bad_argv = [_][]const u8{ "sh\x00ignored", "-c", "printf should-not-run" };
+    try std.testing.expectError(error.InvalidCString, spawn(allocator, .{
+        .argv = &bad_argv,
+    }));
+
+    const good_argv = [_][]const u8{ "sh", "-c", "printf should-not-run" };
+    try std.testing.expectError(error.InvalidCString, spawn(allocator, .{
+        .argv = &good_argv,
+        .cwd = "/tmp\x00ignored",
+    }));
+
+    const bad_env = [_][]const u8{"PATH=/usr/bin\x00ignored"};
+    try std.testing.expectError(error.InvalidCString, spawn(allocator, .{
+        .argv = &good_argv,
+        .env = &bad_env,
+    }));
+}
+
+test "unix pty spawn rejects symlinked cwd paths before forking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("real/work");
+    try tmp.dir.symLink("real/work", "cwd-link", .{ .is_directory = true });
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const link_path = try std.fs.path.join(allocator, &.{ base, "cwd-link" });
+    defer allocator.free(link_path);
+
+    const argv = [_][]const u8{ "sh", "-c", "printf should-not-run > marker" };
+    try std.testing.expectError(error.SymlinkRejected, spawn(allocator, .{
+        .argv = &argv,
+        .cwd = link_path,
+    }));
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("real/work/marker", .{}));
+}
+
+test "unix pty spawn rejects symlinked cwd parents before forking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("outside/work");
+    try tmp.dir.symLink("outside", "parent-link", .{ .is_directory = true });
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const cwd_path = try std.fs.path.join(allocator, &.{ base, "parent-link", "work" });
+    defer allocator.free(cwd_path);
+
+    const argv = [_][]const u8{ "sh", "-c", "printf should-not-run > marker" };
+    try std.testing.expectError(error.SymlinkRejected, spawn(allocator, .{
+        .argv = &argv,
+        .cwd = cwd_path,
+    }));
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("outside/work/marker", .{}));
+}
+
+fn tmpDirPath(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+    return try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", sub_path });
 }

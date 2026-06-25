@@ -125,7 +125,7 @@ fn runCommand(
         task
     else blk: {
         const path = options.task_file.?;
-        task_file_contents = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        task_file_contents = try readTaskFileNoSymlink(allocator, std.fs.cwd(), path);
         break :blk task_file_contents.?;
     };
 
@@ -163,7 +163,12 @@ fn runCommand(
         return 2;
     }
 
-    const run_id_value = try mitos.runtime.RunId.init(run_id);
+    const run_id_value = mitos.runtime.RunId.init(run_id) catch |err| switch (err) {
+        error.EmptyRunId, error.UnsafeRunId => {
+            try stderr.writeAll("error: --run-id must be a safe trace identifier\n");
+            return 2;
+        },
+    };
 
     var env_vars: std.ArrayList(mitos.adapters.EnvVar) = .empty;
     for (options.env) |env_str| {
@@ -198,14 +203,18 @@ fn runCommand(
     defer resolved.deinit(allocator);
 
     const started_at_ms = std.time.milliTimestamp();
+    const trace_redactor = mitos.redaction.Redactor{};
+    const redacted_task_text = try redactProviderEventAlloc(allocator, trace_redactor, task_text);
+    defer allocator.free(redacted_task_text);
+
     var trace = try mitos.trace.file_store.FileTrace.create(allocator, std.fs.cwd(), run_id_value, .{
         .created_at_ms = started_at_ms,
         .provider = provider,
-        .task = task_text,
+        .task = redacted_task_text,
     });
     defer trace.deinit();
 
-    _ = try trace.appendEvent(started_at_ms, .{ .run_created = .{ .task = task_text, .provider = provider } });
+    _ = try trace.appendEvent(started_at_ms, .{ .run_created = .{ .task = redacted_task_text, .provider = provider } });
     _ = try trace.appendEvent(started_at_ms, .{ .run_state_changed = .{
         .from = .created,
         .to = .starting_adapter,
@@ -221,9 +230,23 @@ fn runCommand(
         .to = .running,
         .reason = "provider command spawned",
     } });
+    const redacted_argv = try redactStringListAlloc(
+        allocator,
+        trace_redactor,
+        resolved.argv,
+    );
+    defer freeStringList(allocator, redacted_argv);
+
+    const redacted_cwd = try redactProviderEventAlloc(
+        allocator,
+        trace_redactor,
+        resolved.cwd orelse options.workspace,
+    );
+    defer allocator.free(redacted_cwd);
+
     _ = try trace.appendEvent(started_at_ms, .{ .process_spawned = .{
-        .argv = resolved.argv,
-        .cwd = resolved.cwd orelse options.workspace,
+        .argv = redacted_argv,
+        .cwd = redacted_cwd,
         .pid = null,
     } });
 
@@ -251,11 +274,18 @@ fn runCommand(
     defer result.deinit(allocator);
 
     if (result.stdout.len > 0) {
+        const redacted_stdout = try redactProviderEventAlloc(allocator, trace_redactor, result.stdout);
+        defer allocator.free(redacted_stdout);
+
         _ = try trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
             .stream = .stdout,
-            .bytes = result.stdout,
+            .bytes = redacted_stdout,
         } });
-        var sink_context = TraceAdapterSink{ .trace = &trace };
+        var sink_context = TraceAdapterSink{
+            .trace = &trace,
+            .allocator = allocator,
+            .redactor = trace_redactor,
+        };
         try mitos.providers.headless.emitNormalizedJsonl(
             allocator,
             sink_context.sink(),
@@ -264,9 +294,12 @@ fn runCommand(
         );
     }
     if (result.stderr.len > 0) {
+        const redacted_stderr = try redactProviderEventAlloc(allocator, trace_redactor, result.stderr);
+        defer allocator.free(redacted_stderr);
+
         _ = try trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
             .stream = .stderr,
-            .bytes = result.stderr,
+            .bytes = redacted_stderr,
         } });
     }
 
@@ -279,9 +312,12 @@ fn runCommand(
 
     const final_output = try mitos.providers.headless.extractFinalOutputAlloc(allocator, result.stdout);
     defer allocator.free(final_output);
-    _ = try trace.writeArtifact(.final_output, final_output);
+    const redacted_final_output = try redactProviderEventAlloc(allocator, trace_redactor, final_output);
+    defer allocator.free(redacted_final_output);
+
+    _ = try trace.writeArtifact(.final_output, redacted_final_output);
     if (final_output.len > 0) {
-        _ = try trace.appendEvent(finished_at_ms, .{ .final_output = .{ .text = final_output } });
+        _ = try trace.appendEvent(finished_at_ms, .{ .final_output = .{ .text = redacted_final_output } });
     }
 
     const adapter_status = result.status();
@@ -473,6 +509,74 @@ fn loadProjectConfigIfPresent(allocator: std.mem.Allocator) !?mitos.config.Loade
     };
 }
 
+fn readTaskFileNoSymlink(
+    allocator: std.mem.Allocator,
+    base_dir: std.fs.Dir,
+    path: []const u8,
+) ![]u8 {
+    var it = try std.fs.path.componentIterator(path);
+    var current: std.fs.Dir = undefined;
+    var current_owned = false;
+    if (it.root()) |root| {
+        current = try std.fs.openDirAbsolute(root, .{ .no_follow = true });
+        current_owned = true;
+    } else {
+        current = base_dir;
+    }
+    defer if (current_owned) current.close();
+
+    var component = it.next() orelse return error.FileNotFound;
+    while (true) {
+        const next_component = it.next();
+        if (next_component) |next| {
+            try rejectSymlink(current, component.name);
+            const child = current.openDir(component.name, .{ .no_follow = true }) catch |err| switch (err) {
+                error.SymLinkLoop => return error.SymlinkRejected,
+                else => |e| return e,
+            };
+            if (current_owned) current.close();
+            current = child;
+            current_owned = true;
+            component = next;
+            continue;
+        }
+
+        return readFileFromDirNoSymlink(allocator, current, component.name);
+    }
+}
+
+fn readFileFromDirNoSymlink(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    path: []const u8,
+) ![]u8 {
+    try rejectSymlink(dir, path);
+    const fd = std.posix.openat(
+        dir.fd,
+        path,
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true },
+        0,
+    ) catch |err| switch (err) {
+        error.SymLinkLoop => return error.SymlinkRejected,
+        else => |e| return e,
+    };
+
+    const file: std.fs.File = .{ .handle = fd };
+    defer file.close();
+
+    return file.readToEndAlloc(allocator, 1024 * 1024);
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return error.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
+}
+
 fn printVersion(writer: anytype) !void {
     try writer.print("mitos {s}\n", .{mitos.version});
 }
@@ -537,6 +641,8 @@ fn printProviders(writer: anytype) !void {
 
 const TraceAdapterSink = struct {
     trace: *mitos.trace.file_store.FileTrace,
+    allocator: std.mem.Allocator,
+    redactor: mitos.redaction.Redactor,
 
     fn sink(self: *TraceAdapterSink) mitos.adapters.AdapterEventSink {
         return .{ .context = self, .emit = emit };
@@ -546,15 +652,59 @@ const TraceAdapterSink = struct {
         const self: *TraceAdapterSink = @ptrCast(@alignCast(context));
         switch (event) {
             .structured => |bytes| {
+                const redacted_bytes = try redactProviderEventAlloc(
+                    self.allocator,
+                    self.redactor,
+                    bytes,
+                );
+                defer self.allocator.free(redacted_bytes);
+
                 _ = try self.trace.appendEvent(std.time.milliTimestamp(), .{ .adapter_output = .{
                     .stream = .structured,
-                    .bytes = bytes,
+                    .bytes = redacted_bytes,
                 } });
             },
             else => {},
         }
     }
 };
+
+fn redactProviderEventAlloc(
+    allocator: std.mem.Allocator,
+    redactor: mitos.redaction.Redactor,
+    bytes: []const u8,
+) ![]u8 {
+    return redactor.redactAlloc(allocator, .provider_event, bytes);
+}
+
+fn redactStringListAlloc(
+    allocator: std.mem.Allocator,
+    redactor: mitos.redaction.Redactor,
+    values: []const []const u8,
+) ![]const []const u8 {
+    const redacted = try allocator.alloc([]const u8, values.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (redacted[0..initialized]) |value| {
+            allocator.free(value);
+        }
+        allocator.free(redacted);
+    }
+
+    for (values, 0..) |value, index| {
+        redacted[index] = try redactProviderEventAlloc(allocator, redactor, value);
+        initialized = index + 1;
+    }
+
+    return redacted;
+}
+
+fn freeStringList(allocator: std.mem.Allocator, values: []const []const u8) void {
+    for (values) |value| {
+        allocator.free(value);
+    }
+    allocator.free(values);
+}
 
 fn isHelp(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "--help") or
@@ -610,6 +760,145 @@ test "run option parser rejects pty transport" {
 
     const args = [_][]const u8{ "--provider", "codex", "--task", "hello", "--transport", "pty" };
     try std.testing.expectError(error.InvalidArguments, parseRunOptions(&args, &err.writer));
+}
+
+test "task file reader rejects symlinked task paths" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("real");
+    try tmp.dir.writeFile(.{ .sub_path = "real/task.txt", .data = "hello\n" });
+
+    const bytes = try readTaskFileNoSymlink(allocator, tmp.dir, "real/task.txt");
+    defer allocator.free(bytes);
+    try std.testing.expectEqualStrings("hello\n", bytes);
+
+    try tmp.dir.symLink("real/task.txt", "task-link.txt", .{});
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        readTaskFileNoSymlink(allocator, tmp.dir, "task-link.txt"),
+    );
+
+    try tmp.dir.symLink("real", "dir-link", .{ .is_directory = true });
+    try std.testing.expectError(
+        error.SymlinkRejected,
+        readTaskFileNoSymlink(allocator, tmp.dir, "dir-link/task.txt"),
+    );
+}
+
+test "run command rejects unsafe trace run ids before writing artifacts" {
+    var out: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    var err: std.io.Writer.Allocating = .init(std.testing.allocator);
+    defer err.deinit();
+
+    const args = [_][]const u8{
+        "--provider",
+        "fake",
+        "--task",
+        "hello",
+        "--run-id",
+        "../escape",
+    };
+
+    const code = try runCommand(std.testing.allocator, &args, &out.writer, &err.writer);
+    const stderr_text = try err.toOwnedSlice();
+    defer std.testing.allocator.free(stderr_text);
+
+    try std.testing.expectEqual(@as(u8, 2), code);
+    try std.testing.expect(std.mem.containsAtLeast(u8, stderr_text, 1, "--run-id must be a safe"));
+}
+
+test "cli trace persistence redacts task argv provider output and final artifact" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const run_id = try mitos.runtime.RunId.init("run-cli-redaction");
+    const redactor = mitos.redaction.Redactor{};
+    const task =
+        "call API_KEY=task-secret and https://user:pass@example.test/cb?token=task-token&visible=ok";
+    const redacted_task = try redactProviderEventAlloc(allocator, redactor, task);
+    defer allocator.free(redacted_task);
+
+    var trace = try mitos.trace.file_store.FileTrace.create(allocator, tmp.dir, run_id, .{
+        .created_at_ms = 1,
+        .provider = "codex",
+        .task = redacted_task,
+    });
+    defer trace.deinit();
+
+    _ = try trace.appendEvent(1, .{ .run_created = .{
+        .task = redacted_task,
+        .provider = "codex",
+    } });
+
+    const argv = [_][]const u8{ "codex", "exec", "--", task };
+    const redacted_argv = try redactStringListAlloc(allocator, redactor, &argv);
+    defer freeStringList(allocator, redacted_argv);
+
+    _ = try trace.appendEvent(2, .{ .process_spawned = .{
+        .argv = redacted_argv,
+        .cwd = ".",
+        .pid = null,
+    } });
+
+    const stdout_bytes =
+        "{\"final_output\":\"token=final-secret ghp_abcdefghijklmnopqrstuvwxyz\"}\n";
+    const redacted_stdout = try redactProviderEventAlloc(allocator, redactor, stdout_bytes);
+    defer allocator.free(redacted_stdout);
+
+    _ = try trace.appendEvent(3, .{ .adapter_output = .{
+        .stream = .stdout,
+        .bytes = redacted_stdout,
+    } });
+
+    var sink_context = TraceAdapterSink{
+        .trace = &trace,
+        .allocator = allocator,
+        .redactor = redactor,
+    };
+    var sink = sink_context.sink();
+    try sink.emit(sink.context, .{ .structured = "{\"api_key\":\"structured-secret\"}\n" });
+
+    const final_output = "password: final-secret";
+    const redacted_final = try redactProviderEventAlloc(allocator, redactor, final_output);
+    defer allocator.free(redacted_final);
+
+    _ = try trace.writeArtifact(.final_output, redacted_final);
+    _ = try trace.appendEvent(4, .{ .final_output = .{ .text = redacted_final } });
+
+    const manifest = try trace.run_dir.readFileAlloc(
+        allocator,
+        mitos.trace.defaultArtifactPath(.run_manifest),
+        4096,
+    );
+    defer allocator.free(manifest);
+    const events = try trace.run_dir.readFileAlloc(
+        allocator,
+        mitos.trace.defaultArtifactPath(.events),
+        16 * 1024,
+    );
+    defer allocator.free(events);
+    const final_md = try trace.run_dir.readFileAlloc(
+        allocator,
+        mitos.trace.defaultArtifactPath(.final_output),
+        4096,
+    );
+    defer allocator.free(final_md);
+
+    const persisted = try std.mem.concat(allocator, u8, &.{ manifest, events, final_md });
+    defer allocator.free(persisted);
+
+    try std.testing.expect(!std.mem.containsAtLeast(u8, persisted, 1, "task-secret"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, persisted, 1, "user:pass"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, persisted, 1, "task-token"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, persisted, 1, "final-secret"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, persisted, 1, "ghp_abcdefghijklmnopqrstuvwxyz"));
+    try std.testing.expect(!std.mem.containsAtLeast(u8, persisted, 1, "structured-secret"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, persisted, 1, "[REDACTED]"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, persisted, 1, "visible=ok"));
 }
 
 test "transport order honors project provider config before built-in defaults" {

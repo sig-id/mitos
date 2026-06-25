@@ -5,6 +5,7 @@ const transport = @import("../transport/root.zig");
 pub const provider_id = adapters.ProviderId{ .value = "fake" };
 pub const headless_adapter_id = adapters.AdapterId{ .value = "fake.headless" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "fake.pty" };
+pub const pty_terminal_observation = adapters.terminal_observation_generic_pty;
 
 const supported_transports = [_]transport.TransportName{.stdio_json};
 
@@ -38,6 +39,20 @@ pub fn buildPtyCommand(
         .argv = argv,
         .cwd = cwd,
     };
+}
+
+pub fn buildHeadlessCommand(
+    allocator: std.mem.Allocator,
+    task: adapters.Task,
+    cwd: []const u8,
+) !@import("headless.zig").HeadlessCommand {
+    const argv = try allocator.alloc([]const u8, 5);
+    argv[0] = "/bin/sh";
+    argv[1] = "-c";
+    argv[2] = "case \"$1\" in *\"token usage\"*) printf '%s\\n' '{\"type\":\"token_usage\",\"provider\":\"fake\",\"model\":\"fake-local\",\"input_tokens\":7,\"output_tokens\":3,\"usd\":0.11,\"wall_ms\":125}';; esac; printf 'FAKE_FINAL: %s\\n' \"$1\"";
+    argv[3] = "mitos-fake-provider";
+    argv[4] = task.text;
+    return .{ .argv = argv, .cwd = cwd };
 }
 
 fn detect(

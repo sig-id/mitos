@@ -13,7 +13,8 @@ defmodule Mitos.AppManifest do
   """
 
   @id_pattern ~r/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
-  @secret_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key)/i
+  @secret_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer)/i
+  @secret_url_query_key_pattern ~r/(secret|token|api[_-]?key|password|credential|private[_-]?key|authorization|bearer|signature|sig)/i
   @top_level_keys ~w(
     authors
     capabilities
@@ -28,8 +29,17 @@ defmodule Mitos.AppManifest do
     version
   )
   @workspace_values ~w(repo dataset none)
+  @workspace_keys ~w(kind ref refspec)
   @trust_tiers ~w(T0 T1 T2)
+  @capability_keys ~w(ref as)
+  @pipeline_keys ~w(id file sha256 requires)
   @pipeline_requires_keys ~w(services targets)
+  @entrypoint_keys ~w(id pipeline title description workspace inputs parameters defaults)
+  @entrypoint_inputs_keys ~w(schema)
+  @entrypoint_parameter_keys ~w(name type default description)
+  @entrypoint_defaults_keys ~w(budget constraints success_criteria)
+  @entrypoint_budget_keys ~w(tokens usd wall_ms)
+  @io_keys ~w(inputs outputs)
   @service_keys ~w(requires wants)
   @requirement_keys ~w(connectors egress harnesses resources trust_tier)
   @binding_sidecar_keys ~w(app_id credential_scope defaults_overridden? io)
@@ -81,7 +91,7 @@ defmodule Mitos.AppManifest do
   @spec load(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
   def load(path_or_dir, opts \\ []) when is_binary(path_or_dir) do
     with {:ok, path} <- manifest_path(path_or_dir),
-         {:ok, raw} <- File.read(path),
+         {:ok, raw} <- read_regular_file(path),
          {:ok, manifest} <- decode_manifest(path, raw),
          {:ok, app} <- from_json(manifest, Keyword.put_new(opts, :app_root, Path.dirname(path))) do
       maybe_apply_binding_sidecar(app, Path.dirname(path), opts)
@@ -177,8 +187,10 @@ defmodule Mitos.AppManifest do
   def task_for_entrypoint(%__MODULE__{} = app, entrypoint_id, inputs, opts)
       when is_map(inputs) do
     with {:ok, entrypoint} <- entrypoint(app, entrypoint_id),
-         :ok <- validate_input_schema(input_schema(entrypoint), stringify(inputs)) do
+         :ok <- validate_input_schema(input_schema(entrypoint), stringify(inputs)),
+         {:ok, parameters} <- resolve_parameters(entrypoint, Keyword.get(opts, :parameters, %{})) do
       defaults = map_or(entrypoint["defaults"], %{})
+      workspace = resolve_workspace(entrypoint, Keyword.get(opts, :workspace))
 
       task =
         Mitos.WorkPool.task(%{
@@ -191,9 +203,10 @@ defmodule Mitos.AppManifest do
           "payload" =>
             %{
               "intent" => Keyword.get(opts, :intent) || entrypoint["title"] || entrypoint["id"],
-              "workspace" => entrypoint["workspace"],
+              "workspace" => workspace,
               "inputs" => stringify(inputs)
             }
+            |> maybe_put("parameters", parameter_payload(entrypoint, parameters))
             |> maybe_put("dedupe_key", opts[:dedupe_key] || opts[:idempotency_key])
             |> maybe_put("reply_ref", opts[:reply_ref])
             |> maybe_put("constraints", opts[:constraints] || defaults["constraints"])
@@ -235,23 +248,31 @@ defmodule Mitos.AppManifest do
     do: {:error, {:invalid_application, "install io bindings must be an object"}}
 
   defp manifest_path(path) do
-    cond do
-      File.dir?(path) ->
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
         ["app.json", "app.yaml", "app.yml"]
         |> Enum.map(&Path.join(path, &1))
-        |> Enum.find(&File.regular?/1)
+        |> Enum.find(&regular_file?/1)
         |> case do
           nil -> {:error, {:application_not_found, path}}
           manifest -> {:ok, manifest}
         end
 
-      File.regular?(path) ->
+      {:ok, %{type: :regular}} ->
         {:ok, path}
 
-      true ->
+      {:ok, %{type: :symlink}} ->
+        {:error, {:invalid_application, "application manifest path must not be a symlink"}}
+
+      {:ok, _stat} ->
+        {:error, {:application_not_found, path}}
+
+      {:error, _reason} ->
         {:error, {:application_not_found, path}}
     end
   end
+
+  defp regular_file?(path), do: match?({:ok, %{type: :regular}}, File.lstat(path))
 
   defp maybe_apply_binding_sidecar(app, dir, opts) do
     if Keyword.get(opts, :apply_bindings, true) == false do
@@ -264,7 +285,7 @@ defmodule Mitos.AppManifest do
   defp apply_binding_sidecar(app, dir) do
     path = Path.join(dir, "bindings.json")
 
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, raw} ->
         with {:ok, %{} = sidecar} <- Jason.decode(raw),
              :ok <- validate_binding_sidecar(sidecar, app),
@@ -287,6 +308,15 @@ defmodule Mitos.AppManifest do
 
       {:error, reason} ->
         {:error, {:invalid_application, "could not read bindings.json: #{inspect(reason)}"}}
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -416,12 +446,72 @@ defmodule Mitos.AppManifest do
     end)
   end
 
+  defp reject_secret_fields(value, path) when is_binary(value) do
+    field_path = Enum.reverse(path) |> Enum.join(".")
+
+    cond do
+      credential_url?(value) ->
+        {:error,
+         {:invalid_application,
+          "application manifests must not contain credential-bearing URL field #{field_path}"}}
+
+      credential_url_query?(value) ->
+        {:error,
+         {:invalid_application,
+          "application manifests must not contain credential-bearing URL query field #{field_path}"}}
+
+      true ->
+        :ok
+    end
+  end
+
   defp reject_secret_fields(_value, _path), do: :ok
+
+  defp credential_url?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, userinfo: userinfo}
+      when is_binary(scheme) and is_binary(host) and is_binary(userinfo) ->
+        userinfo != ""
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query?(value) do
+    value
+    |> URI.parse()
+    |> case do
+      %URI{scheme: scheme, host: host, query: query}
+      when is_binary(scheme) and is_binary(host) and is_binary(query) ->
+        query
+        |> String.split("&", trim: true)
+        |> Enum.any?(&credential_url_query_pair?/1)
+
+      _uri ->
+        false
+    end
+  end
+
+  defp credential_url_query_pair?(pair) do
+    [key | _rest] = String.split(pair, "=", parts: 2)
+    Regex.match?(@secret_url_query_key_pattern, safe_form_decode(key))
+  end
+
+  defp safe_form_decode(value) do
+    URI.decode_www_form(value)
+  rescue
+    ArgumentError -> value
+  end
 
   defp normalize_capabilities(values) when is_list(values) do
     with {:ok, capabilities} <-
            normalize_indexed(values, "capabilities", fn value, index ->
              with %{} = capability <- map_or_nil(value),
+                  :ok <-
+                    reject_unknown_fields(capability, @capability_keys, "capabilities.#{index}"),
                   {:ok, ref} <- required_string(capability, "ref", "capabilities.#{index}.ref"),
                   {:ok, alias} <- required_string(capability, "as", "capabilities.#{index}.as"),
                   :ok <- validate_id(alias, "capabilities.#{index}.as") do
@@ -448,6 +538,7 @@ defmodule Mitos.AppManifest do
          {:ok, pipelines} <-
            normalize_indexed(values, "pipelines", fn value, index ->
              with %{} = pipeline <- map_or_nil(value),
+                  :ok <- reject_unknown_fields(pipeline, @pipeline_keys, "pipelines.#{index}"),
                   {:ok, id} <- required_string(pipeline, "id", "pipelines.#{index}.id"),
                   :ok <- validate_id(id, "pipelines.#{index}.id"),
                   {:ok, file} <- required_string(pipeline, "file", "pipelines.#{index}.file"),
@@ -500,23 +591,29 @@ defmodule Mitos.AppManifest do
     with {:ok, entrypoints} <-
            normalize_indexed(values, "entrypoints", fn value, index ->
              with %{} = entrypoint <- map_or_nil(value),
+                  :ok <-
+                    reject_unknown_fields(entrypoint, @entrypoint_keys, "entrypoints.#{index}"),
                   {:ok, id} <- required_string(entrypoint, "id", "entrypoints.#{index}.id"),
                   :ok <- validate_id(id, "entrypoints.#{index}.id"),
                   {:ok, pipeline} <-
                     required_string(entrypoint, "pipeline", "entrypoints.#{index}.pipeline"),
                   :ok <- ensure_pipeline_exists(pipeline, pipeline_ids, index),
                   {:ok, workspace} <- workspace_value(entrypoint["workspace"], index),
-                  {:ok, inputs} <- normalize_inputs(entrypoint["inputs"], index) do
+                  {:ok, inputs} <- normalize_inputs(entrypoint["inputs"], index),
+                  {:ok, parameters} <-
+                    normalize_entrypoint_parameters(entrypoint["parameters"], index),
+                  {:ok, defaults} <- normalize_entrypoint_defaults(entrypoint["defaults"], index) do
                {:ok,
                 %{
                   "id" => id,
                   "pipeline" => pipeline,
                   "workspace" => workspace,
-                  "inputs" => inputs
+                  "inputs" => inputs,
+                  "parameters" => parameters
                 }
                 |> maybe_put("title", optional_string(entrypoint["title"]))
                 |> maybe_put("description", optional_string(entrypoint["description"]))
-                |> maybe_put("defaults", map_or_nil(entrypoint["defaults"]))}
+                |> maybe_put("defaults", defaults)}
              else
                nil ->
                  {:error, {:invalid_application, "entrypoints.#{index} must be an object"}}
@@ -540,17 +637,142 @@ defmodule Mitos.AppManifest do
     inputs = stringify(inputs)
     schema = inputs["schema"] || %{}
 
-    if is_map(schema) do
-      with {:ok, schema} <- normalize_input_schema(schema, index) do
-        {:ok, Map.put(inputs, "schema", schema)}
-      end
+    with :ok <-
+           reject_unknown_fields(inputs, @entrypoint_inputs_keys, "entrypoints.#{index}.inputs"),
+         true <- is_map(schema),
+         {:ok, schema} <- normalize_input_schema(schema, index) do
+      {:ok, Map.put(inputs, "schema", schema)}
     else
-      {:error, {:invalid_application, "entrypoints.#{index}.inputs.schema must be an object"}}
+      false ->
+        {:error, {:invalid_application, "entrypoints.#{index}.inputs.schema must be an object"}}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
   defp normalize_inputs(_inputs, index),
     do: {:error, {:invalid_application, "entrypoints.#{index}.inputs must be an object"}}
+
+  defp normalize_entrypoint_parameters(nil, _index), do: {:ok, []}
+
+  defp normalize_entrypoint_parameters(values, index) when is_list(values) do
+    with {:ok, parameters} <-
+           normalize_indexed(values, "entrypoints.#{index}.parameters", fn value, i ->
+             field = "entrypoints.#{index}.parameters.#{i}"
+
+             with %{} = parameter <- map_or_nil(value),
+                  :ok <- reject_unknown_fields(parameter, @entrypoint_parameter_keys, field),
+                  {:ok, name} <- required_string(parameter, "name", "#{field}.name"),
+                  :ok <- validate_id(name, "#{field}.name"),
+                  {:ok, type} <- parameter_type(parameter["type"], "#{field}.type"),
+                  {:ok, default} <-
+                    parameter_default(parameter["default"], type, "#{field}.default") do
+               {:ok,
+                %{"name" => name, "type" => type}
+                |> maybe_put("default", default)
+                |> maybe_put("description", optional_string(parameter["description"]))}
+             else
+               nil ->
+                 {:error, {:invalid_application, "#{field} must be an object"}}
+
+               {:error, _reason} = error ->
+                 error
+             end
+           end),
+         :ok <- ensure_unique(parameters, "name", "entrypoints.#{index}.parameters name") do
+      {:ok, parameters}
+    end
+  end
+
+  defp normalize_entrypoint_parameters(_values, index),
+    do: {:error, {:invalid_application, "entrypoints.#{index}.parameters must be a list"}}
+
+  defp parameter_type(nil, _field), do: {:ok, "string"}
+
+  defp parameter_type(type, _field) when is_binary(type) and type in @input_schema_types,
+    do: {:ok, type}
+
+  defp parameter_type(type, field) when is_binary(type),
+    do: {:error, {:invalid_application, "#{field} is unsupported"}}
+
+  defp parameter_type(_type, field),
+    do: {:error, {:invalid_application, "#{field} must be a string"}}
+
+  defp parameter_default(nil, _type, _field), do: {:ok, nil}
+
+  defp parameter_default(value, type, field) do
+    if input_type_valid?(type, value) do
+      {:ok, value}
+    else
+      {:error, {:invalid_application, "#{field} has invalid type"}}
+    end
+  end
+
+  defp normalize_entrypoint_defaults(nil, _index), do: {:ok, nil}
+
+  defp normalize_entrypoint_defaults(%{} = defaults, index) do
+    defaults = stringify(defaults)
+
+    with :ok <-
+           reject_unknown_fields(
+             defaults,
+             @entrypoint_defaults_keys,
+             "entrypoints.#{index}.defaults"
+           ),
+         {:ok, budget} <- normalize_entrypoint_budget(defaults["budget"], index),
+         {:ok, constraints} <-
+           required_string_list(
+             defaults["constraints"],
+             "entrypoints.#{index}.defaults.constraints"
+           ),
+         {:ok, success_criteria} <-
+           required_string_list(
+             defaults["success_criteria"],
+             "entrypoints.#{index}.defaults.success_criteria"
+           ) do
+      {:ok,
+       %{}
+       |> maybe_put("budget", budget)
+       |> maybe_put("constraints", constraints)
+       |> maybe_put("success_criteria", success_criteria)}
+    end
+  end
+
+  defp normalize_entrypoint_defaults(_defaults, index),
+    do: {:error, {:invalid_application, "entrypoints.#{index}.defaults must be an object"}}
+
+  defp normalize_entrypoint_budget(nil, _index), do: {:ok, nil}
+
+  defp normalize_entrypoint_budget(%{} = budget, index) do
+    budget = stringify(budget)
+
+    with :ok <-
+           reject_unknown_fields(
+             budget,
+             @entrypoint_budget_keys,
+             "entrypoints.#{index}.defaults.budget"
+           ),
+         :ok <- validate_budget_numbers(budget, "entrypoints.#{index}.defaults.budget") do
+      {:ok, budget}
+    end
+  end
+
+  defp normalize_entrypoint_budget(_budget, index),
+    do: {:error, {:invalid_application, "entrypoints.#{index}.defaults.budget must be an object"}}
+
+  defp validate_budget_numbers(budget, field) do
+    Enum.reduce_while(budget, :ok, fn {key, value}, :ok ->
+      if valid_budget_number?(value) do
+        {:cont, :ok}
+      else
+        {:halt, {:error, {:invalid_application, "#{field}.#{key} must be a non-negative number"}}}
+      end
+    end)
+  end
+
+  defp valid_budget_number?(value) when is_integer(value) or is_float(value), do: value >= 0
+  defp valid_budget_number?(_value), do: false
 
   defp normalize_input_schema(%{} = schema, index) do
     schema = stringify(schema)
@@ -649,7 +871,8 @@ defmodule Mitos.AppManifest do
     io = stringify(io)
     entrypoints_by_id = Map.new(entrypoints, &{&1["id"], &1})
 
-    with {:ok, inputs} <-
+    with :ok <- reject_unknown_fields(io, @io_keys, "io"),
+         {:ok, inputs} <-
            normalize_io_bindings(io["inputs"] || [], "io.inputs", entrypoints_by_id),
          {:ok, outputs} <-
            normalize_io_bindings(io["outputs"] || [], "io.outputs", entrypoints_by_id) do
@@ -858,7 +1081,8 @@ defmodule Mitos.AppManifest do
     with :ok <- safe_relative_path(file, "pipelines.#{index}.file"),
          path <- Path.expand(file, root),
          true <- inside_root?(path, root),
-         {:ok, bytes} <- File.read(path) do
+         true <- no_symlink_path?(path, root),
+         {:ok, bytes} <- read_regular_file(path) do
       {:ok, sha256(bytes)}
     else
       false ->
@@ -905,6 +1129,31 @@ defmodule Mitos.AppManifest do
     path == root or String.starts_with?(path, root <> "/")
   end
 
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    end
+  end
+
   defp ensure_pipeline_exists(pipeline, pipeline_ids, index) do
     if MapSet.member?(pipeline_ids, pipeline) do
       :ok
@@ -914,11 +1163,41 @@ defmodule Mitos.AppManifest do
     end
   end
 
-  defp workspace_value(nil, _index), do: {:ok, "none"}
-  defp workspace_value(value, _index) when value in @workspace_values, do: {:ok, value}
+  defp workspace_value(nil, _index), do: {:ok, %{"kind" => "none"}}
+
+  defp workspace_value(value, _index) when value in @workspace_values,
+    do: {:ok, %{"kind" => value}}
+
+  defp workspace_value(%{} = value, index) do
+    value = stringify(value)
+
+    with :ok <- reject_unknown_fields(value, @workspace_keys, "entrypoints.#{index}.workspace"),
+         {:ok, kind} <- workspace_kind(value["kind"], index),
+         :ok <- optional_workspace_ref(value["ref"], "entrypoints.#{index}.workspace.ref"),
+         :ok <- optional_workspace_ref(value["refspec"], "entrypoints.#{index}.workspace.refspec") do
+      {:ok,
+       %{"kind" => kind}
+       |> maybe_put("ref", optional_string(value["ref"]))
+       |> maybe_put("refspec", optional_string(value["refspec"]))}
+    end
+  end
 
   defp workspace_value(_value, index),
     do: {:error, {:invalid_application, "entrypoints.#{index}.workspace is invalid"}}
+
+  defp workspace_kind(value, _index) when value in @workspace_values, do: {:ok, value}
+
+  defp workspace_kind(_value, index),
+    do:
+      {:error,
+       {:invalid_application,
+        "entrypoints.#{index}.workspace.kind must be repo, dataset, or none"}}
+
+  defp optional_workspace_ref(nil, _field), do: :ok
+  defp optional_workspace_ref(value, _field) when is_binary(value), do: :ok
+
+  defp optional_workspace_ref(_value, field),
+    do: {:error, {:invalid_application, "#{field} must be a string"}}
 
   defp input_schema(%{"inputs" => %{"schema" => %{} = schema}}), do: schema
   defp input_schema(_entrypoint), do: %{}
@@ -993,6 +1272,67 @@ defmodule Mitos.AppManifest do
   defp input_type_valid?("file", value) when is_binary(value), do: value != ""
   defp input_type_valid?("file", %{} = value), do: is_binary(value["path"] || value["name"])
   defp input_type_valid?(_type, _value), do: true
+
+  defp resolve_parameters(entrypoint, provided) when is_map(provided) do
+    declared = entrypoint["parameters"] || []
+    declared_by_name = Map.new(declared, &{&1["name"], &1})
+    allowed = MapSet.new(Map.keys(declared_by_name))
+    provided = stringify(provided)
+
+    with :ok <- reject_unknown_parameters(provided, allowed),
+         :ok <- validate_parameter_types(declared, provided) do
+      resolved =
+        Map.new(declared, fn param ->
+          {param["name"], Map.get(provided, param["name"], param["default"])}
+        end)
+
+      {:ok, resolved}
+    end
+  end
+
+  defp resolve_parameters(_entrypoint, _provided),
+    do: {:error, {:invalid_application_input, "parameters must be an object"}}
+
+  defp reject_unknown_parameters(provided, allowed) do
+    provided
+    |> Map.keys()
+    |> Enum.reject(&MapSet.member?(allowed, &1))
+    |> case do
+      [] -> :ok
+      [name | _] -> {:error, {:invalid_application_input, "unknown parameter #{name}"}}
+    end
+  end
+
+  defp validate_parameter_types(declared, provided) do
+    Enum.reduce_while(declared, :ok, fn param, :ok ->
+      name = param["name"]
+
+      case Map.get(provided, name) do
+        nil ->
+          {:cont, :ok}
+
+        value ->
+          if input_type_valid?(param["type"], value) do
+            {:cont, :ok}
+          else
+            {:halt, {:error, {:invalid_application_input, "parameter #{name} has invalid type"}}}
+          end
+      end
+    end)
+  end
+
+  defp parameter_payload(%{"parameters" => [_ | _]}, parameters), do: parameters
+  defp parameter_payload(_entrypoint, _parameters), do: nil
+
+  defp resolve_workspace(entrypoint, run_workspace) do
+    base = map_or(entrypoint["workspace"], %{"kind" => "none"})
+    run = map_or(run_workspace, %{})
+    kind = base["kind"] || run["kind"] || "none"
+
+    %{"kind" => kind}
+    |> maybe_put("ref", optional_string(run["ref"]) || optional_string(base["ref"]))
+    |> maybe_put("refspec", optional_string(run["refspec"]) || optional_string(base["refspec"]))
+  end
 
   defp generated_task_id(app, entrypoint) do
     "app-" <>

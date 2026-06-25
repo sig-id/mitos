@@ -352,6 +352,90 @@ defmodule Mitos.WorkPoolViewTest do
     refute File.exists?(Path.join(workloads_dir, "../escape.json"))
   end
 
+  test "pipeline authoring rejects malformed env before persisting", %{
+    workloads_dir: workloads_dir
+  } do
+    env_conn =
+      json_conn(:post, "/pipelines", %{
+        id: "bad-env",
+        provider: "fake",
+        template: "Do {{objective}}",
+        env: %{"PATH=/tmp" => "ignored"}
+      })
+      |> Mitos.Web.Router.call([])
+
+    assert env_conn.status == 422
+    assert Jason.decode!(env_conn.resp_body)["detail"] =~ "env name must not contain ="
+    refute File.exists?(Path.join(workloads_dir, "bad-env.json"))
+
+    passthrough_conn =
+      json_conn(:post, "/pipelines", %{
+        id: "bad-env-passthrough",
+        provider: "fake",
+        template: "Do {{objective}}",
+        env_passthrough: ["BAD=NAME"]
+      })
+      |> Mitos.Web.Router.call([])
+
+    assert passthrough_conn.status == 422
+
+    assert Jason.decode!(passthrough_conn.resp_body)["detail"] =~
+             "env_passthrough entry must not contain ="
+
+    refute File.exists?(Path.join(workloads_dir, "bad-env-passthrough.json"))
+  end
+
+  test "pipeline update rejects symlinked persisted definitions", %{workloads_dir: workloads_dir} do
+    outside = unique_tmp_dir("pipeline-registry-outside")
+    File.mkdir_p!(outside)
+    outside_definition = Path.join(outside, "linked.json")
+
+    File.write!(
+      outside_definition,
+      Jason.encode!(%{provider: "fake", template: "Outside {{objective}}"})
+    )
+
+    File.ln_s!(outside_definition, Path.join(workloads_dir, "linked.json"))
+
+    on_exit(fn -> File.rm_rf!(outside) end)
+
+    conn =
+      json_conn(:put, "/pipelines/linked", %{
+        provider: "fake",
+        template: "Updated {{objective}}"
+      })
+      |> Mitos.Web.Router.call([])
+
+    assert conn.status == 422
+
+    assert Jason.decode!(conn.resp_body)["detail"] ==
+             "definition must not be a symlink"
+  end
+
+  test "pipeline create treats dangling symlink definitions as conflicts", %{
+    workloads_dir: workloads_dir
+  } do
+    outside = unique_tmp_dir("pipeline-registry-dangling")
+    File.mkdir_p!(outside)
+    outside_definition = Path.join(outside, "new-pipeline.json")
+    definition_path = Path.join(workloads_dir, "new-pipeline.json")
+    File.ln_s!(outside_definition, definition_path)
+
+    on_exit(fn -> File.rm_rf!(outside) end)
+
+    conn =
+      json_conn(:post, "/pipelines", %{
+        id: "new-pipeline",
+        provider: "fake",
+        template: "Do {{objective}}"
+      })
+      |> Mitos.Web.Router.call([])
+
+    assert conn.status == 409
+    refute File.exists?(outside_definition)
+    assert {:ok, %{type: :symlink}} = File.lstat(definition_path)
+  end
+
   defp opened_trace(base_dir, run_id) do
     trace =
       Mitos.Trace.open!(

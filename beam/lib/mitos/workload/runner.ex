@@ -1278,7 +1278,7 @@ defmodule Mitos.Workload.Runner do
   end
 
   defp read_skill_source(skill, path) do
-    case File.read(path) do
+    case read_regular_file(path) do
       {:ok, body} -> {:ok, body}
       {:error, reason} -> {:error, {:skill_unavailable, skill, reason}}
     end
@@ -1301,14 +1301,57 @@ defmodule Mitos.Workload.Runner do
 
     package_root = Path.expand(package_root)
 
-    if String.starts_with?(expanded, package_root <> "/") or expanded == package_root do
-      {:ok, expanded}
-    else
-      {:error, :path_escape}
+    cond do
+      not (String.starts_with?(expanded, package_root <> "/") or expanded == package_root) ->
+        {:error, :path_escape}
+
+      true ->
+        case no_symlink_path?(expanded, package_root) do
+          true -> {:ok, expanded}
+          false -> {:error, :symlink}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
   defp package_file(_package_root, _path), do: {:error, :missing_package_root}
+
+  defp no_symlink_path?(path, root) do
+    root = Path.expand(root)
+    path = Path.expand(path)
+    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
+
+    with {:ok, %{type: root_type}} <- File.lstat(root),
+         true <- root_type != :symlink do
+      parts
+      |> Enum.reduce_while(root, fn part, current ->
+        candidate = Path.join(current, part)
+
+        case File.lstat(candidate) do
+          {:ok, %{type: :symlink}} -> {:halt, false}
+          {:ok, _stat} -> {:cont, candidate}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        false -> false
+        {:error, reason} -> {:error, reason}
+        _last_path -> true
+      end
+    else
+      false -> false
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_regular_file(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :regular}} -> File.read(path)
+      {:ok, %{type: :symlink}} -> {:error, :symlink}
+      {:ok, _stat} -> {:error, :not_regular}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp selected_skill_overlays(
          %Workload{capability: %Mitos.Capability{} = capability} = workload,

@@ -8,8 +8,17 @@ pub const provider_id = adapters.ProviderId{ .value = "pi" };
 pub const json_adapter_id = adapters.AdapterId{ .value = "pi.json" };
 pub const pty_adapter_id = adapters.AdapterId{ .value = "pi.pty" };
 
+const pty_terminal_chrome_markers = [_][]const u8{
+    "Pi",
+    "Working",
+    "Thinking",
+    "steering",
+    "follow-up",
+};
+pub const pty_terminal_observation = adapters.terminalObservationProviderTui(&pty_terminal_chrome_markers);
+
 const supported_transports = [_]transport.TransportName{.stdio_json};
-const unavailable_warnings = [_][]const u8{"pi binary was not found on PATH"};
+const unavailable_warnings = [_][]const u8{"pi binary was not found on PATH or common toolchain directories"};
 const unsupported_warnings = [_][]const u8{"pi does not advertise --mode json support"};
 
 pub fn initJsonAdapter() adapters.AgentAdapter {
@@ -103,7 +112,7 @@ fn detectJson(
         .owns_version = version != null,
         .auth_status = try adapter_detection.authStatusFromEnv(
             allocator,
-            &.{ "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENCODE_API_KEY" },
+            &.{ "ZAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENCODE_API_KEY" },
         ),
         .supported_transports = &supported_transports,
     };

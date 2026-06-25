@@ -279,7 +279,12 @@ Task {
   status      : queued | blocked | scheduled | running | done | failed | parked | cancelled
   deps        : [Dep]                         # typed edges (relation/payload/strength/guard) — `06` §4; cross-pool
   pipeline    : pipeline_ref | null           # explicit recipe, or null → dispatch selects
-  payload     : { intent, workspace?, inputs, constraints, success_criteria }  # workspace optional: repo|dataset|none
+  payload     : { intent, workspace?, inputs, parameters?, constraints, success_criteria }
+               # workspace?  : {kind: repo|dataset|none, ref?, refspec?}  — kind declared by the entrypoint
+               #               (12 §4); ref/refspec supplied at run time and resolved+cloned by
+               #               `prepare` (§7), so the browser/connector never handles git credentials.
+               # inputs      : the run's SUBJECT data (what to work on) — typed by entrypoint.inputs.schema.
+               # parameters?: per-run KNOBS (how to run), typed with defaults — distinct from inputs (12 §4).
   budget      : { tokens, usd, wall_ms }
   runs        : [run_id]                      # 0..N executions (retry/resume/branch)
   provenance  : { created_by, depth, parent_task? }   # depth bounds agent-emitted + invoked work
@@ -304,7 +309,7 @@ ApplicationManifest {
   name, version
   capabilities : [ {ref: <capability_ref|path>, as: <alias>} ]   # pinned atoms (§8.3, identity §03 §9)
   pipelines    : [ {id, file} ]                                  # markdown pipelines (04 §8)
-  entrypoints  : [ {id, pipeline, title?, inputs:{schema}, workspace: repo|dataset|none, defaults?} ]
+  entrypoints  : [ {id, pipeline, title?, inputs:{schema}, parameters?:[{name,type,default?,description?}], workspace: {kind, ref?, refspec?}|kind, defaults?} ]
   io           : { inputs: [...], outputs: [...] }               # DEFAULT bindings (10 §4); tenant overrides at install
   services     : { requires: [...], wants: [...], units?: [...] } # composition root (06 §9–10)
   requirements : { harnesses, connectors, egress, trust_tier, resources }  # install-time transparency (authority stays per-cap)

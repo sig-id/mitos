@@ -1,4 +1,5 @@
 const std = @import("std");
+const adapter_detection = @import("../adapters/detection.zig");
 const adapters = @import("../adapters/types.zig");
 const normalize = @import("normalize.zig");
 const prompt = @import("../prompt/root.zig");
@@ -53,6 +54,9 @@ pub fn execute(
     command: HeadlessCommand,
     options: ExecuteOptions,
 ) !HeadlessResult {
+    try validateCommandInputs(command);
+    try validateCwdNoSymlink(command.cwd);
+
     var env_map: ?std.process.EnvMap = null;
     defer if (env_map) |*map| map.deinit();
 
@@ -64,7 +68,7 @@ pub fn execute(
         break :env &env_map.?;
     } else null;
 
-    const owned_arg0: ?[]u8 = if (command.argv.len > 0) try resolveArg0FromEnvironment(
+    const owned_arg0: ?[]u8 = if (command.argv.len > 0) try resolveArg0(
         allocator,
         command.argv[0],
         command.cwd,
@@ -103,6 +107,25 @@ pub fn execute(
             else => null,
         },
     };
+}
+
+fn validateCommandInputs(command: HeadlessCommand) !void {
+    for (command.argv) |arg| try validateCString(arg);
+    try validateCString(command.cwd);
+    for (command.environment) |entry| {
+        try validateEnvPair(entry.name, entry.value);
+    }
+}
+
+fn validateCString(value: []const u8) !void {
+    if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidCString;
+}
+
+fn validateEnvPair(name: []const u8, value: []const u8) !void {
+    if (name.len == 0) return error.InvalidEnvName;
+    if (std.mem.indexOfScalar(u8, name, 0) != null) return error.InvalidEnvName;
+    if (std.mem.indexOfScalar(u8, name, '=') != null) return error.InvalidEnvName;
+    if (std.mem.indexOfScalar(u8, value, 0) != null) return error.InvalidEnvValue;
 }
 
 pub fn executeAndEmit(
@@ -283,6 +306,19 @@ fn providerLaunchJson(provider: []const u8, adapter: []const u8) []const u8 {
     return "{\"type\":\"headless_command_built\"}";
 }
 
+fn resolveArg0(
+    allocator: std.mem.Allocator,
+    arg0: []const u8,
+    cwd: []const u8,
+    environment: []const adapters.EnvVar,
+) !?[]u8 {
+    if (explicitPathValue(environment)) |_| {
+        return try resolveArg0FromEnvironment(allocator, arg0, cwd, environment);
+    }
+
+    return try adapter_detection.resolveCommandArg0(allocator, arg0);
+}
+
 fn resolveArg0FromEnvironment(
     allocator: std.mem.Allocator,
     arg0: []const u8,
@@ -301,14 +337,7 @@ fn resolveArg0FromEnvironment(
             try std.fs.path.join(allocator, &.{ cwd, search_path, arg0 });
         errdefer allocator.free(candidate);
 
-        const exists = if (std.fs.path.isAbsolute(candidate)) exists: {
-            std.fs.accessAbsolute(candidate, .{}) catch break :exists false;
-            break :exists true;
-        } else exists: {
-            std.fs.cwd().access(candidate, .{}) catch break :exists false;
-            break :exists true;
-        };
-        if (exists) return candidate;
+        if (adapter_detection.executableFileAvailable(candidate)) return candidate;
 
         allocator.free(candidate);
     }
@@ -324,6 +353,45 @@ fn explicitPathValue(environment: []const adapters.EnvVar) ?[]const u8 {
         }
     }
     return path_value;
+}
+
+fn validateCwdNoSymlink(path: []const u8) !void {
+    if (path.len == 0) return error.FileNotFound;
+
+    var it = try std.fs.path.componentIterator(path);
+    var current: std.fs.Dir = undefined;
+    var current_owned = false;
+    if (it.root()) |root| {
+        current = try std.fs.openDirAbsolute(root, .{ .no_follow = true });
+        current_owned = true;
+    } else {
+        current = std.fs.cwd();
+    }
+    defer if (current_owned) current.close();
+
+    var component = it.next() orelse return;
+    while (true) {
+        try rejectSymlink(current, component.name);
+        const child = current.openDir(component.name, .{ .no_follow = true }) catch |err| switch (err) {
+            error.SymLinkLoop => return error.SymlinkRejected,
+            else => |e| return e,
+        };
+        if (current_owned) current.close();
+        current = child;
+        current_owned = true;
+
+        component = it.next() orelse return;
+    }
+}
+
+fn rejectSymlink(dir: std.fs.Dir, path: []const u8) !void {
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (dir.readLink(path, &buffer)) |_| {
+        return error.SymlinkRejected;
+    } else |err| switch (err) {
+        error.NotLink, error.FileNotFound => return,
+        else => |e| return e,
+    }
 }
 
 fn isJsonObjectLine(allocator: std.mem.Allocator, line: []const u8) !bool {
@@ -406,6 +474,35 @@ test "headless command passes explicit environment to real process" {
     try std.testing.expectEqualStrings("env-ok", result.stdout);
 }
 
+test "headless command rejects c-string truncation and invalid env names before spawning" {
+    const good_argv = [_][]const u8{ "sh", "-c", "printf should-not-run" };
+
+    const bad_argv = [_][]const u8{ "sh\x00ignored", "-c", "printf should-not-run" };
+    try std.testing.expectError(error.InvalidCString, execute(std.testing.allocator, .{
+        .argv = &bad_argv,
+        .cwd = ".",
+    }, .{}));
+
+    try std.testing.expectError(error.InvalidCString, execute(std.testing.allocator, .{
+        .argv = &good_argv,
+        .cwd = ".\x00ignored",
+    }, .{}));
+
+    const bad_name = [_]adapters.EnvVar{.{ .name = "BAD=NAME", .value = "value" }};
+    try std.testing.expectError(error.InvalidEnvName, execute(std.testing.allocator, .{
+        .argv = &good_argv,
+        .cwd = ".",
+        .environment = &bad_name,
+    }, .{}));
+
+    const bad_value = [_]adapters.EnvVar{.{ .name = "GOOD", .value = "value\x00ignored" }};
+    try std.testing.expectError(error.InvalidEnvValue, execute(std.testing.allocator, .{
+        .argv = &good_argv,
+        .cwd = ".",
+        .environment = &bad_value,
+    }, .{}));
+}
+
 test "headless command resolves executable from explicit PATH" {
     var fake_bin = try @import("test_support.zig").FakeBin.init(std.testing.allocator);
     defer fake_bin.deinit();
@@ -426,6 +523,92 @@ test "headless command resolves executable from explicit PATH" {
 
     try std.testing.expectEqual(adapters.AdapterRunStatus.completed, result.status());
     try std.testing.expectEqualStrings("fake-path-ok", result.stdout);
+}
+
+test "headless command skips non-executable shadows on explicit PATH" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("bad");
+    try tmp.dir.makePath("good");
+    var bad_file = try tmp.dir.createFile("bad/mitos-headless-shadow", .{});
+    try bad_file.writeAll("#!/bin/sh\nprintf bad\n");
+    bad_file.close();
+
+    var good_file = try tmp.dir.createFile("good/mitos-headless-shadow", .{});
+    try good_file.writeAll(
+        \\#!/bin/sh
+        \\printf good
+        \\
+    );
+    try good_file.chmod(0o755);
+    good_file.close();
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const bad_dir = try std.fs.path.join(allocator, &.{ base, "bad" });
+    defer allocator.free(bad_dir);
+    const good_dir = try std.fs.path.join(allocator, &.{ base, "good" });
+    defer allocator.free(good_dir);
+    const path_value = try std.mem.join(allocator, ":", &.{ bad_dir, good_dir });
+    defer allocator.free(path_value);
+
+    const argv = [_][]const u8{"mitos-headless-shadow"};
+    const env = [_]adapters.EnvVar{.{ .name = "PATH", .value = path_value }};
+    const result = try execute(allocator, .{
+        .argv = &argv,
+        .cwd = ".",
+        .environment = &env,
+    }, .{});
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(adapters.AdapterRunStatus.completed, result.status());
+    try std.testing.expectEqualStrings("good", result.stdout);
+}
+
+test "headless command rejects symlinked cwd paths before spawning" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("real/work");
+    try tmp.dir.symLink("real/work", "cwd-link", .{ .is_directory = true });
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const link_path = try std.fs.path.join(allocator, &.{ base, "cwd-link" });
+    defer allocator.free(link_path);
+
+    const argv = [_][]const u8{ "sh", "-c", "printf should-not-run > marker" };
+    try std.testing.expectError(error.SymlinkRejected, execute(allocator, .{
+        .argv = &argv,
+        .cwd = link_path,
+    }, .{}));
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("real/work/marker", .{}));
+}
+
+test "headless command rejects symlinked cwd parents before spawning" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("outside/work");
+    try tmp.dir.symLink("outside", "parent-link", .{ .is_directory = true });
+
+    const base = try tmpDirPath(allocator, tmp.sub_path[0..]);
+    defer allocator.free(base);
+    const cwd_path = try std.fs.path.join(allocator, &.{ base, "parent-link", "work" });
+    defer allocator.free(cwd_path);
+
+    const argv = [_][]const u8{ "sh", "-c", "printf should-not-run > marker" };
+    try std.testing.expectError(error.SymlinkRejected, execute(allocator, .{
+        .argv = &argv,
+        .cwd = cwd_path,
+    }, .{}));
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("outside/work/marker", .{}));
 }
 
 test "headless command failure emits process exit and error message" {
@@ -461,6 +644,12 @@ test "headless final output handles provider stream json fields" {
 
     try std.testing.expectEqualStrings("claude done", claude);
     try std.testing.expectEqualStrings("gemini done", gemini);
+}
+
+fn tmpDirPath(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    const cwd = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd);
+    return try std.fs.path.join(allocator, &.{ cwd, ".zig-cache", "tmp", sub_path });
 }
 
 const EventRecorder = struct {
