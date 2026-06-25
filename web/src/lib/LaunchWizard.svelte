@@ -227,7 +227,7 @@
   {:else if step === 1}
     <div class="cfg">
       <div class="field">
-        <label>Application</label>
+        <span class="label">Application</span>
         <div class="readonly">{app?.name} · {entrypoint?.title || entrypoint?.id}</div>
       </div>
 
@@ -237,11 +237,13 @@
 
       {#if workspaceKind(entrypoint) !== "none"}
         <div class="field">
-          <label>Workspace {workspaceKind(entrypoint) === "dataset" ? "/ dataset" : "repository"}</label>
-          <input
-            bind:value={workspaceRef}
-            placeholder="git URL or local path (resolved server-side)"
-          />
+          <label>
+            <span class="label">Workspace {workspaceKind(entrypoint) === "dataset" ? "/ dataset" : "repository"}</span>
+            <input
+              bind:value={workspaceRef}
+              placeholder="git URL or local path (resolved server-side)"
+            />
+          </label>
           <div class="hint">Cloned and checked out by the backend — no git login needed here.</div>
         </div>
       {/if}
@@ -250,21 +252,23 @@
         <div class="sub">Inputs</div>
         {#each inputFields(entrypoint) as [name, schema] (name)}
           <div class="field">
-            <label>{name}{requiredInputs(entrypoint).includes(name) ? " *" : ""}</label>
-            {#if fieldKind(schema?.type) === "number"}
-              <input
-                type="number"
-                bind:value={inputValues[name]}
-                placeholder={schema?.description || ""}
-              />
-            {:else if fieldKind(schema?.type) === "boolean"}
-              <select bind:value={inputValues[name]}>
-                <option value="false">false</option>
-                <option value="true">true</option>
-              </select>
-            {:else}
-              <input bind:value={inputValues[name]} placeholder={schema?.description || ""} />
-            {/if}
+            <label>
+              <span class="label">{name}{requiredInputs(entrypoint).includes(name) ? " *" : ""}</span>
+              {#if fieldKind(schema?.type) === "number"}
+                <input
+                  type="number"
+                  bind:value={inputValues[name]}
+                  placeholder={schema?.description || ""}
+                />
+              {:else if fieldKind(schema?.type) === "boolean"}
+                <select bind:value={inputValues[name]}>
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              {:else}
+                <input bind:value={inputValues[name]} placeholder={schema?.description || ""} />
+              {/if}
+            </label>
           </div>
         {/each}
       {/if}
@@ -273,17 +277,19 @@
         <div class="sub">Parameters</div>
         {#each entrypoint?.parameters || [] as p (p.name)}
           <div class="field">
-            <label>{p.name}</label>
-            {#if fieldKind(p.type) === "number"}
-              <input type="number" bind:value={parameterValues[p.name]} />
-            {:else if fieldKind(p.type) === "boolean"}
-              <select bind:value={parameterValues[p.name]}>
-                <option value="false">false</option>
-                <option value="true">true</option>
-              </select>
-            {:else}
-              <input bind:value={parameterValues[p.name]} placeholder={p.description || ""} />
-            {/if}
+            <label>
+              <span class="label">{p.name}</span>
+              {#if fieldKind(p.type) === "number"}
+                <input type="number" bind:value={parameterValues[p.name]} />
+              {:else if fieldKind(p.type) === "boolean"}
+                <select bind:value={parameterValues[p.name]}>
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              {:else}
+                <input bind:value={parameterValues[p.name]} placeholder={p.description || ""} />
+              {/if}
+            </label>
             {#if p.description}
               <div class="hint">{p.description}</div>
             {/if}
@@ -443,11 +449,15 @@
   .field {
     margin-bottom: 16px;
   }
-  .field > label {
+  .field > label,
+  .field > .label {
     display: block;
     font-size: 12px;
     font-weight: 500;
     color: var(--mt-text-dim);
+    margin-bottom: 6px;
+  }
+  .field > label {
     margin-bottom: 6px;
   }
   .field input,

@@ -194,7 +194,7 @@ defmodule Mitos.IOPlane do
     %{"receipt" => receipt, "payload" => %{}}
   end
 
-  defp delivery_element({:error, reason}, _payload, public_destination, ref) do
+  defp delivery_element({:error, reason}, _payload, _public_destination, ref) do
     base = %{"delivery_id" => ref["delivery_id"], "sink" => ref["sink"], "status" => "failed"}
 
     receipt =
