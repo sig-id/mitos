@@ -269,6 +269,72 @@ defmodule Mitos.IOPlaneTest do
     assert second["duplicate?"] == true
   end
 
+  test "full connector->run->sink round-trip: webhook callback_url replies over HTTP", %{
+    apps_dir: apps_dir,
+    trace_dir: traces
+  } do
+    write_app!(apps_dir,
+      io: %{
+        inputs: [
+          %{connector: "webhook", entrypoint: "ship", select: %{mode: "explicit", pipeline: "ship-flow"}}
+        ],
+        outputs: [
+          %{sink: "reply", entrypoint: "ship", on: "run.done", reply_to: "input.reply_ref"}
+        ]
+      }
+    )
+
+    {port, ref} = start_listener(self())
+    callback = "http://127.0.0.1:#{port}/back"
+
+    body = %{
+      "event" => "build",
+      "data" => %{"objective" => "round trip"},
+      "callback_url" => callback,
+      "delivery_id" => "rt-1"
+    }
+
+    conn =
+      json_conn(:post, "/hooks/io-app", body)
+      |> Mitos.Web.Router.call([])
+
+    assert conn.status == 200, conn.resp_body
+    result = Jason.decode!(conn.resp_body)
+
+    # the reply sink delivered back to the originating callback URL
+    assert [%{"receipt" => receipt}] = result["deliveries"]
+    assert receipt["sink"] == "reply"
+    assert receipt["status"] == "sent"
+    assert receipt["transport"] == "http"
+    assert receipt["destination"] == callback
+
+    # the inbound signal carried the reply_ref and the delivery is keyed to it
+    events = Mitos.Trace.read_events(result["app_run_id"], base_dir: traces)
+
+    assert Enum.any?(events, fn
+      %{"kind" => "effect", "type" => "signal_received", "payload" => %{"intake" => %{"reply_ref" => ^callback}}} ->
+        true
+
+      _event ->
+        false
+    end)
+
+    assert Enum.any?(events, fn
+      %{"kind" => "effect", "type" => "delivery_sent", "ref" => %{"sink" => "reply", "dest" => ^callback}} ->
+        true
+
+      _event ->
+        false
+    end)
+
+    # the callback actually received the reply payload
+    assert_receive {:served, ^ref, reply_body}
+    reply = Jason.decode!(reply_body)
+    assert reply["kind"] == "reply"
+    assert reply["entrypoint"] == "ship"
+    assert is_map(reply["result"])
+  end
+
   test "GET /io/connectors and /io/sinks list registered classes" do
     connectors =
       conn(:get, "/io/connectors") |> Mitos.Web.Router.call([]) |> decode_body()
