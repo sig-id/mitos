@@ -1,6 +1,6 @@
 import { mount } from "svelte";
 import { defineSiguiComponents } from "@sig-ui/components";
-import { watchDarkMode } from "@sig-ui/dom";
+import "./styles.css";
 import App from "./App.svelte";
 
 defineSiguiComponents({
@@ -14,10 +14,6 @@ defineSiguiComponents({
     toastMachine: true,
     tooltipMachine: true
   }
-});
-
-watchDarkMode((isDark: boolean) => {
-  document.documentElement.dataset.systemTheme = isDark ? "dark" : "light";
 });
 
 const target = document.getElementById("app");

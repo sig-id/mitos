@@ -3,18 +3,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun run build.ts",
-    "dev": "bun run build.ts --watch"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@sig-ui/components": "file:../../sigui/packages/components",
     "@sig-ui/core": "file:../../sigui/packages/core",
     "@sig-ui/dom": "file:../../sigui/packages/dom",
-    "@sig-ui/theme": "file:../../sigui/packages/theme",
-    "svelte": "file:../../sigui/node_modules/svelte"
+    "@sig-ui/theme": "file:../../sigui/packages/theme"
   },
   "devDependencies": {
-    "bun-types": "latest",
-    "typescript": "latest"
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "svelte": "^5.55.8",
+    "typescript": "^5.9.2",
+    "vite": "^8.1.0"
   }
 }

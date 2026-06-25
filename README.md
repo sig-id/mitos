@@ -90,7 +90,8 @@ curl -X POST http://127.0.0.1:7682/agents \
 
 The Svelte operations console is served at `http://127.0.0.1:7682/`.
 It loads its static build from `web/dist`; rebuild it with
-`cd web && bun run build` after frontend changes.
+`cd web && npm install && npm run build` after frontend changes (`npm run dev`
+starts a Vite dev server with an API proxy to the running BEAM server).
 
 ## Artifacts
 
