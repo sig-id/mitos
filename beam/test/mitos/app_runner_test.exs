@@ -180,7 +180,7 @@ defmodule Mitos.AppRunnerTest do
                trace_base_dir: traces,
                io_outputs: [
                  %{
-                   sink: "webhook",
+                   sink: "web",
                    entrypoint: "ship",
                    on: "run.done",
                    url:
@@ -205,7 +205,7 @@ defmodule Mitos.AppRunnerTest do
     assert [
              %{
                "receipt" => %{
-                 "sink" => "webhook",
+                 "sink" => "web",
                  "status" => "sent",
                  "destination" => ^redacted_url
                }
@@ -235,7 +235,7 @@ defmodule Mitos.AppRunnerTest do
                "include" => ["result"],
                "nested" => [%{"keep" => "visible"}]
              },
-             "sink" => "webhook",
+             "sink" => "web",
              "url" => redacted_url
            }
 
@@ -267,13 +267,13 @@ defmodule Mitos.AppRunnerTest do
                trace_base_dir: traces,
                io_outputs: [
                  %{
-                   sink: "webhook",
+                   sink: "web",
                    entrypoint: "ship",
                    on: "run.done",
                    url: "https://hooks.example.test/deliver?token=secret-a&visible=ok"
                  },
                  %{
-                   sink: "webhook",
+                   sink: "web",
                    entrypoint: "ship",
                    on: "run.done",
                    url: "https://hooks.example.test/deliver?token=secret-b&visible=ok"
@@ -321,7 +321,7 @@ defmodule Mitos.AppRunnerTest do
 
   test "public io binding helper handles atom keys and nested lists" do
     assert Mitos.IOPlane.public_binding(%{
-             sink: "webhook",
+             sink: "web",
              url: "https://user:pass@example.test/hook?api_key=secret-key&keep=yes",
              token: "top-level-token",
              headers: %{:authorization => "Bearer nested-secret", "x-public" => "visible"},
@@ -332,7 +332,7 @@ defmodule Mitos.AppRunnerTest do
            }) == %{
              "destinations" => [%{"channel" => "ops"}, %{"channel" => "audit"}],
              "headers" => %{"x-public" => "visible"},
-             "sink" => "webhook",
+             "sink" => "web",
              "url" => "https://example.test/hook?api_key=[redacted]&keep=yes"
            }
   end

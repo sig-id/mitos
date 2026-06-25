@@ -510,6 +510,48 @@ defmodule Mitos.Web.Router do
     end
   end
 
+  # POST /hooks/:app_id — raw I/O-plane webhook ingress (10 §3).
+  #
+  # An external system POSTs an arbitrary JSON payload to a bound webhook path.
+  # The `webhook` connector normalizes it into a Task intake (intent, inputs,
+  # reply_ref, idempotency_key) and the run is executed through the same app
+  # runner as a manual/web entrypoint run. The app's `io.inputs` binding with
+  # `connector: webhook` selects the entrypoint (explicit mode only, 10 §3.3).
+  post "/hooks/:app_id" do
+    run_hook_signal(conn, app_id, "webhook")
+  end
+
+  # POST /hooks/:app_id/:connector — raw ingress for a named connector class.
+  post "/hooks/:app_id/:connector" do
+    run_hook_signal(conn, app_id, connector)
+  end
+
+  # GET /io/connectors — registered platform ingress connector classes (10 §3).
+  get "/io/connectors" do
+    connectors =
+      Enum.map(Mitos.Connector.names(), fn name ->
+        module = Mitos.Connector.lookup(name)
+        %{"name" => name, "capabilities" => module.capabilities()}
+      end)
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, Jason.encode!(%{"connectors" => connectors}))
+  end
+
+  # GET /io/sinks — registered platform egress sink classes (10 §5).
+  get "/io/sinks" do
+    sinks =
+      Enum.map(Mitos.Sink.names(), fn name ->
+        module = Mitos.Sink.lookup(name)
+        %{"name" => name, "capabilities" => module.capabilities()}
+      end)
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, Jason.encode!(%{"sinks" => sinks}))
+  end
+
   # GET /work-pool — board-ready durable Task projection across known runs.
   get "/work-pool" do
     conn
@@ -775,6 +817,60 @@ defmodule Mitos.Web.Router do
       {:ok, _stat} -> {:error, :not_regular}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp run_hook_signal(conn, app_id, connector) do
+    body = map_or_empty(conn.body_params)
+    headers = request_headers_map(conn)
+
+    case Mitos.Connector.lookup(connector) do
+      nil ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(404, Jason.encode!(%{error: "unknown connector", connector: connector}))
+
+      module ->
+        source = "connector:#{connector}"
+
+        with {:ok, signal} <- module.receive(nil, body, []),
+             {:ok, intake} <-
+               module.normalize(signal, headers: headers, source: app_id) do
+          inputs = map_or_empty(intake["inputs"])
+
+          opts =
+            [
+              pool: "interactive",
+              source: source,
+              tenant: tenant_context(body),
+              task_id: request_task_id(body)
+            ]
+            |> maybe(:idempotency_key, intake["idempotency_key"])
+            |> maybe(:reply_ref, intake["reply_ref"])
+            |> maybe(:delivery_id, nonempty_string(body["delivery_id"]))
+            |> maybe(:signal_id, nonempty_string(body["signal_id"]))
+
+          case Mitos.Applications.run_connector(app_id, connector, inputs, opts) do
+            {:ok, result} ->
+              conn
+              |> put_resp_content_type("application/json")
+              |> send_resp(200, Jason.encode!(result))
+
+            error ->
+              app_run_error(conn, error)
+          end
+        else
+          {:error, reason} ->
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(422, Jason.encode!(%{error: "invalid webhook signal", detail: inspect(reason)}))
+        end
+    end
+  end
+
+  defp request_headers_map(conn) do
+    conn.req_headers
+    |> Enum.reject(fn {name, _value} -> String.downcase(name) == "content-type" end)
+    |> Map.new(fn {name, value} -> {String.downcase(name), value} end)
   end
 
   defp workload_bindings(body) do

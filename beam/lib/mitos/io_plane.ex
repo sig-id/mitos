@@ -87,47 +87,160 @@ defmodule Mitos.IOPlane do
     ref =
       delivery_ref(trace.run_id, app, task, binding, sink, raw_destination, public_destination)
 
-    payload =
-      render_payload(trace.run_id, app, task, pipeline_result, binding, sink, public_destination)
+    # Idempotency (10 §5.3): a delivery already finalized for this
+    # (run_id, sink, dest) is not re-attempted — re-drive is a no-op even when
+    # the sink would otherwise produce a fresh receipt.
+    if delivery_finalized?(trace, ref["delivery_id"]) do
+      {trace, nil}
+    else
+      payload =
+        render_payload(trace.run_id, app, task, pipeline_result, binding, sink, public_destination)
 
-    trace =
-      Trace.append_effect(trace, %{
-        type: "delivery_attempted",
-        caused_by: caused_by,
-        ref: ref,
-        payload: %{
-          "sink" => sink,
-          "entrypoint" => entrypoint,
-          "on" => binding["on"] || "run.done",
-          "destination" => public_destination,
-          "binding" => public_binding(binding)
-        }
-      })
+      trace =
+        Trace.append_effect(trace, %{
+          type: "delivery_attempted",
+          caused_by: caused_by,
+          ref: ref,
+          payload: %{
+            "sink" => sink,
+            "entrypoint" => entrypoint,
+            "on" => binding["on"] || "run.done",
+            "destination" => public_destination,
+            "binding" => public_binding(binding)
+          }
+        })
 
-    receipt = %{
-      "delivery_id" => ref["delivery_id"],
-      "sink" => sink,
-      "destination" => public_destination,
-      "status" => "sent"
-    }
+      outcome = perform_delivery(sink, binding, payload)
 
-    trace =
-      Trace.append_effect(trace, %{
-        type: "delivery_sent",
-        caused_by: caused_by,
-        ref: ref,
-        payload: %{"receipt" => receipt, "rendered" => payload}
-      })
+      trace = write_delivery_outcome(trace, outcome, ref, payload, caused_by)
 
-    delivery =
-      if trace.seq == before_seq do
-        nil
-      else
-        %{"receipt" => receipt, "payload" => payload}
+      delivery =
+        if trace.seq == before_seq do
+          nil
+        else
+          delivery_element(outcome, payload, public_destination, ref)
+        end
+
+      {trace, delivery}
+    end
+  end
+
+  defp perform_delivery(sink, binding, payload) do
+    case Mitos.Sink.lookup(sink) do
+      nil ->
+        {:error, %{"sink" => sink, "reason" => "sink not registered"}}
+
+      module ->
+        with {:ok, handle} <- module.bind(binding),
+             do: module.deliver(handle, payload)
+    end
+  end
+
+  defp write_delivery_outcome(trace, {:ok, receipt}, ref, payload, caused_by) do
+    final_receipt =
+      %{
+        "delivery_id" => ref["delivery_id"],
+        "sink" => receipt["sink"] || ref["sink"],
+        "destination" => receipt["destination"] || ref["dest"],
+        "status" => "sent"
+      }
+      |> Map.merge(Map.drop(receipt, ["sink", "destination"]))
+
+    Trace.append_effect(trace, %{
+      type: "delivery_sent",
+      caused_by: caused_by,
+      ref: ref,
+      payload: %{"receipt" => final_receipt, "rendered" => payload}
+    })
+  end
+
+  defp write_delivery_outcome(trace, {:skipped, info}, ref, _payload, caused_by) do
+    Trace.append_effect(trace, %{
+      type: "delivery_skipped",
+      caused_by: caused_by,
+      ref: ref,
+      payload: %{"info" => info}
+    })
+  end
+
+  defp write_delivery_outcome(trace, {:error, reason}, ref, _payload, caused_by) do
+    Trace.append_effect(trace, %{
+      type: "delivery_failed",
+      caused_by: caused_by,
+      ref: ref,
+      payload: %{"reason" => reason}
+    })
+  end
+
+  defp delivery_element({:ok, receipt}, payload, public_destination, ref) do
+    final_receipt =
+      %{
+        "delivery_id" => ref["delivery_id"],
+        "sink" => receipt["sink"] || ref["sink"],
+        "destination" => receipt["destination"] || public_destination,
+        "status" => "sent"
+      }
+      |> Map.merge(Map.drop(receipt, ["sink", "destination"]))
+
+    %{"receipt" => final_receipt, "payload" => payload}
+  end
+
+  defp delivery_element({:skipped, info}, _payload, public_destination, ref) do
+    receipt =
+      %{"delivery_id" => ref["delivery_id"], "sink" => ref["sink"], "status" => "skipped"}
+      |> Map.merge(info)
+      |> Map.put_new("destination", public_destination)
+
+    %{"receipt" => receipt, "payload" => %{}}
+  end
+
+  defp delivery_element({:error, reason}, _payload, public_destination, ref) do
+    base = %{"delivery_id" => ref["delivery_id"], "sink" => ref["sink"], "status" => "failed"}
+
+    receipt =
+      case reason do
+        %{} = reason when not is_exception(reason) -> Map.merge(base, reason)
+        _other -> Map.put(base, "reason", reason)
       end
 
-    {trace, delivery}
+    %{"receipt" => receipt, "payload" => %{}}
   end
+
+  defp delivery_finalized?(trace, delivery_id) when is_binary(delivery_id) do
+    trace
+    |> read_trace_events()
+    |> Enum.any?(fn
+      %{"kind" => "effect", "type" => type, "ref" => %{"delivery_id" => ^delivery_id}}
+      when type in ["delivery_sent", "delivery_skipped", "delivery_failed"] ->
+        true
+
+      _event ->
+        false
+    end)
+  end
+
+  defp delivery_finalized?(_trace, _delivery_id), do: false
+
+  defp read_trace_events(%Trace{dir: dir}) when is_binary(dir) do
+    path = Path.join(dir, "events.jsonl")
+
+    case File.read(path) do
+      {:ok, raw} ->
+        raw
+        |> String.split("\n", trim: true)
+        |> Enum.flat_map(fn line ->
+          case Jason.decode(line) do
+            {:ok, %{} = event} -> [event]
+            _ -> []
+          end
+        end)
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  defp read_trace_events(_trace), do: []
 
   defp output_bindings(%AppManifest{} = app, task, opts) do
     entrypoint = get_in(task, ["provenance", "entrypoint"])
