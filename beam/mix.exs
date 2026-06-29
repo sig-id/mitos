@@ -26,13 +26,21 @@ defmodule Mitos.MixProject do
     [
       # Pure-Erlang MessagePack codec; matches the sidecar's on-the-wire format.
       {:msgpax, "~> 2.4"},
-      # HTTP + WebSocket via cowboy. We're not pulling Phoenix yet — the design
-      # calls for Channels/LiveView, but the surface area we need (one HTTP
-      # route + one WS handler bridged to a Session GenServer) is small enough
-      # that Plug.Cowboy keeps the BEAM-side concept count low. Migration to
-      # Phoenix is mechanical when the orchestration surface grows.
+      # HTTP + WebSocket via cowboy. The `/ws/:session_id` raw PTY socket is
+      # dispatched straight to a cowboy_websocket handler (see Endpoint);
+      # everything else reaches the Phoenix Endpoint + LiveView console.
       {:plug_cowboy, "~> 2.8"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+
+      # Phoenix LiveView drives the operations console (`/console`). LiveViews
+      # call the same backend ops (`Mitos.*`) the CLI/HTTP API do — no HTTP loop.
+      {:phoenix, "~> 1.8"},
+      {:phoenix_live_view, "~> 1.2"},
+      {:phoenix_html, "~> 4.1"},
+      {:phoenix_pubsub, "~> 2.1"},
+      {:phoenix_template, "~> 1.0"},
+      {:floki, "~> 0.36", only: :test},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 end

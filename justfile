@@ -1,7 +1,7 @@
 # Mitos development workflows.
 #
 #   just dev          build engine + sidecar, start the control plane with IEx
-#   just poc          build everything, serve the web console headless
+#   just serve        build everything, serve the console headless
 #   just demo-agent   start a claude PTY agent (server must be running)
 #   just steer …      steer a running session semantically over HTTP
 
@@ -14,27 +14,25 @@ default:
 build:
     zig build
 
-# Build the Svelte operations console served by the BEAM router.
-web-build:
-    cd web && bun run build
-
 # Run both test suites (Zig + Elixir, integration included).
-test: build web-build
+test: build
     zig build test --summary all
     cd beam && mix test --include integration
 
 # Sessions, PubSub, and steering are reachable from the attached IEx shell:
 # Mitos.PubSub.subscribe("agent-123"); flush()
 #
-# Build everything and start the BEAM control plane (HTTP + WS + IEx).
-dev: build web-build
+# Build the engine + sidecar and start the BEAM control plane (HTTP + WS + IEx).
+# The operations console is a Phoenix LiveView at http://localhost:{{port}}/console
+# (root `/` redirects there); the JSON control plane stays at the same paths.
+dev: build
     #!/usr/bin/env bash
     set -euo pipefail
     cd beam
     [ -d deps ] || mix deps.get
     echo "────────────────────────────────────────────────────────────────"
     echo " mitos dev — http://localhost:{{port}}"
-    echo "   web console: http://localhost:{{port}}/   (runs, workflows, work pool; WS at /ws/<session-id>)"
+    echo "   console (LiveView): http://localhost:{{port}}/console"
     echo "   start agent: just demo-agent"
     echo "   steer      : just steer <session-id> approve"
     echo "                just steer <session-id> prompt 'do option 2 instead'"
@@ -42,22 +40,8 @@ dev: build web-build
     echo "────────────────────────────────────────────────────────────────"
     MITOS_HTTP_PORT={{port}} exec iex -S mix
 
-# Build everything and serve the Svelte web console on a headless control plane.
-poc: build web-build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd beam
-    [ -d deps ] || mix deps.get
-    echo "────────────────────────────────────────────────────────────────"
-    echo " mitos web console — http://localhost:{{port}}/"
-    echo "   runs / evidence : http://localhost:{{port}}/#/runs"
-    echo "   workflows       : http://localhost:{{port}}/#/workflows"
-    echo "   work pool       : http://localhost:{{port}}/#/work-pool"
-    echo "────────────────────────────────────────────────────────────────"
-    MITOS_HTTP_PORT={{port}} exec mix run --no-halt
-
-# Headless variant of `dev` (no IEx shell), e.g. for running under a watcher.
-serve: build web-build
+# Build the engine + sidecar and serve the console on a headless control plane.
+serve: build
     #!/usr/bin/env bash
     set -euo pipefail
     cd beam

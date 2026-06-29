@@ -1,13 +1,21 @@
 defmodule Mitos.Web.Endpoint do
   @moduledoc """
-  HTTP + WebSocket entry point. Uses Plug.Cowboy with a custom dispatch list
-  so the `/ws/:session_id` route reaches `Mitos.Web.TerminalSocket` (a
-  cowboy_websocket handler) directly, while every other request is served by
-  `Mitos.Web.Router`.
+  HTTP + WebSocket entry point.
 
-  The split lets the WS handler own state with minimal copying: it pipes raw
-  PTY bytes straight from `Mitos.Session` (received via `Mitos.PubSub`) to
-  the browser without any plug pipeline in between.
+  Cowboy's dispatch list routes the raw `/ws/:session_id` PTY socket straight
+  to `Mitos.Web.TerminalSocket` (a `cowboy_websocket` handler, outside any plug
+  pipeline — it pipes raw PTY bytes from `Mitos.Session` to the browser with
+  minimal copying). Every other request reaches the **Phoenix Endpoint**
+  (`MitosWeb.Endpoint`), which:
+
+    * serves the LiveView operations console under `/console` (and redirects
+      `/` there),
+    * exposes the LiveView websocket at `/live/websocket`,
+    * `forward`s everything else to `Mitos.Web.Router` — the JSON/HTTP control
+      plane (`/apps`, `/runs`, `/agents`, `/hooks/*`, `/broker/*`, …) consumed
+      by the CLI, external HTTP callers, and the smoke tests.
+
+  All existing API paths stay byte-identical; only the SPA at `/` is replaced.
   """
 
   def child_spec(_opts) do
@@ -25,13 +33,13 @@ defmodule Mitos.Web.Endpoint do
       {:_,
        [
          {"/ws/:session_id", Mitos.Web.TerminalSocket, %{}},
-         {:_, Plug.Cowboy.Handler, {Mitos.Web.Router, []}}
+         {:_, Plug.Cowboy.Handler, {MitosWeb.Endpoint, []}}
        ]}
     ]
 
     Plug.Cowboy.child_spec(
       scheme: :http,
-      plug: Mitos.Web.Router,
+      plug: MitosWeb.Endpoint,
       options: [
         ip: addr,
         port: port,

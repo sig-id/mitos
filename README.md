@@ -88,10 +88,12 @@ curl -X POST http://127.0.0.1:7682/agents \
   -d '{"provider":"fake","task":"hello","transport_order":["stdio-json","pty"]}'
 ```
 
-The Svelte operations console is served at `http://127.0.0.1:7682/`.
-It loads its static build from `web/dist`; rebuild it with
-`cd web && npm install && npm run build` after frontend changes (`npm run dev`
-starts a Vite dev server with an API proxy to the running BEAM server).
+The operations console is a **Phoenix LiveView** app served at
+`http://127.0.0.1:7682/console` (the root `/` redirects there). It is part of
+the BEAM control plane — LiveViews call the same backend ops (`Mitos.*`) the
+HTTP/JSON API exposes, so there is no separate frontend build step. The JSON
+control plane stays at its existing paths (`/apps`, `/runs`, `/agents`, …);
+the raw PTY byte stream for a live terminal is over `/ws/<session-id>`.
 
 ## Artifacts
 

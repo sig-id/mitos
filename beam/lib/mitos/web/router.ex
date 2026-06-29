@@ -1,17 +1,20 @@
 defmodule Mitos.Web.Router do
   @moduledoc """
-  Browser-facing HTTP routes for the operations console and the run/workload APIs:
+  JSON/HTTP control plane for the operations console and run/workload APIs.
 
-    * serve the Svelte operations console at `/` (static files in `<repo>/web/dist/`)
+  Mounted by `MitosWeb.Router` via `forward "/", Mitos.Web.Router`, so every
+  path below that is not a LiveView route reaches this router unchanged:
+
     * launch: `POST /agents` (provider run), `POST /sessions` (raw argv)
     * review: `GET /runs`, `GET /runs/:id` over the `.runs/` trace store
     * steer:  `POST /sessions/:id/steer`
-    * workloads: `GET /workloads`, `GET /capabilities/setup`,
-      `POST /workloads/:id/execute`
+    * apps/io/work-pool: `/apps*`, `/io/*`, `/work-pool`, `/pipelines*`, …
+    * webhooks/broker: `/hooks/*`, `/broker/*`
 
-  The live byte stream goes over `/ws/:session_id`, which is handled by
-  `Mitos.Web.TerminalSocket` outside the plug pipeline (see
-  `Mitos.Web.Endpoint` for the dispatch).
+  The LiveView console at `/console` calls the same backend ops directly via
+  Elixir functions — it never round-trips through this router. The live byte
+  stream goes over `/ws/:session_id`, dispatched to `Mitos.Web.TerminalSocket`
+  by the cowboy dispatch list (see `Mitos.Web.Endpoint`).
   """
   use Plug.Router
 
@@ -22,24 +25,6 @@ defmodule Mitos.Web.Router do
   plug(:match)
   plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
   plug(:dispatch)
-
-  @doc """
-  Directory holding the Svelte operations console's static files. Resolution
-  order: app config `:webapp_dir`, `MITOS_WEBAPP_DIR`, then `<repo>/web/dist`.
-  """
-  def webapp_dir do
-    Application.get_env(:mitos, :webapp_dir) ||
-      System.get_env("MITOS_WEBAPP_DIR") ||
-      Path.expand("../../../../web/dist", __DIR__)
-  end
-
-  get "/" do
-    serve_webapp_file(conn, "index.html")
-  end
-
-  get "/assets/:file" do
-    serve_webapp_file(conn, Path.join("assets", file))
-  end
 
   @doc false
   def healthz_path, do: "/healthz"
@@ -747,78 +732,11 @@ defmodule Mitos.Web.Router do
     send_resp(conn, 404, "not found")
   end
 
-  # The Svelte console is served with no-cache (not no-store) so the browser
-  # revalidates on every load and local builds show up immediately.
-  defp serve_webapp_file(conn, relative) do
-    with {:ok, path} <- webapp_file_path(relative),
-         {:ok, bytes} <- read_regular_file(path) do
-      conn
-      |> put_resp_content_type(MIME.from_path(path))
-      |> put_resp_header("cache-control", "no-cache")
-      |> send_resp(200, bytes)
-    else
-      _ -> send_resp(conn, 404, "not found")
-    end
-  end
-
-  defp webapp_file_path(relative) do
-    root = Path.expand(webapp_dir())
-    path = Path.expand(relative, root)
-
-    cond do
-      Path.type(relative) != :relative ->
-        {:error, :invalid_path}
-
-      ".." in Path.split(relative) ->
-        {:error, :invalid_path}
-
-      not inside_path?(path, root) ->
-        {:error, :invalid_path}
-
-      not no_symlink_path?(path, root) ->
-        {:error, :invalid_path}
-
-      true ->
-        {:ok, path}
-    end
-  end
-
-  defp inside_path?(path, root), do: path == root or String.starts_with?(path, root <> "/")
-
-  defp no_symlink_path?(path, root) do
-    root = Path.expand(root)
-    path = Path.expand(path)
-    parts = if path == root, do: [], else: Path.split(Path.relative_to(path, root))
-
-    with {:ok, %{type: root_type}} <- File.lstat(root),
-         true <- root_type == :directory do
-      parts
-      |> Enum.reduce_while(root, fn part, current ->
-        candidate = Path.join(current, part)
-
-        case File.lstat(candidate) do
-          {:ok, %{type: :symlink}} -> {:halt, false}
-          {:ok, _stat} -> {:cont, candidate}
-          {:error, _reason} -> {:halt, false}
-        end
-      end)
-      |> case do
-        false -> false
-        _last_path -> true
-      end
-    else
-      _ -> false
-    end
-  end
-
-  defp read_regular_file(path) do
-    case File.lstat(path) do
-      {:ok, %{type: :regular}} -> File.read(path)
-      {:ok, _stat} -> {:error, :not_regular}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
+  # The Svelte SPA (`web/dist`) is gone — the operations console is now a
+  # Phoenix LiveView at `/console`. This router is mounted via
+  # `forward "/", Mitos.Web.Router` in `MitosWeb.Router`, so it only sees
+  # requests that didn't match a LiveView route. Its remaining handlers are
+  # the JSON/HTTP control plane.
   defp run_hook_signal(conn, app_id, connector) do
     body = map_or_empty(conn.body_params)
     headers = request_headers_map(conn)
