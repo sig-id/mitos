@@ -14,14 +14,23 @@ defmodule MitosWeb.Layouts do
           <%= assigns[:page_title] || "Mitos" %>
         </.live_title>
         <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+        <%= csrf_meta_tag() %>
         <script defer phx-track-static type="text/javascript" src={~p"/assets/phoenix.js"}></script>
         <script defer phx-track-static type="text/javascript" src={~p"/assets/phoenix_live_view.js"}></script>
+        <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}></script>
       </head>
       <body>
         <%= @inner_content %>
       </body>
     </html>
     """
+  end
+
+  defp csrf_meta_tag do
+    {:safe,
+     """
+     <meta name="csrf-token" content="#{Plug.CSRFProtection.get_csrf_token()}" />
+     """}
   end
 
   def app(assigns) do

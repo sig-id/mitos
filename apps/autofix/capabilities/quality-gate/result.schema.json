@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["signal", "verdict", "summary", "diff", "build"],
+  "properties": {
+    "signal": { "type": "string", "enum": ["pass", "fail"] },
+    "verdict": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "summary": { "type": "string" },
+    "diff": { "type": "object" },
+    "build": { "type": "object" },
+    "artifacts_clean": { "type": "boolean" },
+    "per_file": { "type": "array" },
+    "fail_reasons": { "type": "array" }
+  }
+}

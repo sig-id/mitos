@@ -87,6 +87,13 @@ defmodule MitosWeb.ConsoleLive.Shared do
         {:noreply, assign(socket, launch_open: false)}
       end
 
+      # The async launch task reported a failure: keep the modal open so the
+      # user can retry, and surface the error in the banner.
+      @impl Phoenix.LiveView
+      def handle_info({:launch_failed, reason}, socket) do
+        {:noreply, assign(socket, error: reason, launch_open: false)}
+      end
+
       # Shared refresh: reload the shell-level sidebar data, then hand off to
       # the page's `refresh_page/1` to reload its own view data.
       @impl Phoenix.LiveView

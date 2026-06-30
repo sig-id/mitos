@@ -1,0 +1,173 @@
+{
+  "name": "autofix",
+  "version": "1.0.0",
+  "description": "Chief Wiggum's autonomous code-improvement service, migrated to the mitos application/capability/pipeline architecture: random-scope audit -> verify-and-fix -> blind quality gate -> commit/push -> PR, looping forever as a service unit; plus the feature, fix, redteam, and meta pipelines.",
+  "authors": ["mitos"],
+  "license": "Apache-2.0",
+
+  "capabilities": [
+    { "ref": "capabilities/batch-signal-done/workload.json", "as": "batch-signal-done" },
+    { "ref": "capabilities/batch-signal-failed/workload.json", "as": "batch-signal-failed" },
+    { "ref": "capabilities/code-review/workload.json", "as": "code-review" },
+    { "ref": "capabilities/codebase-health/workload.json", "as": "codebase-health" },
+    { "ref": "capabilities/commit-push/workload.json", "as": "commit-push" },
+    { "ref": "capabilities/documentation-writer/workload.json", "as": "documentation-writer" },
+    { "ref": "capabilities/domain-expert/workload.json", "as": "domain-expert" },
+    { "ref": "capabilities/exploit-validation/workload.json", "as": "exploit-validation" },
+    { "ref": "capabilities/failure-resolver/workload.json", "as": "failure-resolver" },
+    { "ref": "capabilities/failure-summarizer/workload.json", "as": "failure-summarizer" },
+    { "ref": "capabilities/generic-fix/workload.json", "as": "generic-fix" },
+    { "ref": "capabilities/git-conflict-resolver/workload.json", "as": "git-conflict-resolver" },
+    { "ref": "capabilities/git-sync-main/workload.json", "as": "git-sync-main" },
+    { "ref": "capabilities/intent-distill/workload.json", "as": "intent-distill" },
+    { "ref": "capabilities/master-followup/workload.json", "as": "master-followup" },
+    { "ref": "capabilities/memory-analyst/workload.json", "as": "memory-analyst" },
+    { "ref": "capabilities/open-pr/workload.json", "as": "open-pr" },
+    { "ref": "capabilities/planner/workload.json", "as": "planner" },
+    { "ref": "capabilities/pr-comment-fix/workload.json", "as": "pr-comment-fix" },
+    { "ref": "capabilities/pr-merge/workload.json", "as": "pr-merge" },
+    { "ref": "capabilities/quality-gate/workload.json", "as": "quality-gate" },
+    { "ref": "capabilities/random-audit/workload.json", "as": "random-audit" },
+    { "ref": "capabilities/recon/workload.json", "as": "recon" },
+    { "ref": "capabilities/redteam-remediate/workload.json", "as": "redteam-remediate" },
+    { "ref": "capabilities/redteam-report/workload.json", "as": "redteam-report" },
+    { "ref": "capabilities/security-audit/workload.json", "as": "security-audit" },
+    { "ref": "capabilities/security-fix/workload.json", "as": "security-fix" },
+    { "ref": "capabilities/self-improver/workload.json", "as": "self-improver" },
+    { "ref": "capabilities/software-engineer/workload.json", "as": "software-engineer" },
+    { "ref": "capabilities/system-architect/workload.json", "as": "system-architect" },
+    { "ref": "capabilities/task-summarizer/workload.json", "as": "task-summarizer" },
+    { "ref": "capabilities/test-coverage/workload.json", "as": "test-coverage" },
+    { "ref": "capabilities/test-runner/workload.json", "as": "test-runner" },
+    { "ref": "capabilities/todo-hunter/workload.json", "as": "todo-hunter" },
+    { "ref": "capabilities/validation-review/workload.json", "as": "validation-review" },
+    { "ref": "capabilities/verify-fix/workload.json", "as": "verify-fix" },
+    { "ref": "capabilities/vuln-analysis/workload.json", "as": "vuln-analysis" }
+  ],
+
+  "pipelines": [
+    { "id": "autofix",              "file": "pipelines/autofix.md" },
+    { "id": "default",              "file": "pipelines/default.md" },
+    { "id": "fast",                 "file": "pipelines/fast.md" },
+    { "id": "fix",                  "file": "pipelines/fix.md" },
+    { "id": "redteam",              "file": "pipelines/redteam.md" },
+    { "id": "multi-pr-resolve",     "file": "pipelines/multi-pr-resolve.md" },
+    { "id": "failure-recovery",     "file": "pipelines/failure-recovery.md" },
+    { "id": "meta-todo-hunter",     "file": "pipelines/meta-todo-hunter.md" },
+    { "id": "meta-codebase-health", "file": "pipelines/meta-codebase-health.md" },
+    { "id": "meta-self-improve",    "file": "pipelines/meta-self-improve.md" },
+    { "id": "intent-distill",       "file": "pipelines/intent-distill.md" },
+    { "id": "memory-extract",       "file": "pipelines/memory-extract.md" },
+    { "id": "code-review",           "file": "pipelines/code-review.md" }
+  ],
+
+  "entrypoints": [
+    {
+      "id": "cycle",
+      "pipeline": "autofix",
+      "title": "Run one autonomous-improvement cycle",
+      "description": "Random-scope audit -> verify-and-fix -> quality gate -> commit/push -> PR. One pass of the autofix loop; the daemon (autofix-loop service unit) re-fires it.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "additionalProperties": false,
+        "properties": { "diff_base": { "type": "string", "description": "Optional git base for the quality-gate diff (default: the pushed branch's diff vs the default branch)." } } } },
+      "parameters": [
+        { "name": "severity_floor", "type": "string", "default": "LOW", "description": "Minimum finding severity to act on: CRITICAL|HIGH|MEDIUM|LOW|INFO." },
+        { "name": "dedupe_file", "type": "string", "default": ".mitos/autofix-dedupe.json", "description": "Workspace path used to avoid re-auditing the same scope+concern." }
+      ],
+      "defaults": { "budget": { "usd": 5, "wall_ms": 1800000 },
+        "constraints": [ "read-only audit; no mutating git during audit/verify", "never commit to / force-push the default branch", "publication only after quality-gate PASS" ],
+        "success_criteria": [ "a PR exists, or the cycle correctly found nothing actionable" ] }
+    },
+    {
+      "id": "review",
+      "pipeline": "code-review",
+      "title": "Review a diff",
+      "description": "High-signal read-only review of a single git diff. The original auto-code-review capability.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "required": ["diff_command"], "additionalProperties": false,
+        "properties": { "diff_command": { "type": "string", "description": "Read-only command that prints the review diff." } } } },
+      "parameters": [
+        { "name": "review_focus", "type": "string", "default": "", "description": "Extra areas to prioritize during review." },
+        { "name": "severity_floor", "type": "string", "default": "MAJOR", "description": "Minimum severity to report: BLOCKER|CRITICAL|MAJOR|MINOR." }
+      ],
+      "defaults": { "budget": { "usd": 1, "wall_ms": 600000 },
+        "constraints": [ "Read-only review; do not edit, stage, commit, reset, or clean." ] }
+    },
+    {
+      "id": "implement",
+      "pipeline": "default",
+      "title": "Implement a task end-to-end",
+      "description": "Plan, implement, audit, test, document, validate. The full feature pipeline.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "required": ["objective"], "additionalProperties": false,
+        "properties": { "objective": { "type": "string", "description": "What to build (issue text, spec ref, or description)." } } } },
+      "parameters": [
+        { "name": "plan_mode", "type": "boolean", "default": false, "description": "Run the planner stage first." }
+      ],
+      "defaults": { "budget": { "usd": 8, "wall_ms": 3600000 } }
+    },
+    {
+      "id": "fix-pr",
+      "pipeline": "fix",
+      "title": "Resolve an open PR",
+      "description": "Address comments, sync main, resolve conflicts, test, push, merge.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "additionalProperties": false,
+        "properties": { "pr_number": { "type": "integer", "description": "The PR to resolve." } } } },
+      "defaults": { "budget": { "usd": 4, "wall_ms": 1800000 } }
+    },
+    {
+      "id": "redteam",
+      "pipeline": "redteam",
+      "title": "Security assessment",
+      "description": "Recon -> vuln analysis -> exploit validation -> report -> remediate.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "additionalProperties": false, "properties": {} } },
+      "defaults": { "budget": { "usd": 6, "wall_ms": 2400000 } }
+    },
+    {
+      "id": "scan-health",
+      "pipeline": "meta-codebase-health",
+      "title": "Codebase health scan",
+      "description": "Scan for quality issues and refactoring opportunities.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "additionalProperties": false, "properties": {} } },
+      "defaults": { "budget": { "usd": 1, "wall_ms": 600000 } }
+    },
+    {
+      "id": "hunt-todos",
+      "pipeline": "meta-todo-hunter",
+      "title": "TODO/FIXME hunter",
+      "description": "Find and address TODO/FIXME items.",
+      "workspace": { "kind": "repo" },
+      "inputs": { "schema": { "type": "object", "additionalProperties": false, "properties": {} } },
+      "defaults": { "budget": { "usd": 1, "wall_ms": 600000 } }
+    }
+  ],
+
+  "io": {
+    "inputs": [
+      { "connector": "webhook", "path": "/apps/autofix/cycles",   "entrypoint": "cycle",     "select": { "mode": "explicit", "pipeline": "autofix" } },
+      { "connector": "webhook", "path": "/apps/autofix/reviews",   "entrypoint": "review",    "select": { "mode": "explicit", "pipeline": "code-review" } },
+      { "connector": "webhook", "path": "/apps/autofix/implement", "entrypoint": "implement", "select": { "mode": "explicit", "pipeline": "default" } }
+    ],
+    "outputs": [
+      { "sink": "web",   "on": "run.done", "entrypoint": "cycle",     "render": "result.summary + artifacts" },
+      { "sink": "web",   "on": "run.done", "entrypoint": "review",    "render": "result.summary + artifacts" },
+      { "sink": "reply", "on": "run.done", "entrypoint": "implement", "reply_to": "input.reply_ref", "render": "result.summary + artifacts" }
+    ]
+  },
+
+  "services": {
+    "requires": ["local-agent-runner"],
+    "wants":    ["usage-meter"]
+  },
+
+  "requirements": {
+    "harnesses":  ["opencode", "codex", "claude", "gemini"],
+    "connectors": ["webhook"],
+    "egress":     ["api.github.com", "github.com"],
+    "trust_tier": "T1",
+    "resources":  { "cpu": 2, "mem": "4Gi" }
+  }
+}

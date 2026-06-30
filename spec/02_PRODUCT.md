@@ -236,3 +236,8 @@ MVP is done when, with no human on the happy path:
 
 One such transaction is the gate. Scale, marketplace, memory, and pipeline depth
 are post-gate and are sequenced in `09_IMPLEMENTATION_PLAN`.
+
+> **Competitive landscape** is mapped descriptively in `13_COMPETITIVE_LANDSCAPE`
+> (adjacent players, surface overlaps, and where mitos's specified surface is
+> currently uncontested). That doc carries **no direction decisions**; risks and
+> the wedge stay here in `02`, monetization stays in `08`.

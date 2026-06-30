@@ -23,6 +23,7 @@ defmodule Mitos.Application do
       {Registry, keys: :unique, name: Mitos.SessionRegistry},
       {Registry, keys: :duplicate, name: Mitos.PubSub.Registry},
       Mitos.SessionSupervisor,
+      {Task.Supervisor, name: Mitos.ConsoleTaskSupervisor},
       # Phoenix.PubSub backs the LiveView console (`/console`). The existing
       # Registry-based `Mitos.PubSub` (raw PTY byte fan-out) is unchanged.
       {Phoenix.PubSub, adapter: Phoenix.PubSub.PG2, name: Mitos.PubSub.Phoenix},

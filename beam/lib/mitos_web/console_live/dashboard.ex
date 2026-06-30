@@ -130,12 +130,12 @@ defmodule MitosWeb.ConsoleLive.Dashboard do
                 <%= for r <- items do %>
                   <button class="card" phx-click="open-run" phx-value-id={r["run_id"]}>
                     <div class="row between">
-                      <span class="kind"><%= r["provider"] || "run" %></span>
+                      <span class="kind"><%= r["subtitle"] || r["provider"] || "run" %></span>
                       <%= if r["live"] do %>
                         <span class="live"><span class="pd"></span>live</span>
                       <% end %>
                     </div>
-                    <div class="ttl"><%= r["task"] || r["run_id"] %></div>
+                    <div class="ttl"><%= r["title"] || Format.compact_id(r["run_id"]) %></div>
                     <div class="foot">
                       <span class="ago"><%= Format.format_relative(r["last_event_ms"] || r["created_at_ms"]) %></span>
                       <span class="ago"><%= r["events"] || 0 %> events</span>

@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["signal", "verdict", "summary", "findings_processed", "stats"],
+  "properties": {
+    "signal": { "type": "string", "enum": ["pass", "fix", "skip"] },
+    "verdict": { "type": "string", "enum": ["PASS", "FAIL", "SKIP"] },
+    "summary": { "type": "string" },
+    "findings_processed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "state"],
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "type": "string" },
+          "location": { "type": "string" },
+          "state": { "type": "string", "enum": ["Fixed", "Skipped"] },
+          "tdd": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "properties": {
+        "compiles": { "type": "boolean" },
+        "tests": { "type": "string", "enum": ["PASS", "FAIL", "N/A"] }
+      }
+    },
+    "stats": { "type": "object" }
+  }
+}

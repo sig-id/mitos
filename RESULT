@@ -1,0 +1,16 @@
+{
+  "signal": "pass",
+  "verdict": "PASS",
+  "summary": "Vertical slice seeded from test/fixtures/providers/codex_approval.txt through the prompt-detection path, audited for resource leaks, found 0 actionable findings: every heap allocation in the path is paired with a matching free on the same allocator.",
+  "selection": {
+    "scope_type": "vertical",
+    "scope_target": "test/ (random seed fixture: test/fixtures/providers/codex_approval.txt)",
+    "vertical_path": "test/fixtures/providers/codex_approval.txt -> readFixture src/prompt/detectors.zig:188 (std.fs.cwd().readFileAlloc) -> genericDetect src/prompt/detectors.zig:49 -> detectWithRules src/prompt/detectors.zig:13 (heap alloc of events @ line 44) -> production callers prompt.providers.detect at src/sidecar/sidecar.zig:1115 and :1139 and src/providers/headless.zig:228 -> prompt.freeEvents src/prompt/types.zig:60 -> emitPromptEvent src/sidecar/sidecar.zig:1157 -> redactForScope src/sidecar/sidecar.zig:1389 -> redactForScopeAlloc src/sidecar/sidecar.zig:1905 -> BoundaryBytes.deinit src/sidecar/sidecar.zig:1870 (return path: events freed, redaction buffers deinit'd, no FDs/connections/subprocesses held)",
+    "concern_type": "specific",
+    "concern": "Resource leaks (file handles, connections, memory, subprocesses)",
+    "method": "Step1 scope: listed top-level entries at repo root, excluded vendored/third_party (third_party), generated/build (zig-out, .zig-cache), caches/lock (flake.lock, .runs, erl_crash.dump), hidden tooling (.git, .agents, .agent-worktrees, .codex, .direnv, .pi, .runs, .agent-runtime.yaml, .envrc, .gitignore), and the RESULT output artifact; counted auditable non-binary files per entry; weight=floor(sqrt(size)) min 1; built weighted pool of 121 entries (apps=11, beam=49, fixtures=1, prototypes=37, schema=1, spec=3, src=7, test=2, tests=1, tools=1, workloads=1, autofix-test.sh=1, build.zig=1, build.zig.zon=1, flake.nix=1, justfile=1, LICENSE=1, README.md=1) and ran `shuf -n 1` over it -> test; scope type `shuf -i 0-2 -n 1` -> 2 (vertical slice); test/ holds only fixture data (no executable entry points), so a fixture was chosen as the data seed via `find test -type f | sort | shuf -n 1` -> test/fixtures/providers/codex_approval.txt, and traced through its sole consumer src/prompt/detectors.zig. Step2 concern: coin `shuf -i 0-1 -n 1` -> 0 (specific); `shuf -i 1-65 -n 1` -> 2 (Resource leaks). Repicks: none. Applicability: concern fully applies (Zig = manual memory management, file handles via std.fs, allocators) -> no repick. Recent-duplicate: dedupe file .mitos/autofix-dedupe.json absent and Previous results empty -> no duplicate to avoid. Empirically verified under Zig 0.15.2 GeneralPurposeAllocator(safety=true) that a zero-length alloc not freed returns .ok from deinit (no leak), so the freeEvents len>0 guard at types.zig:61 is benign."
+  },
+  "findings": [],
+  "stats": { "files_examined": 7 },
+  "dedupe_fingerprint": "Resource leaks (file handles, connections, memory, subprocesses) @ src/prompt/detectors.zig (vertical: test/fixtures/providers -> prompt detection)"
+}

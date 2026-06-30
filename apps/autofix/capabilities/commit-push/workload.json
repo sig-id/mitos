@@ -1,0 +1,17 @@
+{
+  "provider": "opencode",
+  "title": "Commit and push a per-cycle branch",
+  "description": "After quality-gate PASS: clean artifacts, commit on a fresh branch, push to origin. Does not open the PR.",
+  "template": "COMMIT-AND-PUSH TASK\n\nWorkspace: {{workspace}}\nCycle id: {{cycle_id}}\nPipeline step: {{pipeline_step}}\nPrevious results: {{previous_results}}\n\nThe quality gate passed. Stage the workspace changes on a fresh per-cycle branch, commit with a message derived from the audit context in Previous results, and push to origin. Do NOT open the PR. Never touch the default branch. Never force-push.\n\nRESULT shape (write to the RESULT file at the workspace root):\n{\n  \"signal\": \"pass|skip|fail\",\n  \"verdict\": \"PASS|SKIP|FAIL\",\n  \"summary\": \"one sentence\",\n  \"branch\": \"autofix/<slug>\",\n  \"commit_sha\": \"<full sha>\",\n  \"pushed\": true,\n  \"error\": \"\"\n}\n\nPASS = branch pushed. SKIP = nothing to commit. FAIL = commit or push failed (record the error).",
+  "transport_order": ["stdio-json"],
+  "timeout_ms": 300000,
+  "approvals": "deny",
+  "capability": {
+    "name": "commit-push",
+    "version": "1.0.0",
+    "harnesses": ["opencode", "codex", "claude", "gemini"],
+    "trust_tier": "T1",
+    "skill": "skill.md",
+    "result": { "path": "RESULT", "schema": "result.schema.json" }
+  }
+}

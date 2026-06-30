@@ -27,10 +27,30 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
         rows = Enum.map(events, &timeline_row/1)
         inner = Enum.filter(events, fn e -> Map.get(e, "type") in @inner_types end)
 
-        assign(socket, run: run, run_not_found: false, events: events, timeline_rows: rows, inner_rows: inner)
+        socket
+        |> assign(
+          run: run,
+          run_not_found: false,
+          starting: false,
+          events: events,
+          timeline_rows: rows,
+          inner_rows: inner
+        )
 
       {:error, :not_found} ->
-        assign(socket, run: nil, run_not_found: true, events: [], timeline_rows: [], inner_rows: [])
+        # A run we just launched may not have written its trace dir yet. Keep
+        # the page mounted in a "starting" state; the 4s refresh picks it up.
+        starting = String.starts_with?(id, "app-") or String.starts_with?(id, "agent-")
+
+        socket
+        |> assign(
+          run: nil,
+          run_not_found: not starting,
+          starting: starting,
+          events: [],
+          timeline_rows: [],
+          inner_rows: []
+        )
     end
   end
 
@@ -47,30 +67,33 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
     %{
       seq: event["seq"] || event["sequence"] || "?",
       type: type,
+      time: Format.format_iso_time(event["ts"]) || Format.format_time(event["timestamp_ms"]),
       label: label_for(type, payload),
       detail:
-        event["rationale"] || payload["reason"] || payload["status"] || payload["summary"] ||
-          payload["pipeline"] || payload["entrypoint"] || "",
+        event["rationale"] || payload["reason"] || payload["summary"] ||
+          payload["status"] || "",
       status: status_for(type, payload)
     }
   end
 
-  defp label_for("task_enqueued", p), do: "#{p["id"] || p["task_id"] || "Task"} queued"
-  defp label_for("task_status_changed", p), do: "#{p["task_id"] || p["id"] || "Task"} #{Format.humanize(p["status"] || "")}"
+  defp label_for("task_enqueued", _p), do: "Queued"
+  defp label_for("task_scheduled", _p), do: "Scheduled"
+  defp label_for("task_running", _p), do: "Started"
+  defp label_for("task_status_changed", p), do: Format.humanize(p["status"] || "updated")
+  defp label_for("task_done", _p), do: "Completed"
 
   defp label_for("capability_started", p),
-    do: "#{p["capability_id"] || p["capability_ref"] || "Capability"} started"
+    do: "#{Format.humanize(p["capability_id"] || p["capability_ref"] || "step")} running"
 
   defp label_for("capability_finished", p),
-    do: "#{p["capability_id"] || p["capability_ref"] || "Capability"} finished"
+    do: "#{Format.humanize(p["capability_id"] || p["capability_ref"] || "step")} done"
 
-  defp label_for("signal_received", p), do: "#{p["connector"] || "Connector"} signal"
-
-  defp label_for("delivery_sent", p),
-    do: "#{p["sink"] || (p["receipt"] && p["receipt"]["sink"]) || "Sink"} delivery"
-
-  defp label_for("delivery_failed", p), do: "#{p["sink"] || "Sink"} delivery failed"
-  defp label_for("verification_recorded", _p), do: "Verification recorded"
+  defp label_for("signal_received", _p), do: "Run requested"
+  defp label_for("delivery_sent", p), do: "Delivered to #{p["sink"] || "sink"}"
+  defp label_for("delivery_failed", p), do: "Delivery to #{p["sink"] || "sink"} failed"
+  defp label_for("verification_recorded", _p), do: "Verification"
+  defp label_for("finish", _p), do: "Completed"
+  defp label_for("abort", p), do: "Aborted#{if p["cause"], do: " · #{p["cause"]}"}"
   defp label_for(type, _p), do: Format.humanize(type)
 
   defp status_for(type, p) do
@@ -117,6 +140,15 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
   defp format_error(reason) when is_exception(reason), do: Exception.message(reason)
   defp format_error(reason), do: inspect(reason)
 
+  defp run_title(nil, run_id), do: Format.compact_id(run_id)
+
+  defp run_title(run, _run_id) do
+    cond do
+      get_in(run, ["manifest", "task"]) not in ["", nil] -> run["manifest"]["task"]
+      true -> Format.compact_id(run["run_id"])
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -127,10 +159,15 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
         <% run = @run %>
         <div class="run-hd">
           <div class="grow">
-            <div class="run-ttl mono"><%= @run_id %></div>
+            <div class="run-ttl"><%= run_title(run, @run_id) %></div>
             <div class="row" style="gap:10px;margin-top:6px;flex-wrap:wrap">
-              <span class="k-chip"><%= run["manifest"] && run["manifest"]["provider"] || "run" %></span>
-              <span class="ago-chip"><%= run["event_count"] || length(@events) %> events</span>
+              <%= if run do %>
+                <span class="k-chip"><%= Format.status_label(run["status"]) %></span>
+                <span class="ago-chip"><%= run["event_count"] || length(@events) %> events</span>
+              <% else %>
+                <span class="k-chip">Starting</span>
+              <% end %>
+              <span class="ago-chip mono" title={@run_id}><%= Format.compact_id(@run_id) %></span>
             </div>
           </div>
         </div>
@@ -143,27 +180,34 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
             </button>
           </div>
           <div class="trace">
-            <%= if @timeline_rows == [] do %>
-              <div class="empty">No events.</div>
+            <%= if @starting and @timeline_rows == [] do %>
+              <div class="empty">Starting the run — events appear here as the agent works.</div>
             <% else %>
-              <%= for r <- @timeline_rows do %>
-                <div class={"t-step #{if r.status == "running", do: "live"}"}>
-                  <div class="rail">
-                    <span class={"dot #{cond do
-                      r.status == "done" -> "ok"
-                      r.status == "parked" -> "warn"
-                      true -> ""
-                    end}"}></span>
-                    <span class="line"></span>
-                  </div>
-                  <div class="body">
-                    <div class="row between">
-                      <span class="lbl"><%= r.label %></span>
-                      <span class="seq mono">#<%= r.seq %></span>
+              <%= if @timeline_rows == [] do %>
+                <div class="empty">No events yet.</div>
+              <% else %>
+                <%= for r <- @timeline_rows do %>
+                  <div class={"t-step #{if r.status == "running", do: "live"}"}>
+                    <div class="rail">
+                      <span class={"dot #{cond do
+                        r.status == "done" -> "ok"
+                        r.status == "parked" -> "warn"
+                        r.status == "error" -> "err"
+                        true -> ""
+                      end}"}></span>
+                      <span class="line"></span>
                     </div>
-                    <div class="ph"><%= r.type %><%= if r.detail != "", do: " · " <> r.detail %></div>
+                    <div class="body">
+                      <div class="row between">
+                        <span class="lbl"><%= r.label %></span>
+                        <span class="seq mono"><%= if r.time != "", do: r.time, else: "#" <> to_string(r.seq) %></span>
+                      </div>
+                      <%= if r.detail not in ["", nil] do %>
+                        <div class="ph"><%= r.detail %></div>
+                      <% end %>
+                    </div>
                   </div>
-                </div>
+                <% end %>
               <% end %>
             <% end %>
           </div>

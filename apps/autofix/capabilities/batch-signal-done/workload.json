@@ -1,0 +1,17 @@
+{
+  "provider": "opencode",
+  "title": "Batch Signal Done",
+  "description": "Signal batch coordination that this PR completed.",
+  "template": "BATCH-SIGNAL-DONE TASK.\n\nWorkspace: {{workspace}}.\nPipeline step: {{pipeline_step}}.\nPrevious results: {{previous_results}}.\n\nSignal batch coordination that this PR completed. Operate read-only. Do not edit, stage, commit, reset, restore, or clean.\n\nWrite the RESULT artifact (JSON matching result.schema.json) to a file named RESULT at the workspace root. The verdict field MUST be one of: PASS. Include a one-sentence summary.",
+  "transport_order": ["stdio-json"],
+  "timeout_ms": 600000,
+  "approvals": "deny",
+  "capability": {
+    "name": "batch-signal-done",
+    "version": "1.0.0",
+    "harnesses": ["opencode", "codex", "claude", "gemini"],
+    "trust_tier": "T1",
+    "skill": "skill.md",
+    "result": { "path": "RESULT", "schema": "result.schema.json" }
+  }
+}

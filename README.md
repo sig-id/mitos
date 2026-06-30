@@ -21,6 +21,9 @@ LLM task runner for automated code analysis and generation.
   executed by full agent harnesses in sandboxes, sold as metered completed
   jobs with proof pages. Business model, MVP scope, and gap analysis
   (decided 2026-06-11; pairs with `gentix/spec/product/00_STRATEGY.md`).
+- [Competitive Landscape](spec/13_COMPETITIVE_LANDSCAPE.md): descriptive map
+  of adjacent players (Vercel Eve, harnesses, sandbox providers) against
+  mitos's specified surface. Carries no direction decisions.
 
 ## Build
 

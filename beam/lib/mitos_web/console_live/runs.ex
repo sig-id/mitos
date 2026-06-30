@@ -31,8 +31,8 @@ defmodule MitosWeb.ConsoleLive.Runs do
       <div class="runs-table">
         <div class="thr">
           <span>Run</span>
-          <span>Source</span>
           <span>Status</span>
+          <span>State</span>
           <span>Last event</span>
           <span>Events</span>
         </div>
@@ -41,8 +41,11 @@ defmodule MitosWeb.ConsoleLive.Runs do
         <% else %>
           <%= for r <- @runs do %>
             <button class="trow" phx-click="open-run" phx-value-id={r["run_id"]}>
-              <span class="nm"><%= r["task"] || r["run_id"] %></span>
-              <span class="muted"><%= r["provider"] || "—" %></span>
+              <span class="nm">
+                <%= r["title"] || r["subtitle"] || Format.compact_id(r["run_id"]) %>
+                <%= if r["subtitle"] do %><span class="muted" style="font-size:11px"> · <%= r["subtitle"] %></span><% end %>
+              </span>
+              <span class="muted"><%= Format.status_label(r["status"]) %></span>
               <span><MitosWeb.Components.status_pill status={r["status"]} /></span>
               <span class="muted"><%= Format.format_relative(r["last_event_ms"] || r["created_at_ms"]) %></span>
               <span class="muted"><%= r["events"] || 0 %></span>

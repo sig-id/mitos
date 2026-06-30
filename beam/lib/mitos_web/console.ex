@@ -48,4 +48,50 @@ defmodule MitosWeb.Console do
       [] -> {:error, :unknown_session}
     end
   end
+
+  # Candidate workspace paths for the launch wizard's path picker. The console
+  # is a local control-plane tool, so we offer the project the server runs in
+  # plus its sibling directories — the common case ("review this repo",
+  # "improve autofix") is right there without typing a path.
+  @workspace_root_default "/media/data/proj"
+
+  def workspace_default do
+    cwd = File.cwd!()
+    find_git_root(cwd) || cwd || @workspace_root_default
+  end
+
+  # Walk up from `dir` to the nearest ancestor containing a `.git`.
+  defp find_git_root(dir) do
+    dir = Path.expand(dir)
+    Enum.reduce_while(Path.split(dir), dir, fn _part, current ->
+      cond do
+        File.dir?(Path.join(current, ".git")) or File.exists?(Path.join(current, ".git")) ->
+          {:halt, current}
+
+        current == "/" ->
+          {:halt, nil}
+
+        true ->
+          {:cont, Path.dirname(current)}
+      end
+    end)
+  end
+
+  def workspace_candidates do
+    root = workspace_default()
+
+    siblings =
+      case File.ls(Path.dirname(root)) do
+        {:ok, entries} ->
+          entries
+          |> Enum.map(&Path.join(Path.dirname(root), &1))
+          |> Enum.filter(&File.dir?/1)
+          |> Enum.sort()
+
+        _ ->
+          []
+      end
+
+    Enum.uniq([root | siblings])
+  end
 end

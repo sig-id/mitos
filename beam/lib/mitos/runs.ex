@@ -12,6 +12,18 @@ defmodule Mitos.Runs do
 
   @max_events 500
 
+  # Run-id prefixes that are user-facing in the Runs list. Internal traces
+  # (`wl-*` workload/harness subprocesses, `sess-*` raw PTY sessions) are
+  # implementation details of a run and MUST NOT surface here — otherwise the
+  # list is drowned in one-per-capability harness noise.
+  @public_prefixes ~w(app- agent-)
+
+  defp public_run?(run_id) when is_binary(run_id) do
+    Enum.any?(@public_prefixes, &String.starts_with?(run_id, &1))
+  end
+
+  defp public_run?(_), do: false
+
   @doc "Summaries of every run on disk, newest first, with live status merged in."
   def list do
     with {:ok, runs_dir} <- trusted_runs_dir(),
@@ -19,6 +31,7 @@ defmodule Mitos.Runs do
       entries
       |> Enum.map(&summary(Path.join(runs_dir, &1), &1))
       |> Enum.reject(&is_nil/1)
+      |> Enum.filter(&public_run?(&1["run_id"]))
       |> Enum.sort_by(& &1["created_at_ms"], :desc)
     else
       _ -> []
@@ -30,29 +43,36 @@ defmodule Mitos.Runs do
   #{@max_events} events), and the approvals sidecar.
   """
   def fetch(run_id) when is_binary(run_id) do
-    if Mitos.Trace.valid_run_id?(run_id) do
-      with {:ok, dir} <- trusted_run_dir(run_id) do
-        events = read_jsonl(Path.join(dir, "events.jsonl"))
-        approvals = read_jsonl(Path.join(dir, "approvals.jsonl"))
-        manifest = read_manifest(Path.join(dir, "run.yaml"))
-        status_event = status_source(events)
+    cond do
+      not public_run?(run_id) ->
+        {:error, :not_found}
 
-        {:ok,
-         %{
-           "run_id" => run_id,
-           "manifest" => manifest,
-           "live" => live?(run_id),
-           "status" => status(run_id, status_event || List.last(events)),
-           "event_count" => length(events),
-           "events" => limit_events(events, @max_events),
-           "approvals" => approvals,
-           "proof" => Mitos.Proof.from_events(events)
-         }}
-      else
-        _ -> {:error, :not_found}
-      end
-    else
-      {:error, :not_found}
+      not Mitos.Trace.valid_run_id?(run_id) ->
+        {:error, :not_found}
+
+      true ->
+        case trusted_run_dir(run_id) do
+          {:ok, dir} ->
+            events = read_jsonl(Path.join(dir, "events.jsonl"))
+            approvals = read_jsonl(Path.join(dir, "approvals.jsonl"))
+            manifest = read_manifest(Path.join(dir, "run.yaml"))
+            status_event = status_source(events)
+
+            {:ok,
+             %{
+               "run_id" => run_id,
+               "manifest" => manifest,
+               "live" => live?(run_id),
+               "status" => status(run_id, status_event || List.last(events)),
+               "event_count" => length(events),
+               "events" => limit_events(events, @max_events),
+               "approvals" => approvals,
+               "proof" => Mitos.Proof.from_events(events)
+             }}
+
+          _ ->
+            {:error, :not_found}
+        end
     end
   end
 
@@ -92,13 +112,17 @@ defmodule Mitos.Runs do
   defp summary(dir, run_id) do
     if Mitos.Trace.valid_run_id?(run_id) and regular_dir?(dir) do
       manifest = read_manifest(Path.join(dir, "run.yaml"))
-      {event_count, last_event, status_event} = scan_events(Path.join(dir, "events.jsonl"))
+      {event_count, last_event, status_event, title, subtitle} =
+        scan_events(Path.join(dir, "events.jsonl"))
+
       approvals = count_lines(Path.join(dir, "approvals.jsonl"))
 
       %{
         "run_id" => run_id,
         "provider" => manifest["provider"],
         "task" => manifest["task"],
+        "title" => title,
+        "subtitle" => subtitle,
         "created_at_ms" => int_or_nil(manifest["created_at_ms"]),
         "live" => live?(run_id),
         "status" => status(run_id, status_event || last_event),
@@ -163,11 +187,37 @@ defmodule Mitos.Runs do
             end
           end)
 
-        {length(lines), List.last(decoded), status_source(decoded)}
+        {title, subtitle} = title_from_events(decoded)
+
+        {length(lines), List.last(decoded), status_source(decoded), title, subtitle}
 
       {:error, _} ->
-        {0, nil, nil}
+        {0, nil, nil, nil, nil}
     end
+  end
+
+  # Derive a human title + subtitle ("app · entrypoint") from the run's
+  # signal/task events so the list and detail pages don't show a bare run id.
+  defp title_from_events(events) do
+    signal = Enum.find(events, &(&1["type"] == "signal_received"))
+    enqueue = Enum.find(events, &(&1["type"] == "task_enqueued"))
+
+    ref = get_in(signal, ["ref"]) || %{}
+    app_name = ref["app_name"] || get_in(enqueue, ["payload", "task", "provenance", "app_name"])
+    entrypoint = ref["entrypoint"] || get_in(enqueue, ["payload", "task", "provenance", "entrypoint"])
+    intent = get_in(signal, ["payload", "intake", "intent"]) || get_in(signal, ["payload", "intent"])
+    pipeline = get_in(enqueue, ["payload", "task", "pipeline"])
+
+    subtitle =
+      [app_name, entrypoint]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" · ")
+
+    title = intent || entrypoint || pipeline || nil
+
+    title = if title == "", do: nil, else: title
+
+    {title, if(subtitle == "", do: nil, else: subtitle)}
   end
 
   defp status_source(events) do
