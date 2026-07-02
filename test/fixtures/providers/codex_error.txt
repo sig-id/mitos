@@ -1,1 +1,0 @@
-codex error: authentication required

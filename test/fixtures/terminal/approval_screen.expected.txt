@@ -1,3 +1,0 @@
-Run npm test?
-Approval required
-[y/N]

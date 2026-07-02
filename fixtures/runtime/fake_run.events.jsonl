@@ -1,7 +1,0 @@
-{"schema_version":1,"run_id":"01HFAKE","sequence":0,"timestamp_ms":1,"type":"run_created","task":"fixture fake run","provider":"fake"}
-{"schema_version":1,"run_id":"01HFAKE","sequence":1,"timestamp_ms":2,"type":"run_state_changed","from":"created","to":"preparing_workspace","reason":"workspace allocated"}
-{"schema_version":1,"run_id":"01HFAKE","sequence":2,"timestamp_ms":3,"type":"policy_decision","action_kind":"run_command","decision":"ask","rule_id":null,"reason":"fake run requires approval"}
-{"schema_version":1,"run_id":"01HFAKE","sequence":3,"timestamp_ms":4,"type":"approval_requested","approval_id":"approval-1","action_kind":"run_command","risk":"medium"}
-{"schema_version":1,"run_id":"01HFAKE","sequence":4,"timestamp_ms":5,"type":"approval_decision","approval_id":"approval-1","decision":"allow_once","decided_by":"runtime"}
-{"schema_version":1,"run_id":"01HFAKE","sequence":5,"timestamp_ms":6,"type":"final_output","text":"Fake run completed."}
-{"schema_version":1,"run_id":"01HFAKE","sequence":6,"timestamp_ms":7,"type":"run_state_changed","from":"finalizing","to":"completed","reason":"fake run completed"}
