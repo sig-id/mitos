@@ -78,6 +78,259 @@ defmodule Mitos.Runs do
 
   def fetch(_), do: {:error, :not_found}
 
+  # ------------------------------------------------------------------
+  # Per-step detail for an application run.
+  #
+  # An `app-*` run is a thin envelope: signal → enqueued → scheduled →
+  # running → done/failed. The actual per-capability work happens in child
+  # `wl-*` traces (one per pipeline step), linked to the parent by the wl
+  # task.id prefix `<parent-task-id>:<step-name>`. Each wl trace owns its
+  # capability_started/finished events and the `runtime/workspace/RESULT`
+  # artifact the capability wrote.
+  # ------------------------------------------------------------------
+
+  @doc ""
+  # `step_traces/1` is defined further below.
+  # (anchor for readers)
+  # """
+  def step_traces(run_id), do: step_traces(run_id, [])
+
+  @doc """
+  The ordered list of pipeline steps (capabilities) that executed for an app
+  run, each with its child trace id, lifecycle status, RESULT artifact (if any),
+  and a parsed failure reason.
+
+  Returns `[]` for non-app runs or runs with no child traces yet (a run that
+  just launched).
+  """
+  def step_traces(run_id, opts) when is_binary(run_id) and is_list(opts) do
+    with {:ok, _dir} <- trusted_run_dir(run_id),
+         {:ok, events} <- events(run_id),
+         {:ok, parent_task_id} <- parent_task_id(events) do
+      prefix = parent_task_id <> ":"
+      steps = find_child_steps(prefix)
+      Enum.sort_by(steps, & &1[:order])
+    else
+      _ -> []
+    end
+  end
+
+  def step_traces(_run_id, _opts), do: []
+
+  defp parent_task_id(events) do
+    case Enum.find(events, &(&1["type"] == "task_enqueued")) do
+      %{"payload" => %{"task" => %{"id" => id}}} when is_binary(id) -> {:ok, id}
+      _ -> {:error, :no_task}
+    end
+  end
+
+  defp find_child_steps(prefix) do
+    runs_dir = runs_dir!()
+
+    case File.ls(runs_dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.filter(&String.starts_with?(&1, "wl-"))
+        |> Enum.flat_map(fn wl_id -> load_child_step(runs_dir, wl_id, prefix) end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp load_child_step(runs_dir, wl_id, prefix) do
+    dir = Path.join(runs_dir, wl_id)
+
+    case read_jsonl(Path.join(dir, "events.jsonl")) do
+      events when is_list(events) and events != [] ->
+        case step_task_id(events) do
+          %{"id" => task_id} when is_binary(task_id) and byte_size(task_id) > 0 ->
+            if String.starts_with?(task_id, prefix) do
+              step_name = task_step_name(task_id, prefix)
+              [build_step(wl_id, dir, events, step_name, task_id)]
+            else
+              []
+            end
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp step_task_id(events) do
+    case Enum.find(events, &(&1["type"] == "task_enqueued")) do
+      %{"payload" => %{"task" => %{} = task}} -> task
+      _ -> %{}
+    end
+  end
+
+  defp task_step_name(task_id, prefix) do
+    raw = String.trim_leading(task_id, prefix)
+    # the step id may itself carry a numeric suffix like "verify-fix-2" from
+    # the pipeline runner; keep it for ordering but show the clean name.
+    raw
+  end
+
+  defp build_step(wl_id, dir, events, step_name, _task_id) do
+    result_path = Path.join([dir, "runtime", "workspace", "RESULT"])
+    result = read_result(result_path)
+    {order, clean_name} = split_step_suffix(step_name)
+    manifest = read_manifest(Path.join(dir, "run.yaml"))
+
+    %{
+      wl_id: wl_id,
+      name: clean_name,
+      raw_name: step_name,
+      order: order,
+      status: step_status(events),
+      reason: step_reason(events),
+      result: result,
+      created_at_ms: int_or_nil(manifest["created_at_ms"]),
+      events: length(events)
+    }
+  end
+
+  defp split_step_suffix(name) do
+    case Regex.run(~r/^(.*?)(?:-(\d+))?$/u, name, capture: :all_but_first) do
+      [base, num] -> {String.to_integer(num), base}
+      [base] -> {0, base}
+      _ -> {0, name}
+    end
+  end
+
+  defp step_status(events) do
+    cond do
+      Enum.any?(events, &(&1["type"] == "task_failed")) -> "failed"
+      Enum.any?(events, &(&1["type"] in ["task_done", "capability_finished"])) -> "completed"
+      Enum.any?(events, &(&1["type"] == "capability_started")) -> "running"
+      Enum.any?(events, &(&1["type"] == "task_running")) -> "running"
+      Enum.any?(events, &(&1["type"] == "task_scheduled")) -> "scheduled"
+      true -> "queued"
+    end
+  end
+
+  # The failure reason lives on the parent app run's `task_failed` effect as a
+  # stringified Elixir tuple like
+  # `{:pipeline_step_failed, "verify-fix-2", "verify-fix", {:empty_result, "wl-x", [...]}}`.
+  # `format_reason/1` parses that into readable prose; here we surface the raw
+  # wl-level reason if present.
+  defp step_reason(events) do
+    case Enum.find(events, &(&1["type"] == "task_failed")) do
+      %{"payload" => %{"reason" => reason}} when is_binary(reason) -> reason
+      _ -> nil
+    end
+  end
+
+  defp read_result(path) do
+    case read_regular_file(path) do
+      {:ok, raw} ->
+        case Jason.decode(raw) do
+          {:ok, %{} = decoded} -> decoded
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Parse a stringified Elixir error tuple (as carried on `task_failed.reason`)
+  into a human-readable summary + detail. Returns `%{summary, detail}` or
+  `%{summary: raw}` when the shape isn't recognized.
+  """
+  def format_reason(nil), do: nil
+
+  def format_reason(raw) when is_binary(raw) do
+    cond do
+      String.contains?(raw, "pipeline_step_failed") ->
+        parse_pipeline_step_failed(raw)
+
+      String.contains?(raw, "empty_result") ->
+        parse_empty_result(raw)
+
+      String.contains?(raw, "publication_validation_failed") ->
+        %{summary: "Capability failed its publication validation gate",
+          detail: String.trim(raw, "{") |> String.trim_trailing("}")}
+
+      true ->
+        %{summary: String.slice(raw, 0, 160), detail: raw}
+    end
+  end
+
+  defp parse_pipeline_step_failed(raw) do
+    # {:pipeline_step_failed, "<step-id>", "<capability>", <inner>}
+    inner =
+      case Regex.run(~r/pipeline_step_failed,\s*"([^"]+)",\s*"([^"]+)",\s*(.+)$/s,
+             String.slice(raw, 0, 600)) do
+        [_, step, capability, rest] -> {step, capability, rest}
+        _ -> {nil, nil, raw}
+      end
+
+    {step, capability, rest} = inner
+    base = parse_inner_error(String.trim_trailing(rest, "}"))
+
+    summary =
+      ["Step \"#{step || "?"}\" failed", base && "— #{base.summary}"]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+
+    detail_parts =
+      [
+        capability && "capability: #{capability}",
+        base && base[:detail]
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    %{summary: summary, detail: Enum.join(detail_parts, " · "), capability: capability}
+  end
+
+  defp parse_inner_error(rest) do
+    cond do
+      String.contains?(rest, "empty_result") ->
+        # {:empty_result, "<wl-id>", ["Reason1", ...]}
+        wl =
+          case Regex.run(~r/empty_result,\s*"(wl-[^"]+)"/, rest) do
+            [_, id] -> id
+            _ -> nil
+          end
+
+        reasons =
+          Regex.scan(~r/"([^"]+)"/, rest)
+          |> Enum.map(fn [_, s] -> s end)
+          |> Enum.reject(&String.starts_with?(&1, "wl-"))
+
+        reason_str = if reasons == [], do: "", else: " (" <> Enum.join(reasons, ", ") <> ")"
+
+        %{
+          summary: "the agent produced no RESULT#{reason_str}",
+          detail: if(wl, do: "trace: #{wl}", else: nil)
+        }
+
+      String.contains?(rest, "timeout") ->
+        %{summary: "the step timed out", detail: nil}
+
+      true ->
+        clean = String.trim(rest, "{") |> String.trim_trailing("}") |> String.trim()
+        if clean == "", do: nil, else: %{summary: clean, detail: nil}
+    end
+  end
+
+  defp parse_empty_result(raw) do
+    %{summary: "the agent produced no RESULT", detail: String.slice(raw, 0, 200)}
+  end
+
+  defp runs_dir! do
+    case trusted_runs_dir() do
+      {:ok, dir} -> dir
+      _ -> ".runs"
+    end
+  end
+
   @doc "Decoded canonical event records for one run, uncapped by default."
   def events(run_id, opts \\ [])
 

@@ -1,20 +1,32 @@
 defmodule MitosWeb.ConsoleLive.RunDetail do
   @moduledoc """
-  Run trace — the outer pipeline timeline + the inner harness trace + steering.
-  Ported from `RunDetail.svelte`; here it is a deep-linkable LiveView page.
+  Run inspector.
+
+  An application run is a thin envelope (requested → queued → running →
+  done/failed); the real per-capability work — and the structured RESULT each
+  capability writes — lives in the run's child `wl-*` step traces. This page
+  surfaces that hierarchy: a header with the run's status and (on failure) a
+  human-readable reason, a vertical list of pipeline steps each rendered with
+  its verdict and RESULT body (findings, selection, evidence), and the raw
+  envelope timeline collapsed under "Raw events".
   """
+
   use MitosWeb, :live_view
   use MitosWeb.ConsoleLive.Shared
 
   alias MitosWeb.Format
 
-  @inner_types ~w(assistant_text tool_use tool_result token_usage status)
-
   @impl true
   def handle_params(%{"id" => id}, _url, socket) do
     socket =
       socket
-      |> assign(active_nav: "runs", run_id: id, advanced: false, steer_text: "", error: nil)
+      |> assign(
+        active_nav: "runs",
+        run_id: id,
+        show_raw: false,
+        steer_text: "",
+        error: nil
+      )
       |> load_run(id)
 
     {:noreply, socket}
@@ -25,7 +37,8 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
       {:ok, run} ->
         events = Enum.map(run["events"] || [], &normalize_event/1)
         rows = Enum.map(events, &timeline_row/1)
-        inner = Enum.filter(events, fn e -> Map.get(e, "type") in @inner_types end)
+        steps = Mitos.Runs.step_traces(id)
+        reason = run_reason(events)
 
         socket
         |> assign(
@@ -34,13 +47,12 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
           starting: false,
           events: events,
           timeline_rows: rows,
-          inner_rows: inner
+          steps: steps,
+          reason: reason
         )
 
       {:error, :not_found} ->
-        # A run we just launched may not have written its trace dir yet. Keep
-        # the page mounted in a "starting" state; the 4s refresh picks it up.
-        starting = String.starts_with?(id, "app-") or String.starts_with?(id, "agent-")
+        starting = String.starts_with?(id, "app-") || String.starts_with?(id, "agent-")
 
         socket
         |> assign(
@@ -49,7 +61,8 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
           starting: starting,
           events: [],
           timeline_rows: [],
-          inner_rows: []
+          steps: [],
+          reason: nil
         )
     end
   end
@@ -60,6 +73,13 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
 
   defp normalize_event(event), do: Map.get(event, "event", event)
 
+  defp run_reason(events) do
+    case Enum.find(events, &(&1["type"] == "task_failed")) do
+      %{"payload" => %{"reason" => reason}} when is_binary(reason) -> reason
+      _ -> nil
+    end
+  end
+
   defp timeline_row(event) do
     type = event["type"] || event["event_type"] || "event"
     payload = event["payload"] || event["params"] || event
@@ -69,56 +89,23 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
       type: type,
       time: Format.format_iso_time(event["ts"]) || Format.format_time(event["timestamp_ms"]),
       label: label_for(type, payload),
-      detail:
-        event["rationale"] || payload["reason"] || payload["summary"] ||
-          payload["status"] || "",
-      status: status_for(type, payload)
+      detail: event["rationale"] || payload["reason"] || payload["status"] || ""
     }
   end
 
   defp label_for("task_enqueued", _p), do: "Queued"
   defp label_for("task_scheduled", _p), do: "Scheduled"
   defp label_for("task_running", _p), do: "Started"
-  defp label_for("task_status_changed", p), do: Format.humanize(p["status"] || "updated")
   defp label_for("task_done", _p), do: "Completed"
-
-  defp label_for("capability_started", p),
-    do: "#{Format.humanize(p["capability_id"] || p["capability_ref"] || "step")} running"
-
-  defp label_for("capability_finished", p),
-    do: "#{Format.humanize(p["capability_id"] || p["capability_ref"] || "step")} done"
-
+  defp label_for("task_failed", _p), do: "Failed"
   defp label_for("signal_received", _p), do: "Run requested"
   defp label_for("delivery_sent", p), do: "Delivered to #{p["sink"] || "sink"}"
-  defp label_for("delivery_failed", p), do: "Delivery to #{p["sink"] || "sink"} failed"
-  defp label_for("verification_recorded", _p), do: "Verification"
-  defp label_for("finish", _p), do: "Completed"
-  defp label_for("abort", p), do: "Aborted#{if p["cause"], do: " · #{p["cause"]}"}"
   defp label_for(type, _p), do: Format.humanize(type)
 
-  defp status_for(type, p) do
-    cond do
-      String.contains?(type, "failed") or String.contains?(type, "denied") or p["status"] == "failed" ->
-        "error"
-
-      String.contains?(type, "approval") or String.contains?(type, "parked") or p["status"] == "parked" ->
-        "parked"
-
-      String.contains?(type, "finished") or String.contains?(type, "done") or String.contains?(type, "sent") ->
-        "done"
-
-      String.contains?(type, "started") or String.contains?(type, "running") ->
-        "running"
-
-      true ->
-        "idle"
-    end
-  end
+  # ----- events -----
 
   @impl true
-  def handle_event("toggle-advanced", %{}, socket) do
-    {:noreply, update(socket, :advanced, &(!&1))}
-  end
+  def handle_event("toggle-raw", %{}, socket), do: {:noreply, update(socket, :show_raw, &(!&1))}
 
   def handle_event("steer-text", %{"value" => v}, socket) do
     {:noreply, assign(socket, steer_text: v)}
@@ -128,13 +115,21 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
     %{run_id: run_id, steer_text: text} = socket.assigns
     opts = if text && text != "", do: [text: String.trim(text)], else: []
 
-    case MitosWeb.Console.steer(run_id, String.to_existing_atom(interaction), opts) do
+    case MitosWeb.Console.steer(run_id, safe_atom(interaction), opts) do
       :ok ->
         {:noreply, assign(socket, steer_text: "", error: nil) |> load_run(run_id)}
 
       {:error, reason} ->
         {:noreply, assign(socket, error: format_error(reason))}
     end
+  end
+
+  # `String.to_existing_atom/1` crashes the LiveView on unknown client values;
+  # validate against an allow-list instead.
+  @steer_atoms ~w(approve interrupt prompt answer select_option)a
+  defp safe_atom(name) do
+    atom = if is_binary(name), do: String.to_atom(name), else: nil
+    if atom in @steer_atoms, do: atom, else: :prompt
   end
 
   defp format_error(reason) when is_exception(reason), do: Exception.message(reason)
@@ -149,95 +144,239 @@ defmodule MitosWeb.ConsoleLive.RunDetail do
     end
   end
 
+  # step status -> {tone, label}
+  defp step_status_view("completed"), do: {"ok", "Done"}
+  defp step_status_view("failed"), do: {"err", "Failed"}
+  defp step_status_view("running"), do: {"live", "Running"}
+  defp step_status_view("scheduled"), do: {"warn", "Scheduled"}
+  defp step_status_view(_), do: {"muted", "Queued"}
+
+  # verdict -> tone
+  defp verdict_tone("PASS"), do: "ok"
+  defp verdict_tone("FAIL"), do: "err"
+  defp verdict_tone("FIX"), do: "warn"
+  defp verdict_tone("SKIP"), do: "muted"
+  defp verdict_tone(_), do: "muted"
+
+  defp sev_tone("BLOCKER"), do: "err"
+  defp sev_tone("CRITICAL"), do: "err"
+  defp sev_tone("HIGH"), do: "err"
+  defp sev_tone("MAJOR"), do: "warn"
+  defp sev_tone("MEDIUM"), do: "warn"
+  defp sev_tone("LOW"), do: "info"
+  defp sev_tone("INFO"), do: "muted"
+  defp sev_tone("MINOR"), do: "info"
+  defp sev_tone(_), do: "muted"
+
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="page" style="max-width: 880px;">
+    <div class="page run-detail">
       <%= if @run_not_found do %>
-        <div class="empty">Run not found.</div>
+        <div class="rd-empty">Run not found.</div>
       <% else %>
         <% run = @run %>
-        <div class="run-hd">
-          <div class="grow">
-            <div class="run-ttl"><%= run_title(run, @run_id) %></div>
-            <div class="row" style="gap:10px;margin-top:6px;flex-wrap:wrap">
-              <%= if run do %>
-                <span class="k-chip"><%= Format.status_label(run["status"]) %></span>
-                <span class="ago-chip"><%= run["event_count"] || length(@events) %> events</span>
-              <% else %>
-                <span class="k-chip">Starting</span>
-              <% end %>
-              <span class="ago-chip mono" title={@run_id}><%= Format.compact_id(@run_id) %></span>
+
+        <header class="rd-head">
+          <div class="rd-title-row">
+            <div class="grow">
+              <h1 class="rd-title"><%= run_title(run, @run_id) %></h1>
+              <div class="rd-meta">
+                <%= if run do %>
+                  <span class={"rd-status tone-#{status_tone(run["status"])}"}>
+                    <span class="dot"></span><%= Format.status_label(run["status"]) %>
+                  </span>
+                  <span class="rd-chip"><%= run["event_count"] || length(@events) %> events</span>
+                  <%= if @steps != [] do %><span class="rd-chip"><%= length(@steps) %> steps</span><% end %>
+                <% else %>
+                  <span class="rd-status tone-live"><span class="dot pulse"></span>Starting</span>
+                <% end %>
+                <span class="rd-id mono" title={@run_id}><%= Format.compact_id(@run_id) %></span>
+              </div>
             </div>
           </div>
-        </div>
+        </header>
 
-        <div class="run-sec">
-          <div class="sec-h">
-            <span>Outer pipeline timeline</span>
-            <button class={"adv #{if @advanced, do: "on"}"} phx-click="toggle-advanced">
-              <%= if @advanced, do: "Hide steering", else: "Steer" %>
-            </button>
+        <%= if @starting && @events == [] do %>
+          <div class="rd-starting">
+            <div class="spinner"></div>
+            <p>Starting the run — steps will appear here as the agent works.</p>
           </div>
-          <div class="trace">
-            <%= if @starting and @timeline_rows == [] do %>
-              <div class="empty">Starting the run — events appear here as the agent works.</div>
-            <% else %>
+        <% end %>
+
+        <%= if @reason do %>
+          <% fr = Mitos.Runs.format_reason(@reason) %>
+          <div class="rd-error">
+            <div class="rd-error-h">
+              <span class="rd-error-icon">✕</span>
+              <strong><%= fr && fr[:summary] || "Run failed" %></strong>
+            </div>
+            <%= if fr && fr[:detail] not in ["", nil] do %>
+              <div class="rd-error-detail mono"><%= fr[:detail] %></div>
+            <% end %>
+          </div>
+        <% end %>
+
+        <%= if @steps != [] do %>
+          <section class="rd-section">
+            <h2 class="rd-sec-h">Pipeline</h2>
+            <ol class="rd-steps">
+              <%= for {s, i} <- Enum.with_index(@steps) do %>
+                <li class={"rd-step is-#{s[:status]}"}>
+                  <div class="rd-step-rail">
+                    <span class="rd-step-num"><%= i + 1 %></span>
+                  </div>
+                  <div class="rd-step-body">
+                    <div class="rd-step-top">
+                      <span class="rd-step-name"><%= Format.humanize(s[:name]) %></span>
+                      <span class={"rd-step-status tone-#{elem(step_status_view(s[:status]), 0)}"}>
+                        <span class="dot"></span><%= elem(step_status_view(s[:status]), 1) %>
+                      </span>
+                    </div>
+
+                    <%= if s[:reason] && s[:status] == "failed" do %>
+                      <% fr = Mitos.Runs.format_reason(s[:reason]) %>
+                      <div class="rd-step-error">
+                        <%= if fr, do: fr[:summary], else: s[:reason] %>
+                      </div>
+                    <% end %>
+
+                    <%= if s[:result] do %>
+                      <.result_card result={s[:result]} />
+                    <% else %>
+                      <%= if s[:status] in ["completed"] do %>
+                        <div class="rd-step-nosult">No RESULT artifact.</div>
+                      <% end %>
+                    <% end %>
+
+                    <div class="rd-step-foot mono">
+                      <span><%= s[:wl_id] %></span>
+                      <span><%= s[:events] %> events</span>
+                    </div>
+                  </div>
+                </li>
+              <% end %>
+            </ol>
+          </section>
+        <% end %>
+
+        <section class="rd-section">
+          <button class="rd-collapse" phx-click="toggle-raw">
+            <%= if @show_raw, do: "▾ Hide raw events", else: "▸ Raw events" %>
+          </button>
+          <%= if @show_raw do %>
+            <div class="rd-raw">
               <%= if @timeline_rows == [] do %>
-                <div class="empty">No events yet.</div>
+                <div class="rd-empty-inline">No events.</div>
               <% else %>
                 <%= for r <- @timeline_rows do %>
-                  <div class={"t-step #{if r.status == "running", do: "live"}"}>
-                    <div class="rail">
-                      <span class={"dot #{cond do
-                        r.status == "done" -> "ok"
-                        r.status == "parked" -> "warn"
-                        r.status == "error" -> "err"
-                        true -> ""
-                      end}"}></span>
-                      <span class="line"></span>
-                    </div>
-                    <div class="body">
-                      <div class="row between">
-                        <span class="lbl"><%= r.label %></span>
-                        <span class="seq mono"><%= if r.time != "", do: r.time, else: "#" <> to_string(r.seq) %></span>
-                      </div>
-                      <%= if r.detail not in ["", nil] do %>
-                        <div class="ph"><%= r.detail %></div>
-                      <% end %>
-                    </div>
+                  <div class="rd-raw-row">
+                    <span class="rd-raw-time mono"><%= r.time %></span>
+                    <span class="rd-raw-type mono"><%= r.type %></span>
+                    <span class="rd-raw-label"><%= r.label %></span>
                   </div>
                 <% end %>
               <% end %>
+            </div>
+          <% end %>
+        </section>
+      <% end %>
+    </div>
+    """
+  end
+
+  # ----- structured RESULT renderer -----
+
+  defp status_tone("running"), do: "live"
+  defp status_tone(status) when status in ["done", "completed"], do: "ok"
+  defp status_tone(status) when status in ["failed", "error"], do: "err"
+  defp status_tone("parked"), do: "warn"
+  defp status_tone(_), do: "muted"
+
+  attr(:result, :map, required: true)
+
+  defp result_card(assigns) do
+    %{result: r} = assigns
+    verdict = r["verdict"]
+    summary = r["summary"]
+    findings = List.wrap(r["findings"])
+    selection = r["selection"]
+    evidence = List.wrap(r["evidence"])
+    stats = r["stats"] || %{}
+
+    assigns =
+      assign(assigns,
+        verdict: verdict,
+        summary: summary,
+        findings: findings,
+        selection: selection,
+        evidence: evidence,
+        stats: stats
+      )
+
+    ~H"""
+    <div class="rd-result">
+      <div class="rd-result-top">
+        <%= if @verdict do %>
+          <span class={"rd-verdict v-#{verdict_tone(@verdict)}"}><%= @verdict %></span>
+        <% end %>
+        <%= if @summary do %><p class="rd-result-summary"><%= @summary %></p><% end %>
+      </div>
+
+      <%= if @selection do %>
+        <div class="rd-result-block">
+          <div class="rd-result-k">Scope</div>
+          <div class="rd-result-v">
+            <span class="rd-pill"><%= @selection["scope_type"] %></span>
+            <%= if @selection["scope_target"] do %><span class="rd-pill"><%= @selection["scope_target"] %></span><% end %>
+            <%= if @selection["concern"] do %>
+              <span class="rd-concern"><%= @selection["concern"] %></span>
             <% end %>
           </div>
         </div>
+      <% end %>
 
-        <%= if @advanced do %>
-          <div class="run-sec steer">
-            <div class="sec-h"><span>Steer the agent</span></div>
-            <%= if @error do %><div class="err"><%= @error %></div><% end %>
-            <div class="steer-btns">
-              <button class="btn ghost sm" phx-click="steer" phx-value-interaction="approve">Approve</button>
-              <button class="btn ghost sm" phx-click="steer" phx-value-interaction="interrupt">Stop</button>
-            </div>
-            <textarea rows="2" phx-keyup="steer-text" placeholder="Answer or instruction for the agent"><%= @steer_text %></textarea>
-            <div class="row" style="justify-content:flex-end;margin-top:8px">
-              <button class="btn primary sm" phx-click="steer" phx-value-interaction="prompt" disabled={String.trim(@steer_text) == ""}>Send</button>
-            </div>
-          </div>
-        <% end %>
+      <%= if @findings != [] do %>
+        <div class="rd-result-block">
+          <div class="rd-result-k"><%= length(@findings) %> findings</div>
+          <ul class="rd-findings">
+            <%= for f <- @findings do %>
+              <li class="rd-finding">
+                <div class="rd-finding-h">
+                  <% sev = f["severity"] %>
+                  <%= if sev do %>
+                    <span class={"rd-sev s-#{sev_tone(sev)}"}><%= sev %></span>
+                  <% end %>
+                  <%= if f["id"] do %><span class="rd-finding-id mono"><%= f["id"] %></span><% end %>
+                  <%= if f["path"] do %>
+                    <span class="rd-loc mono">
+                      <%= f["path"] %><%= if f["line"], do: ":#{f["line"]}" %>
+                    </span>
+                  <% end %>
+                </div>
+                <%= if f["problem"] || f["issue"] do %>
+                  <p class="rd-finding-issue"><%= f["problem"] || f["issue"] %></p>
+                <% end %>
+                <%= if f["suggested_fix"] || f["fix"] do %>
+                  <p class="rd-finding-fix"><span class="rd-fix-k">Fix:</span> <%= f["suggested_fix"] || f["fix"] %></p>
+                <% end %>
+                <%= if f["why_it_matters"] do %>
+                  <p class="rd-finding-why"><span class="rd-fix-k">Why:</span> <%= f["why_it_matters"] %></p>
+                <% end %>
+                <%= if f["code"] do %><pre class="rd-code mono"><%= f["code"] %></pre><% end %>
+              </li>
+            <% end %>
+          </ul>
+        </div>
+      <% end %>
 
-        <%= if @inner_rows != [] do %>
-          <div class="run-sec">
-            <div class="sec-h"><span>Inner harness trace</span></div>
-            <div class="inner">
-              <%= for e <- @inner_rows do %>
-                <pre class="mono"><%= Jason.encode!(e, pretty: true) %></pre>
-              <% end %>
-            </div>
-          </div>
-        <% end %>
+      <%= if @evidence != [] do %>
+        <details class="rd-result-block rd-evidence">
+          <summary>Evidence (<%= length(@evidence) %>)</summary>
+          <ul>
+            <%= for e <- @evidence do %><li class="mono"><%= e %></li><% end %>
+          </ul>
+        </details>
       <% end %>
     </div>
     """
