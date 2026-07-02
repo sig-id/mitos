@@ -381,5 +381,5 @@ entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
 | `08_FACILITATOR` | Gentix: capability=monetizable unit, metering off the log, multi-tenancy, take-rate |
 | `09_IMPLEMENTATION_PLAN` | Phased build on BEAM+Zig, reuse map, sequencing |
 | `10_IO_PLANE` | **I/O plane**: connectors (ingress: chat/email/calendar/webhook/event/web), sinks (egress: notify/deliver/reply/web), application I/O bindings; distinct from the in-sandbox broker (`05`) |
-| `11_FRONTEND` | **Frontend product spec**: app⊃pipeline⊃capability hierarchy, three surfaces (Run & Watch two-zoom · Build & Test · Fleet), CLI/web primacy, packaging lifecycle |
-| `12_APPLICATION` | **Application packaging & manifest** (`§8.8`): capabilities/pipelines/entrypoints, input→Task mapping, ship-vs-bind I/O defaults, composition root, `app_id` identity, OCI bundling |
+| `11_FRONTEND` | **Frontend**: surfaces as readers of the log (`08 §2`); personas seller/buyer/operator; Run & Watch (two-zoom + cuts); the Deliverable (report ⇄ proof, one renderer); Author & Test (thin, CLI-first, import); Publish & Attribute; Fleet (deferred); CLI/web/URL primacy |
+| `12_APPLICATION` | **Application packaging & manifest** (`§8.8`): the unit of sale; entrypoints as order forms (input→Task, validate-before-quote), ship-vs-bind I/O defaults, composition root, `app_id` identity vs facilitator-side offer, OCI bundling, Eve import (app cut) |

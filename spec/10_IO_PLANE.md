@@ -212,7 +212,7 @@ run/Task lifecycle Effect (`01 §8.2`).
 | `notify` | a human-facing message | "your resize job is done" to chat / email / push |
 | `deliver` | the artifact payload | POST `{result, artifacts}` to a webhook; write to object store |
 | `reply` | round-trip back to the originating connector | reply in the same Slack thread / email (§5.4) |
-| `web` | the web app surface | live trace + a receipt/result card (`11 §4`, §6) |
+| `web` | the web app surface | live trace + the deliverable page (`11 §4`, `11 §5`) |
 
 ### 5.3 Sink behaviour [TARGET]
 
@@ -227,8 +227,8 @@ capabilities()                :: %{egress: true, round_trip?: bool, retries: _}
 ```
 
 - `render/2` reads **folded run state + harvested artifacts** only — the same
-  source as the proof page (`08 §7`). Buyer-facing renders MUST redact recipe
-  (`08 §7`: `rationale` is audit-only); platform/dev renders MAY show more.
+  source as the proof page (`08 §5`). Buyer-facing renders MUST redact recipe
+  (`08 §5`: `rationale` is audit-only); platform/dev renders MAY show more.
 - **Every delivery is an Effect** (extends the open list of `01 §8.2`):
   `delivery_attempted | delivery_sent | delivery_failed`, with `caused_by` the
   terminal Decision/Effect and `ref` the receipt. Delivery is therefore on the
@@ -264,7 +264,7 @@ The web app is **not special** — it is an I/O surface like the others:
 
 Treating the web app as I/O (not as a privileged client) keeps `01 §10.11` true —
 UI, CLI, API, and connectors all call the same backend ops — and means the
-operate/watch experience (`11 §6`) is a *rendering of the same plane* a Slack
+operate/watch experience (`11 §8`) is a *rendering of the same plane* a Slack
 reply or a webhook POST uses.
 
 ---
@@ -272,14 +272,14 @@ reply or a webhook POST uses.
 ## 7. Multi-tenancy, custody, metering
 
 - **Scoping.** Connectors, sinks, and bindings are **per (org, project)**
-  (`06 §12`, `08 §3`). A tenant's binding is invisible to others.
+  (`06 §12`, `08 §3.1`). A tenant's binding is invisible to others.
 - **Custody.** Connector and sink credentials live in the **control-plane vault**
   (`01 §7`), never in the sandbox (`01 §8.5`). Same rule as the broker; different
   vault scope (`(tenant, connector|sink, dest)`).
 - **Metering & audit.** `signal_received`, `task_enqueued` (ingress) and
   `delivery_attempted|sent|failed` (egress) are Effects on the log — the I/O plane
   adds **no parallel ledger**; deliveries fold into the same billing/audit view as
-  everything else (`08 §2`).
+  everything else (`08 §4`).
 
 ---
 
@@ -289,7 +289,7 @@ reply or a webhook POST uses.
 `webhook` + `manual`/`web` connectors; `notify`/`web`/`deliver` sinks; `explicit`
 selection. `chat`/`email`/`calendar` connectors and `smart` selection follow.
 Remote T2 delivery context (E2B/Daytona) is a later extension (`05 §3`,
-unimplemented today — `11 §7`).
+unimplemented today — `11 §10`).
 
 **Breadth note (rev. 2026-07-02).** Generic chat-platform connector breadth is
 now commodity: Eve ships channels (Slack out of the box) free (`13 §1`). This
@@ -311,7 +311,7 @@ arrive through it, not for parity. An imported Eve agent's `channels/*`
 2. **Delivery guarantees (§5.3):** at-least-once + idempotency is the floor; do
    any sinks need exactly-once (and is that even achievable for chat/email)?
 3. **Connector auth model:** per-tenant OAuth app vs bring-your-own-token, per
-   connector class — pairs with the broker vault design (`05`, `08 §4`).
+   connector class — pairs with the broker vault design (`05`, `08 §3.2`).
 4. **Application-shipped connectors (§3.4):** the sandbox/trust posture for a
    usage-specific connector an untrusted app ships — likely must run control-plane
    side, not in-sandbox; confirm against `05`'s T2 constraints.

@@ -79,7 +79,7 @@ continuity (Slack → web).
 | I/O plane: connectors in / sinks out (`10`) | `channels/` + `connections/` | near-identical surface; Eve ships Slack out of the box |
 | compute plane: T2 µVM, deny-all egress, RO snapshot (`01 §6`, `05`) | per-agent sandbox (Vercel Sandbox / Sandbox0) | same primitive; Eve's trust story is single-tenant / own-workload, no cross-tenant isolation requirement |
 | application manifest + OCI packaging (`12`) | the `agent/` folder **is** the deploy unit | Eve is simpler and lighter; mitos is more formal (`app_id`, entrypoints, default I/O bindings, service composition) |
-| event log = state + audit + proof + billing ledger (`01 §8.2`) | workflow event log + deterministic replay; Agent Runs dashboard | closer than v0.1 of this map assumed: Eve's durability is also event-sourced-with-replay, and Agent Runs renders much of what a proof page renders — but **operator-facing**. Purpose still differs: operational resume + own-run telemetry, not evidence to a counterparty, not a billing ledger |
+| event log = state + audit + proof + billing ledger (`01 §8.2`) | workflow event log + deterministic replay; Agent Runs dashboard | closer than v0.1 of this map assumed: Eve's durability is also event-sourced-with-replay, and Agent Runs renders much of what a proof page renders — but **operator-facing**. The cleanest statement of the gap: **same write side** (execution as event log), **different read side** — Eve's log has one reader (the deployer: resume + telemetry); mitos's log is specified for many readers across trust boundaries (buyer→proof, platform→meter, seller→attribution, auditor→audit; `02 §1`) |
 
 ### 1.4 What Eve is **not**
 

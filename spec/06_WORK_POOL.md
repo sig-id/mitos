@@ -493,7 +493,7 @@ requires: { services: [render-pool], targets: [seller-endpoint.target] }
 ---
 # Resize and deliver
 1. capability: image-resize   (03)        # MAY invoke a `watermark` subtask (§5)
-2. capability: deliver-proof  (08 §7)
+2. capability: deliver-proof  (08 §5)
 ```
 **Resolved active set** (`mitos status`, §9.4):
 ```

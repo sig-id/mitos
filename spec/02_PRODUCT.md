@@ -60,6 +60,22 @@ schedules, evals, approvals, observability. Three consequences:
    capability (`03 §10.1`), exactly as harnesses are suppliers (`13 §2.3`).
    Every Eve author is a prospective seller.
 
+**Execution as event log — write-side consensus, read-side moat.** Eve's
+independent convergence on event-sourced execution (`13 §1.3`) confirms the
+`01 §4` bet: execution *is* the append-only log, and resume, audit, and
+observability are **reads** of it. That write side is now commodity — every
+serious runtime will have it. The differentiation is entirely on the **read
+side**: who may read the log, across which trust boundary, under what
+guarantees. A single-tenant framework's log has **one reader** — the deployer
+(resume + telemetry). Mitos's log is specified for **many readers across trust
+boundaries**: the buyer reads a proof (`08 §5`), the platform reads a meter
+(`08 §4`), the seller reads attribution (`08 §6`, `03 §9`), an auditor reads the
+record (`01 §8.2`). `08 §2` fixes this as the facilitator's organizing contract. That is why it carries properties a single-tenant log never grows:
+content-addressed Decision inputs (`01 §8.1`), a redaction boundary (the recipe
+stays server-side while the proof ships), and settlement semantics (billing is
+a fold of the same log — no reconciliation). The product, stated in one line:
+**mitos sells the read side of the execution log.**
+
 ---
 
 ## 2. What mitos IS vs IS NOT
@@ -236,13 +252,15 @@ The MVP proves the sentence in §6 **once**, not at scale.
 | R2 | **Untrusted-workload isolation** — seller capability runs on buyer data; both are untrusted to mitos | a leak or escape ends the business on transaction #1 | trust tier **T2** ⇒ remote µVM (E2B/Daytona), **deny-all egress except broker**, RO snapshot of buyer data, no secrets in env (`01 §6`, `05`) |
 | R3 | **Seller-key custody** — sellers bring provider keys; recipe must stay server-side | a key leak or recipe exfiltration is a breach and a trust collapse | secrets live **only at the broker**; broker attaches/withholds per `egress_policy` + destination and logs each crossing; recipe never enters the buyer-visible surface (`01 §8.5`, `05`, `08`) |
 | R4 | **Cost of LLM verification** — proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); for MVP, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
-| R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (post-gate ordering, `09 §3`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08`), T2 (`05`), proof-for-a-stranger (`08 §7`) — the parts a single-tenant framework structurally cannot retrofit |
+| R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (post-gate ordering, `09 §3`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`) — the parts a single-tenant framework structurally cannot retrofit |
 
 Cross-cutting: the **event log is the source of truth** (`01 §8.2`) — it is
 simultaneously run state, audit record, the proof page's backing data, and the
 billing ledger. Every risk above is observable on it after the fact, which is the
 difference between "a job went wrong" and "a job went wrong and we cannot say
-how."
+how." In the §1 framing: those four reads *are* the product — the write side is
+industry consensus (`13 §1.3`); R5 is only fatal if mitos's read side stays
+unbuilt while the write side commoditizes.
 
 ---
 
