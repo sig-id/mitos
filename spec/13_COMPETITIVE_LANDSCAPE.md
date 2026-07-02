@@ -1,6 +1,6 @@
 # 13 — Competitive Landscape
 
-Status: draft v0.1 · Date: 2026-06-30
+Status: draft v0.2 · Date: 2026-07-02
 
 A **descriptive** map of the agent-framework / agent-runtime space as of
 late June 2026, scoped to what each player **is** and how it overlaps with
@@ -32,7 +32,10 @@ facilitator, proof page, completed-work monetization).
 ## 1. Vercel Eve — filesystem-first durable agent framework
 
 - **Source:** `github.com/vercel/eve`, npm `eve`, `npx eve@latest init`.
-  Open source (repo public on `vercel/eve`). Launched late June 2026.
+  Open source, **Apache-2.0**. Launched late June 2026 (Vercel Ship London);
+  public preview under Vercel beta terms. Traction as of 2026-07-02: ~3.1k
+  GitHub stars in ~10 days, multi-release-per-week cadence (`eve@0.19.0`
+  2026-07-02). Vercel claims 100+ internal production agents on the stack.
 - **Deployment model:** authored locally, deployed/hosted on Vercel (or
   self-hosted). Single-tenant by construction: the agent runs against *the
   deployer's* account and resources.
@@ -58,8 +61,14 @@ agents — convention over config, file-based routing as authoring.
 | `schedules/` | config | scheduled tasks |
 | `evals/` | config | evaluation harness |
 
-Runtime: durable sessions/workflows compiled from the folder; one sandbox per
-agent; built-in approvals; durable state for resumption.
+Runtime: durable sessions/workflows compiled from the folder. Durability is an
+**event log with deterministic replay** (Workflow SDK): progress persists as
+events; state is reconstructed by replaying them — the same mechanism as
+`01 §4`'s `fold(events)`, built for resumption. One sandbox per agent, adapter
+pattern (Vercel Sandbox, Docker, microsandbox, just-bash). Built-in approvals
+(pause without compute). **Agent Runs** dashboard, zero-config: sessions,
+turns, tool calls, reasoning, timing, token usage. Cross-channel session
+continuity (Slack → web).
 
 ### 1.3 Overlap with mitos (surface, not commitment)
 
@@ -70,7 +79,7 @@ agent; built-in approvals; durable state for resumption.
 | I/O plane: connectors in / sinks out (`10`) | `channels/` + `connections/` | near-identical surface; Eve ships Slack out of the box |
 | compute plane: T2 µVM, deny-all egress, RO snapshot (`01 §6`, `05`) | per-agent sandbox (Vercel Sandbox / Sandbox0) | same primitive; Eve's trust story is single-tenant / own-workload, no cross-tenant isolation requirement |
 | application manifest + OCI packaging (`12`) | the `agent/` folder **is** the deploy unit | Eve is simpler and lighter; mitos is more formal (`app_id`, entrypoints, default I/O bindings, service composition) |
-| event log = state + audit + proof + billing ledger (`01 §8.2`) | durable session state (for resumption) | different purpose: Eve's durability is **operational** (resume), not evidentiary or billable |
+| event log = state + audit + proof + billing ledger (`01 §8.2`) | workflow event log + deterministic replay; Agent Runs dashboard | closer than v0.1 of this map assumed: Eve's durability is also event-sourced-with-replay, and Agent Runs renders much of what a proof page renders — but **operator-facing**. Purpose still differs: operational resume + own-run telemetry, not evidence to a counterparty, not a billing ledger |
 
 ### 1.4 What Eve is **not**
 
@@ -85,6 +94,23 @@ agent; built-in approvals; durable state for resumption.
 - **No event-log-as-billing-ledger.** The log is for resumption, not metering.
 - **Single-tenant trust model.** The sandbox protects the deployer from the
   agent; it is not the cross-tenant authority boundary mitos specifies (`01 §6`).
+
+### 1.5 Adjacent Vercel surfaces (facts about proximity, not predictions)
+
+Vercel-owned products that border the §3 uncontested list, without occupying it:
+
+- **Vercel Connect** — delegated user/team credentials for eve tools. Borders
+  seller-key custody (`01 §8.5`) but is deployer-scoped delegation, not a broker
+  that attaches/withholds a *seller's* credential against a *buyer's* run.
+- **Vercel Marketplace + consumption billing** — existing storefront and
+  metering machinery. Borders metered public endpoints (`08`) but today meters
+  infra usage to the deployer, not completed jobs to strangers.
+- **Agent Runs** — borders the proof page's rendering surface (§1.3), for the
+  operator only.
+
+The distance from these surfaces to "publish your eve agent as a paid endpoint"
+is one product decision, not a research program. The direction consequence is
+owned by `02 §8` (R5), not this doc.
 
 ---
 
@@ -129,6 +155,12 @@ mitos design for which no mapped player offers an equivalent surface:
 
 These are uncontested as of this doc's date; they are not asserted to be
 defensible forever. Updates to this map go here, not in `02` or `08`.
+
+Revision note (2026-07-02): Eve's event-log durability + Agent Runs now cover
+much of the *rendering* of a proof page for a deployer's own runs (§1.3). The
+items above hold because they are **cross-tenant** — evidence, custody, and
+settlement between strangers — not because the telemetry is hard. Direction
+consequences recorded in `02 §1`/`02 §8 R5`, `03 §10.1`, `09 §3`, `10 §8`.
 
 ---
 

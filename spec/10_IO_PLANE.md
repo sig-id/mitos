@@ -1,6 +1,6 @@
 # 10 — I/O Plane (Connectors In · Sinks Out)
 
-Status: draft v0.1 · Date: 2026-06-24
+Status: draft v0.2 · Date: 2026-07-02
 
 This document specifies the **I/O plane** — the previously-missing layer that
 gives mitos a *world-facing input and output*. The substrate had **sources-in**
@@ -290,6 +290,14 @@ reply or a webhook POST uses.
 selection. `chat`/`email`/`calendar` connectors and `smart` selection follow.
 Remote T2 delivery context (E2B/Daytona) is a later extension (`05 §3`,
 unimplemented today — `11 §7`).
+
+**Breadth note (rev. 2026-07-02).** Generic chat-platform connector breadth is
+now commodity: Eve ships channels (Slack out of the box) free (`13 §1`). This
+plane's near-term scope stays exactly what a **paid job** needs — `webhook` +
+`web` ingress and `reply`/`deliver`/`web` sinks around the `08` flow. Chat/email
+breadth is **demand-gated**: built when a design partner's buyers actually
+arrive through it, not for parity. An imported Eve agent's `channels/*`
+(`03 §10.1`) maps here as a *binding* (§4), not as new connector code.
 
 | What this plane owns | Delegates |
 |---|---|

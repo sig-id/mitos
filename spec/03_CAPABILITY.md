@@ -1,6 +1,6 @@
 # 03 — Capability
 
-Status: draft v0.2 · Date: 2026-06-18
+Status: draft v0.3 · Date: 2026-07-02
 
 Elaborates `01_ARCHITECTURE` §5 (the atom), §8.3 (manifest), §8.6 (harness
 adapter). Where this doc and `01` disagree, `01` wins. RFC 2119 keywords are
@@ -63,6 +63,15 @@ markdown** so a deterministic layer can address its sections:
 <!-- @skill:procedure -->   the ordered method (phases, steps)
 <!-- @skill:success -->     definition of done + what evidence to emit
 ```
+
+**Anchors are RECOMMENDED, not REQUIRED** (rev. 2026-07-02). A plain markdown
+skill in the de-facto cross-vendor skills convention — the format the harness
+vendors seeded and Eve installs from (`13 §1`) — is a valid base skill: it runs
+verbatim, and the §2.1 overlay degrades to document-scope `append`/`prepend`
+(no `replace`; there is no anchor to address). Authoring friction is a
+competitive variable (`02 §1`): mitos MUST accept the common format as-is and
+treat anchors as the opt-in upgrade that unlocks section-addressed adaptation.
+The identity law (§2.1) holds in both cases.
 
 The base skill **MUST be model-agnostic**. It never says "as Claude…" or tunes
 phrasing to one model's quirks. Model-specific shaping lives in a separate,
@@ -407,6 +416,31 @@ Build → content-address → publish (immutable, §9).
 The capability is now harness-agnostic, hermetic, replayable, meterable, and —
 unlike the CW agent — improvable without editing the base skill, via the §2.1
 adaptation seam.
+
+### 10.1 Importing an Eve `agent/` directory **[T]** (rev. 2026-07-02)
+
+The same decomposition applies to the Eve convention (`13 §1`), the emerging
+de-facto authoring shape. This is the funnel move of `02 §1`: every Eve author
+is a prospective seller, so import MUST be cheap. A `mitos import eve <dir>`
+build step SHOULD map:
+
+| Eve source (`agent/`) | → mitos pillar / field |
+|---|---|
+| `instructions.md` | SKILL base (unanchored, §2 — valid as-is) |
+| `skills/*` | SKILL modules (§2); common skills format accepted verbatim |
+| `tools/*.ts` (`defineTool`) | typed TOOLS (§3) — I/O schema carries over; impl runs as a JS tool |
+| `connections/*` | `egress_policy` claims (§8); credentials re-homed to the **broker**, never baked |
+| `sandbox/*` | **dropped** — mitos supplies the sandbox (`05`); posture comes from `trust_tier` |
+| `agent.ts` (model config) | **dropped** — model/harness are injected (§5); kept only as a preference hint |
+| `subagents/*` | candidate pipeline steps (`04`), not intra-capability nesting |
+| `channels/*`, `schedules/*` | NOT capability concerns → I/O bindings (`10 §4`) and triggers (`06 §6`) |
+| `evals/*` | candidate verifier material (`04`) |
+
+What does NOT survive import unchanged: anything that assumes the agent owns
+its egress, its secrets, or its model. Import is a funnel, not a compatibility
+promise — the capability that comes out is hermetic, brokered, content-addressed
+(§9), and metered like any other. An imported capability defaults to **T2**
+unless the operator vets it down.
 
 ---
 

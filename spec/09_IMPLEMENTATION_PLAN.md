@@ -1,6 +1,6 @@
 # 09 — Implementation Plan
 
-Status: draft v0.2 · Date: 2026-06-18
+Status: draft v0.3 · Date: 2026-07-02
 
 How to build the `01_ARCHITECTURE` substrate on the existing BEAM+Zig codebase.
 This doc is sequencing and reuse, not contract: field names and signatures are
@@ -178,6 +178,16 @@ open public. True **T2 untrusted-seller isolation requires P4** and MUST land
 before open seller onboarding. The gate ("a stranger *pays*") is met by an
 arbitrary *buyer*; the *seller* stays curated until P4. Flag for sign-off.
 
+**Post-gate ordering (rev. 2026-07-02).** After the gate, the next investment is
+NOT "widen the substrate." Eve ships schedules, evals, subagents, and channels
+free with Vercel distribution (`13 §1`); P5 and P6 now compete with a zero-price
+reference implementation and touch none of the uncontested surface (`13 §3`).
+Post-gate order is therefore: **P4** (T2 gates open seller onboarding) →
+**P7 depth** (more sellers and transactions; the Eve `agent/` import funnel,
+`03 §10.1`) → **P5/P6 only against a paying seller's concrete demand**. The
+clock this runs against is `02 §8` R5 — a platform player bolting payments onto
+its framework.
+
 ---
 
 ## 4. Cross-cutting concerns
@@ -216,6 +226,7 @@ These thread every phase; build their seams in P0/P1, fill incrementally.
 
 **Sequencing summary:** collapse to one plane → make the log real and crash-safe →
 build the sandbox boundary and broker → package the capability that flows through
-it → then widen (remote, work pool, memory) and monetize (facilitator). The MVP
-borrows one thin thread from P1/P2/P3/P7 and the existing `Workload` surface to
-reach the product gate before any of those phases are complete.
+it → then **isolate (P4) and deepen monetization (P7) before widening** — work
+pool and memory are demand-gated post-gate (§3). The MVP borrows one thin thread
+from P1/P2/P3/P7 and the existing `Workload` surface to reach the product gate
+before any of those phases are complete.

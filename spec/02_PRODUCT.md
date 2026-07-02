@@ -1,6 +1,6 @@
 # 02 — Product
 
-Status: draft v0.2 · Date: 2026-06-18
+Status: draft v0.3 · Date: 2026-07-02
 
 Scope: the product thesis, who it is for, the atomic unit, the business it funds,
 the wedge it must win, and the smallest build that wins it. Vocabulary and
@@ -40,6 +40,26 @@ runs, multi-step pipelines — executed in an isolated sandbox, harvested as a d
 evidence bundle and a replayable trace from the event log. The buyer pays for a
 finished job they can inspect, not a turn of conversation.
 
+### Positioning against the framework class (rev. 2026-07-02)
+
+The framework/authoring slot is taken. Eve ("Next.js for agents", `13 §1`)
+occupies it with Apache-2.0 economics and distribution mitos cannot match, and
+it gives away most of mitos's non-differentiating surface: durable event-logged
+execution, pluggable sandboxes, channels/connections, skills/tools/subagents,
+schedules, evals, approvals, observability. Three consequences:
+
+1. **Outward positioning is the commerce layer, not the OS.** "Substrate/OS"
+   stays the *internal* architecture identity (`01 §0`); the *outward* claim is
+   where frameworks stop: **your agent exists — mitos makes it a paid, metered,
+   proven product sold to strangers.** Mitos MUST NOT present as an agent
+   framework; that fight is lost on distribution before it is fought on merit.
+2. **The one-line differentiation: frameworks sell sessions that persist;
+   mitos sells jobs that complete** — input → sandbox → diff + `RESULT` +
+   evidence + receipt, across a trust boundary between strangers.
+3. **Frameworks are funnel, not foe.** An Eve `agent/` directory imports as a
+   capability (`03 §10.1`), exactly as harnesses are suppliers (`13 §2.3`).
+   Every Eve author is a prospective seller.
+
 ---
 
 ## 2. What mitos IS vs IS NOT
@@ -53,6 +73,7 @@ finished job they can inspect, not a turn of conversation.
 | the **authority boundary** at the sandbox edge — inject / broker / harvest (`05`) | a trust model that relies on the agent or a harness protocol |
 | **cloud-first, multi-tenant**, locally runnable (`01 §1.6`) | a single-tenant local-only dev toy |
 | a seller of **finished jobs with proof**, metered off the event log (`08`) | a seller of chat turns or raw tokens |
+| the **commerce layer where frameworks stop** — jobs that complete, sold to strangers | an agent framework competing for the authoring slot (Eve-class, `13 §1`) — frameworks are funnel, not foe |
 
 The "not a fixed pipeline tool" line is the hard one and the reason for the
 redesign: a pipeline is **enforced at runtime by an orchestrator agent**, not
@@ -215,6 +236,7 @@ The MVP proves the sentence in §6 **once**, not at scale.
 | R2 | **Untrusted-workload isolation** — seller capability runs on buyer data; both are untrusted to mitos | a leak or escape ends the business on transaction #1 | trust tier **T2** ⇒ remote µVM (E2B/Daytona), **deny-all egress except broker**, RO snapshot of buyer data, no secrets in env (`01 §6`, `05`) |
 | R3 | **Seller-key custody** — sellers bring provider keys; recipe must stay server-side | a key leak or recipe exfiltration is a breach and a trust collapse | secrets live **only at the broker**; broker attaches/withholds per `egress_policy` + destination and logs each crossing; recipe never enters the buyer-visible surface (`01 §8.5`, `05`, `08`) |
 | R4 | **Cost of LLM verification** — proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); for MVP, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
+| R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (post-gate ordering, `09 §3`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08`), T2 (`05`), proof-for-a-stranger (`08 §7`) — the parts a single-tenant framework structurally cannot retrofit |
 
 Cross-cutting: the **event log is the source of truth** (`01 §8.2`) — it is
 simultaneously run state, audit record, the proof page's backing data, and the
