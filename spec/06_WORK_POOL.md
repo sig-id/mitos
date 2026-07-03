@@ -1,8 +1,5 @@
 # 06 — Work Pool
 
-Status: draft v0.3 · Date: 2026-06-19 · (was `06_SCHEDULING`; renamed + restructured
-around the pool as a first-class plane)
-
 This is the **Work Pool plane** — the *durable-intent* layer that sits between
 **TRIGGERS** and **DISPATCH** in the layer stack (`01_ARCHITECTURE` §3). It owns:
 

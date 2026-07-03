@@ -1,8 +1,5 @@
 # 05 — Compute Plane
 
-Status: draft v0.2 · Date: 2026-06-18 · Supersedes the old `03_NUCLEUS_INTEGRATION`
-and `06_AUTHORITY_CALLBACK_PLANE`.
-
 This document specifies **how a capability runs safely** — locally and remotely —
 behind one provider abstraction, and how mitos enforces authority at the **sandbox
 boundary**. It elaborates `01_ARCHITECTURE` §6 (trust tiers), §7 (runtime
@@ -11,16 +8,13 @@ adapter). Where this doc and `01` disagree, `01` wins; field names from `01` §8
 reproduced verbatim and MUST NOT be renamed.
 
 Two corrections vs earlier mitos thinking are load-bearing here. **(1) Nucleus is
-one provider, not the architecture** — the gVisor strict-agent sandbox at
-`/media/data/proj/nucleus` is a single `SandboxProvider` implementation, described
-here by contract, not by its internals. **(2) The authority plane is the sandbox
+one provider, not the architecture** — the gVisor strict-agent sandbox (Nucleus) is an **external product**, shipped as OCI containers; mitos integrates with it as one `SandboxProvider` implementation, described by contract, not by its internals. **(2) The authority plane is the sandbox
 boundary, not an in-harness MCP server** — authority is granted by *inbound
 hermetic injection*, gated by an *outbound egress credential broker*, and results
 come from *harvest*; MCP is a DEMOTED, optional tool affordance (§5.5), never the
 trust boundary.
 
-RFC 2119 keywords (MUST / SHOULD / MAY) are normative. Sections are marked
-**[TARGET]** (designed, not built) or **[IMPLEMENTED]** (in the Zig/BEAM tree today).
+RFC 2119 keywords (MUST / SHOULD / MAY) are normative. Every provider — Nucleus, Docker, E2B, Daytona — is an external product behind the `SandboxProvider` seam (`01` §0); mitos ships only the in-process `Provider.Local`.
 
 ---
 
@@ -65,7 +59,7 @@ normalizes observation; the sandbox provider normalizes execution.
 
 ---
 
-## 2. The `SandboxProvider` behaviour [TARGET]
+## 2. The `SandboxProvider` behaviour
 
 One behaviour, many backends. Reproduced from `01` §8.4, then elaborated:
 
@@ -116,14 +110,14 @@ by the harness.
 
 ---
 
-## 3. Provider matrix [TARGET]
+## 3. Provider matrix
 
 Each row is a `SandboxProvider` implementation. Columns map directly to
 `capabilities()` and `01` §6.
 
 | Provider | Isolation mechanism | Locality | Egress / authority transport | DATA mount | Snapshot | Default tier |
 |---|---|---|---|---|---|---|
-| **Nucleus** (gVisor strict-agent) | gVisor userspace kernel + seccomp; per-run agent; syscall interposition | **local** | gVisor netstack `deny-all`; **unix-domain socket** to the in-process broker | bind (RO/RW) or RO overlay | yes — gVisor checkpoint/restore `[TARGET]` | **T0 / T1** |
+| **Nucleus** (gVisor strict-agent) | gVisor userspace kernel + seccomp; per-run agent; syscall interposition | **local** | gVisor netstack `deny-all`; **unix-domain socket** to the in-process broker | bind (RO/RW) or RO overlay | yes — gVisor checkpoint/restore | **T0 / T1** |
 | **Docker / OCI** | namespaces + cgroups + seccomp/AppArmor (shared host kernel — **weak**) | **local** | host-loopback forced proxy + docker network policy (allowlist = broker only) | bind (RO/RW) | coarse (commit only) — treated as **no** | **T1** |
 | **E2B** | Firecracker **microVM** (KVM, separate kernel) | **remote** | **forced HTTP/SOCKS proxy** → broker over TLS; VM firewall deny-all-else | RO provider **volume / snapshot** | yes — Firecracker VM snapshot | **T2** |
 | **Daytona** | workspace VM / container | **remote** | network policy → broker proxy; egress allowlist = broker endpoint only | RO provider volume | partial — workspace snapshot | **T2** |
@@ -145,7 +139,7 @@ credential broker** for all tiers.
 
 ---
 
-## 4. Trust tiers → provider + posture (the launch policy compiler) [TARGET]
+## 4. Trust tiers → provider + posture (the launch policy compiler)
 
 `trust_tier` is an input; the deterministic **Tier-1 launch policy compiler** (BEAM,
 coded not agentic — `01` §3's enforcement layer) maps it to an **eligible provider
@@ -180,7 +174,7 @@ downgrade isolation. **Distrust scales isolation; it never relaxes it.**
 
 ---
 
-## 5. The authority boundary in depth [TARGET]
+## 5. The authority boundary in depth
 
 Three controlled crossings + harvest (numbered ①–④ in the §1 diagram). This is the
 whole security model: trust the *boundary*, not the agent and not a protocol the
@@ -279,7 +273,7 @@ no MCP server grants a credential. MCP off ⇒ capability still fully governed.
 
 ---
 
-## 6. Hermeticity [TARGET]
+## 6. Hermeticity
 
 **Hermetic by default.** A run carries only what mitos injected (§5.1); the harness
 MUST NOT pick up cross-run state from the host or a previous run. At `prepare`, the
@@ -304,7 +298,7 @@ store.
 
 ---
 
-## 7. DATA mounting [TARGET]
+## 7. DATA mounting
 
 DATA is the capability's **persistent corpus/refs/DB**, distinct from the input
 **workspace** (`01` §5), and versioned **with the capability** (the manifest pins
@@ -322,7 +316,7 @@ and replayable (`01` §4).
 
 ---
 
-## 8. Snapshot / resume, timeouts, failure handling [TARGET]
+## 8. Snapshot / resume, timeouts, failure handling
 
 **Snapshot / resume.** `snapshot(session)` captures filesystem (+ optional harness
 session, §6) as an opaque content-addressed `snap`; resume is
@@ -352,7 +346,7 @@ billable from the log.
 
 ---
 
-## 9. Threat model [TARGET]
+## 9. Threat model
 
 Two primary threats, each defended by a *different* mechanism — neither relies on
 trusting the agent or the model:
@@ -374,18 +368,13 @@ byte metering, not eliminated.
 
 ---
 
-## 10. Status summary
+---
 
-Everything in this doc is **[TARGET]** except local sandbox launch, which exists
-in the Zig engine today (`01` §7) — i.e. the Nucleus provider is *partial* (launch
-done; broker unix-socket + gVisor checkpoint/restore are TARGET). The **egress
-credential broker** (§5.3) is the keystone and is unbuilt; the `SandboxProvider`
-behaviour (§2), launch policy compiler (§4), remote E2B/Daytona BEAM clients,
-hermetic harness adapter (§6, superseding PTY screen-scrape), and snapshot/harvest
-(§5.4, §8, with event-log replay as the authoritative fallback) are all TARGET.
+## Cross-references
 
-**Cross-refs:** capability manifest, harness adapter, MCP-as-tool → `03_CAPABILITY`;
+capability manifest, harness adapter, MCP-as-tool → `03_CAPABILITY`;
 orchestrator/loop-manager, Decision/Effect schema, resume/replay → `04_CONTROL_PLANE`;
 approval surfacing, services/triggers → `06_WORK_POOL`; `/ctx` context slices →
 `07_MEMORY`; metering off the egress/effect log, multi-tenancy → `08_FACILITATOR`;
-build sequencing → `09_IMPLEMENTATION_PLAN`.
+system decomposition → `09_IMPLEMENTATION_PLAN`.
+

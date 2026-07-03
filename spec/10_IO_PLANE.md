@@ -1,7 +1,5 @@
 # 10 — I/O Plane (Connectors In · Sinks Out)
 
-Status: draft v0.2 · Date: 2026-07-02
-
 This document specifies the **I/O plane** — the previously-missing layer that
 gives mitos a *world-facing input and output*. The substrate had **sources-in**
 for developer trackers (`06_WORK_POOL §6`) but **no first-class outputs**, and
@@ -17,8 +15,7 @@ It elaborates `01_ARCHITECTURE` §3 (layer stack) and §8.2/§8.7 (Effects, Task
 reuses `06_WORK_POOL` (triggers, services, multi-tenancy) for scheduling, and is
 careful **not** to be confused with the in-sandbox egress broker (`05`, §5 below).
 Where this doc and `01` disagree, `01` wins. Field names from `01` §8 are canonical
-and MUST NOT be renamed. RFC 2119 keywords are normative. Sections are marked
-**[TARGET]** (designed, not built) unless noted **[I]** (implemented today).
+and MUST NOT be renamed. RFC 2119 keywords are normative. Connectors and sinks are external integrations behind their respective behaviours (`01` §0).
 
 ---
 
@@ -93,7 +90,7 @@ Every connector resolves to the **same durable unit — a Task** — enqueued in
 pool, never run directly (`06 §6`). One pool, many provenances; `task.source`
 already carries `connector:<name>` / `trigger:<id>` (`01 §8.7`).
 
-### 3.2 Connector behaviour [TARGET]
+### 3.2 Connector behaviour
 
 ```elixir
 @behaviour Mitos.Connector
@@ -214,7 +211,7 @@ run/Task lifecycle Effect (`01 §8.2`).
 | `reply` | round-trip back to the originating connector | reply in the same Slack thread / email (§5.4) |
 | `web` | the web app surface | live trace + the deliverable page (`11 §4`, `11 §5`) |
 
-### 5.3 Sink behaviour [TARGET]
+### 5.3 Sink behaviour
 
 ```elixir
 @behaviour Mitos.Sink
@@ -283,21 +280,11 @@ reply or a webhook POST uses.
 
 ---
 
-## 8. Status, scope, open questions
+## 8. Scope and open questions
 
-**[TARGET] — the whole plane is new.** Suggested first cut (local, T1):
-`webhook` + `manual`/`web` connectors; `notify`/`web`/`deliver` sinks; `explicit`
-selection. `chat`/`email`/`calendar` connectors and `smart` selection follow.
-Remote T2 delivery context (E2B/Daytona) is a later extension (`05 §3`,
-unimplemented today — `11 §10`).
+The I/O plane's scope is exactly what a **paid job** needs: `webhook` + `manual`/`web` ingress and `reply`/`deliver`/`notify`/`web` sinks around the `08` flow. Chat/email/calendar connector breadth is commodity (Eve ships channels free, `13 §1`) and is built only against a paying buyer's concrete demand, never for parity. Remote T2 delivery context runs through the T2 `SandboxProvider` (`05 §3`). An imported Eve agent's `channels/*` (`03 §10.1`) maps here as a *binding* (§4), not as new connector code.
 
-**Breadth note (rev. 2026-07-02).** Generic chat-platform connector breadth is
-now commodity: Eve ships channels (Slack out of the box) free (`13 §1`). This
-plane's near-term scope stays exactly what a **paid job** needs — `webhook` +
-`web` ingress and `reply`/`deliver`/`web` sinks around the `08` flow. Chat/email
-breadth is **demand-gated**: built when a design partner's buyers actually
-arrive through it, not for parity. An imported Eve agent's `channels/*`
-(`03 §10.1`) maps here as a *binding* (§4), not as new connector code.
+
 
 | What this plane owns | Delegates |
 |---|---|

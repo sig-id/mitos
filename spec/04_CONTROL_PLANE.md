@@ -1,7 +1,5 @@
 # 04 — Control Plane
 
-Status: draft v0.2 · Date: 2026-06-18
-
 Elaborates `01_ARCHITECTURE` §4 (control model) and §8.1/§8.2 (Decision/Effect
 events). This document fixes the two agentic control layers, the event-sourced
 state they produce, and the markdown pipeline-intent format the orchestrator

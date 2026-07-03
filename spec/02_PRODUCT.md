@@ -1,7 +1,5 @@
 # 02 — Product
 
-Status: draft v0.3 · Date: 2026-07-02
-
 Scope: the product thesis, who it is for, the atomic unit, the business it funds,
 the wedge it must win, and the smallest build that wins it. Vocabulary and
 contracts are fixed by `01_ARCHITECTURE` and are not redefined here. Monetization
@@ -40,7 +38,7 @@ runs, multi-step pipelines — executed in an isolated sandbox, harvested as a d
 evidence bundle and a replayable trace from the event log. The buyer pays for a
 finished job they can inspect, not a turn of conversation.
 
-### Positioning against the framework class (rev. 2026-07-02)
+### Positioning against the framework class
 
 The framework/authoring slot is taken. Eve ("Next.js for agents", `13 §1`)
 occupies it with Apache-2.0 economics and distribution mitos cannot match, and
@@ -201,12 +199,12 @@ Decomposed, every clause is a hard requirement:
 | **machine-fulfilled** | the capability ran in a sandbox; no human in the loop on the happy path | `03`, `04`, `05` |
 | **with proof** | evidence bundle + replayable trace the buyer can inspect | `01 §8.2–8.5`, `04` |
 
-Everything in the MVP exists to make that one sentence true once. Nothing that is
+Everything on the launch path exists to make that one sentence true once. Nothing that is
 not on the path to it is in scope.
 
 ---
 
-## 7. MVP scope
+## 7. Launch scope
 
 The smallest end-to-end path that reaches the success gate — one capability, one
 trivial pipeline, one buyer, one proof:
@@ -220,7 +218,7 @@ capability ──► pipeline ──► sandbox ──► broker ──► harve
   +own keys    composition   of input    policy                  receipt
 ```
 
-| # | MVP must do | Spec |
+| # | The system must | Spec |
 |---|---|---|
 | 1 | author + publish **one** capability (skill+tools+optional data), seller keys held by broker | `03`, `08` |
 | 2 | a buyer hits a **public metered endpoint**, pays (USDC/x402), submits input | `08` |
@@ -230,7 +228,7 @@ capability ──► pipeline ──► sandbox ──► broker ──► harve
 | 6 | **harvest** diff + `RESULT` + artifacts; build the **proof page** from evidence + trace | `01 §8.5`, `04` |
 | 7 | **meter** off the event log; settle; take the facilitator cut | `08` |
 
-### Non-goals for MVP (explicitly out)
+### Non-goals (explicitly out of scope)
 
 - Marketplace, discovery, seller dashboards, ratings — one design partner, no market.
 - Multi-capability pipeline depth, branching, or sophisticated orchestration — 1–2 steps suffice.
@@ -240,7 +238,7 @@ capability ──► pipeline ──► sandbox ──► broker ──► harve
 - Protocol-take settlement (`08`) and the second take lever — primary take only.
 - Polished local-dev DX — secondary mode must *work*, not delight.
 
-The MVP proves the sentence in §6 **once**, not at scale.
+This proves the product sentence (§6) end-to-end; scale is a separate concern (`09 §2`).
 
 ---
 
@@ -251,8 +249,8 @@ The MVP proves the sentence in §6 **once**, not at scale.
 | R1 | **Harness fragility** — coding-agent CLIs change output formats, break, hang | screen-scraping breaks fulfillment silently; buyer gets a bad job | normalized harness adapter contract with structured events; PTY is a *fallback codec*, not the path (`01 §8.6`); harness-switchable mid-step; loop-manager FSM detects stuck/escalate (`04`) |
 | R2 | **Untrusted-workload isolation** — seller capability runs on buyer data; both are untrusted to mitos | a leak or escape ends the business on transaction #1 | trust tier **T2** ⇒ remote µVM (E2B/Daytona), **deny-all egress except broker**, RO snapshot of buyer data, no secrets in env (`01 §6`, `05`) |
 | R3 | **Seller-key custody** — sellers bring provider keys; recipe must stay server-side | a key leak or recipe exfiltration is a breach and a trust collapse | secrets live **only at the broker**; broker attaches/withholds per `egress_policy` + destination and logs each crossing; recipe never enters the buyer-visible surface (`01 §8.5`, `05`, `08`) |
-| R4 | **Cost of LLM verification** — proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); for MVP, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
-| R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (post-gate ordering, `09 §3`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`) — the parts a single-tenant framework structurally cannot retrofit |
+| R4 | **Cost of LLM verification** — proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); at launch, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
+| R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (`09 §2`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`) — the parts a single-tenant framework structurally cannot retrofit |
 
 Cross-cutting: the **event log is the source of truth** (`01 §8.2`) — it is
 simultaneously run state, audit record, the proof page's backing data, and the
@@ -264,9 +262,9 @@ unbuilt while the write side commoditizes.
 
 ---
 
-## 9. Definition of done (MVP)
+## 9. Launch criteria
 
-MVP is done when, with no human on the happy path:
+mitos is launched when, with no human on the happy path:
 
 1. a stranger pays a public metered endpoint for design partner #1's capability;
 2. the capability runs in a T2 sandbox, egress only through the broker;
@@ -274,8 +272,7 @@ MVP is done when, with no human on the happy path:
 4. the event log yields the meter, the settlement, and the facilitator take;
 5. the seller's keys and recipe never left the server-side trust boundary.
 
-One such transaction is the gate. Scale, marketplace, memory, and pipeline depth
-are post-gate and are sequenced in `09_IMPLEMENTATION_PLAN`.
+This is the launch gate (`09 §2`). Scale, marketplace, memory, and pipeline depth are beyond launch.
 
 > **Competitive landscape** is mapped descriptively in `13_COMPETITIVE_LANDSCAPE`
 > (adjacent players, surface overlaps, and where mitos's specified surface is

@@ -1,8 +1,5 @@
 # 12 — Application (Packaging, Manifest, and the Unit of Sale)
 
-Status: draft v0.2 · Date: 2026-07-02 · Ground-up redesign; supersedes v0.1
-(2026-06-24) in place.
-
 The **agentic application** is the *shipping unit* (`11 §2`) — and, post the
 commerce repositioning (`02 §1`), the **unit of sale**: what a developer
 publishes, what a tenant adds, what a seller prices. This document fixes its
@@ -14,7 +11,6 @@ exactly as `03` elaborates the capability manifest (`01 §8.3`).
 
 Where this doc and `01` disagree, `01` wins. Field names from `01 §8` are
 canonical and MUST NOT be redefined here. RFC 2119 keywords are normative.
-Sections are **[TARGET]** unless marked **[I]**.
 
 ---
 
@@ -57,7 +53,7 @@ runs a **pipeline** named by an entrypoint, never a bare capability. The
 simplest valid application is one entrypoint → one single-step pipeline → one
 capability.
 
-**Alignment with `08`.** The facilitator's MVP endpoint
+**Alignment with `08`.** The facilitator's endpoint
 (`/capabilities/{id}/runs`, `08 §8`) is exactly this degenerate form — one
 capability wrapped in a one-step pipeline behind one entrypoint. The general
 published paid surface is an **application entrypoint**; the flow and contracts
@@ -326,7 +322,7 @@ its manifest + pipelines and (lazily) the referenced capability images.
 
 ## 10. Import — an Eve `agent/` becomes an application
 
-`mitos import eve <dir>` **[T]** produces a complete application scaffold.
+`mitos import eve <dir>` produces a complete application scaffold.
 `03 §10.1` owns the capability cut; this section owns the application cut:
 
 | Eve source (`agent/`) | → application |
@@ -368,9 +364,9 @@ The application manifest is **not an authority surface**. Authority stays where
 - **Secrets** never live in the manifest (`01 §8.5`); connector/sink/provider
   credentials are tenant-side (`10 §7`, `08 §3.2`).
 - **Marketplace boundary:** Gentix publish forces T2 (`08 §8`) regardless of
-  the manifest's declared aggregate. **Now:** local T1 (`05 §3`
-  Nucleus/Docker). **Later:** T2 remote (E2B/Daytona) per `09 §3` post-gate
-  ordering (`11 §10`).
+  the manifest's declared aggregate. **At launch:** local T1 (`05 §3`
+  Nucleus/Docker). **Beyond launch:** T2 remote (E2B/Daytona) per `09 §2`
+  (`11 §10`).
 
 ---
 

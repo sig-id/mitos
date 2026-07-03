@@ -1,13 +1,9 @@
 # 03 — Capability
 
-Status: draft v0.3 · Date: 2026-07-02
-
 Elaborates `01_ARCHITECTURE` §5 (the atom), §8.3 (manifest), §8.6 (harness
 adapter). Where this doc and `01` disagree, `01` wins. RFC 2119 keywords are
 normative. Field names come from `01` §8 and MUST NOT be redefined here.
 
-Status legend: **[T]** TARGET (specced, not built) · **[I]** IMPLEMENTED in mitos
-· **[CW]** exists in chief-wiggum today (being replaced/borrowed).
 
 ---
 
@@ -45,8 +41,8 @@ launch. Everything a capability needs to be reasoned about is declared in its
 | *workspace* | the input being worked on | RW, harvested as diff | `/workspace` | §8.5 |
 
 The pillar split maps cleanly onto chief-wiggum's two agent formats: a CW
-`*.md` agent **[CW]** becomes the SKILL pillar (formalized), a CW `*.sh`
-imperative agent **[CW]** becomes one or more typed TOOLS, and DATA is **new** —
+`*.md` agent becomes the SKILL pillar (formalized), a CW `*.sh`
+imperative agent becomes one or more typed TOOLS, and DATA is **new** —
 chief-wiggum has no per-agent persistent corpus.
 
 ---
@@ -64,7 +60,7 @@ markdown** so a deterministic layer can address its sections:
 <!-- @skill:success -->     definition of done + what evidence to emit
 ```
 
-**Anchors are RECOMMENDED, not REQUIRED** (rev. 2026-07-02). A plain markdown
+**Anchors are RECOMMENDED, not REQUIRED**. A plain markdown
 skill in the de-facto cross-vendor skills convention — the format the harness
 vendors seeded and Eve installs from (`13 §1`) — is a valid base skill: it runs
 verbatim, and the §2.1 overlay degrades to document-scope `append`/`prepend`
@@ -108,12 +104,12 @@ run's exact instructions are replayable.
 overlay format and `⊕`. *Producing* overlay entries (mining the verify loop for
 "model M keeps skipping phase 3 → inject a guard") is owned by `04` (verify→
 distill) and `07` (memory). Until a generator exists, every capability runs
-`base ⊕ ∅` and is fully functional. **[T]**
+`base ⊕ ∅` and is fully functional.
 
 > Why a seam, not per-model skills? One model-agnostic base stays authorable and
 > reviewable; adaptations are small, attributable patches that the system can
 > grow automatically without forking the skill. chief-wiggum has no equivalent —
-> its prompts are static markdown with `{{var}}` interpolation only **[CW]**.
+> its prompts are static markdown with `{{var}}` interpolation only.
 
 ---
 
@@ -122,7 +118,7 @@ distill) and `07` (memory). Until a generator exists, every capability runs
 TOOLS are the deterministic code the agent invokes: CLIs, Python, JS, baked into
 the image. **The rules of *when/how* to use a tool live in the SKILL; the *code*
 is deterministic and lives here.** This is the clean refactor of chief-wiggum's
-`*.sh` agents, which tangled imperative logic and orchestration together **[CW]**.
+`*.sh` agents, which tangled imperative logic and orchestration together.
 
 Every tool is **typed** — `name` + I/O schema — so the harness adapter can expose
 it (as native tools or MCP, §8.6) and the substrate can validate calls:
@@ -162,7 +158,7 @@ DATA is mounted RO via a SandboxProvider snapshot or volume (`05`). For T2
 (untrusted) the snapshot is the *only* corpus access and is immutable for the run
 (`01` §6). A capability MAY ship with no DATA. **New vs chief-wiggum** — CW
 agents carry no persistent per-agent data; their only "corpus" is whatever the
-prompt embeds **[CW]**.
+prompt embeds.
 
 ---
 
@@ -190,7 +186,7 @@ manifest.harnesses: [claude-code, codex, gemini-cli]   # capability declares com
   opts into reuse. mitos owns memory (`07`), not the harness.
 - A capability SHOULD declare the harness `capabilities` it relies on
   (`structured_output`, `mcp_tools`, `effort_levels`); the launch policy refuses
-  an incompatible harness rather than degrading silently. **[T]**
+  an incompatible harness rather than degrading silently.
 
 ---
 
@@ -232,7 +228,7 @@ hooks:
   the step's harvest unverified (the orchestrator decides, `04`).
 - Each hook execution is recorded as an Effect (`commit`, `artifact_registered`,
   `egress_*`, …). chief-wiggum performs the analogous git-commit-on-behalf and
-  prereq checks imperatively inside `agent_run`/lifecycle hooks **[CW]**; here
+  prereq checks imperatively inside `agent_run`/lifecycle hooks; here
   they are first-class, typed, and logged.
 
 ---
@@ -242,7 +238,7 @@ hooks:
 A capability does **not** emit a rigid control token. It emits a **soft result
 signal + evidence**; the orchestrator interprets `result + evidence + trace`
 (`01` §5). This deliberately replaces chief-wiggum's
-`gate_result: PASS|FAIL|FIX|SKIP` and its fixed result→jump table **[CW]**
+`gate_result: PASS|FAIL|FIX|SKIP` and its fixed result→jump table
 (AGENT_SPEC §7.2), which forced every agent into four buckets and hard-coded the
 next move.
 
@@ -363,7 +359,7 @@ egress MUST be rejected at launch, not at runtime.
 
 ## 10. Authoring guide — porting chief-wiggum's `software-engineer`
 
-How to write a capability, worked against CW's `software-engineer.md` **[CW]**.
+How to write a capability, worked against CW's `software-engineer.md`.
 
 **Step 1 — Split the CW agent into pillars.** CW's `software-engineer.md` is one
 markdown file mixing role, procedure, git rules, and a PASS/FAIL gate. Decompose:
@@ -395,7 +391,7 @@ All PRD items done AND build/tests pass. Emit RESULT {signal, evidence:[diff, te
 
 **Step 3 — Promote imperative `.sh` logic to typed TOOLS.** CW's
 `git-conflict-resolver.sh` `_auto_resolve_trivial_conflicts` (accept-theirs for
-lockfiles, then stage) **[CW]** becomes a deterministic tool
+lockfiles, then stage) becomes a deterministic tool
 `resolve_lockfile_conflicts` (§3). The *rule* "resolve stale conflict markers
 immediately" stays in `@skill:rules`; the *mechanism* is the tool.
 
@@ -406,7 +402,7 @@ fixed PASS→next / FAIL→abort table.
 
 **Step 5 — Optional DATA.** software-engineer usually needs none. A variant could
 mount a `/data` snapshot of the project's API docs (CW does this ad hoc via
-`wdoc`/`.ralph/docs` **[CW]** — here it is a declared RO snapshot, §4).
+`wdoc`/`.ralph/docs` — here it is a declared RO snapshot, §4).
 
 **Step 6 — Hooks + manifest.** `hooks.pre`: create git worktree/branch.
 `hooks.post`: run the build/test gate (`on_fail: block`) then commit
@@ -417,7 +413,7 @@ The capability is now harness-agnostic, hermetic, replayable, meterable, and —
 unlike the CW agent — improvable without editing the base skill, via the §2.1
 adaptation seam.
 
-### 10.1 Importing an Eve `agent/` directory **[T]** (rev. 2026-07-02)
+### 10.1 Importing an Eve `agent/` directory
 
 The same decomposition applies to the Eve convention (`13 §1`), the emerging
 de-facto authoring shape. This is the funnel move of `02 §1`: every Eve author

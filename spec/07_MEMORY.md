@@ -1,7 +1,5 @@
 # 07 — Memory
 
-Status: draft v0.2 · Date: 2026-06-18
-
 Conforms to `01_ARCHITECTURE` (the constitution). This doc owns the **cross-run
 knowledge service**: OS-owned, multi-tenant, two-track memory with write-time
 contradiction-supersession. It is the substrate hook named in `01 §3` (SUBSTRATE:

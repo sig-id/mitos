@@ -1,9 +1,5 @@
 # 01 — Architecture (Constitution)
 
-Status: draft v0.2 · Date: 2026-06-18 · Supersedes the entire prior `spec/` set
-(old `00_ARCHITECTURE`, `01_PRODUCT`, `02_HLD`, `03_NUCLEUS_INTEGRATION`,
-`05_LAYERING`, `06_AUTHORITY_CALLBACK_PLANE`, `07_GENTIX_FACILITATOR`).
-
 This document is the constitution. It fixes the vocabulary, the layer model, the
 control model, and the **canonical contracts** (§8) that every other spec in this
 directory MUST conform to. Where another doc and this one disagree, this one wins.
@@ -12,22 +8,26 @@ RFC 2119 keywords (MUST / SHOULD / MAY) are normative.
 
 ---
 
-## 0. What this redesign changed
+## 0. Scope & project boundary
 
-Mitos was previously specced as a *deterministic control plane executing an
-explicit, pre-declared run state machine* over a Zig transport engine. This
-redesign — informed by a study of chief-wiggum (a Ralph-Wiggum orchestrator) —
-keeps the deterministic-substrate thesis but moves the *control decisions* into
-an agent, and relocates determinism into **recording and limits** rather than
-**pre-authored transitions**. It also makes mitos **cloud-first and
-multi-tenant**, and elevates a packaged **capability** to the atomic unit of both
-execution and monetization.
+**mitos is the BEAM/Elixir control plane.** It owns the event log, the folds
+over it, the orchestrator and loop-manager, the run lifecycle, the egress
+broker, metering, proof, settlement, the facilitator, the web surfaces, and the
+CLI. Everything outside that boundary is an **external product** that mitos
+integrates with through a defined seam; mitos neither contains nor builds it:
 
-The one-line thesis:
+| External product | Seam (`§8`) | Role |
+|---|---|---|
+| **the engine** — a harness-execution product (the Zig-based one, if retained) | `Harness` adapter (`§8.6`) + transport | launches a harness in a sandbox and normalizes its output into the event stream. A structured-output harness (e.g. Claude Code `--output-format stream-json`) needs no engine; the engine is required only where PTY/transport complexity demands it. |
+| **Nucleus** — a gVisor-class sandbox shipped as OCI containers | `SandboxProvider` (`§8.4`) | T2 isolation. mitos ships its own in-process `Provider.Local` for T0/T1; Nucleus (or E2B/Daytona) is the external T2 provider. |
+| **sigid** — the identity provider | identity/assertion intake | every human identity (operator/seller/buyer) is asserted by sigid; mitos consumes assertions and never runs its own IdP. |
 
-> **Mitos is a cloud-first, multi-tenant substrate that runs packaged
+A seam is a `@behaviour` with normative callbacks. A second implementation of
+anything is a new behaviour impl, never an inline branch.
+
+> **Thesis.** mitos is a cloud-first, multi-tenant substrate that runs packaged
 > capabilities through agent-driven pipelines, where an agent decides policy and
-> deterministic code records every decision and enforces every limit.**
+> deterministic code records every decision and enforces every limit.
 
 ---
 
@@ -119,6 +119,19 @@ Effect commits, mitos recovers without guessing — the Decision is on the log, 
 Effect is not, so the action is simply re-driven. Reasoning is stochastic; the
 record of *what was decided and done* is total.
 
+**Normative invariants (load-bearing — violating any defeats the architecture):**
+
+- The event log is the **only** source of truth for run state. Processes MAY
+  cache a fold; they MUST NOT own state the log cannot reproduce. Any answer
+  returned to a caller MUST be recomputable from `fold(events)` with no process
+  running.
+- A new `Effect` subtype MUST be consumed by every fold reader in the same
+  change — in mitos: `Run.State`, `Meter`, and `Proof` (`08 §2`). A reader that
+  silently ignores a new Effect is a defect, never a deferral.
+- Redaction is enforced at the **data layer**, never the view layer: a
+  commercial cut is a fold over a strict Effect subset; `rationale` and harness
+  identity are physically incapable of reaching it (`08 §2`, `11 §5`).
+
 Two agentic control layers, no third:
 
 - **Orchestrator** (cross-step): adapts the pipeline, handles stuck/edge cases,
@@ -158,11 +171,13 @@ eligible provider set + network/mount posture.
 
 ## 7. Runtime ownership
 
-| BEAM/Elixir (control plane — owns all orchestration) | Zig (engine — local only) | Sandbox (per run) |
+| mitos — BEAM/Elixir control plane (this project) | External products (integrated via seams) | Sandbox interior (per run) |
 |---|---|---|
-| orchestrator agent host, loop-manager FSM, event log/trace writer, policy compiler, **egress credential broker**, **remote** provider clients (E2B/Daytona over HTTP/WS), scheduling/services, memory, multi-tenancy/orgs/keys/metering, web/WS UI | **local** transports (pty/stdio), terminal codec (libghostty-vt), raw spool + first-pass redaction, local sandbox launch (Nucleus/Docker), Tier-2 synchronous enforcement | harness process + capability image + RO data + workspace + (optional MCP tool relay) |
+| orchestrator + loop-manager, event-log writer, policy compiler, **egress broker**, scheduling/services, memory, multi-tenancy/keys/metering, web + CLI | **the engine** (transport/terminal/local launch; `§8.6`), **Nucleus / E2B / Daytona** (sandbox providers; `§8.4`), **sigid** (identity) | harness process + capability image + RO data + workspace + (optional MCP tool relay) |
 
-Languages: Elixir/BEAM + Zig only. No Go, no Rust, no TypeScript.
+mitos is Elixir/BEAM. The engine and sandbox providers are external products
+with their own implementation-language choices (the engine may be Zig); mitos
+constrains only the seam, not their language.
 
 ---
 
@@ -264,8 +279,14 @@ hermeticity   : redirect/neutralize native cross-run memory (HOME, config, sessi
 capabilities  : { structured_output, mcp_tools?, sessions?, effort_levels, ... }
 ```
 
-This supersedes the old PTY/`claude_log` screen-scraping path: structured
-observation is re-specced per harness generation; PTY is a fallback codec.
+**Normative posture.** The harness is observed through its **structured
+output**, drained to completion per iteration (fire-and-drain). Interactive PTY
+steering of a live agent is **out of scope**: a prior implementation centered on
+a long-lived interactive PTY session and it did not compose with
+audit/proof/metering — do not reintroduce it. The `steer` callback is reserved
+as a seam for future mitos-initiated control, not a live-conversation channel.
+PTY survives only as a codec of last resort for harnesses with no structured
+output.
 
 ### 8.7 Task (work-pool unit — elaborated in `06`)
 
@@ -364,6 +385,15 @@ entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
 9. Determinism where the space is small, agency where it is large.
 10. Verify cheaply and tiered; reuse verification as the self-improvement signal.
 11. UI, CLI, API, and automation call the same backend operations.
+12. **Thin kernel, seam-first.** The substrate owns the log and folds; every
+    pluggable concern is a `@behaviour` (`§8.4`, `§8.6`, orchestrator policy).
+    No second implementation lives as an inline branch.
+13. **Cohesion over accumulation.** A module owns one concern and stays small
+    enough to hold in the head. (A prior implementation's 2.7k-line session
+    module was a defect, not a stage.)
+14. **Errors are values.** Control flow uses `{:ok,_}|{:error,_}` and `with`;
+    `raise` is reserved for genuinely unreachable states. (A prior
+    implementation's ~90 `raise`s were a defect.)
 
 ---
 
@@ -372,7 +402,7 @@ entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
 | Doc | Scope |
 |---|---|
 | `01_ARCHITECTURE` (this) | Constitution: vocabulary, layers, control model, canonical contracts |
-| `02_PRODUCT` | Thesis, users, multi-tenant framing, what mitos is/isn't, MVP scope |
+| `02_PRODUCT` | Thesis, users, multi-tenant framing, what mitos is/isn't, launch scope |
 | `03_CAPABILITY` | The capability: pillars, per-model skill seam, manifest, hooks, result+evidence, authoring |
 | `04_CONTROL_PLANE` | Orchestrator + loop-manager, Decision/Effect schema, resume/replay, pipeline-in-markdown, verify+distill |
 | `05_COMPUTE_PLANE` | SandboxProvider, trust tiers, providers, authority boundary (inject/broker/harvest), hermeticity |

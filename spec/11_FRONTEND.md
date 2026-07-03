@@ -1,23 +1,16 @@
 # 11 — Frontend (Surfaces as Readers of the Log)
 
-Status: draft v0.2 · Date: 2026-07-02 · Ground-up redesign; supersedes v0.1
-(2026-06-24) in place.
-
 Scope: **how mitos is represented to a user and how it should feel** — the
 surfaces, the journeys, and the altitude of platform involvement. Functionality
 is fixed by `01`–`08` and the I/O plane (`10`); this doc defines no new
 canonical contracts. Where this doc and `01` disagree, `01` wins. RFC 2119
 keywords are normative.
 
-Sections are **[TARGET]** unless marked **[I]**. The current Svelte "Operations
-Console" (`web/`) is a 1:1 projection of backend endpoints and is **superseded**
-by this spec.
-
 ---
 
 ## 1. First principles
 
-v0.1 organized the frontend by screens. This redesign derives it from five
+The frontend derives from five
 principles, each anchored in a contract that already exists:
 
 1. **A surface is a reader.** The frontend never invents state: every screen is
@@ -27,8 +20,7 @@ principles, each anchored in a contract that already exists:
 2. **Personas follow the money.** The product's people are `02 §3`'s: the
    **seller** (authors, publishes, prices, attributes), the **buyer** (pays for
    a completed job), and the **operator** (runs the stack for themself — the
-   secondary local mode, and the seller at work). v0.1's "consumer/developer"
-   split modeled a framework audience; a commerce layer has counterparties.
+   secondary local mode, and the seller at work). a commerce layer has counterparties, not a framework audience.
 3. **Jobs, not sessions** (`02 §1`). Every surface points at a deliverable:
    watching is *progress toward completion*; the terminal screen is *artifacts
    + proof*; nothing is chat-shaped. Free-form intent enters only where an
@@ -75,7 +67,7 @@ importing one (`12 §10`); the frontend lists only what the tenant has added.
 |---|---|---|---|
 | **Seller** | own tenant; cross-tenant reader of their sales | import/scaffold → author in own tools → test → publish → price → attribute | §6 → §7 |
 | **Buyer** | stranger; pays per job | order (entrypoint form / x402) → watch (commercial cut, read-only) → receive the deliverable | §4 (buyer cut), §5 |
-| **Operator / dev** | trusted, local (T1) | add app → run → watch (full) + steer → report; wire I/O (`10 §4`); fleet post-gate | §4, §5, §8 |
+| **Operator / dev** | trusted, local (T1) | add app → run → watch (full) + steer → report; wire I/O (`10 §4`); fleet post-launch | §4, §5, §8 |
 
 Load-bearing rule: **seller and buyer never share a live surface.** They meet
 only through cuts of the log (`08 §2`, invariant 3): the buyer never sees the
@@ -211,17 +203,17 @@ What the seller gets after the freeze:
   `capability_id`/`app_id`, own-key spend (`budget_charged` on their key),
   result signals / wall-time / crossing counts per run, and version-vs-version
   comparison — content-addressing makes digests directly comparable.
-- **No live view of buyer runs** (§3). Dispute-grade access is post-gate
+- **No live view of buyer runs** (§3). Dispute-grade access is post-launch
   (`08 §6` open question).
-- **MVP cut** (`09 §3`): publish CLI + payout config + a flat revenue list. The
+- **Launch scope** (`09 §2`): publish CLI + payout config + a flat revenue list. The
   gate needs one seller to see one settled dollar — not a dashboard.
 
 ---
 
-## 8. Surface — Operate: the Fleet [post-gate, demand-gated]
+## 8. Surface — Operate: the Fleet [post-launch, demand-gated]
 
 The operate layer is **I/O + services made visible**, and it is explicitly
-deferred: it renders `10` and `06`, and `09 §3` demand-gates that breadth (Eve
+deferred: it renders `10` and `06`, and `09 §2` demand-gates that breadth (Eve
 ships fleet-adjacent surfaces free — `13 §1`). When built, it renders:
 
 - **Applications & pipelines** the tenant added (§2), each with its I/O
@@ -252,13 +244,11 @@ default for a phase, never capability gating.
 
 ---
 
-## 10. v1 scope & status
+## 10. Scope
 
-| Now (v1) | Gate path (`08 §9`) | Post-gate (`09 §3`) |
-|---|---|---|
-| local T1 sandboxes (Nucleus/Docker, `05 §3`) | one Gentix endpoint, x402, proof, settle | remote T2 (E2B/Daytona) |
-| dir-based dev; OCI on publish (§6) | thin Publish & Attribute (§7) | Fleet (§8), attribution depth |
-| `webhook` + `manual`/`web` I/O, `explicit` selection (`10 §8`) | buyer deliverable page (§5, commercial cut) | `chat`/`email` connectors, `smart` selection |
+The frontend owns the **read surfaces**: Run & Watch (two zooms + cuts, §4), the Deliverable (report ⇄ proof, §5), Author & Test (§6), and Publish & Attribute (§7). The **Fleet** operate surface (§8) is demand-gated — built when operating many sellers requires it, not for parity. Web surfaces are server-rendered folds over the log with no client framework; identity is provided by **sigid** (`01` §0).
+
+
 
 ---
 
@@ -268,7 +258,7 @@ default for a phase, never capability gating.
 |---|---|
 | the five principles; the persona × surface map; the two-zoom watch and its cuts; the one-renderer/two-cuts rule; CLI/web/URL primacy | the event log + control model (`01`, `04`); the read-model contract (`08 §2`); the capability contract (`03`) |
 | the author altitude (thin: contract + scaffold + import + test + publish) | sandbox/test execution (`05`); verify/judge (`04 §10`); import mappings (`03 §10.1`, `12 §10`) |
-| Fleet *presentation* (deferred) | I/O mechanism (`10`); pools/services (`06`); metering/settlement/proof folds (`08`) |
+| Fleet *presentation* (demand-gated) | I/O mechanism (`10`); pools/services (`06`); metering/settlement/proof folds (`08`) |
 
 ---
 
@@ -278,7 +268,7 @@ default for a phase, never capability gating.
    Even the commercial cut's timing/destination pattern can leak method.
 2. **Inner-trace redaction for imported capabilities:** the dev cut of a
    T2-default import (`03 §10.1`) run locally — full spool or redacted?
-3. **Attribution depth at MVP:** flat list first; charts only when a seller
-   asks (`09 §3`).
+3. **Attribution depth:** flat list first; charts only when a seller
+   asks (`09 §2`).
 4. **Web/CLI parity surface:** which operate actions need CLI parity for
    headless automation.

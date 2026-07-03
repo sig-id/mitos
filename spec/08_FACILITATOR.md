@@ -1,21 +1,18 @@
 # 08 — Gentix Facilitator
 
-Status: draft v0.3 · Date: 2026-07-02
-
 This is the business/monetization spec. Mitos (the substrate, `01_ARCHITECTURE`)
 is the engine; **Gentix is the hosted, multi-tenant facilitator that runs on it**
 and is the revenue path for ~2 years. It fixes how a packaged capability becomes a
 metered paid endpoint, how charges are derived off the event log (01 §8.2), how
-isolation, key custody, and settlement work, and what the MVP must do to clear the
+isolation, key custody, and settlement work, and what the system must do to clear the
 success gate. It defines no new contracts — it composes `01`'s. Where this and
 `01` disagree, `01` wins.
 
-Organizing principle (v0.3, restructured around it): **Gentix is the read side of
+Organizing principle: **Gentix is the read side of
 the execution log, made into a business** (`02 §1`). The substrate writes the log;
 Gentix (a) guarantees the write-side conditions that make the log credible between
 strangers (§3), (b) sells reads of it — the meter (§4), the proof (§5), attribution
-(§6) — and (c) settles the meter over an external rail (§7). v0.2's content is
-preserved; sections are renumbered to match this shape.
+(§6) — and (c) settles the meter over an external rail (§7).
 
 RFC 2119 keywords (MUST / SHOULD / MAY) are normative.
 
@@ -128,6 +125,9 @@ SELLER tenant                         BUYER tenant
   buyer tenants.
 - **Per-tenant budgets** (`01 §8.1` `budget`) cap blast radius: a buyer's prepaid
   amount is the run's hard ceiling; the orchestrator MUST `abort` on exhaustion.
+- **Identity is external.** Buyer, seller, and operator identity are asserted by
+  **sigid** (the external IdP, `01` §0); mitos consumes assertions and never
+  authenticates users itself.
 
 ### 3.2 Key custody — seller BYO keys, broker-only injection
 
@@ -275,13 +275,13 @@ The seller's read is the same log, cut the other way:
   (`01 §8.1`) for the seller's own capability's runs — the buyer's proof redacts
   it (§5); the seller's read includes it, subject to the open question below.
 
-**Open question (flagged v0.3) — symmetric redaction at audit grade.**
+**Open question — symmetric redaction at audit grade.**
 `rationale` and tool output may quote the buyer's private inputs; an unrestricted
 seller read of audit-grade traces would leak buyer data in the direction §2's
 invariant 3 forbids. Likely resolution: the default attribution read excludes raw
 buyer content; audit grade is reachable only through dispute proceedings or with
-buyer consent. MUST be decided before open seller onboarding (post-gate,
-`09 §3`).
+buyer consent. MUST be decided before open seller onboarding (post-launch,
+`09 §2`).
 
 ---
 
@@ -357,9 +357,9 @@ she lacks machine fulfillment. That gap is exactly Gentix.
 transaction, with proof.* Not a marketplace, not throughput — one end-to-end
 dollar that the machine, not the human, earned.
 
-MVP must do exactly this end-to-end, and no more:
+The system must do exactly this end-to-end, and no more:
 
-| MVP must-have | Spec owner |
+| Must-have | Spec owner |
 |---|---|
 | package her workflow as **one** T2 capability (skill+tools, optional RO brand data) | `03`, `01 §5/§8.3` |
 | publish **one** Gentix endpoint, **flat** price | this §8; `06` |
@@ -396,7 +396,7 @@ The pivot backlog, each item mapped to the spec/section that owns the mechanism
 | buyer delivery + proof | harvest `05`; log `01 §8.2` | §5 |
 | seller attribution / audit-grade access | log `01 §8.2`; identity `03 §9` | §6 |
 | compute-cost metering | `capability_finished` `01 §8.2` | §4.2 |
-| build sequencing | `09_IMPLEMENTATION_PLAN` | §9 (MVP cut) |
+| system decomposition | `09_IMPLEMENTATION_PLAN` | §1–§2 |
 
 Nothing here requires a new canonical contract. x402/USDC settlement is the only
 genuinely external dependency; everything else is a fold, a policy, or a
