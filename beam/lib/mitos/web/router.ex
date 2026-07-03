@@ -1,21 +1,378 @@
 defmodule Mitos.Web.Router do
   @moduledoc """
-  HTTP API. UI, CLI, API, and automation MUST call the same backend operations
-  (01 §10.11) — this router is a thin adapter over `Mitos.Facilitator`,
-  `Mitos.Run`, and the read models (08 §2). Placeholder until the facilitator
-  slice (task 8) fills it in.
+  The HTTP surface. UI, CLI, API, and automation MUST call the same backend
+  operations (01 §10.11) — every handler here is a thin adapter over
+  `Mitos.Facilitator`, `Mitos.Run`, and the log's read models (08 §2); nothing
+  is computed here that the CLI can't reach by the same function calls.
+
+  The buyer surface is the Gentix-compliant endpoint (08 §8):
+  `POST /capabilities/{id}/runs` with x402 admission — no payment ⇒ 402 with a
+  quote; verified payment ⇒ the run. Delivery is `GET .../deliverable` +
+  `GET .../proof` (08 §5).
   """
   use Plug.Router
 
+  alias Mitos.{Catalog, Facilitator, Proof, Run}
+  alias Mitos.Web.Pages
+
   plug(:match)
-  plug(Plug.Parsers, parsers: [:json], json_decoder: Mitos.JSON)
+  plug(Plug.Parsers, parsers: [:json, :urlencoded], json_decoder: Mitos.JSON, pass: ["*/*"])
   plug(:dispatch)
 
   get "/health" do
-    send_resp(conn, 200, Mitos.JSON.encode!(%{status: "ok"}))
+    json(conn, 200, %{status: "ok"})
+  end
+
+  # --- the web surfaces (11): server-rendered readers of the log ---
+  #
+  # Identity is a mock role cookie (operator | seller | buyer) standing in for
+  # an IdP. The role selects navigation and the redaction cut (08 §2); buyer
+  # proof/watch URLs stay reachable without sign-in — "buy is a URL, no
+  # account" (11 §9), and those pages are redacted by construction.
+
+  # The customer-facing site (02/08 told to the counterparties) — same BEAM,
+  # same brand as the console.
+  get "/" do
+    html(conn, 200, Mitos.Web.Landing.page())
+  end
+
+  get "/web/login" do
+    html(conn, 200, Pages.login())
+  end
+
+  get "/web/login/:role_name" when role_name in ~w(operator seller buyer) do
+    conn
+    |> put_resp_cookie("mitos_role", role_name, max_age: 30 * 24 * 3600, http_only: true)
+    |> put_resp_header("location", landing(role_name))
+    |> send_resp(303, "")
+  end
+
+  get "/web/logout" do
+    conn
+    |> delete_resp_cookie("mitos_role")
+    |> put_resp_header("location", "/web/login")
+    |> send_resp(303, "")
+  end
+
+  get "/web" do
+    case role(conn) do
+      "operator" -> html(conn, 200, Pages.dashboard("operator"))
+      nil -> redirect(conn, "/web/login")
+      other -> redirect(conn, landing(other))
+    end
+  end
+
+  get "/web/apps" do
+    require_role(conn, ["operator"], fn r -> html(conn, 200, Pages.apps(r)) end)
+  end
+
+  get "/web/apps/:app_id/entrypoints/:ep_id" do
+    require_role(conn, ["operator"], fn r ->
+      case Pages.order_form(app_id, ep_id, r) do
+        {:ok, page} -> html(conn, 200, page)
+        :not_found -> not_found_page(conn, r, "no such entrypoint")
+      end
+    end)
+  end
+
+  # The order form maps onto the same backend op the CLI uses (01 §10.11):
+  # entrypoint → run (12 §4).
+  post "/web/apps/:app_id/entrypoints/:ep_id/run" do
+    require_role(conn, ["operator"], fn r ->
+      with app when not is_nil(app) <- Catalog.get_app(app_id),
+           ep when not is_nil(ep) <- Mitos.App.Manifest.entrypoint(app, ep_id),
+           pipeline when not is_nil(pipeline) <- Mitos.App.Manifest.pipeline(app, ep.pipeline) do
+        p = conn.body_params
+
+        inputs =
+          case Mitos.JSON.decode(p["inputs"] || "{}") do
+            {:ok, %{} = m} -> m
+            _ -> %{}
+          end
+
+        parameters =
+          for {"param_" <> name, v} <- p, into: %{}, do: {name, v}
+
+        workspace = if p["workspace"] in [nil, ""], do: nil, else: p["workspace"]
+
+        {:ok, run_id} =
+          Run.start_run(
+            tenant: %{"org" => "local", "project" => app.name},
+            pipeline: pipeline.body,
+            capabilities: Map.new(app.capabilities, fn c -> {c.as, Path.expand(c.ref, app.dir)} end),
+            workspace: workspace,
+            inputs: inputs,
+            parameters: parameters
+          )
+
+        redirect(conn, "/web/runs/#{run_id}")
+      else
+        _ -> not_found_page(conn, r, "no such entrypoint")
+      end
+    end)
+  end
+
+  # The storefront is public — buy is a URL (11 §9).
+  get "/web/capabilities" do
+    html(conn, 200, Pages.capabilities(role(conn)))
+  end
+
+  get "/web/capabilities/:id" do
+    case Pages.buy(id, role(conn)) do
+      {:ok, page} -> html(conn, 200, page)
+      :not_found -> not_found_page(conn, role(conn), "not published")
+    end
+  end
+
+  get "/web/attribution" do
+    require_role(conn, ["seller", "operator"], fn r ->
+      html(conn, 200, Pages.attribution(r))
+    end)
+  end
+
+  get "/web/runs/*path" do
+    r = role(conn)
+
+    result =
+      case Enum.reverse(path) do
+        # dev-cut pages: operator only (the recipe side of the cut)
+        [stage, "trace" | rid] ->
+          if r == "operator", do: Pages.trace(rejoin(rid), stage, r), else: {:redirect, "/web/login"}
+
+        ["report" | rid] ->
+          if r == "operator",
+            do: Pages.report(rejoin(rid), :dev, r),
+            else: {:redirect, "/web/runs/#{rejoin(rid)}/proof"}
+
+        # commercial-cut pages: public by URL — redacted by construction (08 §5)
+        ["proof" | rid] ->
+          Pages.report(rejoin(rid), :commercial, r)
+
+        ["watch" | rid] ->
+          Pages.watch(rejoin(rid), :commercial, r)
+
+        _rid ->
+          run_id = Enum.join(path, "/")
+
+          if r == "operator",
+            do: Pages.watch(run_id, :dev, r),
+            else: {:redirect, "/web/runs/#{run_id}/watch"}
+      end
+
+    case result do
+      {:ok, page} -> html(conn, 200, page)
+      {:redirect, to} -> redirect(conn, to)
+      :not_found -> not_found_page(conn, r, "no such run")
+    end
+  end
+
+  # --- catalog (public view — never the recipe, 08 §1) ---
+
+  get "/capabilities" do
+    caps =
+      for {id, m} <- Catalog.capabilities() do
+        offer = Catalog.get_offer(id)
+
+        %{
+          capability_id: id,
+          name: m.name,
+          version: m.version,
+          trust_tier: m.trust_tier,
+          price_usd: offer && offer.price_usd
+        }
+      end
+
+    json(conn, 200, %{capabilities: caps})
+  end
+
+  # --- the paid endpoint (08 §7/§8) ---
+
+  post "/capabilities/:id/runs" do
+    case List.first(get_req_header(conn, "x-payment")) do
+      nil ->
+        case Facilitator.quote(id) do
+          {:ok, q} ->
+            # HTTP 402 Payment Required + the x402 quote (08 §7).
+            json(conn, 402, %{
+              error: "payment_required",
+              quote_id: q.quote_id,
+              amount_usdc: q.amount_usdc,
+              pay_to: q.pay_to
+            })
+
+          {:error, :not_published} ->
+            json(conn, 404, %{error: "not_published"})
+        end
+
+      payment ->
+        inputs = conn.body_params["inputs"] || conn.body_params["params"] || %{}
+
+        case Facilitator.purchase(id, payment, inputs) do
+          {:ok, admitted} ->
+            json(conn, 202, %{
+              run_id: admitted.run_id,
+              task_id: admitted.task_id,
+              quote_id: admitted.quote_id,
+              status_url: "/runs/#{admitted.run_id}",
+              proof_url: "/runs/#{admitted.run_id}/proof"
+            })
+
+          {:error, reason} ->
+            # Refused admission emits nothing billable (08 §7).
+            json(conn, 402, %{error: "payment_rejected", reason: inspect(reason)})
+        end
+    end
+  end
+
+  # --- local/operator run surface (same op the CLI uses) ---
+
+  post "/runs" do
+    p = conn.body_params
+
+    case Run.start_run(
+           tenant: p["tenant"] || %{"org" => "local", "project" => "default"},
+           pipeline: p["pipeline"] || "",
+           capabilities: p["capabilities"] || %{},
+           workspace: p["workspace"],
+           inputs: p["inputs"] || %{},
+           budget: p["budget"] || %{},
+           scope: p["scope"],
+           trust_tier: p["trust_tier"]
+         ) do
+      {:ok, run_id} -> json(conn, 202, %{run_id: run_id, status_url: "/runs/#{run_id}"})
+      {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
+    end
+  end
+
+  # run_id is tenant-namespaced ("<org>/<id>", 09 §4) — glob and re-join.
+  get "/runs/*path" do
+    case Enum.reverse(path) do
+      ["proof" | rid] ->
+        run_id = rejoin(rid)
+        charge = settled_charge(run_id)
+        json(conn, 200, Proof.render(run_id, charge))
+
+      ["deliverable" | rid] ->
+        json(conn, 200, Proof.deliverable(rejoin(rid)))
+
+      ["events" | rid] ->
+        # Operator/audit read — full fidelity, incl. Decisions (08 §2 audit row).
+        lines = rejoin(rid) |> Mitos.Log.read() |> Enum.map(&Mitos.Event.to_line/1)
+
+        conn
+        |> put_resp_content_type("application/jsonl")
+        |> send_resp(200, Enum.join(lines))
+
+      [sha, "artifacts" | rid] ->
+        case Proof.artifact(rejoin(rid), sha) do
+          {:ok, bytes} ->
+            conn
+            |> put_resp_content_type("application/octet-stream")
+            |> send_resp(200, bytes)
+
+          {:error, _} ->
+            json(conn, 404, %{error: "no_such_artifact"})
+        end
+
+      _rid ->
+        run_id = Enum.join(path, "/")
+        state = Run.status(run_id)
+
+        if state.events == [] do
+          json(conn, 404, %{error: "no_such_run"})
+        else
+          json(conn, 200, %{
+            run_id: run_id,
+            status: state.status,
+            spent: state.spent,
+            stages:
+              Enum.map(state.stage_order, fn id ->
+                s = state.stages[id]
+                %{id: id, status: s.status, signal: s.result && s.result["signal"]}
+              end),
+            settlement: settlement_view(run_id)
+          })
+        end
+    end
   end
 
   match _ do
-    send_resp(conn, 404, Mitos.JSON.encode!(%{error: "not_found"}))
+    json(conn, 404, %{error: "not_found"})
+  end
+
+  # --- helpers ---
+
+  defp rejoin(reversed_segments), do: reversed_segments |> Enum.reverse() |> Enum.join("/")
+
+  defp settled_charge(run_id) do
+    case Facilitator.settlement(run_id) do
+      %{charge: charge} -> charge
+      _ -> nil
+    end
+  end
+
+  defp settlement_view(run_id) do
+    case Facilitator.settlement(run_id) do
+      %{charge: charge, transfers: txs} ->
+        %{
+          delivered: charge.delivered?,
+          buyer_charge_usd: charge.buyer_charge,
+          refund_usd: charge.buyer_refund,
+          transfers: Enum.map(txs, &Map.take(&1, [:kind, :amount, :tx]))
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  defp json(conn, status, body) do
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Mitos.JSON.encode!(body))
+  end
+
+  defp html(conn, status, body) do
+    conn
+    |> put_resp_content_type("text/html")
+    |> send_resp(status, body)
+  end
+
+  # --- mock identity (role cookie; an IdP replaces this seam) ---
+
+  defp role(conn) do
+    conn = fetch_cookies(conn)
+
+    case conn.cookies["mitos_role"] do
+      r when r in ["operator", "seller", "buyer"] -> r
+      _ -> nil
+    end
+  end
+
+  defp require_role(conn, allowed, fun) do
+    case role(conn) do
+      r when r != nil ->
+        if r in allowed, do: fun.(r), else: redirect(conn, landing(r))
+
+      nil ->
+        redirect(conn, "/web/login")
+    end
+  end
+
+  defp landing("operator"), do: "/web"
+  defp landing("seller"), do: "/web/attribution"
+  defp landing("buyer"), do: "/web/capabilities"
+  defp landing(_), do: "/web/login"
+
+  defp redirect(conn, to) do
+    conn |> put_resp_header("location", to) |> send_resp(303, "")
+  end
+
+  defp not_found_page(conn, r, message) do
+    html(
+      conn,
+      404,
+      Mitos.Web.HTML.layout("not found", "<h1>#{Mitos.Web.HTML.esc(message)}</h1>", role: r)
+    )
   end
 end

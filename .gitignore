@@ -10,6 +10,7 @@
 /beam/_build/
 /beam/deps/
 /beam/*.ez
+/beam/mitos
 erl_crash.dump
 /beam/priv/static/cache_manifest.json
 /beam/.runs/

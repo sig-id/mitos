@@ -86,7 +86,7 @@ defmodule Mitos.Broker do
   def handle_call({:request, token, req}, _from, st) do
     case Map.get(st.leases, token) do
       nil ->
-        {:reply, {:denied, effect(:egress_denied, req, reason: "no_lease")}, st}
+        {:reply, {:denied, effect(:egress_denied, nil, req, reason: "no_lease")}, st}
 
       %Lease{} = lease ->
         {:reply, decide(lease, req), st}
@@ -101,18 +101,19 @@ defmodule Mitos.Broker do
     case match_rule(lease.egress_policy, dest) do
       nil ->
         # default deny
-        {:denied, effect(:egress_denied, req, reason: "no_matching_policy", dest: dest)}
+        {:denied, effect(:egress_denied, lease, req, reason: "no_matching_policy", dest: dest)}
 
       rule ->
         if truthy(rule["requires_approval"]) do
-          {:parked, effect(:approval_requested, req, dest: dest, credential: rule["credential"])}
+          {:parked,
+           effect(:approval_requested, lease, req, dest: dest, credential: rule["credential"])}
         else
-          attach_and_forward(rule, req, dest)
+          attach_and_forward(rule, lease, req, dest)
         end
     end
   end
 
-  defp attach_and_forward(rule, req, dest) do
+  defp attach_and_forward(rule, lease, req, dest) do
     credential_id = rule["credential"]
     cred = credential_id && Mitos.Vault.get_by_id(credential_id, dest)
 
@@ -122,7 +123,7 @@ defmodule Mitos.Broker do
     resp = forward(outbound, dest)
 
     {:allowed, resp,
-     effect(:egress_allowed, req,
+     effect(:egress_allowed, lease, req,
        dest: dest,
        credential_id: credential_id,
        status: resp.status,
@@ -216,7 +217,16 @@ defmodule Mitos.Broker do
   defp truthy("true"), do: true
   defp truthy(_), do: false
 
-  defp effect(type, req, extra) do
-    [type: type, dest: req[:dest] || req["dest"]] ++ extra
+  # Effect fields carry the lease's run_id + opening-Decision seq so the caller
+  # (broker listener / provider) can route the crossing to the run's single log
+  # writer with causality intact (04 §6: caused_by = the opening Decision).
+  defp effect(type, lease, req, extra) do
+    lease_fields =
+      case lease do
+        %Lease{run_id: run_id, seq: seq} -> [run_id: run_id, caused_by: seq]
+        nil -> []
+      end
+
+    [type: type, dest: req[:dest] || req["dest"]] ++ lease_fields ++ extra
   end
 end

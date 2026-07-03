@@ -12,8 +12,17 @@ defmodule Mitos.Application do
       Mitos.Vault,
       Mitos.Catalog,
       Mitos.WorkPool,
+      Mitos.Broker.Destinations,
+      Mitos.Settlement.Mock,
+      Mitos.Facilitator,
       {DynamicSupervisor, name: Mitos.Run.Supervisor, strategy: :one_for_one},
+      {Task.Supervisor, name: Mitos.Run.TaskSupervisor},
       {Mitos.Broker, port: Application.fetch_env!(:mitos, :broker_port)},
+      # The broker ingress is loopback-only — the sandbox's single way out (05 §5.3).
+      {Bandit,
+       plug: Mitos.Broker.Listener,
+       ip: {127, 0, 0, 1},
+       port: Application.fetch_env!(:mitos, :broker_port)},
       {Bandit, plug: Mitos.Web.Router, port: Application.fetch_env!(:mitos, :http_port)}
     ]
 
