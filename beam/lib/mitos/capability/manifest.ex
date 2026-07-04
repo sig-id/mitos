@@ -75,7 +75,7 @@ defmodule Mitos.Capability.Manifest do
       image = raw["image"]
       data = normalize_data(raw["data"])
       # For local dev the "image" is the dir; digest over its skill+tools stands
-      # in for an OCI image digest until the build pipeline lands (09 §3, [T]).
+      # in for an OCI image digest until the build pipeline lands (09 §2, [T]).
       image_digest = image || "dir:" <> Mitos.sha256(dir <> skill_sha <> tools_sha)
       data_ref = (data && data.snapshot) || "none"
 

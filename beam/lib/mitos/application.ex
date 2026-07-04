@@ -12,6 +12,11 @@ defmodule Mitos.Application do
       Mitos.Vault,
       Mitos.Catalog,
       Mitos.WorkPool,
+      # I/O plane (10): bindings registry + ingress dedup, plus sink delivery
+      # transports (in-process for the MVP; chat/email breadth is demand-gated).
+      Mitos.IO,
+      Mitos.Sink.Notify.Destination,
+      Mitos.Sink.Reply.Destination,
       Mitos.Broker.Destinations,
       Mitos.Settlement.Mock,
       Mitos.Facilitator,

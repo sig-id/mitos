@@ -25,6 +25,9 @@ defmodule Mitos.Run.State do
             budget: %{tokens: 0, usd: 0.0, wall_ms: 0, remaining: %{}},
             # spent so far, folded from budget_charged Effects
             spent: %{tokens: 0, usd: 0.0, wall_ms: 0},
+            # I/O-plane deliveries (10 §5.3), folded from delivery_* Effects —
+            # consumed here so no Effect subtype is silently ignored (01 §4).
+            deliveries: %{sent: [], failed: []},
             result_ref: nil,
             last_seq: -1
 
@@ -109,6 +112,20 @@ defmodule Mitos.Run.State do
   defp apply_effect(%Effect{type: :approval_resolved}, st),
     do: if(st.status == :parked, do: %{st | status: :running}, else: st)
 
+  # I/O-plane deliveries (10 §5.3) — consumed so the read model is complete.
+  defp apply_effect(%Effect{type: :delivery_sent} = e, st) do
+    entry = %{sink: e.ref["sink"], dest: e.ref["dest"], receipt: e.ref["receipt"], ts: e.ts}
+    %{st | deliveries: %{st.deliveries | sent: st.deliveries.sent ++ [entry]}}
+  end
+
+  defp apply_effect(%Effect{type: :delivery_failed} = e, st) do
+    entry = %{sink: e.ref["sink"], dest: e.ref["dest"], reason: e.payload["reason"], ts: e.ts}
+    %{st | deliveries: %{st.deliveries | failed: st.deliveries.failed ++ [entry]}}
+  end
+
+  # delivery_attempted / signal_received / task_enqueued (and the rest) are
+  # I/O-plane Effects that don't change execution state; they are deliberately
+  # no-ops on the control-plane read model (consumed, not ignored — 01 §4).
   defp apply_effect(_e, st), do: st
 
   defp new_stage(stage_id),

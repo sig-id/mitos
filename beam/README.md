@@ -5,10 +5,10 @@ runs packaged capabilities through agent-driven pipelines, where an agent
 decides policy and deterministic code records every decision and enforces
 every limit (`spec/01_ARCHITECTURE`).
 
-Scope: the **MVP cut of `spec/09_IMPLEMENTATION_PLAN §3`** — one thin vertical
-slice through P0/P1/P2/P3/P7 that reaches the product gate (*one
+Scope: the **launch-path cut of `spec/09_IMPLEMENTATION_PLAN`** — one thin vertical
+slice through the component map (§1) that reaches the launch gate (§2: *one
 stranger-paid, machine-fulfilled transaction, with proof*), plus the seams the
-later phases fill.
+later breadth fills.
 
 ## Run it
 
@@ -27,6 +27,10 @@ mix escript.build
 ./mitos status <run_id>           # fold(events)
 ./mitos proof  <run_id>           # buyer-facing redacted proof (08 §5)
 
+# I/O plane (10): connectors in / sinks out
+./mitos deliver <run_id>          # idempotent egress re-drive for a finished run
+./mitos import eve <agent_dir>     # Eve agent/ → app scaffold (the import funnel, 12 §10)
+
 # hosted surface
 ./mitos serve                     # API on :4646, broker ingress on 127.0.0.1:4647
 ```
@@ -34,6 +38,11 @@ mix escript.build
 The paid endpoint (08 §7/§8): `POST /capabilities/{id}/runs` — no `X-PAYMENT`
 header returns `402` with an x402 quote; a verified payment admits the run.
 Delivery: `GET /runs/{run_id}/deliverable` + `GET /runs/{run_id}/proof`.
+
+The I/O plane (10): `POST /ingest/{org}/{connector}` turns an inbound webhook
+into a Task → run (`signal_received` + `task_enqueued` land on the log);
+`POST /runs/{run_id}/deliver` is the idempotent egress re-drive (sinks fire,
+`delivery_*` Effects appended).
 
 ## The web UI (11)
 
@@ -92,28 +101,39 @@ trace, no harness identity ever reaches them.
 | `Mitos.Proof` | 08 §5 | buyer proof from Effects only (rationale/harness/skill redacted), log-hash anchor |
 | `Mitos.Settlement` (+ `.Mock`) | 08 §7 | x402 rail seam: verify / escrow / split / refund |
 | `Mitos.Facilitator` | 08 §7–§9 | publish → quote → admit → run → settle |
-| `Mitos.Task` / `Mitos.WorkPool` | 01 §8.7, 06 | durable Task intake (thin; pools/deps/disciplines are P5) |
+| `Mitos.Task` / `Mitos.WorkPool` | 01 §8.7, 06 | durable Task intake (thin; pools/deps/disciplines beyond launch) |
 | `Mitos.App.Manifest` | 01 §8.8, 12 | application bundle, content-addressed `app_id`, entrypoints |
-| `Mitos.Web.Router` | 01 §10.11, 08 §8 | HTTP surface = the same backend ops the CLI calls |
+| `Mitos.App` | 12 §4/§5 | app lifecycle: add (activate shipped I/O defaults), validate-before-run entrypoint → run |
+| `Mitos.Import.Eve` | 12 §10, 03 §10.1 | the import funnel: an Eve `agent/` → a draft T2 app scaffold |
+| `Mitos.Connector` (+ `.Webhook`, `.Manual`) | 10 §3 | ingress behaviour + impls: external signal → idempotent intake → Task |
+| `Mitos.Sink` (+ `.Notify`, `.Deliver`, `.Reply`, `.Web`) | 10 §5 | egress behaviour + impls: terminal Effect → redacted render → delivery |
+| `Mitos.IO` (+ `.Binding`) | 10 §2/§4/§7 | bindings registry, ingress intake (dedup + select), idempotent delivery driver |
+| `Mitos.Web.Router` | 01 §10.11, 08 §8, 10 §6 | HTTP surface = the same backend ops the CLI calls; the web app is one connector + sink |
 | `Mitos.CLI` | 11 §7 | escript: run / log / status / proof / publish / serve |
 
 ## Judgment calls carried from the spec
 
-- **Sellers are curated, runs execute at T1 locally** (09 §3, flagged there for
+- **Sellers are curated, runs execute at T1 locally** (09 §2, flagged for
   sign-off). `config :mitos, :marketplace_tier` is the knob; setting it to
   `"T2"` today *fails closed* (no remote provider is registered) and refunds
   the buyer — distrust never relaxes isolation (05 §4). E2B/Daytona providers
-  are P4.
+  are a later `SandboxProvider` impl.
 - **`Provider.Local` is process-level isolation** and is honest about it
   (`capabilities().isolation = :process`), so the policy compiler admits it
-  for T0/T1 only. The Nucleus/gVisor provider (Zig engine) plugs into the same
-  behaviour in P2.
-- **The MVP orchestrator is the deterministic `Linear` policy** behind the
+  for T0/T1 only. The Nucleus/gVisor provider plugs into the same behaviour.
+- **The orchestrator is the deterministic `Linear` policy** behind the
   real seam (`Mitos.Orchestrator.Policy`): one Decision per turn, budget on
   every Decision, append-before-execute. The LLM orchestrator swaps in without
   touching the substrate.
 - **Broker approvals fail closed** (the `approval_requested` Effect is
-  emitted; the interactive approve→forward leg is post-gate).
-- **Deferred wholesale** (per 09 §3): remote providers (P4), work-pool
-  disciplines/deps/invoke/services (P5), memory + self-improvement (P6), image
-  build pipeline, multi-step branching, snapshot resume, frontend (11).
+  emitted; the interactive approve→forward leg is beyond launch).
+- **The I/O plane (10) is in scope** for what a paid job needs: `webhook` +
+  `manual`/`web` ingress and `notify`/`deliver`/`reply`/`web` sinks, all as
+  Effects on the run log (no parallel ledger). Chat/email/calendar connector
+  breadth is commodity and demand-gated (10 §8).
+- **Deferred wholesale** (beyond launch, per 09 §1): remote providers, work-pool
+  disciplines/deps/invoke/services, memory + self-improvement, image
+  build pipeline, multi-step branching, snapshot resume, `smart` selection.
+- **Identity is external.** Buyer/seller/operator identity are asserted by
+  **sigid** (the external IdP, 01 §0, 08 §3.1); mitos consumes assertions and
+  never runs its own IdP. The web role cookie is a mock seat for that seam.

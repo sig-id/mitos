@@ -60,7 +60,10 @@ defmodule Mitos.Run do
   def status(run_id), do: State.fold(run_id)
 
   @doc "Broker listener → run log: append a brokered-crossing Effect (04 §11)."
-  def record_broker_effect(run_id, fields) do
+  def record_broker_effect(run_id, fields), do: append_effect(run_id, fields)
+
+  @doc "I/O plane → run log: append an Effect through the run's single writer (04 §11)."
+  def append_effect(run_id, fields) do
     GenServer.call(via(run_id), {:append_effect, fields})
   catch
     :exit, _ -> :ok
@@ -101,7 +104,8 @@ defmodule Mitos.Run do
 
     srv =
       if events == [] do
-        append_effect(srv, type: :run_started, payload: %{"tenant" => config.tenant})
+        srv = emit_ingress(config, srv)
+        commit_effect(srv, type: :run_started, payload: %{"tenant" => config.tenant})
       else
         srv
       end
@@ -166,7 +170,7 @@ defmodule Mitos.Run do
 
   @impl true
   def handle_call({:append_effect, fields}, _from, srv) do
-    {:reply, :ok, append_effect(srv, fields)}
+    {:reply, :ok, commit_effect(srv, fields)}
   end
 
   def handle_call(:await, from, srv) do
@@ -232,7 +236,7 @@ defmodule Mitos.Run do
 
   defp execute(srv, _state, %Decision{type: :finish} = d) do
     srv =
-      append_effect(srv,
+      commit_effect(srv,
         type: :run_finished,
         caused_by: d.seq,
         payload: %{"status" => "finished", "result_ref" => d.params[:result_ref] || d.params["result_ref"]}
@@ -244,7 +248,7 @@ defmodule Mitos.Run do
 
   defp execute(srv, _state, %Decision{type: :abort} = d) do
     srv =
-      append_effect(srv,
+      commit_effect(srv,
         type: :run_finished,
         caused_by: d.seq,
         payload: %{"status" => "aborted", "cause" => to_string(d.params[:cause] || d.params["cause"] || "unknown")}
@@ -256,7 +260,7 @@ defmodule Mitos.Run do
 
   defp execute(srv, _state, %Decision{type: :request_approval} = d) do
     srv =
-      append_effect(srv,
+      commit_effect(srv,
         type: :approval_requested,
         caused_by: d.seq,
         payload: d.params
@@ -286,7 +290,7 @@ defmodule Mitos.Run do
         )
       )
 
-    append_effect(srv,
+    commit_effect(srv,
       type: :run_finished,
       caused_by: d.seq,
       payload: %{"status" => "aborted", "cause" => to_string(cause), "detail" => detail}
@@ -481,12 +485,33 @@ defmodule Mitos.Run do
 
   # --- log plumbing (single writer) ---
 
+  # I/O-plane ingress provenance (10 §3/§7): a run started from a connector
+  # records the signal + the task it was enqueued from as its opening Effects,
+  # so ingress folds into the same log as everything else (no parallel ledger).
+  defp emit_ingress(%{ingress: nil} = _config, srv), do: srv
+
+  defp emit_ingress(%{ingress: %{connector: name, intake: intake}, task_id: task_id}, srv) do
+    srv
+    |> commit_effect(
+      type: :signal_received,
+      ref: %{"connector" => name},
+      payload: %{"intent" => intake[:intent], "idempotency_key" => intake[:idempotency_key]}
+    )
+    |> commit_effect(
+      type: :task_enqueued,
+      ref: %{"task" => task_id, "source" => "connector:#{name}"},
+      payload: %{"pool" => "io"}
+    )
+  end
+
+  defp emit_ingress(_config, srv), do: srv
+
   defp append(srv, %Decision{} = d) do
     {stamped, writer} = Log.append(srv.writer, d)
     {stamped, %{srv | writer: writer, events: srv.events ++ [stamped]}}
   end
 
-  defp append_effect(srv, fields) do
+  defp commit_effect(srv, fields) do
     fields = Map.new(fields)
 
     effect =
@@ -555,7 +580,7 @@ defmodule Mitos.Run do
           |> Enum.map(& &1.seq)
           |> Enum.max(fn -> nil end)
 
-        append_effect(srv,
+        commit_effect(srv,
           type: :run_finished,
           caused_by: terminal_seq,
           payload: %{"status" => to_string(state.status)}
@@ -571,8 +596,31 @@ defmodule Mitos.Run do
       Mitos.WorkPool.update_status(srv.config.task_id, status)
     end
 
+    # I/O-plane egress (10 §5): if this tenant has output bindings, drive delivery
+    # once the run process has released its writer (single-writer, 01 §4). The
+    # driver is idempotent, so a crash between here and delivery is recovered by
+    # `mitos deliver <run_id>` / resume.
+    maybe_schedule_delivery(srv.config)
+
     Enum.each(srv.waiters, &GenServer.reply(&1, state))
     {:stop, :normal, %{srv | waiters: []}}
+  end
+
+  defp maybe_schedule_delivery(%{run_id: run_id, tenant: tenant}) do
+    if Mitos.IO.any_output_bindings?(tenant) do
+      run_pid = self()
+
+      Task.Supervisor.start_child(Mitos.Run.TaskSupervisor, fn ->
+        ref = Process.monitor(run_pid)
+        receive do
+          {:DOWN, ^ref, _, _, _} -> :ok
+        after
+          30_000 -> :ok
+        end
+
+        Mitos.IO.deliver_for(run_id)
+      end)
+    end
   end
 
   @impl true

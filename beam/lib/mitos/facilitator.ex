@@ -5,7 +5,7 @@ defmodule Mitos.Facilitator do
   admission on x402 payment (§7), execute in the buyer's isolation context
   (§3.1), then settle the meter's fold (§4.2) and render the proof (§5).
 
-  MVP posture (09 §3, flagged judgment call): sellers are operator-vetted and
+  MVP posture (09 §2, flagged judgment call): sellers are operator-vetted and
   runs execute at `config :mitos, :marketplace_tier` (T1, local provider); true
   T2 remote isolation gates OPEN seller onboarding, post-gate (P4). The
   facilitator itself never touches key material — `scope` routes the broker to

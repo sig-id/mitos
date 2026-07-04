@@ -76,38 +76,46 @@ defmodule Mitos.Web.Router do
   end
 
   # The order form maps onto the same backend op the CLI uses (01 §10.11):
-  # entrypoint → run (12 §4).
+  # entrypoint → run (12 §4). Inputs are validated against the entrypoint's
+  # schema before any model spend (12 §4: validate before run).
   post "/web/apps/:app_id/entrypoints/:ep_id/run" do
     require_role(conn, ["operator"], fn r ->
-      with app when not is_nil(app) <- Catalog.get_app(app_id),
-           ep when not is_nil(ep) <- Mitos.App.Manifest.entrypoint(app, ep_id),
-           pipeline when not is_nil(pipeline) <- Mitos.App.Manifest.pipeline(app, ep.pipeline) do
-        p = conn.body_params
+      app = Catalog.get_app(app_id)
 
-        inputs =
-          case Mitos.JSON.decode(p["inputs"] || "{}") do
-            {:ok, %{} = m} -> m
-            _ -> %{}
+      cond do
+        is_nil(app) or is_nil(Mitos.App.Manifest.entrypoint(app, ep_id)) ->
+          not_found_page(conn, r, "no such entrypoint")
+
+        Mitos.App.Manifest.draft?(app, ep_id) ->
+          html(conn, 422, Mitos.Web.HTML.layout("draft entrypoint", "<p>This entrypoint is a draft: its order form must be typed before it can run (12 §10).</p>", role: r))
+
+        true ->
+          p = conn.body_params
+
+          inputs =
+            case Mitos.JSON.decode(p["inputs"] || "{}") do
+              {:ok, %{} = m} -> m
+              _ -> %{}
+            end
+
+          parameters = for {"param_" <> name, v} <- p, into: %{}, do: {name, v}
+          workspace = if p["workspace"] in [nil, ""], do: nil, else: p["workspace"]
+
+          case Mitos.App.run_entrypoint(app, ep_id, %{"org" => "local", "project" => app.name},
+                 %{inputs: inputs, workspace: workspace, parameters: parameters}
+               ) do
+            {:ok, run_id} ->
+              redirect(conn, "/web/runs/#{run_id}")
+
+            {:error, {:missing_required, fields}} ->
+              html(conn, 422, Mitos.Web.HTML.layout("missing inputs", "<p>Missing required inputs: #{Enum.join(fields, ", ")}.</p>", role: r))
+
+            {:error, {:bad_type, type, _v}} ->
+              html(conn, 422, Mitos.Web.HTML.layout("bad input", "<p>An input did not match its declared type (#{type}).</p>", role: r))
+
+            {:error, _} ->
+              not_found_page(conn, r, "no such entrypoint")
           end
-
-        parameters =
-          for {"param_" <> name, v} <- p, into: %{}, do: {name, v}
-
-        workspace = if p["workspace"] in [nil, ""], do: nil, else: p["workspace"]
-
-        {:ok, run_id} =
-          Run.start_run(
-            tenant: %{"org" => "local", "project" => app.name},
-            pipeline: pipeline.body,
-            capabilities: Map.new(app.capabilities, fn c -> {c.as, Path.expand(c.ref, app.dir)} end),
-            workspace: workspace,
-            inputs: inputs,
-            parameters: parameters
-          )
-
-        redirect(conn, "/web/runs/#{run_id}")
-      else
-        _ -> not_found_page(conn, r, "no such entrypoint")
       end
     end)
   end
@@ -241,6 +249,61 @@ defmodule Mitos.Web.Router do
          ) do
       {:ok, run_id} -> json(conn, 202, %{run_id: run_id, status_url: "/runs/#{run_id}"})
       {:error, reason} -> json(conn, 422, %{error: inspect(reason)})
+    end
+  end
+
+  # --- I/O plane (10): connectors in / sinks out ---
+  #
+  # Ingress: a webhook binding turns an inbound POST into a Task + run (10 §3.1).
+  # The web app's order form is the `manual`/`web` connector realization (10 §6);
+  # both reach the same backend op the CLI uses (01 §10.11).
+  post "/ingest/:org/:name" do
+    headers = for {k, v} <- conn.req_headers, into: %{}, do: {k, v}
+
+    delivery = %{
+      body: conn.body_params,
+      headers: headers,
+      id: List.first(get_req_header(conn, "x-mitos-delivery-id"))
+    }
+
+    case Mitos.IO.ingest(%{"org" => org}, name, delivery) do
+      {:ok, run_id} when is_binary(run_id) ->
+        json(conn, 202, %{run_id: run_id, status_url: "/runs/#{run_id}"})
+
+      {:ok, :duplicate} ->
+        json(conn, 200, %{status: "duplicate"})
+
+      {:error, reason} ->
+        json(conn, 422, %{error: inspect(reason)})
+    end
+  end
+
+  # Egress re-drive: idempotent delivery for a finished run (10 §5.3). Safe to
+  # call repeatedly; a delivery_sent keyed (sink, dest) suppresses re-delivery.
+  post "/runs/*path" do
+    case Enum.reverse(path) do
+      ["deliver" | rid] ->
+        run_id = rejoin(rid)
+
+        case Mitos.IO.deliver_for(run_id) do
+          {:ok, results} ->
+            view =
+              Enum.map(results, fn
+                {:sent, sink, dest, receipt} ->
+                  %{status: "sent", sink: sink, dest: dest, receipt: receipt}
+
+                {:failed, sink, dest, reason} ->
+                  %{status: "failed", sink: sink, dest: dest, reason: inspect(reason)}
+              end)
+
+            json(conn, 200, %{run_id: run_id, deliveries: view})
+
+          {:error, reason} ->
+            json(conn, 404, %{error: inspect(reason)})
+        end
+
+      _rid ->
+        json(conn, 405, %{error: "method_not_allowed"})
     end
   end
 

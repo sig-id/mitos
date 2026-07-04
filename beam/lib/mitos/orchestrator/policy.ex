@@ -17,7 +17,7 @@ defmodule Mitos.Orchestrator.Policy do
 
   An LLM-backed orchestrator implements this same behaviour with a model call
   (04 §3.4: one call → one Decision); the MVP ships the deterministic
-  `Linear` policy (09 §3: single linear pipeline, no branching).
+  `Linear` policy (09 §2: single linear pipeline, no branching).
   """
 
   @callback decide(ctx :: map()) :: Mitos.Event.Decision.t()

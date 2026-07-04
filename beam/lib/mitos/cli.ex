@@ -10,6 +10,8 @@ defmodule Mitos.CLI do
       mitos proof <run_id>
       mitos status <run_id>
       mitos publish <cap_dir> --price X --payout ADDR --seller ORG
+      mitos deliver <run_id>                       # idempotent egress re-drive (10 §5.3)
+      mitos import eve <agent_dir> [--out <dir>]   # Eve agent/ → app scaffold (12 §10)
       mitos serve [<cap_dir>...] [--price X --payout ADDR --seller ORG]
                   [--app <app_dir>]...          # register apps for the web UI
   """
@@ -28,7 +30,8 @@ defmodule Mitos.CLI do
           payout: :string,
           seller: :string,
           trust_tier: :string,
-          app: :keep
+          app: :keep,
+          out: :string
         ],
         aliases: [i: :input, e: :entrypoint, w: :workspace]
       )
@@ -40,6 +43,8 @@ defmodule Mitos.CLI do
       ["proof", run_id] -> boot() && print_json(Mitos.Proof.render(run_id, settled(run_id)))
       ["status", run_id] -> boot() && print_status(run_id)
       ["publish", cap_dir] -> boot() && publish(cap_dir, opts)
+      ["deliver", run_id] -> boot() && deliver(run_id)
+      ["import", "eve", agent_dir] -> import_eve(agent_dir, opts)
       ["serve" | cap_dirs] -> serve(cap_dirs, opts)
       _ -> usage()
     end
@@ -133,6 +138,45 @@ defmodule Mitos.CLI do
     })
   end
 
+  # I/O-plane egress re-drive (10 §5.3): fold the log, fire matched sinks,
+  # record delivery_* Effects. Idempotent — safe to re-run.
+  defp deliver(run_id) do
+    case Mitos.IO.deliver_for(run_id) do
+      {:ok, results} ->
+        IO.puts("deliveries for #{run_id}:")
+
+        Enum.each(results, fn
+          {:sent, sink, dest, receipt} ->
+            IO.puts("  + #{sink} -> #{dest}  (#{inspect(receipt)})")
+
+          {:failed, sink, dest, reason} ->
+            IO.puts("  x #{sink} -> #{dest}  (#{inspect(reason)})")
+        end)
+
+      {:error, reason} ->
+        halt("deliver failed: #{inspect(reason)}")
+    end
+  end
+
+  # Eve agent/ → mitos app scaffold (12 §10, 03 §10.1). The output is a draft
+  # app runnable from disk; publish is refused until the order form is typed.
+  defp import_eve(agent_dir, opts) do
+    out = opts[:out] || Path.join(Path.dirname(Path.expand(agent_dir)), "#{Path.basename(agent_dir)}-app")
+
+    case Mitos.Import.Eve.scaffold(agent_dir, out) do
+      {:ok, out_dir} ->
+        app = Mitos.App.Manifest.load!(out_dir)
+
+        IO.puts("imported: #{app.name} → #{out_dir}")
+        IO.puts("  app_id:  #{String.slice(app.app_id, 0, 12)}…")
+        IO.puts("  run it:  mitos run #{out_dir} --entrypoint run -i message=\"hello\"")
+        IO.puts("  NOTE:    entrypoint 'run' is a DRAFT — type the order form before publish (12 §10)")
+
+      {:error, reason} ->
+        halt("import failed: #{inspect(reason)}")
+    end
+  end
+
   defp publish(cap_dir, opts) do
     offer = %{
       price_usd: opts[:price] || halt("--price required"),
@@ -160,7 +204,9 @@ defmodule Mitos.CLI do
 
     for dir <- Keyword.get_values(opts, :app) do
       app = dir |> Path.expand() |> Mitos.App.Manifest.load!()
-      Mitos.Catalog.put_app(app)
+      # Adding an app activates its shipped I/O defaults for the local tenant
+      # (12 §5: ship defaults, bind at install).
+      Mitos.App.add(app, %{"org" => "local"})
       IO.puts("app: #{app.name} (#{String.slice(app.app_id, 0, 12)}…) → /web/apps")
     end
 

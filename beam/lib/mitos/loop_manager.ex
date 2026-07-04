@@ -5,7 +5,7 @@ defmodule Mitos.LoopManager do
   deterministically (04 §4.2), watches deterministic signals (04 §4.3), and
   emits Effects `caused_by` the opening Decision.
 
-  MVP posture (09 §3): **one iteration, no ESCALATE-CHOICE model call** — the
+  MVP posture (09 §2): **one iteration, no ESCALATE-CHOICE model call** — the
   signal computation and the ladder seam are here, but with
   `max_iterations: 1` a step is a single harness invocation followed by
   harvest. The `switch`/`escalate` Decision emission plugs into the same

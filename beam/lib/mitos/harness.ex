@@ -14,7 +14,7 @@ defmodule Mitos.Harness do
       :assistant_text | :tool_use | :tool_result | :token_usage | :status | :final_result
 
   This supersedes the old PTY/session-log screen-scraping path; PTY is a
-  fallback codec, out of MVP scope (01 §8.6, 09 §3).
+  fallback codec, out of MVP scope (01 §8.6, 09 §2).
   """
 
   @type session :: term()

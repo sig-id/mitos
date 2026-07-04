@@ -21,7 +21,7 @@ defmodule Mitos.LaunchPolicy do
   @doc """
   Compile a LaunchSpec. `run_ctx` carries `%{run_id, stage_id, workspace,
   scope, trust_tier?}` — `trust_tier` in ctx overrides the manifest's (the
-  facilitator forces T2 at publish, 08 §8; MVP curates sellers at T1, 09 §3).
+  facilitator forces T2 at publish, 08 §8; MVP curates sellers at T1, 09 §2).
   """
   def compile(%Capability.Manifest{} = m, run_ctx) do
     tier = run_ctx[:trust_tier] || m.trust_tier

@@ -26,12 +26,16 @@ defmodule Mitos.Run.Config do
             budget: %{},
             # broker credential scope (seller org for marketplace runs, 08 §3.2)
             scope: nil,
-            # trust-tier override (facilitator forces T2 at publish, 08 §8; MVP T1, 09 §3)
+            # trust-tier override (facilitator forces T2 at publish, 08 §8; MVP T1, 09 §2)
             trust_tier: nil,
             # Mitos.Orchestrator.Policy implementation
             policy: Mitos.Orchestrator.Policy.Linear,
             # facilitator offer key — set on paid runs; triggers settle-on-finish (08 §7)
             offer_key: nil,
+            # I/O-plane ingress provenance (10 §3): %{connector: name, intake: %{...}};
+            # nil for runs started directly. Carries no secrets. Emits signal_received +
+            # task_enqueued at run start (10 §7).
+            ingress: nil,
             max_iterations: nil
 
   @type t :: %__MODULE__{}
@@ -79,6 +83,7 @@ defmodule Mitos.Run.Config do
          trust_tier: raw["trust_tier"],
          policy: String.to_existing_atom(raw["policy"] || "Elixir.Mitos.Orchestrator.Policy.Linear"),
          offer_key: raw["offer_key"],
+         ingress: raw["ingress"],
          max_iterations: raw["max_iterations"]
        }}
     else

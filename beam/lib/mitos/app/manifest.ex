@@ -150,7 +150,8 @@ defmodule Mitos.App.Manifest do
         workspace: normalize_workspace(ep["workspace"]),
         inputs: ep["inputs"] || %{},
         parameters: ep["parameters"] || [],
-        defaults: ep["defaults"] || %{}
+        defaults: ep["defaults"] || %{},
+        draft: ep["draft"] == true
       }
     end)
   end
@@ -167,4 +168,116 @@ defmodule Mitos.App.Manifest do
 
   @doc "Find a pipeline by id."
   def pipeline(%__MODULE__{pipelines: ps}, id), do: Enum.find(ps, &(&1.id == id))
+
+  @doc "Is an entrypoint a draft (imported, order form not yet typed — 12 §10)?"
+  def draft?(%__MODULE__{} = app, ep_id) do
+    case entrypoint(app, ep_id) do
+      %{draft: true} -> true
+      _ -> false
+    end
+  end
+
+  @doc """
+  12 §4 — validate caller inputs against an entrypoint's `inputs.schema` BEFORE
+  any model spend. Supports two spellings the manifests use: a JSON-Schema
+  `{properties, required}` map, or a flat `{field: type}` map. A typed order is
+  what makes the job sellable (the quote and refund rule need to know "the job",
+  12 §10); rejecting here means no escrow is taken for an un-runnable order.
+  """
+  def validate_inputs(entrypoint, inputs) when is_map(inputs) do
+    schema = (entrypoint.inputs || %{})["schema"] || entrypoint.inputs || %{}
+    props = normalize_props(schema["properties"] || drop_meta(schema))
+    required = required_fields(schema, props)
+
+    inputs = Map.new(inputs, fn {k, v} -> {to_string(k), v} end)
+
+    with :ok <- check_required(required, inputs, props),
+         :ok <- check_types(props, inputs) do
+      :ok
+    end
+  end
+
+  defp drop_meta(schema), do: Map.drop(schema, ["required", "type", "$schema"])
+
+  # Normalize property specs. The flat {field: "string"} shorthand means a
+  # field of that type (required only if declared — via a top-level `required`
+  # list or the field's own `required: true`); a full {field: {type: …}} map is
+  # used as-is.
+  defp normalize_props(props) do
+    Map.new(props, fn
+      {k, v} when is_binary(v) -> {k, %{"type" => v}}
+      {k, %{} = v} -> {k, v}
+      {k, v} -> {k, %{"type" => to_string(v)}}
+    end)
+  end
+
+  # `required` may be a top-level list, or per-property (`{field: {required: true}}`).
+  defp required_fields(%{"required" => list}, _props) when is_list(list), do: list
+
+  defp required_fields(_, props) do
+    for {k, v} <- props, truthy?(v["required"]), do: k
+  end
+
+  defp check_required(required, inputs, _props) do
+    missing = for k <- required, not Map.has_key?(inputs, k), do: k
+    if missing == [], do: :ok, else: {:error, {:missing_required, missing}}
+  end
+
+  defp check_types(props, inputs) do
+    Enum.reduce_while(props, :ok, fn {field, spec}, _acc ->
+      case Map.get(inputs, field) do
+        nil ->
+          {:cont, :ok}
+
+        value ->
+          case check_one_type(spec["type"], value) do
+            :ok -> {:cont, :ok}
+            {:error, _} = e -> {:halt, e}
+          end
+      end
+    end)
+  end
+
+  defp check_one_type(nil, _), do: :ok
+  defp check_one_type("string", v) when is_binary(v), do: :ok
+  defp check_one_type("file", v) when is_binary(v), do: :ok
+  defp check_one_type("int", v) when is_integer(v), do: :ok
+  defp check_one_type("integer", v) when is_integer(v), do: :ok
+  defp check_one_type("number", v) when is_number(v), do: :ok
+  defp check_one_type("boolean", v) when is_boolean(v), do: :ok
+
+  defp check_one_type(type, v) when is_binary(v) and type in ["int", "integer", "number", "boolean"] do
+    case coerce(type, v) do
+      {:ok, _} -> :ok
+      :error -> {:error, {:bad_type, type, v}}
+    end
+  end
+
+  defp check_one_type(type, v), do: {:error, {:bad_type, type, v}}
+
+  defp coerce(type, v) do
+    case type do
+      t when t in ["int", "integer"] ->
+        case Integer.parse(v) do
+          {n, ""} -> {:ok, n}
+          _ -> :error
+        end
+
+      "number" ->
+        case Float.parse(v) do
+          {n, ""} -> {:ok, n}
+          _ -> :error
+        end
+
+      "boolean" ->
+        case v do
+          b when b in ["true", "false"] -> {:ok, b == "true"}
+          _ -> :error
+        end
+    end
+  end
+
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(_), do: false
 end

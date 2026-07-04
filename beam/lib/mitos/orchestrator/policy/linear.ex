@@ -1,6 +1,6 @@
 defmodule Mitos.Orchestrator.Policy.Linear do
   @moduledoc """
-  The MVP orchestrator policy (09 §3): a **single linear pipeline** — advance
+  The MVP orchestrator policy (09 §2): a **single linear pipeline** — advance
   through the declared stages in order, `skip` a stage whose capability is not
   in the run's catalog, `finish` when every stage is done, `abort` when the
   budget is exhausted. No insert/switch branching, no model call.

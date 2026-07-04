@@ -3,7 +3,7 @@ defmodule Mitos.WorkPool do
   The Work Pool plane (06). Durable Tasks in pools, each picked by a pluggable
   discipline; a platform drainer empties it into dispatch → a run.
 
-  MVP scope (09 §3 / 02 §7 non-goals): the pool is present as the single durable
+  MVP scope (09 §2 / 02 §7 non-goals): the pool is present as the single durable
   intake for every provenance (a buyer's paid request is a Task like any other),
   but deps/disciplines/invoke/services are deferred. This holds Tasks and their
   status transitions, each recorded as an Effect on the owning run's log where a

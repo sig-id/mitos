@@ -20,6 +20,7 @@ defmodule Mitos.Proof do
     run_started capability_started iteration_started iteration_finished
     egress_allowed egress_denied approval_requested approval_resolved
     artifact_registered capability_finished budget_charged run_finished
+    delivery_sent
   )a
 
   @doc "Render the proof for a run. `charge` (a Mitos.Meter fold) is optional."
@@ -86,6 +87,7 @@ defmodule Mitos.Proof do
       %{"seq" => e.seq, "ts" => e.ts, "type" => to_string(e.type)}
       |> put_if("stage", e.ref["stage_id"])
       |> put_if("dest", e.ref["dest"])
+      |> put_if("sink", e.ref["sink"])
     end)
   end
 
