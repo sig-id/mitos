@@ -74,11 +74,20 @@ defmodule Mitos.LaunchPolicy do
   defp eligible?(_t0_or_t1, caps), do: caps.egress == :broker
 
   # mitos injects exactly ONE harness from the compatible set (01 §5, 03 §5);
-  # an unknown set is refused, not degraded.
+  # an unknown set is refused, not degraded. The configured `:default_harness`
+  # (e.g. "pi") wins when it's in the capability's compatible set.
   defp select_harness(%Capability.Manifest{harnesses: names}) do
     registry = Application.fetch_env!(:mitos, :harnesses)
+    default = Application.get_env(:mitos, :default_harness)
+    compatible = Enum.filter(names, &Map.has_key?(registry, &1))
 
-    case Enum.find(names, &Map.has_key?(registry, &1)) do
+    pick =
+      cond do
+        default && default in compatible -> default
+        true -> Enum.find(compatible, &Map.has_key?(registry, &1))
+      end
+
+    case pick do
       nil -> {:error, {:no_compatible_harness, names}}
       name -> {:ok, name, Map.fetch!(registry, name)}
     end

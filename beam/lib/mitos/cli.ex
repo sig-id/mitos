@@ -13,7 +13,8 @@ defmodule Mitos.CLI do
       mitos deliver <run_id>                       # idempotent egress re-drive (10 §5.3)
       mitos import eve <agent_dir> [--out <dir>]   # Eve agent/ → app scaffold (12 §10)
       mitos serve [<cap_dir>...] [--price X --payout ADDR --seller ORG]
-                  [--app <app_dir>]...          # register apps for the web UI
+                  [--app <app_dir>]...                       # register apps for the web UI
+                  [--http-port N] [--broker-port N]          # per-instance port override
   """
 
   def main(argv) do
@@ -31,7 +32,9 @@ defmodule Mitos.CLI do
           seller: :string,
           trust_tier: :string,
           app: :keep,
-          out: :string
+          out: :string,
+          http_port: :integer,
+          broker_port: :integer
         ],
         aliases: [i: :input, e: :entrypoint, w: :workspace]
       )
@@ -199,7 +202,7 @@ defmodule Mitos.CLI do
   # `--app <dir>` registers an application so its entrypoints get web order
   # forms (11 §4).
   defp serve(cap_dirs, opts) do
-    boot()
+    boot(http_port: opts[:http_port], broker_port: opts[:broker_port])
     Enum.each(cap_dirs, &publish(&1, opts))
 
     for dir <- Keyword.get_values(opts, :app) do
@@ -217,7 +220,15 @@ defmodule Mitos.CLI do
 
   # --- helpers ---
 
-  defp boot do
+  defp boot(overrides \\ []) do
+    # Load first so the compiled config is baked into env, THEN apply overrides
+    # — ensure_all_started would otherwise re-load and clobber put_env.
+    Application.load(:mitos)
+
+    for {k, v} <- overrides, not is_nil(v) do
+      Application.put_env(:mitos, k, v)
+    end
+
     {:ok, _} = Application.ensure_all_started(:mitos)
     true
   end

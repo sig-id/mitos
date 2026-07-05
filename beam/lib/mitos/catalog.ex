@@ -34,6 +34,14 @@ defmodule Mitos.Catalog do
 
   def get_app(id), do: Agent.get(__MODULE__, &get_in(&1, [:apps, id]))
 
+  @doc "Resolve an app by its content-addressed `app_id` OR its human `name`."
+  def find_app(id_or_name) do
+    case get_app(id_or_name) do
+      nil -> apps() |> Map.values() |> Enum.find(&(&1.name == id_or_name))
+      app -> app
+    end
+  end
+
   def apps, do: Agent.get(__MODULE__, & &1.apps)
 
   # --- offers (facilitator-side, mutable) ---

@@ -83,7 +83,8 @@ trace, no harness identity ever reaches them.
 | `Mitos.Run.State` | 01 §4, 04 §7 | `state = fold(events)`; pending-Decision recovery tail |
 | `Mitos.Run` | 04 §3.4/§7, 03 §6 | run process: control loop, step runtime (hooks→loop→harvest), budget refusal, resume/re-drive |
 | `Mitos.Run.Config` | 09 §4 | durable per-run config (tenant-stamped run_id, no secrets) |
-| `Mitos.Orchestrator.Policy` (+ `.Linear`) | 04 §3 | the orchestrator seam; MVP deterministic linear policy |
+| `Mitos.Orchestrator.Policy` (+ `.Linear`, `.Agentic`) | 04 §3 | the orchestrator seam; deterministic Linear + LLM Agentic (model seam + Linear fallback) |
+| `Mitos.Orchestrator.Model` (+ `.Stub`, `.HTTP`) | 04 §3.4 | the model client seam (OpenAI-compatible HTTP; Stub ⇒ Linear fallback) |
 | `Mitos.LoopManager` | 04 §4 | intra-step FSM; MVP one iteration, signals seam in place |
 | `Mitos.Pipeline` | 04 §8 | loose markdown intent parser (never rejects for shape) |
 | `Mitos.Capability.Manifest` | 01 §8.3, 03 §8/§9 | content-addressed capability identity |
@@ -93,7 +94,10 @@ trace, no harness identity ever reaches them.
 | `Mitos.SandboxProvider` | 01 §8.4, 05 §2 | the one provider behaviour |
 | `Mitos.LaunchSpec` / `Mitos.LaunchPolicy` | 05 §2/§4 | policy compiler; T2 fails closed, never downgrades |
 | `Mitos.Provider.Local` | 05 §3 (seam) | local process-isolation provider: hermetic inject, git-baseline harvest |
-| `Mitos.Harness` (+ `.Fake`, `.ClaudeCode`) | 01 §8.6, 05 §6 | adapter contract; hermetic env (full ambient clear); stream-json normalization |
+| `Mitos.Provider.Nucleus` | 05 §3 | gVisor-class local isolation via `nucleus run` (T1; remote T2 still a gap) |
+| `Mitos.Harness` (+ `.Fake`, `.ClaudeCode`, `.Codex`, `.Opencode`, `.Pi`) | 01 §8.6, 05 §6 | adapter contract + impls; per-vendor structured-output normalization + `argv/2` |
+| `Mitos.Harness.PortAdapter` | 01 §8.6 | shared subprocess + line-stream machinery for structured-output adapters |
+| `Mitos.Memory` | 07 | two-track knowledge + contradiction-supersession + verify→distill |
 | `Mitos.Broker` (+ `.Listener`, `.Destinations`) | 01 §8.5, 05 §5.3 | egress credential broker: default deny, attach-at-edge, every crossing an Effect |
 | `Mitos.Vault` | 08 §3.2 | credentials exist only here, keyed `(scope, dest)` |
 | `Mitos.Hermetic` | 05 §6 | full-env-clear subprocess environments; host git/gpg neutralized |
@@ -110,6 +114,23 @@ trace, no harness identity ever reaches them.
 | `Mitos.IO` (+ `.Binding`) | 10 §2/§4/§7 | bindings registry, ingress intake (dedup + select), idempotent delivery driver |
 | `Mitos.Web.Router` | 01 §10.11, 08 §8, 10 §6 | HTTP surface = the same backend ops the CLI calls; the web app is one connector + sink |
 | `Mitos.CLI` | 11 §7 | escript: run / log / status / proof / publish / serve |
+
+## Applications on the stack (`apps/`)
+
+Three real, content-addressed mitos apps (each loads via `Mitos.App.Manifest`):
+
+- **`security-audit`** — profile a repo's security scope, audit a commit range,
+  classify findings P0–P3, author issues + fix PRs. The durable profile lives in
+  `Mitos.Memory`.
+- **`kanban-executor`** — plan a dependency/concurrency-aware fanout over a
+  kanban board and run each task through a **non-linear** worker pipeline
+  (plan ⇄ execute ⇄ gate ⇄ fix) via the **agentic orchestrator**.
+- **`conflict-resolver`** — resolve PR merge conflicts with the smallest safe
+  change and push.
+
+The per-run pipelines run on the stack today. The cross-run orchestration each
+app needs (continuous triggers, fanout, GitHub issue/PR integration) is the gap
+analysis in **[`apps/GAPS.md`](apps/GAPS.md)**.
 
 ## Judgment calls carried from the spec
 

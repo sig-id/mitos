@@ -80,7 +80,7 @@ defmodule Mitos.Web.Router do
   # schema before any model spend (12 §4: validate before run).
   post "/web/apps/:app_id/entrypoints/:ep_id/run" do
     require_role(conn, ["operator"], fn r ->
-      app = Catalog.get_app(app_id)
+      app = Catalog.find_app(app_id)
 
       cond do
         is_nil(app) or is_nil(Mitos.App.Manifest.entrypoint(app, ep_id)) ->
@@ -92,10 +92,17 @@ defmodule Mitos.Web.Router do
         true ->
           p = conn.body_params
 
-          inputs =
+          # base inputs from the JSON textarea (advanced), overlaid with the
+          # per-field `input_<name>` form fields (12 §4).
+          base_inputs =
             case Mitos.JSON.decode(p["inputs"] || "{}") do
               {:ok, %{} = m} -> m
               _ -> %{}
+            end
+
+          inputs =
+            for {"input_" <> name, v} <- p, v not in [nil, ""], into: base_inputs do
+              {name, v}
             end
 
           parameters = for {"param_" <> name, v} <- p, into: %{}, do: {name, v}

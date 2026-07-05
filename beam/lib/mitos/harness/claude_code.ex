@@ -20,25 +20,31 @@ defmodule Mitos.Harness.ClaudeCode do
   @behaviour Mitos.Harness
 
   @impl true
+  def argv(prompt, opts) do
+    args =
+      [
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--max-turns",
+        to_string(Keyword.get(opts, :max_turns, 30)),
+        "--dangerously-skip-permissions"
+      ] ++ model_args(opts)
+
+    {"claude", args}
+  end
+
+  @impl true
   def launch(sandbox, prompt, opts) do
     exe = System.find_executable("claude")
 
     if is_nil(exe) do
       {:error, :claude_cli_not_found}
     else
-      args =
-        [
-          "-p",
-          prompt,
-          "--output-format",
-          "stream-json",
-          "--verbose",
-          "--max-turns",
-          to_string(Keyword.get(opts, :max_turns, 30)),
-          "--dangerously-skip-permissions"
-        ] ++ model_args(opts)
-
-      env = Map.merge(hermetic_env(sandbox), passthrough_env())
+      {_exe, args} = argv(prompt, opts)
+      env = Map.merge(hermetic_env(sandbox), Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env()))
 
       port =
         Port.open({:spawn_executable, exe}, [

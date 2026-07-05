@@ -9,7 +9,7 @@ defmodule Mitos.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      escript: [main_module: Mitos.CLI, name: "mitos"]
+      escript: [main_module: Mitos.CLI, name: "mitos", app: nil]
     ]
   end
 

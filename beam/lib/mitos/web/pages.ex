@@ -161,7 +161,7 @@ defmodule Mitos.Web.Pages do
   end
 
   def order_form(app_id, ep_id, role) do
-    with app when not is_nil(app) <- Catalog.get_app(app_id),
+    with app when not is_nil(app) <- Catalog.find_app(app_id),
          ep when not is_nil(ep) <- Mitos.App.Manifest.entrypoint(app, ep_id) do
       params =
         Enum.map_join(ep.parameters, "\n", fn p ->
@@ -185,14 +185,33 @@ defmodule Mitos.Web.Pages do
             """
         end
 
+      input_fields =
+        case input_properties(ep.inputs) do
+          [] ->
+            """
+            <label>inputs <span class="faint">JSON</span></label>
+            <textarea name="inputs">#{esc(Mitos.JSON.encode!(if ep.defaults == %{}, do: %{}, else: ep.defaults))}</textarea>
+            """
+
+          props ->
+            Enum.map_join(props, "\n", fn {name, spec} ->
+              type = spec["type"] || "string"
+              req = if spec_required?(spec), do: " required", else: ""
+
+              """
+              <label>#{esc(name)} <span class="faint">#{esc(type)}#{if spec_required?(spec), do: " · required", else: ""}</span></label>
+              <input type="text" name="input_#{esc(name)}" placeholder="#{esc(type)}"#{req}>
+              """
+            end)
+        end
+
       body = """
       <h1>#{esc(ep.title || ep.id)}</h1>
       <p class="sub">#{esc(app.name)} · pipeline <code>#{esc(ep.pipeline)}</code></p>
       <div class="card">
       <form method="post" action="/web/apps/#{app_id}/entrypoints/#{esc(ep.id)}/run">
         #{workspace_field}
-        <label>inputs — the run's subject data <span class="faint">JSON · schema #{esc(Mitos.JSON.encode!(ep.inputs))}</span></label>
-        <textarea name="inputs">#{esc(Mitos.JSON.encode!(if ep.defaults == %{}, do: %{}, else: ep.defaults))}</textarea>
+        #{input_fields}
         #{params}
         <button type="submit">Run</button>
       </form>
@@ -670,5 +689,20 @@ defmodule Mitos.Web.Pages do
   defp active_for(_), do: "endpoints"
 
   defp base_url, do: "http://localhost:#{Application.fetch_env!(:mitos, :http_port)}"
+
+  # The declared input properties for the order form (12 §4). Supports the
+  # JSON-Schema {properties: {...}} spelling and the flat {field: type} shorthand.
+  defp input_properties(%{"schema" => %{"properties" => props}}) when is_map(props),
+    do: Enum.to_list(props)
+
+  defp input_properties(%{"schema" => schema}) when is_map(schema),
+    do: schema |> Map.drop(["required", "type", "$schema"]) |> Enum.to_list()
+
+  defp input_properties(%{"properties" => props}) when is_map(props), do: Enum.to_list(props)
+  defp input_properties(_), do: []
+
+  defp spec_required?(%{"required" => true}), do: true
+  defp spec_required?(%{"required" => "true"}), do: true
+  defp spec_required?(_), do: false
 
 end

@@ -46,4 +46,49 @@ defmodule Mitos.Harness do
 
   @doc "Adapter descriptor: %{structured_output, mcp_tools?, sessions?, effort_levels, ...}."
   @callback capabilities() :: map()
+
+  @doc """
+  The non-interactive argv for this harness given a prompt + opts, WITHOUT
+  spawning: `{exe, args}`. Lets a `SandboxProvider` (e.g. Nucleus) run the CLI
+  as the inner command of its own sandbox while the adapter still owns
+  normalization of the passthrough stream (01 §8.6).
+  """
+  @callback argv(prompt :: String.t(), opts :: keyword()) :: {exe :: String.t(), args :: [String.t()]}
+
+  @optional_callbacks [argv: 2]
+
+  @doc """
+  The model-egress proxy env for a harness (05 R1): when
+  `config :mitos, :model_proxy_url` is set (e.g. `http://127.0.0.1:4648`), the
+  harness's model base URL is redirected to the edge proxy so the model key is
+  attached there (Vault), never in the sandbox. Returns `%{}` when unset
+  (spec-clean default).
+  """
+  def model_proxy_env do
+    reverse =
+      case Application.get_env(:mitos, :model_proxy_url) do
+        nil -> %{}
+        url -> %{"ANTHROPIC_BASE_URL" => "#{url}/anthropic", "OPENAI_BASE_URL" => "#{url}/openai"}
+      end
+
+    # The MITM form is universal: route HTTPS through the edge + trust its CA.
+    # `ca_cert_path/0` reads the mitos CA the TlsMitm proxy signs leaves with.
+    mitm =
+      case Application.get_env(:mitos, :mitm_proxy_url) do
+        nil -> %{}
+        url ->
+          ca = Mitos.Broker.CertAuthority.ca_cert_path()
+
+          %{
+            "HTTPS_PROXY" => url,
+            "HTTP_PROXY" => url,
+            "SSL_CERT_FILE" => ca,
+            "REQUESTS_CA_BUNDLE" => ca,
+            "NODE_EXTRA_CA_CERTS" => ca,
+            "GIT_SSL_CAINFO" => ca
+          }
+      end
+
+    Map.merge(reverse, mitm)
+  end
 end
