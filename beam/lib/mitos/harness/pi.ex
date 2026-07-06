@@ -40,13 +40,24 @@ defmodule Mitos.Harness.Pi do
 
   @impl true
   def hermetic_env(sandbox) do
+    # pi refuses to start without a key present ("No API key found"). The MITM
+    # proxy (05 R1) injects the real key for the *calls*, but pi's startup check
+    # needs auth reachable. For local T1 dev, `config :mitos, :pi_dev_auth` points
+    # pi at the operator's real ~/.pi so it reads auth.json and boots; production
+    # keeps the hermetic redirect and routes calls through the broker/MITM edge.
+    pi_data =
+      if Application.get_env(:mitos, :pi_dev_auth, false) do
+        Path.expand("~/.pi")
+      else
+        Path.join(sandbox.home, ".pi")
+      end
+
     %{
       "HOME" => sandbox.home,
       "XDG_CONFIG_HOME" => Path.join(sandbox.home, ".config"),
       "XDG_CACHE_HOME" => Path.join(sandbox.home, ".cache"),
       "XDG_DATA_HOME" => Path.join([sandbox.home, ".local", "share"]),
-      # pi's session store + project data live under this; redirect it hermetic.
-      "PI_DATA_DIR" => Path.join(sandbox.home, ".pi"),
+      "PI_DATA_DIR" => pi_data,
       "PATH" => System.get_env("PATH", "/usr/local/bin:/usr/bin:/bin")
     }
   end

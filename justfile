@@ -30,9 +30,11 @@ build:
     cd beam && mix escript.build
 
 # Serve a mitos app on the control plane (default: the security-audit demo).
-# Override ports to run alongside another instance: `just serve 4756 4757`.
+# `--dev` lets pi read the operator's ~/.pi so runs boot locally (T1 dev;
+# production uses the broker/MITM edge). Override ports to run alongside another
+# instance: `just serve 4756 4757`.
 serve http_port="4646" broker_port="4647" app="security-audit": build
-    cd beam && ./mitos serve --app apps/{{app}} --http-port {{http_port}} --broker-port {{broker_port}}
+    cd beam && ./mitos serve --dev --app apps/{{app}} --http-port {{http_port}} --broker-port {{broker_port}}
 
 # Clean build artifacts.
 clean:

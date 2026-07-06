@@ -7,7 +7,7 @@ defmodule Mitos.Provider.NucleusTest do
   """
   use ExUnit.Case, async: true
 
-  alias Mitos.{Capability, LaunchPolicy, Provider}
+  alias Mitos.{LaunchPolicy, Provider}
 
   defp handle do
     dir = Mitos.Fixtures.capability("nuc-cap")

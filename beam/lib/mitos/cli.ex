@@ -34,7 +34,8 @@ defmodule Mitos.CLI do
           app: :keep,
           out: :string,
           http_port: :integer,
-          broker_port: :integer
+          broker_port: :integer,
+          dev: :boolean
         ],
         aliases: [i: :input, e: :entrypoint, w: :workspace]
       )
@@ -202,7 +203,7 @@ defmodule Mitos.CLI do
   # `--app <dir>` registers an application so its entrypoints get web order
   # forms (11 §4).
   defp serve(cap_dirs, opts) do
-    boot(http_port: opts[:http_port], broker_port: opts[:broker_port])
+    boot(http_port: opts[:http_port], broker_port: opts[:broker_port], dev: opts[:dev])
     Enum.each(cap_dirs, &publish(&1, opts))
 
     for dir <- Keyword.get_values(opts, :app) do
@@ -227,6 +228,13 @@ defmodule Mitos.CLI do
 
     for {k, v} <- overrides, not is_nil(v) do
       Application.put_env(:mitos, k, v)
+    end
+
+    # `--dev`: local T1 conveniences — let pi read the operator's real ~/.pi so
+    # it boots (its startup auth check). Production routes model calls through
+    # the broker/MITM edge (05 R1) and leaves this off.
+    if Keyword.get(overrides, :dev) do
+      Application.put_env(:mitos, :pi_dev_auth, true)
     end
 
     {:ok, _} = Application.ensure_all_started(:mitos)

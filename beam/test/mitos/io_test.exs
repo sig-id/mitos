@@ -46,7 +46,7 @@ defmodule Mitos.IOTest do
     }
   end
 
-  defp notify_binding(org, to \\ "ops-chat") do
+  defp notify_binding(org, to) do
     %Binding{
       tenant: %{"org" => org},
       name: "notify",

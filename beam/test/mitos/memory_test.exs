@@ -37,7 +37,7 @@ defmodule Mitos.MemoryTest do
   test "distill writes long-term lessons only from a verified (ship/pass) run" do
     # a finished run with a ship signal
     dir = Mitos.Fixtures.capability("mem-cap")
-    {:ok, manifest} = Mitos.Capability.Manifest.load(dir)
+    {:ok, _manifest} = Mitos.Capability.Manifest.load(dir)
 
     {:ok, run_id} =
       Mitos.Run.start_run(
