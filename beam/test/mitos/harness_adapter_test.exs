@@ -96,4 +96,36 @@ defmodule Mitos.HarnessAdapterTest do
     assert Application.get_env(:mitos, :harnesses)["opencode"] == Mitos.Harness.Opencode
     assert Application.get_env(:mitos, :harnesses)["pi"] == Mitos.Harness.Pi
   end
+
+  # A harness that dies abnormally (SIGSEGV / SIGKILL — e.g. a node EPIPE crash)
+  # must be observed as an exit status and NEVER crash the BEAM owner. Real
+  # harnesses run through PortAdapter on an UNLINKED port, so the worst a crash
+  # does is end the event stream with {:exited, N} — the substrate turns that
+  # into a stage abort (04 §3.4), not a control-plane crash.
+  test "a crashing harness is contained: observed as {:exited, _}, owner alive" do
+    owner = self()
+
+    for {label, cmd, status_pred} <- [
+          {"non-zero exit", ~c"exit 1", &(&1 == 1)},
+          {"SIGKILL", ~c"kill -9 $$", &(&1 == 137)},
+          {"SIGSEGV", ~c"kill -SEGV $$", &(&1 == 139)}
+        ] do
+      {:ok, session} = Mitos.Harness.PortAdapter.launch("sh", ["-c", to_string(cmd)], System.tmp_dir!(), %{})
+
+      events =
+        Mitos.Harness.PortAdapter.events(session, fn _ -> [] end)
+        |> Enum.to_list()
+
+      exited =
+        Enum.find_value(events, fn
+          %{type: :status, status: {:exited, n}} -> n
+          _ -> nil
+        end)
+
+      assert exited && status_pred.(exited),
+             "#{label}: expected an {:exited, n} status matching, got: #{inspect(events)}"
+      # the calling BEAM process survived the child crash
+      assert Process.alive?(owner), "#{label}: owner died"
+    end
+  end
 end
