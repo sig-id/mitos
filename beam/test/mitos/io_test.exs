@@ -361,7 +361,6 @@ defmodule Mitos.IOTest do
   # --- HTTP surface (10 §3.1 / §5.3) ---
 
   test "the /ingest webhook route turns an inbound POST into a run, and /runs/:id/deliver re-drives" do
-    import Plug.Test
     import Plug.Conn
 
     org = "io_http_" <> Mitos.id()
