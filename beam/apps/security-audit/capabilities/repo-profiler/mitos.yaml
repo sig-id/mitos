@@ -1,0 +1,8 @@
+name: repo-profiler
+version: 0.1.0
+harnesses: ["pi", "claude-code", "codex", "opencode"]
+skill: skill.md
+trust_tier: "T1"
+egress_policy: []
+result: { evidence: [] }
+hooks: {}

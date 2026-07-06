@@ -1,0 +1,39 @@
+name: conflict-resolver
+version: 0.1.0
+description: Watch a repo's open PRs; whenever a merge conflict surfaces, launch a worker that resolves trivial conflicts, pushes the fix, and reports.
+
+capabilities:
+  - { ref: "capabilities/conflict-fixer", as: conflict-fixer }
+
+pipelines:
+  - { id: resolve, file: pipelines/resolve.md }
+
+entrypoints:
+  - id: resolve-pr
+    pipeline: resolve
+    title: Resolve conflicts on a PR
+    description: Given a repo + a PR number that has merge conflicts, resolve them and push.
+    workspace: { kind: repo }
+    inputs:
+      schema:
+        repo: { type: string, required: true }
+        pr:   { type: string, required: true }       # PR number with a conflict
+        base: { type: string }                        # target branch (default: main)
+
+# Monitoring all PRs for conflicts is an event-trigger gap (06 §6): there is no
+# connector that emits a Task per conflicting PR yet. Ingress is webhook-driven
+# (a CI hook POSTs on conflict), and the monitor service is a gap — see GAPS.md.
+io:
+  inputs:
+    - { connector: webhook, entrypoint: resolve-pr, select: { mode: explicit } }
+  outputs:
+    - { sink: deliver, on: capability_finished, entrypoint: resolve-pr, render: "resolution summary + push ref" }
+
+services:
+  requires: []
+  wants: [pr-conflict-watcher]   # an event trigger over PR webhooks (06 §6) — gap
+
+requirements:
+  trust_tier: "T1"
+  connectors: [webhook]
+  egress: [api.github.com]

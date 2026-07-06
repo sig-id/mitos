@@ -1,0 +1,43 @@
+name: kanban-executor
+version: 0.1.0
+description: Execute every open task in a kanban file (synced with GitHub issues) one by one in git worktrees — fanning out N concurrent workers over a dependency/concurrency plan, each running a non-linear worker pipeline, ending in a PR.
+
+capabilities:
+  - { ref: "capabilities/kanban-planner", as: kanban-planner }
+  - { ref: "capabilities/task-worker",    as: task-worker }
+  - { ref: "capabilities/quality-gate",   as: quality-gate }
+
+pipelines:
+  - { id: worker,  file: pipelines/worker.md }    # the per-task pipeline (non-linear)
+  - { id: plan,    file: pipelines/plan.md }       # the fanout plan over the board
+
+entrypoints:
+  - id: execute-board
+    pipeline: plan
+    title: Execute the kanban board
+    description: Read the kanban file, plan a dependency/concurrency-aware fanout, and run each open task through the worker pipeline to a PR.
+    workspace: { kind: repo }
+    inputs:
+      schema:
+        repo: { type: string, required: true }
+        kanban: { type: string, required: true }    # path to the kanban file (synced w/ GH issues)
+    parameters:
+      - { name: concurrency, type: int, default: 4, description: "Max concurrent workers (fanout width)." }
+
+# The fanout is an app-level orchestration the per-run pipeline cannot express:
+# plan emits N child Tasks the Work Pool must dispatch concurrently with least
+# conflict. That discipline (06 §5 invoke/fanout) is a gap — see apps/GAPS.md.
+io:
+  inputs:
+    - { connector: webhook, entrypoint: execute-board, select: { mode: explicit } }
+  outputs:
+    - { sink: deliver, on: run_finished, entrypoint: execute-board, render: "board run summary + PR links" }
+
+services:
+  requires: []
+  wants: [kanban-sync]   # a service syncing the kanban file ↔ GitHub issues (06 §8) — gap
+
+requirements:
+  trust_tier: "T1"
+  connectors: [webhook]
+  egress: [api.github.com]

@@ -1,0 +1,45 @@
+name: security-audit
+version: 0.1.0
+description: Continuously audit a git repo for security regressions on every commit to main; classify findings, report, open an issue, and author a fix PR.
+
+capabilities:
+  - { ref: "capabilities/repo-profiler",      as: repo-profiler }
+  - { ref: "capabilities/diff-auditor",       as: diff-auditor }
+  - { ref: "capabilities/finding-classifier", as: finding-classifier }
+  - { ref: "capabilities/fix-author",         as: fix-author }
+
+pipelines:
+  - { id: audit-main, file: pipelines/audit.md }
+
+entrypoints:
+  - id: audit
+    pipeline: audit-main
+    title: Audit a commit range on main
+    description: Given a repo + a (from..to] commit range (or HEAD for a baseline), profile scope, audit the diff, classify findings, open issues, and fix.
+    workspace: { kind: repo }
+    inputs:
+      schema:
+        from: { type: string }                       # baseline commit; empty ⇒ broad baseline
+        to:   { type: string }                        # target commit; empty ⇒ HEAD
+        # NOTE: the repo itself is the `workspace` (cloned into /workspace by
+        # prepare); it is not a separate input.
+    parameters:
+      - { name: severity_floor, type: string, default: P2, description: "Lowest severity to open an issue for (P0..P3)." }
+
+# io bindings are SHIPPED DEFAULTS (12 §5); credentials bind tenant-side.
+# The continuous-monitoring trigger and the GitHub issue/PR sinks name classes
+# mitos does not yet ship — see apps/GAPS.md.
+io:
+  inputs:
+    - { connector: webhook, entrypoint: audit, select: { mode: explicit } }
+  outputs:
+    - { sink: deliver, on: capability_finished, entrypoint: audit, render: "audit report + finding table" }
+
+services:
+  requires: []
+  wants: [main-commit-watcher]   # a cron/trigger service (06 §6) — gap
+
+requirements:
+  trust_tier: "T1"
+  connectors: [webhook]
+  egress: [api.github.com]
