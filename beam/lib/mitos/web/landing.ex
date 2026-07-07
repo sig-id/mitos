@@ -142,13 +142,13 @@ defmodule Mitos.Web.Landing do
           <li>Aborted run? Escrow refunds you. The log decides delivery, not the seller</li>
         </ul>
       </div>
-      <div class="proof-mini" aria-label="a proof page, reduced">
-        <div class="pm-head">Proof of work <span class="pill-ok">finished</span></div>
-        <div class="pm-row"><span>deliverable</span><b>critique.md · annotated.svg · diff</b></div>
-        <div class="pm-row"><span>wall</span><b>75 ms</b></div>
-        <div class="pm-row"><span>egress</span><b>1 crossing · api.figma.com</b></div>
-        <div class="pm-row"><span>charge</span><b>$5.00 → payout $4.40 · take $0.60</b></div>
-        <div class="pm-row pm-hash"><span>log hash</span><b>06d967685c6d9ff10dd27cf1b4ecba80…</b></div>
+      <div class="proof-mini" aria-label="the fields a proof page contains">
+        <div class="pm-head">Proof of work <span class="pill-ok">per run</span></div>
+        <div class="pm-row"><span>deliverable</span><b>artifacts · diff · RESULT</b></div>
+        <div class="pm-row"><span>wall</span><b>ms — folded from events</b></div>
+        <div class="pm-row"><span>egress</span><b>brokered crossings, logged</b></div>
+        <div class="pm-row"><span>charge</span><b>buyer charge · payout · take</b></div>
+        <div class="pm-row pm-hash"><span>log hash</span><b>sha256 — recompute-able</b></div>
       </div>
     </section>
 
@@ -204,19 +204,19 @@ defmodule Mitos.Web.Landing do
   defp hero_snippet do
     Enum.join(
       [
-        ~s(<span class="c">$</span> curl -X POST api.gentix.dev/capabilities/<span class="v">design-critique</span>/runs),
+        ~s(<span class="c">$</span> curl -X POST /capabilities/<span class="v">&lt;capability_id&gt;</span>/runs),
         ~s(<span class="r">402 Payment Required</span>),
-        ~s({ "amount_usdc": <span class="n">5.00</span>, "pay_to": "escrow", "quote_id": "…" }),
+        ~s({ "amount_usdc": <span class="n">&lt;usdc&gt;</span>, "pay_to": "escrow", "quote_id": <span class="v">&lt;id&gt;</span> }),
         "",
-        ~s(<span class="c">$</span> curl -X POST … -H <span class="v">'X-PAYMENT: {"quote_id": …}'</span>),
+        ~s(<span class="c">$</span> curl -X POST … -H <span class="v">'X-PAYMENT: {quote_id, amount_usdc, payer}'</span>),
         ~s(<span class="g">202 Accepted</span>),
-        ~s({ "run_id": "buyer_0xa41c/run_STql…", "proof_url": "…" }),
+        ~s({ "run_id": <span class="v">&lt;id&gt;</span>, "proof_url": <span class="v">&lt;url&gt;</span> }),
         "",
-        ~s(<span class="c">$</span> curl …/runs/buyer_0xa41c/run_STql…/proof),
+        ~s(<span class="c">$</span> curl …/runs/<span class="v">&lt;run_id&gt;</span>/proof),
         ~s({ "status": <span class="g">"finished"</span>,),
-        ~s(  "artifacts": [<span class="v">"critique.md"</span>, <span class="v">"annotated.svg"</span>],),
-        ~s(  "receipt": { "charge": <span class="n">5.00</span>, "payout": <span class="n">4.40</span> },),
-        ~s(  "log_hash": <span class="v">"06d967…feb8a"</span> } <span class="c">← recompute it</span>)
+        ~s(  "artifacts": [<span class="v">&lt;sha256&gt;</span>, …],),
+        ~s(  "receipt": { "charge": <span class="n">&lt;usdc&gt;</span>, "payout": <span class="n">&lt;usdc&gt;</span> },),
+        ~s(  "log_hash": <span class="v">&lt;sha256&gt;</span> } <span class="c">← recompute it</span>)
       ],
       "\n"
     )
@@ -225,13 +225,13 @@ defmodule Mitos.Web.Landing do
   defp seller_snippet do
     Enum.join(
       [
-        ~s(<span class="c">$</span> ls design-critique/),
+        ~s(<span class="c">$</span> ls <span class="v">&lt;capability&gt;</span>/),
         ~s(mitos.yaml   skill.md   tools/   data/),
         "",
-        ~s(<span class="c">$</span> mitos publish design-critique <span class="v">--price 5.00</span> \\),
-        ~s(    <span class="v">--payout 0xYOUR_WALLET</span> --seller studio_k),
-        ~s(capability_id: <span class="g">af7b98bee4009f27…</span>),
-        ~s(endpoint:      POST /capabilities/af7b98…/runs  <span class="c">\(x402\)</span>),
+        ~s(<span class="c">$</span> mitos publish <span class="v">&lt;capability&gt;</span> <span class="v">--price &lt;usdc&gt;</span> \\),
+        ~s(    <span class="v">--payout &lt;wallet&gt;</span> --seller <span class="v">&lt;seller&gt;</span>),
+        ~s(capability_id: <span class="g">&lt;content-addressed&gt;</span>),
+        ~s(endpoint:      POST /capabilities/<span class="g">&lt;capability_id&gt;</span>/runs  <span class="c">\(x402\)</span>),
         "",
         ~s(<span class="c">$</span> mitos serve),
         ~s(<span class="g">mitos control plane on :4646 — attribution at /web/attribution</span>)

@@ -22,8 +22,22 @@ defmodule Mitos.Harness.Pi do
 
   @impl true
   def launch(sandbox, prompt, opts) do
+    # Path R (reverse proxy, 05 R1): pi ignores ANTHROPIC_BASE_URL, so to route
+    # its model calls through ModelProxy we write a models.json provider
+    # baseUrl override + a placeholder apiKey into the hermetic .pi. The
+    # placeholder satisfies pi's startup auth check; ModelProxy strips it and
+    # attaches the real Vault key. No-op under pi_dev_auth (operator's real
+    # ~/.pi), with the reverse proxy disabled, or with nothing seeded.
+    prepare_proxy_models(sandbox)
+
     {exe, args} = argv(prompt, opts)
-    env = Map.merge(hermetic_env(sandbox), Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env()))
+
+    env =
+      hermetic_env(sandbox)
+      |> Map.merge(placeholder_env_for_mitm())
+      |> Map.merge(passthrough_env())
+      |> Map.merge(Mitos.Harness.model_proxy_env())
+
     PortAdapter.launch(exe, args, sandbox.workspace, Mitos.Hermetic.env(env))
   end
 
@@ -40,16 +54,27 @@ defmodule Mitos.Harness.Pi do
 
   @impl true
   def hermetic_env(sandbox) do
-    # pi refuses to start without a key present ("No API key found"). The MITM
-    # proxy (05 R1) injects the real key for the *calls*, but pi's startup check
-    # needs auth reachable. For local T1 dev, `config :mitos, :pi_dev_auth` points
-    # pi at the operator's real ~/.pi so it reads auth.json and boots; production
-    # keeps the hermetic redirect and routes calls through the broker/MITM edge.
-    pi_data =
+    # pi refuses to start without a key present ("No API key found"). Two ways
+    # that key reaches pi without entering the sandbox as a real secret:
+    #   • pi_dev_auth (local T1 dev): point pi at the operator's real
+    #     ~/.pi/agent so it reads their auth.json and boots with their key.
+    #   • the edge proxy (default + prod): prepare_proxy_models/1 writes a
+    #     models.json with a placeholder apiKey at <sandbox>/.pi/agent — pi boots
+    #     on the placeholder and its calls route through ModelProxy/TlsMitm,
+    #     which strip it and attach the real Vault key.
+    #
+    # pi locates that dir via PI_CODING_AGENT_DIR (from
+    # `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`), defaulting to
+    # $HOME/<configDir>/agent. It does NOT read PI_DATA_DIR — that was a no-op,
+    # so in dev pi fell back to the empty sandbox $HOME/.pi/agent and died with
+    # "No API key found". Point PI_CODING_AGENT_DIR explicitly in both modes:
+    # the operator's agent dir in dev, the sandbox agent dir (where
+    # prepare_proxy_models writes models.json) otherwise.
+    agent_dir =
       if Application.get_env(:mitos, :pi_dev_auth, false) do
-        Path.expand("~/.pi")
+        Path.expand("~/.pi/agent")
       else
-        Path.join(sandbox.home, ".pi")
+        Path.join(sandbox.home, ".pi/agent")
       end
 
     %{
@@ -57,14 +82,19 @@ defmodule Mitos.Harness.Pi do
       "XDG_CONFIG_HOME" => Path.join(sandbox.home, ".config"),
       "XDG_CACHE_HOME" => Path.join(sandbox.home, ".cache"),
       "XDG_DATA_HOME" => Path.join([sandbox.home, ".local", "share"]),
-      "PI_DATA_DIR" => pi_data,
+      "PI_CODING_AGENT_DIR" => agent_dir,
       "PATH" => System.get_env("PATH", "/usr/local/bin:/usr/bin:/bin")
     }
   end
 
   @impl true
   def capabilities,
-    do: %{structured_output: true, mcp_tools?: true, sessions?: true, effort_levels: ["low", "medium", "high"]}
+    do: %{
+      structured_output: true,
+      mcp_tools?: true,
+      sessions?: true,
+      effort_levels: ["low", "medium", "high"]
+    }
 
   # --- pi JSON → normalized events ---
 
@@ -140,5 +170,68 @@ defmodule Mitos.Harness.Pi do
         val -> Map.put(acc, var, val)
       end
     end)
+  end
+
+  # --- edge-proxy wiring (Path R reverse, Path M MITM) ---
+
+  # Sentinel that satisfies pi's startup auth check. ModelProxy (reverse) drops
+  # every credential header it doesn't keep, and TlsMitm strips x-api-key /
+  # api-key / Authorization, so this never reaches an upstream — the real key is
+  # attached at the edge from the Vault.
+  @placeholder_key "via-mitos-edge"
+
+  @doc """
+  Write a models.json into the sandbox's hermetic .pi so pi routes its model
+  calls through the reverse proxy (Path R, 05 R1). Idempotent no-op under
+  pi_dev_auth, with the reverse proxy off, or with no seeded providers. Public
+  so the wiring is testable without spawning pi.
+  """
+  def prepare_proxy_models(sandbox) do
+    with false <- Application.get_env(:mitos, :pi_dev_auth, false),
+         base when is_binary(base) <- Mitos.Harness.reverse_proxy_url(),
+         [_ | _] = providers <- Mitos.Broker.ModelCredentials.seeded_providers() do
+      path = Path.join([sandbox.home, ".pi", "agent", "models.json"])
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, Mitos.JSON.encode!(proxy_models(base, providers)) <> "\n")
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  # pi reads ~/.pi/agent/models.json (PI_CODING_AGENT_DIR, which we set to
+  # <sandbox>/.pi/agent) and DOES respect a provider baseUrl override there
+  # (unlike the ANTHROPIC_BASE_URL env var). Pointing each seeded provider at
+  # `<reverse_url>/<dest><prefix>` routes its calls through ModelProxy; the
+  # placeholder apiKey boots pi. The prefix reconstructs providers whose real
+  # base carries a path prefix (zai → /api/paas/v4).
+  defp proxy_models(base, providers) do
+    %{
+      "providers" =>
+        Map.new(providers, fn p ->
+          prefix =
+            case Mitos.Broker.ModelCredentials.upstream_base(p) do
+              {_host, pref} -> pref || ""
+              nil -> ""
+            end
+
+          {p, %{"baseUrl" => "#{base}/#{p}#{prefix}", "apiKey" => @placeholder_key}}
+        end)
+    }
+  end
+
+  # Path M fallback: if the MITM proxy is engaged but the reverse proxy is NOT
+  # (so no models.json was written), inject a placeholder key so pi boots. Its
+  # calls then go direct to the upstream over HTTPS, intercepted by TlsMitm,
+  # which strips the placeholder and attaches the Vault key. No-op when the
+  # reverse proxy is engaged (models.json boots pi), under pi_dev_auth, or with
+  # MITM disabled. Merged before passthrough so a real passthrough key wins.
+  defp placeholder_env_for_mitm do
+    cond do
+      Application.get_env(:mitos, :pi_dev_auth, false) -> %{}
+      is_nil(Mitos.Harness.mitm_proxy_url()) -> %{}
+      not is_nil(Mitos.Harness.reverse_proxy_url()) -> %{}
+      true -> %{"ANTHROPIC_API_KEY" => @placeholder_key, "OPENAI_API_KEY" => @placeholder_key}
+    end
   end
 end

@@ -4,8 +4,12 @@ defmodule Mitos.CLI do
   command is the same backend operation the web router calls (01 §10.11).
 
       mitos run <app_dir> [--entrypoint ID] [--workspace DIR] [-i k=v]...
-                          [--budget-usd X] [--org ORG]
+                          [--budget-usd X] [--org ORG] [--dev]
+                          [--http-port N] [--broker-port N]
+                          # --dev lets pi read ~/.pi so runs boot locally;
+                          # ports let a CLI run coexist with a live control plane.
       mitos run-pipeline <pipeline.md> --cap name=dir [--workspace DIR] [-i k=v]...
+                                 [--dev] [--http-port N] [--broker-port N]
       mitos log <run_id>
       mitos proof <run_id>
       mitos status <run_id>
@@ -41,8 +45,8 @@ defmodule Mitos.CLI do
       )
 
     case args do
-      ["run", app_dir] -> boot() && run_app(app_dir, opts)
-      ["run-pipeline", file] -> boot() && run_pipeline(file, opts)
+      ["run", app_dir] -> boot_run(opts) && run_app(app_dir, opts)
+      ["run-pipeline", file] -> boot_run(opts) && run_pipeline(file, opts)
       ["log", run_id] -> boot() && print_log(run_id)
       ["proof", run_id] -> boot() && print_json(Mitos.Proof.render(run_id, settled(run_id)))
       ["status", run_id] -> boot() && print_status(run_id)
@@ -120,7 +124,10 @@ defmodule Mitos.CLI do
       IO.puts("  stage #{id}: #{s.status} (signal: #{signal})")
     end)
 
-    IO.puts("spent:  #{state.spent.tokens} tokens · $#{state.spent.usd} · #{state.spent.wall_ms}ms")
+    IO.puts(
+      "spent:  #{state.spent.tokens} tokens · $#{state.spent.usd} · #{state.spent.wall_ms}ms"
+    )
+
     IO.puts("log:    #{Mitos.Log.path(run_id)}")
     if state.status != :finished, do: System.halt(1)
   end
@@ -165,7 +172,9 @@ defmodule Mitos.CLI do
   # Eve agent/ → mitos app scaffold (12 §10, 03 §10.1). The output is a draft
   # app runnable from disk; publish is refused until the order form is typed.
   defp import_eve(agent_dir, opts) do
-    out = opts[:out] || Path.join(Path.dirname(Path.expand(agent_dir)), "#{Path.basename(agent_dir)}-app")
+    out =
+      opts[:out] ||
+        Path.join(Path.dirname(Path.expand(agent_dir)), "#{Path.basename(agent_dir)}-app")
 
     case Mitos.Import.Eve.scaffold(agent_dir, out) do
       {:ok, out_dir} ->
@@ -174,7 +183,10 @@ defmodule Mitos.CLI do
         IO.puts("imported: #{app.name} → #{out_dir}")
         IO.puts("  app_id:  #{String.slice(app.app_id, 0, 12)}…")
         IO.puts("  run it:  mitos run #{out_dir} --entrypoint run -i message=\"hello\"")
-        IO.puts("  NOTE:    entrypoint 'run' is a DRAFT — type the order form before publish (12 §10)")
+
+        IO.puts(
+          "  NOTE:    entrypoint 'run' is a DRAFT — type the order form before publish (12 §10)"
+        )
 
       {:error, reason} ->
         halt("import failed: #{inspect(reason)}")
@@ -215,11 +227,32 @@ defmodule Mitos.CLI do
     end
 
     port = Application.fetch_env!(:mitos, :http_port)
-    IO.puts("mitos control plane on http://localhost:#{port} (broker on 127.0.0.1:#{Application.fetch_env!(:mitos, :broker_port)})")
+
+    IO.puts(
+      "mitos control plane on http://localhost:#{port} (broker on 127.0.0.1:#{Application.fetch_env!(:mitos, :broker_port)})"
+    )
+
     Process.sleep(:infinity)
   end
 
   # --- helpers ---
+
+  # `run`/`run-pipeline` forward the same --http-port/--broker-port/--dev
+  # overrides `serve` uses, so a CLI run can boot alongside a live control
+  # plane (no :eaddrinuse) and, with --dev, let pi read the operator's ~/.pi
+  # auth the same way `serve --dev` does. A `run` only executes one pipeline —
+  # it is not the hosted control plane — so it does NOT stand up the model/MITM
+  # edge proxy (those are serve concerns); disabling them also avoids colliding
+  # on the escript-baked model_proxy port (4648) that a live serve holds.
+  defp boot_run(opts),
+    do:
+      boot(
+        http_port: opts[:http_port],
+        broker_port: opts[:broker_port],
+        model_proxy_port: 0,
+        mitm_proxy_port: 0,
+        dev: opts[:dev]
+      )
 
   defp boot(overrides \\ []) do
     # Load first so the compiled config is baked into env, THEN apply overrides

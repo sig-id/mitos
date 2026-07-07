@@ -23,7 +23,13 @@ defmodule Mitos.Harness.Opencode do
   @impl true
   def launch(sandbox, prompt, opts) do
     {exe, args} = argv(prompt, opts)
-    env = Map.merge(hermetic_env(sandbox), Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env()))
+
+    env =
+      Map.merge(
+        hermetic_env(sandbox),
+        Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env())
+      )
+
     PortAdapter.launch(exe, args, sandbox.workspace, Mitos.Hermetic.env(env))
   end
 
@@ -51,7 +57,12 @@ defmodule Mitos.Harness.Opencode do
 
   @impl true
   def capabilities,
-    do: %{structured_output: true, mcp_tools?: true, sessions?: true, effort_levels: ["minimal", "low", "high", "max"]}
+    do: %{
+      structured_output: true,
+      mcp_tools?: true,
+      sessions?: true,
+      effort_levels: ["minimal", "low", "high", "max"]
+    }
 
   # --- opencode JSON → normalized events ---
 

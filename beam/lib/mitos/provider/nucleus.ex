@@ -66,11 +66,15 @@ defmodule Mitos.Provider.Nucleus do
       case Application.get_env(:mitos, :nucleus_bundle, nil) do
         nil ->
           [
-            "--workspace", handle.workspace,
-            "--workspace-mode", "bind-rw",
+            "--workspace",
+            handle.workspace,
+            "--workspace-mode",
+            "bind-rw",
             "--workspace-exec",
-            "--workdir", "/workspace",
-            "--home", "/home/agent"
+            "--workdir",
+            "/workspace",
+            "--home",
+            "/home/agent"
           ]
 
         bundle ->
@@ -82,12 +86,17 @@ defmodule Mitos.Provider.Nucleus do
       | base
     ] ++
       [
-        "--runtime", "gvisor",
+        "--runtime",
+        "gvisor",
         "--rootless",
-        "--userns", "keep-id",
-        "--memory", resource(handle, :memory, "2G"),
-        "--cpus", resource(handle, :cpus, "2"),
-        "--pids", resource(handle, :pids, "512")
+        "--userns",
+        "keep-id",
+        "--memory",
+        resource(handle, :memory, "2G"),
+        "--cpus",
+        resource(handle, :cpus, "2"),
+        "--pids",
+        resource(handle, :pids, "512")
       ] ++ egress_args() ++ credential_broker_args() ++ ["--", inner_exe | inner_args]
   end
 
@@ -140,6 +149,7 @@ defmodule Mitos.Provider.Nucleus do
 
   defp resource(handle, key, default) do
     resources = (handle.spec.manifest && handle.spec.manifest.resources) || %{}
+
     case Map.get(resources, to_string(key)) || Map.get(resources, key) do
       nil -> default
       val -> to_string(val)
@@ -160,6 +170,11 @@ defmodule Mitos.Provider.Nucleus do
   end
 
   defp default_model_domains do
-    ["api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com", "open.bigmodel.cn"]
+    [
+      "api.anthropic.com",
+      "api.openai.com",
+      "generativelanguage.googleapis.com",
+      "open.bigmodel.cn"
+    ]
   end
 end

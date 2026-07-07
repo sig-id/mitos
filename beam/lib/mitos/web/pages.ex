@@ -240,7 +240,7 @@ defmodule Mitos.Web.Pages do
           signal = s.result && s.result["signal"]
 
           trace_link =
-            if cut == :dev and Runs.trace(run_id, id) != [],
+            if cut == :dev and Runs.trace(run_id, id, limit: 1).events != [],
               do: ~s( · <a href="/web/runs/#{run_id}/trace/#{esc(id)}">inner trace ↓</a>),
               else: ""
 
@@ -282,9 +282,9 @@ defmodule Mitos.Web.Pages do
   # --- inner zoom: one capability's harness trace (11 §4, dev cut only) ---
 
   def trace(run_id, stage, role) do
-    events = Runs.trace(run_id, stage)
+    %{events: events, total_shown: shown, truncated: truncated, bytes: bytes} = Runs.trace(run_id, stage)
 
-    if events == [] do
+    if events == [] and bytes == 0 do
       :not_found
     else
       rows =
@@ -307,16 +307,34 @@ defmodule Mitos.Web.Pages do
           end
         end)
 
+      # Surface that the on-disk trace is huge / truncated — it's bounded at read
+      # time so a runaway trace (e.g. a harness that flooded stderr) can't OOM
+      # the page; the raw file is still on disk for offline inspection.
+      banner =
+        cond do
+          truncated ->
+            ~s|<p class="sub warn">⚠ showing the first #{shown} events of a larger trace (#{mb(bytes)} MB on disk). The file is bounded at read time; inspect <code>trace/#{esc(stage)}.jsonl</code> directly for the full record.</p>|
+
+          bytes > 5_000_000 ->
+            ~s(<p class="sub">#{shown} events · #{mb(bytes)} MB on disk</p>)
+
+          true ->
+            ""
+        end
+
       body = """
       <h1>inner trace · #{esc(stage)}</h1>
       <p class="sub">the harness's own steps inside one capability — an observability surface,
       never an orchestrator input · <a href="#{run_link(run_id)}">← run</a></p>
+      #{banner}
       <ul class="timeline">#{rows}</ul>
       """
 
       {:ok, layout("trace · #{stage}", body, role: role, active: "runs")}
     end
   end
+
+  defp mb(bytes), do: :erlang.float_to_binary(bytes / 1_048_576, [:compact, decimals: 1])
 
   # --- the Deliverable: one renderer, two cuts (11 §5) ---
 
@@ -363,7 +381,11 @@ defmodule Mitos.Web.Pages do
       <ul class="timeline">#{timeline}</ul>
       """
 
-      {:ok, layout("#{if cut == :dev, do: "report", else: "proof"} · #{run_id}", body, role: role, active: "runs")}
+      {:ok,
+       layout("#{if cut == :dev, do: "report", else: "proof"} · #{run_id}", body,
+         role: role,
+         active: "runs"
+       )}
     end
   end
 
@@ -663,7 +685,7 @@ defmodule Mitos.Web.Pages do
   defp inner_trace_links(run_id, state) do
     links =
       state.stage_order
-      |> Enum.filter(&(Runs.trace(run_id, &1) != []))
+      |> Enum.filter(&(Runs.trace(run_id, &1, limit: 1).events != []))
       |> Enum.map_join(" · ", fn stage ->
         ~s(<a href="/web/runs/#{run_id}/trace/#{esc(stage)}">#{esc(stage)}</a>)
       end)
@@ -683,7 +705,8 @@ defmodule Mitos.Web.Pages do
 
   # Buyer-side copy: say what they get, not what the system withheld.
   defp cut_note(:commercial),
-    do: "what happened, verifiable from the event-log excerpt — the seller's method stays server-side"
+    do:
+      "what happened, verifiable from the event-log excerpt — the seller's method stays server-side"
 
   defp active_for("buyer"), do: "order"
   defp active_for(_), do: "endpoints"
@@ -704,5 +727,4 @@ defmodule Mitos.Web.Pages do
   defp spec_required?(%{"required" => true}), do: true
   defp spec_required?(%{"required" => "true"}), do: true
   defp spec_required?(_), do: false
-
 end

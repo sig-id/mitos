@@ -18,7 +18,12 @@ defmodule Mitos.Broker.TlsMitm do
   use Task, restart: :permanent
 
   def child_spec(port: port) when is_integer(port) and port > 0 do
-    %{id: __MODULE__, start: {__MODULE__, :start_link, [port]}, type: :worker, restart: :permanent}
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [port]},
+      type: :worker,
+      restart: :permanent
+    }
   end
 
   def child_spec(_), do: :ignore
@@ -30,7 +35,9 @@ defmodule Mitos.Broker.TlsMitm do
   defp accept_loop(port) do
     # Line mode for parsing the CONNECT request; the socket switches to raw
     # before the TLS handshake. (Mirrors the standalone probe that works.)
-    {:ok, listen} = :gen_tcp.listen(port, [:binary, active: false, reuseaddr: true, packet: :line])
+    {:ok, listen} =
+      :gen_tcp.listen(port, [:binary, active: false, reuseaddr: true, packet: :line])
+
     loop(listen)
   end
 
@@ -52,7 +59,7 @@ defmodule Mitos.Broker.TlsMitm do
       {:connect, host, port} ->
         :ok = read_headers(sock)
         {cert, key} = Mitos.Broker.CertAuthority.leaf(host)
-        :inet.setopts(sock, [packet: :raw, active: false])
+        :inet.setopts(sock, packet: :raw, active: false)
         :gen_tcp.send(sock, "HTTP/1.1 200 Connection Established\r\n\r\n")
         tls_serve(sock, host, port, cert, key)
 
@@ -152,7 +159,9 @@ defmodule Mitos.Broker.TlsMitm do
             end
 
           _ ->
-            if byte_size(buf) > 1_000_000, do: {:error, :too_large}, else: read_tls_request(tls, buf)
+            if byte_size(buf) > 1_000_000,
+              do: {:error, :too_large},
+              else: read_tls_request(tls, buf)
         end
 
       {:error, _} = e ->
@@ -181,10 +190,23 @@ defmodule Mitos.Broker.TlsMitm do
 
   @doc """
   The outbound request headers with the Vault model credential injected for
-  `host` (any existing Authorization is replaced). Public for unit testing.
+  `host`. Any harness-supplied credential header is stripped first so a
+  placeholder/boot key (pi, claude) never leaks upstream — the real key lives
+  only at this edge. Public for unit testing.
   """
   def credentialed_headers(headers, host) do
-    headers = Enum.reject(headers, &String.starts_with?(&1, "Authorization:"))
+    headers =
+      Enum.reject(headers, fn h ->
+        # Strip every credential-carrier a harness might set, by header-name
+        # prefix, case-insensitively: Authorization (Bearer), x-api-key /
+        # api-key (Anthropic / OpenAI), proxy-auth. The Vault key replaces them.
+        down = h |> String.downcase() |> String.trim_leading()
+
+        String.starts_with?(down, "authorization:") or
+          String.starts_with?(down, "x-api-key:") or
+          String.starts_with?(down, "api-key:") or
+          String.starts_with?(down, "proxy-authorization:")
+      end)
 
     case Mitos.Vault.get("model", host) do
       %{secret: secret} -> ["Authorization: Bearer #{secret}" | headers]
@@ -195,13 +217,18 @@ defmodule Mitos.Broker.TlsMitm do
   defp forward_tls(client_tls, host, port, method, path, headers, body) do
     request = "#{method} #{path} HTTP/1.1\r\n#{Enum.join(headers, "\r\n")}\r\n\r\n#{body}"
 
-    case :ssl.connect(String.to_charlist(host), port, [
-           verify: :verify_peer,
-           customize_hostname_check: [],
-           active: false,
-           packet: :raw,
-           timeout: 30_000
-         ], 30_000) do
+    case :ssl.connect(
+           String.to_charlist(host),
+           port,
+           [
+             verify: :verify_peer,
+             customize_hostname_check: [],
+             active: false,
+             packet: :raw,
+             timeout: 30_000
+           ],
+           30_000
+         ) do
       {:ok, up} ->
         :ssl.send(up, request)
         pipe(up, client_tls)
@@ -214,9 +241,15 @@ defmodule Mitos.Broker.TlsMitm do
 
   defp pipe(up, client) do
     case :ssl.recv(up, 0, 300_000) do
-      {:ok, data} -> :ssl.send(client, data); pipe(up, client)
-      {:error, :closed} -> :ok
-      {:error, _} -> :ok
+      {:ok, data} ->
+        :ssl.send(client, data)
+        pipe(up, client)
+
+      {:error, :closed} ->
+        :ok
+
+      {:error, _} ->
+        :ok
     end
   end
 
@@ -224,11 +257,22 @@ defmodule Mitos.Broker.TlsMitm do
     uri = URI.parse(url)
     host = uri.host
     injected = credentialed_headers([], host)
-    request = "#{method} #{uri.path}#{uri.query && "?" <> uri.query} HTTP/1.1\r\n#{Enum.join(injected, "\r\n")}\r\n\r\n"
 
-    case :gen_tcp.connect(String.to_charlist(host), uri.port || 80, [active: false, packet: :raw], 15_000) do
-      {:ok, up} -> :gen_tcp.send(up, request); pipe_tcp(up, sock)
-      {:error, _} -> :ok
+    request =
+      "#{method} #{uri.path}#{uri.query && "?" <> uri.query} HTTP/1.1\r\n#{Enum.join(injected, "\r\n")}\r\n\r\n"
+
+    case :gen_tcp.connect(
+           String.to_charlist(host),
+           uri.port || 80,
+           [active: false, packet: :raw],
+           15_000
+         ) do
+      {:ok, up} ->
+        :gen_tcp.send(up, request)
+        pipe_tcp(up, sock)
+
+      {:error, _} ->
+        :ok
     end
   end
 

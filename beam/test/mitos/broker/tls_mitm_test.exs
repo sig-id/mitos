@@ -108,4 +108,35 @@ defmodule Mitos.Broker.TlsMitmTest do
     assert Enum.any?(headers, &(&1 == "Authorization: Bearer sk-edge"))
     refute Enum.any?(headers, &(&1 == "Authorization: Bearer caller-attempt"))
   end
+
+  # A harness may auth with x-api-key (Anthropic) / api-key (OpenAI) rather than
+  # Authorization: Bearer. The placeholder/boot key a sandbox sends under those
+  # names must be stripped too, or it leaks upstream and 401s — the real key is
+  # injected from the Vault, case-insensitively across all the conventions.
+  test "credentialed_headers strips x-api-key / api-key placeholders before injecting the Vault key" do
+    Mitos.Vault.put("model", "api.anthropic.com", "sk-edge")
+
+    headers =
+      TlsMitm.credentialed_headers(
+        [
+          "Host: api.anthropic.com",
+          "x-api-key: via-mitos-edge",
+          "api-key: via-mitos-edge",
+          "X-Api-Key: via-mitos-edge",
+          "Authorization: Bearer via-mitos-edge",
+          "anthropic-version: 2023-06-01"
+        ],
+        "api.anthropic.com"
+      )
+
+    assert Enum.any?(headers, &(&1 == "Authorization: Bearer sk-edge"))
+
+    refute Enum.any?(headers, &String.starts_with?(&1, "x-api-key:"))
+    refute Enum.any?(headers, &String.starts_with?(&1, "api-key:"))
+    refute Enum.any?(headers, &String.starts_with?(&1, "X-Api-Key:"))
+    refute Enum.any?(headers, &String.starts_with?(&1, "Authorization: Bearer via-mitos-edge"))
+
+    # non-credential headers survive
+    assert Enum.any?(headers, &(&1 == "anthropic-version: 2023-06-01"))
+  end
 end

@@ -53,35 +53,48 @@ defmodule Mitos.Harness do
   as the inner command of its own sandbox while the adapter still owns
   normalization of the passthrough stream (01 §8.6).
   """
-  @callback argv(prompt :: String.t(), opts :: keyword()) :: {exe :: String.t(), args :: [String.t()]}
+  @callback argv(prompt :: String.t(), opts :: keyword()) ::
+              {exe :: String.t(), args :: [String.t()]}
 
   @optional_callbacks [argv: 2]
 
   @doc """
-  The model-egress proxy env for a harness (05 R1): when
-  `config :mitos, :model_proxy_url` is set (e.g. `http://127.0.0.1:4648`), the
-  harness's model base URL is redirected to the edge proxy so the model key is
-  attached there (Vault), never in the sandbox. Returns `%{}` when unset
-  (spec-clean default).
+  The model-egress proxy env for a harness (05 R1): the harness's model base
+  URL is redirected to the edge proxy so the model key is attached there
+  (Vault), never in the sandbox. Each proxy's URL is an explicit `_url` if set,
+  otherwise **derived from its enabled `_port`** — so starting `ModelProxy`
+  (`:model_proxy_port`) or `TlsMitm` (`:mitm_proxy_port`) auto-wires the harness
+  env. Returns `%{}` when neither URL nor port is set (spec-clean default).
   """
   def model_proxy_env do
+    # Reverse-proxy form (base-URL override — no TLS interception). NOTE: pi
+    # ignores ANTHROPIC_BASE_URL; the pi adapter writes a models.json baseUrl
+    # override instead (it DOES respect that). Other harnesses read these env
+    # vars directly. Either way, the Vault key is attached at ModelProxy.
     reverse =
-      case Application.get_env(:mitos, :model_proxy_url) do
+      case reverse_proxy_url() do
         nil -> %{}
         url -> %{"ANTHROPIC_BASE_URL" => "#{url}/anthropic", "OPENAI_BASE_URL" => "#{url}/openai"}
       end
 
-    # The MITM form is universal: route HTTPS through the edge + trust its CA.
-    # `ca_cert_path/0` reads the mitos CA the TlsMitm proxy signs leaves with.
+    # The MITM form is universal (any HTTPS client, no base-URL override needed):
+    # route HTTPS through the edge + trust its CA. `ca_cert_path/0` reads the
+    # mitos CA the TlsMitm proxy signs leaves with. NO_PROXY keeps loopback off
+    # the MITM so reverse-proxy base-URL traffic (→ 127.0.0.1:<model_proxy_port>)
+    # goes direct when both forms are active.
     mitm =
-      case Application.get_env(:mitos, :mitm_proxy_url) do
-        nil -> %{}
+      case mitm_proxy_url() do
+        nil ->
+          %{}
+
         url ->
           ca = Mitos.Broker.CertAuthority.ca_cert_path()
 
           %{
             "HTTPS_PROXY" => url,
             "HTTP_PROXY" => url,
+            "NO_PROXY" => "127.0.0.1,localhost",
+            "no_proxy" => "127.0.0.1,localhost",
             "SSL_CERT_FILE" => ca,
             "REQUESTS_CA_BUNDLE" => ca,
             "NODE_EXTRA_CA_CERTS" => ca,
@@ -90,5 +103,26 @@ defmodule Mitos.Harness do
       end
 
     Map.merge(reverse, mitm)
+  end
+
+  @doc "The resolved reverse-proxy base URL (loopback + :model_proxy_port), or nil if disabled."
+  def reverse_proxy_url, do: proxy_url(:model_proxy_url, :model_proxy_port)
+
+  @doc "The resolved TLS-MITM proxy URL (loopback + :mitm_proxy_port), or nil if disabled."
+  def mitm_proxy_url, do: proxy_url(:mitm_proxy_url, :mitm_proxy_port)
+
+  # Explicit `_url` wins; otherwise derive from the enabled `_port` (loopback —
+  # both proxies bind to {127,0,0,1}). nil when neither is set / port is 0.
+  defp proxy_url(url_key, port_key) do
+    case Application.get_env(:mitos, url_key) do
+      nil ->
+        case Application.get_env(:mitos, port_key, 0) do
+          port when is_integer(port) and port > 0 -> "http://127.0.0.1:#{port}"
+          _ -> nil
+        end
+
+      url ->
+        url
+    end
   end
 end

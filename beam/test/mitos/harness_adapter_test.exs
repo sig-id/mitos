@@ -27,7 +27,12 @@ defmodule Mitos.HarnessAdapterTest do
 
     assert Enum.any?(events, &match?(%{type: :status, status: "thread.started"}, &1))
     assert Enum.any?(events, &match?(%{type: :assistant_text, text: "planning"}, &1))
-    assert Enum.any?(events, &match?(%{type: :tool_use, name: "shell", input: %{"cmd" => "ls"}}, &1))
+
+    assert Enum.any?(
+             events,
+             &match?(%{type: :tool_use, name: "shell", input: %{"cmd" => "ls"}}, &1)
+           )
+
     assert Enum.any?(events, &match?(%{type: :tool_result, content: "file.txt"}, &1))
     assert Enum.any?(events, &match?(%{type: :token_usage, tokens: 104}, &1))
     assert Enum.any?(events, &match?(%{type: :final_result, ok: true}, &1))
@@ -66,8 +71,16 @@ defmodule Mitos.HarnessAdapterTest do
     ]
 
     events = norm(Mitos.Harness.Opencode, lines)
-    assert Enum.any?(events, &match?(%{type: :tool_use, name: "bash", input: %{"command" => "pwd"}}, &1))
-    assert Enum.any?(events, &match?(%{type: :tool_result, content: "/workspace", tool_use_id: "tr1"}, &1))
+
+    assert Enum.any?(
+             events,
+             &match?(%{type: :tool_use, name: "bash", input: %{"command" => "pwd"}}, &1)
+           )
+
+    assert Enum.any?(
+             events,
+             &match?(%{type: :tool_result, content: "/workspace", tool_use_id: "tr1"}, &1)
+           )
   end
 
   test "pi: session lifecycle, text deltas, message_end final + usage" do
@@ -97,6 +110,71 @@ defmodule Mitos.HarnessAdapterTest do
     assert Application.get_env(:mitos, :harnesses)["pi"] == Mitos.Harness.Pi
   end
 
+  # (a) stderr capture: a line the adapter doesn't recognize is surfaced as
+  # :stderr ONLY once the harness has emitted its first real JSON event — so
+  # installer/bootstrap noise before the harness starts is dropped, but runtime
+  # diagnostics (pi emits `session` JSON, THEN errors to stderr) are kept.
+  test "post-JSON unrecognized lines surface as :stderr; pre-JSON noise is dropped" do
+    # bootstrap-style noise BEFORE any JSON, then a JSON session event, then a
+    # real runtime stderr line — mirrors pi's actual ordering.
+    {:ok, session} =
+      Mitos.Harness.PortAdapter.launch(
+        "sh",
+        [
+          "-c",
+          ~s|echo 'added 140 packages in 10s'; echo '{"type":"session","id":"s1"}'; echo 'No API key found'>&2|
+        ],
+        System.tmp_dir!(),
+        %{}
+      )
+
+    events =
+      Mitos.Harness.PortAdapter.events(session, &Mitos.Harness.Pi.normalize/1)
+      |> Enum.to_list()
+
+    # the pre-session bootstrap line is dropped (not surfaced as stderr)
+    refute Enum.any?(events, &match?(%{type: :stderr, line: "added 140 packages in 10s"}, &1)),
+           "pre-JSON bootstrap noise should be dropped, got: #{inspect(events)}"
+
+    # the post-session stderr line IS surfaced (death visibility)
+    assert Enum.any?(events, &match?(%{type: :stderr, line: "No API key found"}, &1)),
+           "expected the post-JSON stderr line to surface, got: #{inspect(events)}"
+
+    # the real JSON event normalizes
+    assert Enum.any?(events, &match?(%{type: :status, status: "session"}, &1))
+    assert Enum.any?(events, &match?(%{type: :status, status: {:exited, 0}}, &1))
+  end
+
+  # (b) no-wedge: if the port disappears without delivering {:exit_status, _}
+  # (e.g. closed owner-side), the bounded receive must synthesize an exit
+  # instead of blocking the consumer forever.
+  test "a vanished port is reaped as {:exited, :port_vanished}, not a wedge" do
+    # Shrink the probe so the test doesn't wait the full 5s.
+    prev = Application.get_env(:mitos, :port_idle_probe_ms)
+    Application.put_env(:mitos, :port_idle_probe_ms, 50)
+
+    try do
+      # A long sleep keeps the OS process alive but silent.
+      {:ok, %{port: port} = session} =
+        Mitos.Harness.PortAdapter.launch("sh", ["-c", "sleep 30"], System.tmp_dir!(), %{})
+
+      # Close the port owner-side WITHOUT consuming exit_status — simulates the
+      # real failure mode (process gone, no message delivered).
+      Port.close(port)
+
+      events =
+        Mitos.Harness.PortAdapter.events(session, fn _ -> [] end)
+        |> Enum.to_list()
+
+      assert Enum.any?(events, &match?(%{type: :status, status: {:exited, :port_vanished}}, &1)),
+             "expected a synthesized :port_vanished exit, got: #{inspect(events)}"
+    after
+      if prev,
+        do: Application.put_env(:mitos, :port_idle_probe_ms, prev),
+        else: Application.delete_env(:mitos, :port_idle_probe_ms)
+    end
+  end
+
   # A harness that dies abnormally (SIGSEGV / SIGKILL — e.g. a node EPIPE crash)
   # must be observed as an exit status and NEVER crash the BEAM owner. Real
   # harnesses run through PortAdapter on an UNLINKED port, so the worst a crash
@@ -110,7 +188,8 @@ defmodule Mitos.HarnessAdapterTest do
           {"SIGKILL", ~c"kill -9 $$", &(&1 == 137)},
           {"SIGSEGV", ~c"kill -SEGV $$", &(&1 == 139)}
         ] do
-      {:ok, session} = Mitos.Harness.PortAdapter.launch("sh", ["-c", to_string(cmd)], System.tmp_dir!(), %{})
+      {:ok, session} =
+        Mitos.Harness.PortAdapter.launch("sh", ["-c", to_string(cmd)], System.tmp_dir!(), %{})
 
       events =
         Mitos.Harness.PortAdapter.events(session, fn _ -> [] end)
@@ -124,6 +203,7 @@ defmodule Mitos.HarnessAdapterTest do
 
       assert exited && status_pred.(exited),
              "#{label}: expected an {:exited, n} status matching, got: #{inspect(events)}"
+
       # the calling BEAM process survived the child crash
       assert Process.alive?(owner), "#{label}: owner died"
     end

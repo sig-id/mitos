@@ -38,23 +38,43 @@ defmodule Mitos.Runs do
     }
   end
 
-  @doc "The persisted inner trace of one stage (11 §4 inner zoom), or []."
-  def trace(run_id, stage) do
-    path = Path.join([Mitos.run_dir(run_id), "trace", stage <> ".jsonl"])
+  @doc """
+  The persisted inner trace of one stage (11 §4 inner zoom).
 
-    case File.read(path) do
-      {:ok, body} ->
-        body
-        |> String.split("\n", trim: true)
-        |> Enum.flat_map(fn line ->
-          case Mitos.JSON.decode(line) do
-            {:ok, %{} = e} -> [e]
-            _ -> []
-          end
-        end)
+  Returns `%{events: [...], total_shown: n, truncated: bool, bytes: size}` — the
+  trace is STREAMED and bounded (`limit`, default 2_000 events) so a runaway
+  trace (e.g. a harness that flooded stderr) can't OOM the reader. `truncated`
+  is true when more than `limit` events exist on disk. The full file is never
+  read into memory.
+  """
+  def trace(run_id, stage, opts \\ []) do
+    path = Path.join([Mitos.run_dir(run_id), "trace", stage <> ".jsonl"])
+    limit = Keyword.get(opts, :limit, 2_000)
+
+    case File.stat(path) do
+      {:ok, %{:size => bytes}} when bytes > 0 ->
+        # take limit+1 so we can detect truncation without reading the whole file
+        taken =
+          path
+          |> File.stream!()
+          |> Stream.map(&String.trim_trailing(&1, "\n"))
+          |> Stream.filter(&(&1 != ""))
+          |> Stream.flat_map(fn line ->
+            case Mitos.JSON.decode(line) do
+              {:ok, %{} = e} -> [e]
+              _ -> []
+            end
+          end)
+          |> Stream.take(limit + 1)
+          |> Enum.to_list()
+
+        truncated = length(taken) > limit
+        events = Enum.take(taken, limit)
+
+        %{events: events, total_shown: length(events), truncated: truncated, bytes: bytes}
 
       _ ->
-        []
+        %{events: [], total_shown: 0, truncated: false, bytes: 0}
     end
   end
 

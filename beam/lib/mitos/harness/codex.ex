@@ -31,7 +31,13 @@ defmodule Mitos.Harness.Codex do
   @impl true
   def launch(sandbox, prompt, opts) do
     {exe, args} = argv(prompt, opts)
-    env = Map.merge(hermetic_env(sandbox), Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env()))
+
+    env =
+      Map.merge(
+        hermetic_env(sandbox),
+        Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env())
+      )
+
     PortAdapter.launch(exe, args, sandbox.workspace, Mitos.Hermetic.env(env))
   end
 
@@ -60,7 +66,12 @@ defmodule Mitos.Harness.Codex do
 
   @impl true
   def capabilities,
-    do: %{structured_output: true, mcp_tools?: false, sessions?: true, effort_levels: ["minimal", "low", "medium", "high"]}
+    do: %{
+      structured_output: true,
+      mcp_tools?: false,
+      sessions?: true,
+      effort_levels: ["minimal", "low", "medium", "high"]
+    }
 
   # --- codex JSONL → normalized events ---
 
@@ -94,7 +105,11 @@ defmodule Mitos.Harness.Codex do
   end
 
   defp content_events("assistant", content),
-    do: for(%{"type" => "text", "text" => t} <- content || [], do: %{type: :assistant_text, text: t})
+    do:
+      for(
+        %{"type" => "text", "text" => t} <- content || [],
+        do: %{type: :assistant_text, text: t}
+      )
 
   defp content_events(_, _), do: []
 

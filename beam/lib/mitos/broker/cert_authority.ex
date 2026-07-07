@@ -48,11 +48,9 @@ defmodule Mitos.Broker.CertAuthority do
     if File.exists?(cert) and File.exists?(key) do
       {cert, key}
     else
-      openssl(
-        ~w(req -x509 -newkey rsa:2048 -nodes -keyout #{key} -out #{cert}
+      openssl(~w(req -x509 -newkey rsa:2048 -nodes -keyout #{key} -out #{cert}
            -subj /CN=mitos-mitm-ca -days 3650 -addext basicConstraints=critical,CA:TRUE
-           -addext keyUsage=critical,keyCertSign,cRLSign,digitalSignature)
-      )
+           -addext keyUsage=critical,keyCertSign,cRLSign,digitalSignature))
 
       {cert, key}
     end
@@ -83,10 +81,8 @@ defmodule Mitos.Broker.CertAuthority do
           ~w(req -new -newkey rsa:2048 -nodes -keyout #{hkey} -out #{csr} -subj /CN=#{host})
         )
 
-        openssl(
-          ~w(x509 -req -in #{csr} -CA #{ca_cert} -CAkey #{ca_key} -CAcreateserial
-             -out #{hcrt} -days 825 -extfile #{ext})
-        )
+        openssl(~w(x509 -req -in #{csr} -CA #{ca_cert} -CAkey #{ca_key} -CAcreateserial
+             -out #{hcrt} -days 825 -extfile #{ext}))
 
         {hcrt, hkey}
     end

@@ -25,7 +25,10 @@ defmodule Mitos.Broker.ModelProxyTest do
   test "outbound_headers attaches the Vault credential for (model, upstream); omits it when absent" do
     conn = Plug.Test.conn(:post, "/openai/v1/chat/completions", "{}")
     # no credential registered ⇒ no authorization header
-    refute Enum.any?(ModelProxy.outbound_headers(conn, "api.openai.com"), &match?({~c"authorization", _}, &1))
+    refute Enum.any?(
+             ModelProxy.outbound_headers(conn, "api.openai.com"),
+             &match?({~c"authorization", _}, &1)
+           )
 
     # register a model key at the edge ⇒ the proxy attaches it; the sandbox never saw it
     Mitos.Vault.put("model", "api.openai.com", "sk-edge-secret")
@@ -41,12 +44,27 @@ defmodule Mitos.Broker.ModelProxyTest do
              "https://api.openai.com/v1/chat/completions"
   end
 
-  test "model_proxy_env redirects harness base URLs to the edge when configured, else empty" do
+  test "model_proxy_env redirects harness base URLs to the edge, deriving the URL from the enabled port" do
+    # Explicit URL wins.
     Application.put_env(:mitos, :model_proxy_url, "http://127.0.0.1:4648")
+    Application.put_env(:mitos, :model_proxy_port, 0)
     env = Mitos.Harness.model_proxy_env()
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4648/anthropic"
     assert env["OPENAI_BASE_URL"] == "http://127.0.0.1:4648/openai"
+
+    # No explicit URL, but the port is enabled → URL derived from it (loopback)
+    # so a running ModelProxy is auto-wired without a second config knob.
     Application.delete_env(:mitos, :model_proxy_url)
+    Application.put_env(:mitos, :model_proxy_port, 4648)
+    env = Mitos.Harness.model_proxy_env()
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4648/anthropic"
+
+    # Neither URL nor an enabled port → spec-clean empty.
+    Application.put_env(:mitos, :model_proxy_port, 0)
     assert Mitos.Harness.model_proxy_env() == %{}
+  after
+    Application.delete_env(:mitos, :model_proxy_url)
+    # restore the test-isolated port (config/test.exs)
+    Application.put_env(:mitos, :model_proxy_port, 4748)
   end
 end

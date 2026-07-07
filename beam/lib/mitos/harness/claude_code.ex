@@ -44,7 +44,12 @@ defmodule Mitos.Harness.ClaudeCode do
       {:error, :claude_cli_not_found}
     else
       {_exe, args} = argv(prompt, opts)
-      env = Map.merge(hermetic_env(sandbox), Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env()))
+
+      env =
+        Map.merge(
+          hermetic_env(sandbox),
+          Map.merge(passthrough_env(), Mitos.Harness.model_proxy_env())
+        )
 
       port =
         Port.open({:spawn_executable, exe}, [

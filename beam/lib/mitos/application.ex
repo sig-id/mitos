@@ -10,6 +10,9 @@ defmodule Mitos.Application do
     children = [
       {Registry, keys: :unique, name: Mitos.Run.Registry},
       Mitos.Vault,
+      # Seed the Vault's model credentials at boot (app.manifest in prod, the
+      # operator's ~/.pi/agent/auth.json in dev). Runs before any run starts.
+      Mitos.Broker.ModelCredentials,
       Mitos.Catalog,
       Mitos.WorkPool,
       # I/O plane (10): bindings registry + ingress dedup, plus sink delivery
@@ -41,8 +44,11 @@ defmodule Mitos.Application do
 
   defp model_proxy_child do
     case Application.get_env(:mitos, :model_proxy_port, 0) do
-      port when port > 0 -> [{Bandit, plug: Mitos.Broker.ModelProxy, ip: {127, 0, 0, 1}, port: port}]
-      _ -> []
+      port when port > 0 ->
+        [{Bandit, plug: Mitos.Broker.ModelProxy, ip: {127, 0, 0, 1}, port: port}]
+
+      _ ->
+        []
     end
   end
 
