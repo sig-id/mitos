@@ -100,6 +100,26 @@ defmodule Mitos.HarnessAdapterTest do
     assert Enum.any?(events, &match?(%{type: :final_result, ok: true, subtype: "stop"}, &1))
   end
 
+  test "pi: reasoning (thinking_delta) surfaces as marked assistant text, never as stderr" do
+    # glm/Claude stream chain-of-thought as thinking_delta. Pre-fix these fell
+    # through normalize to [] and PortAdapter misfiled each one as :stderr —
+    # one ~1KB blob per token, which produced multi-GB traces of fake "stderr".
+    lines = [
+      ~s<{"type":"session","id":"s1"}>,
+      ~s<{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Let "}}>,
+      ~s<{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"me think."}}>,
+      ~s<{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"done"}}>
+    ]
+
+    events = norm(Mitos.Harness.Pi, lines)
+
+    thinking = for %{type: :assistant_text, thinking: true, text: t} <- events, do: t
+    assert thinking == ["Let ", "me think."]
+    assert Enum.any?(events, &match?(%{type: :assistant_text, text: "done"}, &1))
+    # the crucial regression: nothing was misfiled as stderr
+    refute Enum.any?(events, &match?(%{type: :stderr}, &1))
+  end
+
   test "claude-code adapter still normalizes its stream-json shape (parity)" do
     # claude_code keeps its own private normalize; verify via the public path
     # it shares (the adapter is exercised end-to-end in run_test). Here we only
@@ -108,6 +128,42 @@ defmodule Mitos.HarnessAdapterTest do
     assert Application.get_env(:mitos, :harnesses)["codex"] == Mitos.Harness.Codex
     assert Application.get_env(:mitos, :harnesses)["opencode"] == Mitos.Harness.Opencode
     assert Application.get_env(:mitos, :harnesses)["pi"] == Mitos.Harness.Pi
+  end
+
+  test "pi: tool calls/results come from tool_execution_*, usage+stop from turn_end" do
+    # The real glm/pi protocol: toolcall_* carry only streaming partials, so
+    # the parsed call+result live on tool_execution_start/end; the assistant
+    # message, per-turn usage, and stop-reason all land on turn_end (NOT
+    # message_end, which for this provider is only ever role user/toolResult).
+    frames = [
+      %{"type" => "turn_start"},
+      %{"type" => "message_update", "assistantMessageEvent" => %{"type" => "thinking_delta", "delta" => "plan"}},
+      %{"type" => "tool_execution_start", "toolCallId" => "c1", "toolName" => "bash",
+        "args" => %{"command" => "ls"}},
+      %{"type" => "tool_execution_end", "toolCallId" => "c1", "toolName" => "bash",
+        "result" => %{"content" => [%{"type" => "text", "text" => "a.txt"}]}, "isError" => false},
+      %{"type" => "turn_end",
+        "message" => %{"role" => "assistant", "stopReason" => "toolUse",
+          "usage" => %{"totalTokens" => 4242, "cost" => %{"total" => 0.04}},
+          "content" => [%{"type" => "thinking", "thinking" => "plan"}, %{"type" => "text", "text" => "listing files"}]}}
+    ]
+
+    events = Enum.flat_map(frames, &Mitos.Harness.Pi.normalize_frame/1)
+
+    assert Enum.any?(events, &match?(%{type: :tool_use, name: "bash", input: %{"command" => "ls"}, tool_use_id: "c1"}, &1))
+
+    assert Enum.any?(events, &match?(%{type: :tool_result, content: "a.txt", tool_use_id: "c1", isError: false}, &1))
+
+    assert Enum.any?(events, &match?(%{type: :token_usage, tokens: 4242, usd: 0.04}, &1))
+    assert Enum.any?(events, &match?(%{type: :final_result, ok: true, subtype: "toolUse"}, &1))
+
+    # answer prose comes from turn_end text parts; thinking from the streamed
+    # thinking_delta — NOT re-emitted from turn_end's thinking part (would dup).
+    texts = for %{type: :assistant_text, text: t} <- events, do: t
+    assert "listing files" in texts
+    assert Enum.any?(events, &match?(%{type: :assistant_text, text: "plan", thinking: true}, &1))
+    # the thinking part on turn_end was NOT re-emitted as a second thinking block
+    assert Enum.count(events, &match?(%{type: :assistant_text, thinking: true}, &1)) == 1
   end
 
   # (a) stderr capture: a line the adapter doesn't recognize is surfaced as
@@ -143,6 +199,42 @@ defmodule Mitos.HarnessAdapterTest do
     # the real JSON event normalizes
     assert Enum.any?(events, &match?(%{type: :status, status: "session"}, &1))
     assert Enum.any?(events, &match?(%{type: :status, status: {:exited, 0}}, &1))
+  end
+
+  # (a′) regression: a line that IS valid JSON but isn't matched by the adapter
+  # (pi's thinking_start/message_start/turn_end frames, or any protocol frame
+  # the adapter deliberately ignores) must NOT be logged as :stderr. Pre-fix,
+  # every such frame was misfiled as a stderr blob — and a token-by-token
+  # reasoning stream turned into a multi-GB trace of fake stderr. Only genuine
+  # non-JSON (the line above) is stderr.
+  test "unrecognized-but-valid JSON is dropped, never surfaced as :stderr" do
+    {:ok, session} =
+      Mitos.Harness.PortAdapter.launch(
+        "sh",
+        [
+          "-c",
+          # session (recognized) → message_start user role (valid JSON, ignored
+          # by pi.normalize) → a real stderr line. The JSON frame must vanish;
+          # the stderr line must survive.
+          ~s|echo '{"type":"session","id":"s1"}'; echo '{"type":"message_start","message":{"role":"user","content":[]}}'; echo 'boom'>&2|
+        ],
+        System.tmp_dir!(),
+        %{}
+      )
+
+    events =
+      Mitos.Harness.PortAdapter.events(session, &Mitos.Harness.Pi.normalize/1)
+      |> Enum.to_list()
+
+    stderr_lines = for %{type: :stderr, line: l} <- events, do: l
+    # the only stderr is the genuine non-JSON line — the valid-JSON message_start
+    # frame was dropped, not misfiled as a stderr blob.
+    assert stderr_lines == ["boom"],
+           "expected only the real stderr line, got: #{inspect(events)}"
+    refute Enum.any?(stderr_lines, fn l -> match?({:ok, %{}}, Mitos.JSON.decode(l)) end),
+           "no stderr line should be valid JSON (that would be a misfiled frame)"
+
+    assert Enum.any?(events, &match?(%{type: :status, status: "session"}, &1))
   end
 
   # (b) no-wedge: if the port disappears without delivering {:exit_status, _}

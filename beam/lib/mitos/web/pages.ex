@@ -287,52 +287,240 @@ defmodule Mitos.Web.Pages do
     if events == [] and bytes == 0 do
       :not_found
     else
-      rows =
-        Enum.map_join(events, "\n", fn e ->
-          case e["type"] do
-            "assistant_text" ->
-              ~s(<li><span class="mk mk-info"></span><span class="k">assistant</span></li><pre>#{esc(e["text"])}</pre>)
+      {setup, turns} = group_trace(events)
 
-            "tool_use" ->
-              ~s(<li><span class="mk mk-warn"></span><span class="k">tool_use</span><span class="d">#{esc(e["name"])} #{esc(Mitos.JSON.encode!(e["input"] || %{}))}</span></li>)
-
-            "tool_result" ->
-              ~s(<li><span class="mk"></span><span class="k">tool_result</span><span class="d">#{esc(String.slice(to_string(e["content"] || ""), 0, 400))}</span></li>)
-
-            "token_usage" ->
-              ~s(<li><span class="mk"></span><span class="k">tokens</span><span class="d">#{esc(e["tokens"])} · #{usd(e["usd"] || 0.0)}</span></li>)
-
-            other ->
-              ~s(<li><span class="mk"></span><span class="k">#{esc(other)}</span><span class="d">#{esc(e["status"] || e["subtype"])}</span></li>)
-          end
-        end)
-
-      # Surface that the on-disk trace is huge / truncated — it's bounded at read
-      # time so a runaway trace (e.g. a harness that flooded stderr) can't OOM
-      # the page; the raw file is still on disk for offline inspection.
-      banner =
-        cond do
-          truncated ->
-            ~s|<p class="sub warn">⚠ showing the first #{shown} events of a larger trace (#{mb(bytes)} MB on disk). The file is bounded at read time; inspect <code>trace/#{esc(stage)}.jsonl</code> directly for the full record.</p>|
-
-          bytes > 5_000_000 ->
-            ~s(<p class="sub">#{shown} events · #{mb(bytes)} MB on disk</p>)
-
-          true ->
-            ""
-        end
+      banner = trace_banner(shown, truncated, bytes, stage)
 
       body = """
       <h1>inner trace · #{esc(stage)}</h1>
       <p class="sub">the harness's own steps inside one capability — an observability surface,
       never an orchestrator input · <a href="#{run_link(run_id)}">← run</a></p>
       #{banner}
-      <ul class="timeline">#{rows}</ul>
+      <div class="trace">
+        #{render_trace_setup(setup)}
+        #{Enum.map_join(Enum.with_index(turns, 1), "\n", fn {items, i} -> render_turn(i, items) end)}
+      </div>
       """
 
-      {:ok, layout("trace · #{stage}", body, role: role, active: "runs")}
+      {:ok, layout("trace · #{stage}", body, role: role, active: "runs", hljs: true)}
     end
   end
+
+  defp trace_banner(shown, truncated, bytes, stage) do
+    cond do
+      truncated ->
+        ~s|<p class="sub warn">⚠ showing the first #{shown} entries of a larger trace (#{mb(bytes)} MB on disk). Bounded at read time; inspect <code>trace/#{esc(stage)}.jsonl</code> for the full record.</p>|
+
+      bytes > 5_000_000 ->
+        ~s|<p class="sub">#{shown} entries · #{mb(bytes)} MB on disk (read-time healed from raw frames)</p>|
+
+      true ->
+        ""
+    end
+  end
+
+  # Group a flat event stream into [setup-items] and a list of turns. A
+  # `turn_start` status opens a new turn; everything before the first one is the
+  # session setup (session/agent_start, bootstrap stderr). Within a turn the
+  # items arrive roughly in order: reasoning, answer text, tool calls + results,
+  # per-turn usage, final stop-reason.
+  defp group_trace(events) do
+    {setup_rev, turns_rev} =
+      Enum.reduce(events, {[], []}, fn e, {setup, turns} ->
+        item = trace_item(e)
+
+        case e do
+          %{"type" => "status", "status" => "turn_start"} ->
+            {setup, [[] | turns]}
+
+          %{"type" => "status", "status" => s} when s in ["session", "agent_start"] ->
+            {[{:status, s} | setup], turns}
+
+          _ ->
+            push_item(item, setup, turns)
+        end
+      end)
+
+    {Enum.reverse(setup_rev), turns_rev |> Enum.reverse() |> Enum.map(&Enum.reverse/1)}
+  end
+
+  defp trace_item(%{"type" => "assistant_text"} = e) do
+    if e["thinking"], do: {:think, e["text"] || ""}, else: {:text, e["text"] || ""}
+  end
+
+  defp trace_item(%{"type" => "tool_use"} = e), do: {:tool_use, e}
+  defp trace_item(%{"type" => "tool_result"} = e), do: {:tool_result, e}
+  defp trace_item(%{"type" => "token_usage"} = e), do: {:usage, e}
+  defp trace_item(%{"type" => "final_result"} = e), do: {:final, e}
+  defp trace_item(%{"type" => "stderr"} = e), do: {:stderr, e["line"] || ""}
+  defp trace_item(%{"type" => "status"} = e), do: {:status, e["status"]}
+  defp trace_item(_), do: nil
+
+  defp push_item(nil, setup, turns), do: {setup, turns}
+  defp push_item(item, setup, []), do: {[item | setup], []}
+  defp push_item(item, setup, [cur | rest]), do: {setup, [[item | cur] | rest]}
+
+  defp render_trace_setup([]), do: ""
+
+  defp render_trace_setup(items) do
+    inner =
+      items
+      |> Enum.map(fn
+        {:stderr, line} -> ~s(<span class="k">stderr</span> #{esc(String.slice(line, 0, 300))}<br>)
+        {:status, s} -> ~s(<span class="k">#{esc(s)}</span> )
+        # A harness whose protocol isn't turn-based (e.g. the Fake test harness)
+        # never opens a turn, so its real content lands here — render it with the
+        # same blocks a turn body uses rather than dropping it.
+        item -> render_trace_item(item)
+      end)
+      |> Enum.join("\n")
+
+    ~s(<div class="trace-setup">#{inner}</div>)
+  end
+
+  # Render one turn as a <details> card. Summary carries the turn index and
+  # quick stats (tool count, tokens, stop reason); the body is reasoning +
+  # answer text + tool calls, each individually collapsible.
+  defp render_turn(idx, items) do
+    paired = pair_tools(items)
+
+    ntools = Enum.count(paired, &match?({:tool, _, _}, &1))
+    {:usage, usage} = Enum.find(paired, {:usage, nil}, &match?({:usage, _}, &1))
+    {:final, final} = Enum.find(paired, {:final, nil}, &match?({:final, _}, &1))
+
+    meta =
+      [
+        if(ntools > 0,
+          do: ~s(<span class="b b-tools">#{ntools} #{if ntools == 1, do: "tool", else: "tools"}</span>),
+          else: ""
+        ),
+        if(usage && usage["tokens"], do: ~s(<span class="b">#{esc(usage["tokens"])} tok</span>), else: ""),
+        if(final && final["subtype"],
+          do: ~s(<span class="b b-sig-#{sig_class(final["subtype"])}">#{esc(final["subtype"])}</span>),
+          else: ""
+        )
+      ]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n")
+
+    body = paired |> Enum.map(&render_trace_item/1) |> Enum.reject(&(&1 == "")) |> Enum.join("\n")
+
+    """
+    <details class="turn" open>
+      <summary><span class="turn-idx">turn #{idx}</span><span class="turn-meta">#{meta}</span></summary>
+      <div class="turn-body">#{body}</div>
+    </details>
+    """
+  end
+
+  # Pair each tool_use with its tool_result (by tool_use_id when present, else
+  # by order) so a call and its output render as one block. Preserves the
+  # position of the first of the pair.
+  defp pair_tools(items) do
+    {out, pending} =
+      Enum.reduce(items, {[], []}, fn
+        {:tool_use, e}, {out, pend} -> {out, pend ++ [e]}
+
+        {:tool_result, e}, {out, pend} ->
+          {tu, rest} = take_tool(pend, e["tool_use_id"])
+          {out ++ [{:tool, tu, e}], rest}
+
+        it, {out, pend} ->
+          {out ++ [it], pend}
+      end)
+
+    out ++ for tu <- pending, do: {:tool, tu, nil}
+  end
+
+  defp take_tool([], _), do: {nil, []}
+  defp take_tool([h | t], nil), do: {h, t}
+
+  defp take_tool(pend, id) do
+    case Enum.split_with(pend, &(&1["tool_use_id"] == id)) do
+      {[h | _], rest} -> {h, rest}
+      _ -> take_tool(pend, nil)
+    end
+  end
+
+  defp render_trace_item({:think, text}) do
+    ~s(<details class="blk blk-think"><summary>reasoning <span class="mut">~#{div(byte_size(text), 4)} tok</span></summary><pre>#{esc(String.slice(text, 0, 20_000))}</pre></details>)
+  end
+
+  defp render_trace_item({:text, text}) do
+    ~s(<details class="blk blk-text" open><summary>assistant</summary><pre>#{esc(String.slice(text, 0, 20_000))}</pre></details>)
+  end
+
+  defp render_trace_item({:tool, tu, tr}) do
+    name = (tu && tu["name"]) || (tr && tr["name"]) || "?"
+
+    status =
+      cond do
+        is_nil(tr) -> ~s(<span class="mut">no result</span>)
+        tr["isError"] -> ~s(<span class="err">error</span>)
+        true -> ~s(<span class="ok">ok</span>)
+      end
+
+    input = if tu, do: tool_input_block(tu["name"], tu["input"] || %{}), else: ""
+    result = if tr, do: tool_result_block(tr), else: ""
+
+    """
+    <details class="blk blk-tool">
+      <summary><span class="tname">#{esc(name)}</span>#{status}</summary>
+      #{input}
+      #{result}
+    </details>
+    """
+  end
+
+  defp render_trace_item({:usage, _}), do: ""
+  defp render_trace_item({:final, _}), do: ""
+
+  defp render_trace_item({:stderr, line}) do
+    ~s(<details class="blk blk-tool"><summary><span class="tname">stderr</span></summary><pre>#{esc(String.slice(line, 0, 4_000))}</pre></details>)
+  end
+
+  defp render_trace_item({:status, s}), do: ~s(<div class="mut">#{esc(inspect(s))}</div>)
+
+  # Tool input: a bash/shell command renders as bash (much nicer than the JSON
+  # wrapper); everything else as JSON.
+  defp tool_input_block(name, input) when name in ["bash", "shell", "sh", "zsh"] do
+    case input do
+      %{"command" => cmd} when is_binary(cmd) ->
+        ~s(<div class="lbl">command</div><pre><code class="language-bash">#{esc(cmd)}</code></pre>)
+
+      _ ->
+        json_block(input, "input")
+    end
+  end
+
+  defp tool_input_block(_, input), do: json_block(input, "input")
+
+  defp tool_result_block(tr) do
+    content = to_string(tr["content"] || "")
+
+    cond do
+      content == "" ->
+        ""
+
+      match?({:ok, _}, Mitos.JSON.decode(content)) ->
+        json_block(String.slice(content, 0, 20_000), "result")
+
+      true ->
+        ~s(<div class="lbl">result</div><pre>#{esc(String.slice(content, 0, 20_000))}</pre>)
+    end
+  end
+
+  defp json_block(term, label) when is_binary(term) do
+    ~s(<div class="lbl">#{esc(label)}</div><pre><code class="language-json">#{esc(term)}</code></pre>)
+  end
+
+  defp json_block(term, label) do
+    ~s(<div class="lbl">#{esc(label)}</div><pre><code class="language-json">#{esc(Mitos.JSON.encode!(term))}</code></pre>)
+  end
+
+  defp sig_class("stop"), do: "stop"
+  defp sig_class("toolUse"), do: "stop"
+  defp sig_class(_), do: "stop"
 
   defp mb(bytes), do: :erlang.float_to_binary(bytes / 1_048_576, [:compact, decimals: 1])
 

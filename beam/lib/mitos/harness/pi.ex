@@ -100,52 +100,95 @@ defmodule Mitos.Harness.Pi do
 
   def normalize(line) do
     case Mitos.JSON.decode(line) do
-      {:ok, %{"type" => "message_update", "assistantMessageEvent" => ae}} ->
-        message_update_events(ae)
-
-      {:ok, %{"type" => "message_end", "message" => %{"role" => "assistant"} = m}} ->
-        text_events(m["content"]) ++
-          usage_events(m["usage"]) ++
-          [%{type: :final_result, ok: true, subtype: m["stopReason"] || "stop"}]
-
-      {:ok, %{"type" => "turn_end"}} ->
-        []
-
-      {:ok, %{"type" => other}} when other in ["session", "agent_start", "turn_start"] ->
-        [%{type: :status, status: other}]
-
-      _ ->
-        []
+      {:ok, %{} = frame} -> normalize_frame(frame)
+      _ -> []
     end
   end
 
-  # Streaming assistant parts. text_delta carries the incremental text; tool
-  # events carry tool invocations. We emit per-delta text (the loop-manager
-  # folds them) and tool_use/tool_result where present.
+  @doc """
+  Normalize an already-decoded pi protocol frame (a map) into events.
+
+  Public so the trace read-model can re-hydrate legacy trace files (whose raw
+  pi frames were persisted verbatim as `:stderr` blobs by the pre-fix adapter)
+  through the same mapping used for a live run.
+
+  pi's session/turn protocol (captured from `pi -p --mode json` over glm-5.2):
+
+    * `session` / `agent_start` / `turn_start`   → status (turn_start opens a turn)
+    * `message_update` `thinking_delta`           → assistant text (reasoning)
+    * `message_update` `text_delta`               → assistant text (streamed answer)
+    * `message_update` other (toolcall_*, *_start/_end) → ignored; the parsed
+      tool call + result arrive on the `tool_execution_*` frames below, which
+      carry the full arguments/output rather than the streaming partials.
+    * `tool_execution_start` {toolName, args}     → tool_use
+    * `tool_execution_end` {toolName, result, isError} → tool_result
+    * `turn_end` {message: assistant w/ usage + stopReason + content}
+        → assistant text (from content text parts), token_usage, final_result
+    * `message_start` / `message_end` / `turn_end`'s thinking parts / etc. → ignored
+
+  Older pi builds (and some providers) put the assistant message on
+  `message_end` instead; we still honor that as a fallback so the adapter
+  doesn't go silent on a protocol shift.
+  """
+  def normalize_frame(%{"type" => "message_update", "assistantMessageEvent" => ae}) do
+    message_update_events(ae)
+  end
+
+  def normalize_frame(%{"type" => "tool_execution_start", "toolName" => name, "args" => args} = f) do
+    [%{type: :tool_use, name: name, input: args || %{}, tool_use_id: f["toolCallId"]}]
+  end
+
+  def normalize_frame(%{"type" => "tool_execution_end"} = f) do
+    [%{type: :tool_result, content: tool_result_text(f["result"]), tool_use_id: f["toolCallId"],
+       name: f["toolName"], isError: f["isError"] == true}]
+  end
+
+  def normalize_frame(%{"type" => "turn_end", "message" => %{} = m}) do
+    text_parts(m["content"]) ++
+      usage_events(m["usage"]) ++
+      [%{type: :final_result, ok: true, subtype: m["stopReason"] || "stop"}]
+  end
+
+  # Fallback for pi builds that finalize the assistant message on message_end
+  # rather than turn_end.
+  def normalize_frame(%{"type" => "message_end", "message" => %{"role" => "assistant"} = m}) do
+    text_parts(m["content"]) ++
+      usage_events(m["usage"]) ++
+      [%{type: :final_result, ok: true, subtype: m["stopReason"] || "stop"}]
+  end
+
+  def normalize_frame(%{"type" => other}) when other in ["session", "agent_start", "turn_start"] do
+    [%{type: :status, status: other}]
+  end
+
+  def normalize_frame(_), do: []
+
+  # Streaming assistant parts. Reasoning (glm/Claude thinking) and answer text
+  # stream as *_delta; we emit per-delta and let Runs.trace coalesce a run into
+  # one block. The streaming toolcall_* partials are ignored — tool_execution_*
+  # carries the parsed call and its result.
+  defp message_update_events(%{"type" => "thinking_delta", "delta" => delta}) when is_binary(delta),
+    do: [%{type: :assistant_text, text: delta, thinking: true}]
+
   defp message_update_events(%{"type" => "text_delta", "delta" => delta}) when is_binary(delta),
     do: [%{type: :assistant_text, text: delta}]
 
-  defp message_update_events(%{"type" => "text_start", "partial" => %{"content" => content}}),
-    do: text_events(content)
-
-  defp message_update_events(%{"type" => "tool_" <> _, "tool" => tool} = ae) do
-    case ae["type"] do
-      t when t in ["tool_start", "tool_call"] ->
-        [%{type: :tool_use, name: tool["name"], input: tool["input"]}]
-
-      t when t in ["tool_end", "tool_result"] ->
-        [%{type: :tool_result, content: tool["output"], tool_use_id: tool["id"]}]
-
-      _ ->
-        []
-    end
-  end
-
   defp message_update_events(_), do: []
 
-  defp text_events(content) do
+  # Extract the answer prose from a finalized assistant message. We take only
+  # `text` parts (NOT `thinking` — reasoning already streamed via
+  # thinking_delta, and echoing it here would duplicate).
+  defp text_parts(content) do
     for %{"type" => "text", "text" => t} <- content || [], do: %{type: :assistant_text, text: t}
   end
+
+  # pi ships tool results as %{content: [%{type: "text", text: ...}, ...]}; join
+  # the text parts so the trace shows the output the way the model saw it.
+  defp tool_result_text(%{"content" => content}) do
+    for %{"type" => "text", "text" => t} <- content || [], into: "", do: t
+  end
+
+  defp tool_result_text(other), do: other
 
   defp usage_events(nil), do: []
 

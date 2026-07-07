@@ -121,10 +121,27 @@ defmodule Mitos.Harness.PortAdapter do
       case normalize.(line) do
         [] ->
           cond do
-            line == "" -> {acc, sj, n}
-            not sj -> {acc, sj, n}
-            n >= @stderr_cap -> {acc, sj, n + 1}
-            true -> {acc ++ [%{type: :stderr, line: clean_stderr(line)}], sj, n + 1}
+            line == "" ->
+              {acc, sj, n}
+
+            # A line the adapter didn't surface but which IS valid JSON is
+            # harness protocol (pi's thinking_start/message_start/turn_end
+            # frames, claude-code's preamble, …), NOT stderr. Drop it silently
+            # and flip seen_json — the harness has started its protocol, so
+            # any later non-JSON is a runtime diagnostic worth keeping. Without
+            # this, every unrecognized JSON frame was misfiled as :stderr and a
+            # token-by-token reasoning stream could balloon the trace by GBs.
+            match?({:ok, %{}}, Mitos.JSON.decode(line)) ->
+              {acc, true, n}
+
+            not sj ->
+              {acc, sj, n}
+
+            n >= @stderr_cap ->
+              {acc, sj, n + 1}
+
+            true ->
+              {acc ++ [%{type: :stderr, line: clean_stderr(line)}], sj, n + 1}
           end
 
         events ->

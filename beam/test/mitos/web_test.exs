@@ -118,6 +118,49 @@ defmodule Mitos.WebTest do
     assert body =~ "agent: working in"
   end
 
+  test "inner trace page groups events into collapsible turns with highlighted tools" do
+    # A synthetic pi-shaped trace written straight to the run dir exercises the
+    # new transcript UI: turn cards, tool blocks with the parsed input, and the
+    # hljs include. Uses raw frames persisted as :stderr blobs so the legacy
+    # re-hydration path is the one producing the rendered events.
+    run_id = "webtest/#{Mitos.id()}"
+    stage = "webcap"
+    path = Path.join([Mitos.run_dir(run_id), "trace", stage <> ".jsonl"])
+    File.mkdir_p!(Path.dirname(path))
+
+    # Build lines programmatically so the JSON-in-JSON (a raw pi frame nested
+    # as a :stderr `line`) is encoded correctly, not hand-escaped.
+    frame = fn m -> Mitos.JSON.encode!(m) end
+
+    line = fn m -> %{"iteration" => 1, "type" => "stderr", "line" => frame.(m)} |> Mitos.JSON.encode!() end
+
+    events = [
+      %{"iteration" => 1, "type" => "status", "status" => "session"} |> Mitos.JSON.encode!(),
+      %{"iteration" => 1, "type" => "status", "status" => "turn_start"} |> Mitos.JSON.encode!(),
+      line.(%{"type" => "tool_execution_start", "toolCallId" => "c1", "toolName" => "bash", "args" => %{"command" => "cat a"}}),
+      line.(%{"type" => "tool_execution_end", "toolCallId" => "c1", "toolName" => "bash",
+              "result" => %{"content" => [%{"type" => "text", "text" => "hello"}]}, "isError" => false}),
+      line.(%{"type" => "turn_end",
+              "message" => %{"role" => "assistant", "stopReason" => "stop", "usage" => %{"totalTokens" => 10},
+                             "content" => [%{"type" => "text", "text" => "done"}]}})
+    ]
+
+    File.write!(path, Enum.join(events, "\n") <> "\n")
+
+    {200, body, _} = get_page("/web/runs/#{run_id}/trace/#{stage}", "operator")
+
+    # one turn card, marked as a transcript turn
+    assert body =~ ~s(class="turn-idx">turn 1)
+    # the bash tool call recovered from the raw frame, with its parsed command
+    assert body =~ "language-bash"
+    assert body =~ "cat a"
+    assert body =~ ~s(class="tname">bash)
+    # the recovered result text
+    assert body =~ "hello"
+    # hljs is pulled in for this surface
+    assert body =~ "highlight.min.js"
+  end
+
   test "one renderer, two cuts: report shows rationale, proof never does (11 §5)" do
     run_id = finished_run()
 

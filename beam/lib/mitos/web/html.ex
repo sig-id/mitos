@@ -35,6 +35,16 @@ defmodule Mitos.Web.HTML do
         secs -> ~s(<meta http-equiv="refresh" content="#{secs}">)
       end
 
+    # highlight.js is pulled in only by surfaces that show code/JSON (the inner
+    # trace). Served from a CDN; if offline, code simply renders unhighlighted.
+    hljs =
+      if opts[:hljs],
+        do:
+          ~s|<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/atom-one-dark.min.css">| <>
+            ~s|<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js" defer></script>| <>
+            ~S|<script>window.addEventListener("DOMContentLoaded",function(){if(window.hljs){hljs.configure({ignoreUnescapedHTML:true});hljs.highlightAll()}})</script>|,
+        else: ""
+
     """
     <!DOCTYPE html>
     <html lang="en">
@@ -43,6 +53,7 @@ defmodule Mitos.Web.HTML do
     <meta name="viewport" content="width=device-width, initial-scale=1">
     #{refresh}
     <title>#{esc(title)} · mitos</title>
+    #{hljs}
     <style>#{css()}</style>
     </head>
     <body>
@@ -285,7 +296,53 @@ defmodule Mitos.Web.HTML do
                       letter-spacing:.08em; text-transform:uppercase; }
     .role-card .dot { width:9px; height:9px; border-radius:99px; display:block; }
     .login .idp-note { color:var(--faint); font-size:12px; margin-top:2.2rem; }
-    @media (prefers-reduced-motion: reduce) { .role-card { transition:none; } }
+
+    /* inner trace (dev cut) — a transcript of turns, each collapsible */
+    .trace { display:flex; flex-direction:column; gap:.5rem; margin:.4rem 0; }
+    .trace-setup { font-size:12px; color:var(--dim); border:1px dashed var(--line);
+      border-radius:8px; padding:.5rem .8rem; }
+    .trace-setup .k { color:var(--faint); }
+    details.turn { background:var(--panel); border:1px solid var(--line);
+      border-radius:8px; overflow:hidden; }
+    details.turn > summary { list-style:none; cursor:pointer; padding:.6rem .9rem;
+      display:flex; align-items:center; gap:.7rem; font-size:13px; user-select:none; }
+    details.turn > summary::-webkit-details-marker { display:none; }
+    details.turn > summary::before { content:"▸"; color:var(--faint); font-size:10px;
+      transition:transform .12s; }
+    details.turn[open] > summary::before { transform:rotate(90deg); }
+    details.turn > summary:hover { background:var(--panel-2); }
+    .turn-idx { font-family:var(--mono); font-weight:600; color:var(--fg); }
+    .turn-meta { color:var(--dim); font-size:12px; display:flex; gap:.7rem; flex-wrap:wrap; }
+    .turn-meta .b { background:var(--panel-2); border:1px solid var(--line);
+      border-radius:99px; padding:.05rem .55rem; }
+    .turn-meta .b-tools { color:var(--info); border-color:var(--line); }
+    .turn-meta .b-sig-stop { color:var(--ok); }
+    .turn-body { padding:.2rem .9rem .8rem; display:flex; flex-direction:column; gap:.5rem; }
+    details.blk { border:1px solid var(--line-soft); border-radius:7px; background:#0a0d12; }
+    details.blk > summary { list-style:none; cursor:pointer; padding:.45rem .7rem;
+      font-family:var(--mono); font-size:12.5px; display:flex; align-items:center;
+      gap:.5rem; user-select:none; }
+    details.blk > summary::-webkit-details-marker { display:none; }
+    details.blk > summary::before { content:"▸"; color:var(--faint); font-size:9px; }
+    details.blk[open] > summary::before { transform:rotate(90deg); }
+    details.blk > summary:hover { color:var(--fg); }
+    .blk-think > summary { color:var(--warn); }
+    .blk-think > summary::before { color:var(--warn); }
+    .blk-think[open] > summary { border-bottom:1px solid var(--line-soft); }
+    .blk-tool > summary { color:var(--info); }
+    .blk-tool > summary .tname { font-weight:600; }
+    .blk-tool .ok { color:var(--ok); } .blk-tool .err { color:var(--bad); }
+    .blk-tool .seg { margin:0; border:0; border-top:1px solid var(--line-soft);
+      border-radius:0; max-height:22rem; }
+    .blk-tool .lbl { color:var(--faint); font-size:11px; letter-spacing:.08em;
+      text-transform:uppercase; padding:.4rem .7rem 0; }
+    .blk-text > summary { color:var(--fg); }
+    .blk-text[open] > summary { border-bottom:1px solid var(--line-soft); }
+    .trace pre, .blk pre { margin:0; border-radius:0; border:0; max-height:26rem; }
+    details.blk > pre { border-top:1px solid var(--line-soft); }
+    .mut { color:var(--faint); font-size:11px; }
+    .trace-exit { font-size:12px; color:var(--dim); padding:.4rem .2rem; }
+    @media (prefers-reduced-motion: reduce) { .role-card { transition:none; } details > summary::before { transition:none; } }
     """
   end
 end
