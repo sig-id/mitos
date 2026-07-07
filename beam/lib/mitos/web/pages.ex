@@ -1,14 +1,17 @@
 defmodule Mitos.Web.Pages do
   @moduledoc """
-  The v1 surfaces (11 §10): run history + watch + deliverable pages, the
-  entrypoint order form, the seller's flat attribution list, and the paid
-  endpoints. Every page is a read of the log at a cut (11 §1); the **one
-  renderer, two cuts** rule (11 §5) is `report/3` — the dev cut adds
-  `rationale` and inner-trace links, the commercial cut is exactly the 08 §5
-  proof page plus the receipt.
+  The console surfaces (11 §10, product shape 11 §13): home (launch + recent),
+  run history, application detail (entrypoints, pipelines, I/O wiring), the
+  entrypoint order form, watch/report with failure diagnosis + one-click
+  re-run, sales (offers + attribution), and the storefront. Every page is a
+  read of the log at a cut (11 §1); the **one renderer, two cuts** rule
+  (11 §5) is `report/3` — the dev cut adds `rationale` and inner-trace links,
+  the commercial cut is exactly the 08 §5 proof page plus the receipt.
 
-  `role` (mock identity, IdP later) only selects navigation and the cut —
-  never a different data source (08 §2).
+  `role` (cookie; IdP later — locally defaults to operator, 11 §13.2) only
+  selects navigation and the cut — never a different data source (08 §2). The
+  copy rules are 11 §13.4: product language, benefits where earned, empty
+  states that teach the next command.
   """
 
   import Mitos.Web.HTML
@@ -17,29 +20,25 @@ defmodule Mitos.Web.Pages do
   alias Mitos.Run.State
   alias Mitos.{Catalog, Facilitator, Log, Proof, Runs}
 
-  # --- sign-in: the mock role picker (an IdP replaces this) ---
+  # --- "view as": the cut preview picker (11 §13.2; an IdP replaces the cookie) ---
 
-  def login do
+  def login(role \\ nil) do
     cards = [
-      {"operator", "var(--info)", "Operator",
-       "Run pipelines against your own code, watch every decision and inner trace, steer.",
-       "dev cut — full fidelity"},
-      {"seller", "var(--accent)", "Seller",
-       "Publish capabilities as paid endpoints, price them, read revenue and operations.",
-       "attribution cut — never buyer data"},
-      {"buyer", "var(--ok)", "Buyer",
-       "Order a completed job with a wallet, watch read-only, receive artifacts + proof.",
-       "commercial cut — never the recipe"}
+      {"operator", "var(--info)", "Operator", "your console",
+       "Everything: run entrypoints, watch every decision and inner trace, read your sales."},
+      {"seller", "var(--accent)", "Seller", "preview",
+       "What a seller sees of runs bought from them: revenue and operations — never the buyer's data."},
+      {"buyer", "var(--ok)", "Buyer", "preview",
+       "What a paying stranger sees: progress and the deliverable with its proof — never your method."}
     ]
 
     grid =
-      Enum.map_join(cards, "\n", fn {role, color, label, blurb, cut} ->
+      Enum.map_join(cards, "\n", fn {role, color, label, kind, blurb} ->
         """
         <a class="role-card" href="/web/login/#{role}">
           <span class="dot" style="background:#{color}"></span>
-          <h3>#{label}</h3>
+          <h3>#{label} <span class="faint">· #{kind}</span></h3>
           <p>#{blurb}</p>
-          <span class="cut">#{cut}</span>
         </a>
         """
       end)
@@ -47,18 +46,89 @@ defmodule Mitos.Web.Pages do
     body = """
     <div class="login">
       <div class="brand-big">mitos<span class="brand-dot">.</span></div>
-      <p class="tagline">packaged capabilities · agent-driven pipelines · every decision on the record</p>
+      <p class="tagline">the workbench for agent pipelines</p>
       <div class="role-grid">#{grid}</div>
-      <p class="idp-note">mock identity — role selects a redaction cut of the same log; an IdP takes this seat later</p>
+      <p class="idp-note">every view reads the same records, cut for a different party —
+      useful for checking what you expose before you publish.
+      Roles are a mock identity for now; hosted deployments put an IdP in this seat.</p>
     </div>
     """
 
-    layout("sign in", body)
+    layout("view as", body, role: role)
   end
 
-  # --- dashboard: run history (the v1 operate surface, 11 §8) ---
+  # --- home: launch + recent (11 §13.3 — "what can I run, what just happened?") ---
 
-  def dashboard(role) do
+  def home(role) do
+    apps = Catalog.apps()
+    recent = Runs.list() |> Enum.take(8)
+
+    launcher =
+      if apps == %{} do
+        """
+        <div class="callout">
+          <p><b>No applications installed.</b> Serve one from a directory and its entrypoints appear here, runnable:</p>
+          <pre>mitos serve --app path/to/app</pre>
+          <p class="dim">An application bundles pipelines and capabilities behind typed entrypoints —
+          have an Eve agent? <code>mitos import eve &lt;dir&gt;</code> converts it into one.</p>
+        </div>
+        """
+      else
+        Enum.map_join(apps, "\n", fn {app_id, app} -> app_launcher_card(app_id, app) end)
+      end
+
+    recent_table =
+      if recent == [] do
+        ~s(<div class="empty">nothing has run yet — order a job above, or <code>mitos run</code> from a terminal</div>)
+      else
+        runs_table(recent)
+      end
+
+    body = """
+    #{eyebrow("run something")}
+    #{launcher}
+    #{eyebrow(~s(recent runs))}
+    #{recent_table}
+    <p class="sub" style="margin-top:.6rem"><a href="/web/runs">all runs →</a></p>
+    """
+
+    layout("home", body, role: role, active: "home")
+  end
+
+  defp app_launcher_card(app_id, app) do
+    eps =
+      Enum.map_join(app.entrypoints, "\n", fn ep ->
+        action =
+          if ep.draft,
+            do: ~s(<span class="pill s-parked"><span class="dot"></span>draft</span>),
+            else: ~s(<a class="btn btn-sm" href="/web/apps/#{app_id}/entrypoints/#{esc(ep.id)}">Run…</a>)
+
+        """
+        <div class="ep-row">
+          <div class="ep-copy">
+            <div class="ep-title">#{esc(ep.title || ep.id)}</div>
+            #{if ep.description, do: ~s(<div class="ep-desc">#{esc(ep.description)}</div>), else: ""}
+          </div>
+          #{action}
+        </div>
+        """
+      end)
+
+    """
+    <div class="app-card">
+      <div class="app-head">
+        <h3><a href="/web/apps/#{app_id}">#{esc(app.name)}</a></h3>
+        <span class="faint">v#{esc(app.version)}</span>
+      </div>
+      #{if app.description, do: ~s(<div class="app-desc">#{esc(app.description)}</div>), else: ""}
+      #{eps}
+    </div>
+    """
+  end
+
+  # --- runs: the full history (11 §13.3 — "what has this machine done?") ---
+
+  def runs(role) do
     runs = Runs.list()
 
     finished = Enum.count(runs, &(&1.status == :finished))
@@ -72,13 +142,29 @@ defmodule Mitos.Web.Pages do
         {"finished", finished, nil},
         {"aborted", aborted, nil},
         {"tokens", tokens, nil},
-        {"model spend", usd(spend), "fold of budget_charged"}
+        {"model spend", usd(spend), "across all runs"}
       ])
 
+    table =
+      if runs == [] do
+        ~s(<div class="empty">no runs yet — start one from <a href="/web">Home</a> or <code>mitos run</code></div>)
+      else
+        runs_table(Enum.take(runs, 100))
+      end
+
+    body = """
+    <h1>Runs</h1>
+    <p class="sub">every run this control plane has executed — read straight from each run's on-disk record</p>
+    #{tiles}
+    #{table}
+    """
+
+    layout("runs", body, role: role, active: "runs")
+  end
+
+  defp runs_table(runs) do
     rows =
-      runs
-      |> Enum.take(100)
-      |> Enum.map_join("\n", fn r ->
+      Enum.map_join(runs, "\n", fn r ->
         stages =
           Enum.map_join(r.stages, " ", fn {id, st} ->
             ~s(<span class="pill s-#{esc(st)}"><span class="dot"></span>#{esc(id)}</span>)
@@ -96,69 +182,226 @@ defmodule Mitos.Web.Pages do
         """
       end)
 
-    table =
-      if runs == [] do
-        ~s(<div class="empty">no runs yet — start one from an application entrypoint or <code>mitos run</code></div>)
-      else
-        """
-        <div class="table-wrap"><table>
-          <thead><tr><th>started</th><th>run</th><th>pipeline</th><th>status</th><th>stages</th><th>spent</th></tr></thead>
-          <tbody>#{rows}</tbody>
-        </table></div>
-        """
-      end
-
-    body = """
-    <h1>Runs</h1>
-    <p class="sub">every row is fold(events) of one run log — nothing is stored beside it</p>
-    #{tiles}
-    #{table}
     """
-
-    layout("runs", body, role: role, active: "runs")
+    <div class="table-wrap"><table>
+      <thead><tr><th>started</th><th>run</th><th>pipeline</th><th>status</th><th>stages</th><th>spent</th></tr></thead>
+      <tbody>#{rows}</tbody>
+    </table></div>
+    """
   end
 
-  # --- applications: list + entrypoint order forms (11 §4 entry, 12 §4) ---
+  # --- applications: what's installed, and how each one is wired (11 §13.3) ---
 
   def apps(role) do
     apps = Catalog.apps()
 
-    rows =
-      Enum.map_join(apps, "\n", fn {app_id, app} ->
-        eps =
-          Enum.map_join(app.entrypoints, " · ", fn ep ->
-            ~s(<a href="/web/apps/#{app_id}/entrypoints/#{esc(ep.id)}">#{esc(ep.title || ep.id)}</a>)
-          end)
-
-        """
-        <tr>
-          <td>#{esc(app.name)} <span class="faint">v#{esc(app.version)}</span></td>
-          <td>#{mono(digest(app_id))}</td>
-          <td>#{eps}</td>
-        </tr>
-        """
-      end)
-
-    table =
+    cards =
       if apps == %{} do
-        ~s(<div class="empty">no applications registered — <code>mitos serve --app &lt;dir&gt;</code></div>)
+        """
+        <div class="callout">
+          <p><b>No applications installed.</b> Serve one from a directory:</p>
+          <pre>mitos serve --app path/to/app</pre>
+          <p class="dim">An application bundles pipelines and capabilities behind typed,
+          runnable entrypoints. <code>mitos import eve &lt;dir&gt;</code> converts an existing Eve agent.</p>
+        </div>
+        """
       else
-        """
-        <div class="table-wrap"><table>
-          <thead><tr><th>application</th><th>app_id</th><th>entrypoints</th></tr></thead>
-          <tbody>#{rows}</tbody>
-        </table></div>
-        """
+        Enum.map_join(apps, "\n", fn {app_id, app} ->
+          eps =
+            Enum.map_join(app.entrypoints, " · ", fn ep ->
+              ~s(<a href="/web/apps/#{app_id}/entrypoints/#{esc(ep.id)}">#{esc(ep.title || ep.id)}</a>)
+            end)
+
+          """
+          <div class="app-card">
+            <div class="app-head">
+              <h3><a href="/web/apps/#{app_id}">#{esc(app.name)}</a></h3>
+              <span class="faint">v#{esc(app.version)}</span>
+              <span class="faint">#{mono(digest(app_id))}</span>
+            </div>
+            #{if app.description, do: ~s(<div class="app-desc">#{esc(app.description)}</div>), else: ""}
+            <div class="dim" style="font-size:13px">
+              #{length(app.entrypoints)} #{plural(length(app.entrypoints), "entrypoint")} — #{eps}
+              · #{length(app.pipelines)} #{plural(length(app.pipelines), "pipeline")}
+              · #{length(app.capabilities)} #{plural(length(app.capabilities), "capability", "capabilities")}
+            </div>
+          </div>
+          """
+        end)
       end
 
     body = """
     <h1>Applications</h1>
-    <p class="sub">a user runs a pipeline named by an entrypoint — never a bare capability</p>
-    #{table}
+    <p class="sub">what's installed on this control plane — each bundles pipelines and capabilities behind runnable entrypoints</p>
+    #{cards}
     """
 
     layout("applications", body, role: role, active: "applications")
   end
+
+  # One application: entrypoints (runnable), the pipeline intent, the
+  # capabilities it composes, and its I/O wiring — the "manage" surface.
+  def app_detail(app_id, role) do
+    case Catalog.find_app(app_id) do
+      nil -> :not_found
+      app -> {:ok, render_app_detail(app, role)}
+    end
+  end
+
+  defp render_app_detail(app, role) do
+    eps =
+      Enum.map_join(app.entrypoints, "\n", fn ep ->
+        params =
+          Enum.map_join(ep.parameters, " · ", fn p ->
+            default = if p["default"], do: ~s( = #{esc(p["default"])}), else: ""
+            ~s(<code>#{esc(p["name"])}#{default}</code>)
+          end)
+
+        action =
+          if ep.draft,
+            do:
+              ~s(<span class="pill s-parked"><span class="dot"></span>draft — needs a typed order form before it can run</span>),
+            else: ~s(<a class="btn btn-sm" href="/web/apps/#{app.app_id}/entrypoints/#{esc(ep.id)}">Run…</a>)
+
+        """
+        <div class="ep-row">
+          <div class="ep-copy">
+            <div class="ep-title">#{esc(ep.title || ep.id)} <span class="faint">→ pipeline #{esc(ep.pipeline)}</span></div>
+            #{if ep.description, do: ~s(<div class="ep-desc">#{esc(ep.description)}</div>), else: ""}
+            #{if params != "", do: ~s(<div class="ep-desc">knobs: #{params}</div>), else: ""}
+          </div>
+          #{action}
+        </div>
+        """
+      end)
+
+    pipelines =
+      Enum.map_join(app.pipelines, "\n", fn pl ->
+        """
+        <details class="fold">
+          <summary>#{esc(pl.id)} <span class="faint">· #{esc(pl.file)}</span></summary>
+          <pre>#{esc(pl.body)}</pre>
+        </details>
+        """
+      end)
+
+    caps =
+      Enum.map_join(app.capabilities, "\n", fn c ->
+        """
+        <tr>
+          <td>#{esc(c.as)}</td>
+          <td>#{mono(c.ref)}</td>
+          <td>#{mono(digest(c.capability_id))}</td>
+        </tr>
+        """
+      end)
+
+    body = """
+    <h1>#{esc(app.name)} <span class="faint">v#{esc(app.version)}</span></h1>
+    <p class="sub">#{if app.description, do: esc(app.description) <> " · ", else: ""}#{mono(digest(app.app_id))}</p>
+
+    #{eyebrow("entrypoints — how this application is asked to work")}
+    <div class="card">#{if eps == "", do: ~s(<span class="dim">none declared</span>), else: eps}</div>
+
+    #{eyebrow("pipelines — the intent each entrypoint runs")}
+    #{if pipelines == "", do: ~s(<div class="empty">no pipelines</div>), else: pipelines}
+
+    #{eyebrow("capabilities — what the pipelines compose")}
+    <div class="table-wrap"><table>
+      <thead><tr><th>name</th><th>source</th><th>identity</th></tr></thead>
+      <tbody>#{caps}</tbody>
+    </table></div>
+
+    #{io_section(app)}
+    #{requirements_section(app)}
+    """
+
+    layout(app.name, body, role: role, active: "applications")
+  end
+
+  # The app's live I/O wiring (10 §4): how the world triggers it and where
+  # results go. Webhook inputs get their POST URL — that's the wiring a
+  # developer comes here to copy.
+  defp io_section(app) do
+    bindings =
+      Mitos.IO.bindings()
+      |> Enum.filter(&String.starts_with?(&1.name, app.name <> "."))
+
+    inputs =
+      bindings
+      |> Enum.filter(&(&1.direction == :input))
+      |> Enum.map_join("\n", fn b ->
+        org = b.tenant["org"] || "local"
+
+        trigger =
+          case b.kind do
+            :webhook -> ~s(<code>POST /ingest/#{esc(org)}/#{esc(b.name)}</code>)
+            other -> ~s(<code>#{esc(other)}</code> connector)
+          end
+
+        ~s(<dt>#{esc(b.name)}</dt><dd>#{trigger}</dd>)
+      end)
+
+    outputs =
+      bindings
+      |> Enum.filter(&(&1.direction == :output))
+      |> Enum.map_join("\n", fn b ->
+        ~s(<dt>#{esc(b.name)}</dt><dd><code>#{esc(b.kind)}</code> sink, fires on <code>#{esc(b.on)}</code></dd>)
+      end)
+
+    declared = length(List.wrap(app.io["inputs"])) + length(List.wrap(app.io["outputs"]))
+
+    gap_note =
+      if declared > length(bindings) do
+        ~s(<p class="dim" style="font-size:12.5px">the manifest declares #{declared} bindings; #{declared - length(bindings)} name connector/sink classes this control plane doesn't ship yet</p>)
+      else
+        ""
+      end
+
+    cond do
+      inputs == "" and outputs == "" and declared == 0 ->
+        ""
+
+      inputs == "" and outputs == "" ->
+        """
+        #{eyebrow("i/o — triggers in, deliveries out")}
+        <div class="card"><span class="dim">no live bindings</span>#{gap_note}</div>
+        """
+
+      true ->
+        """
+        #{eyebrow("i/o — triggers in, deliveries out")}
+        <div class="card"><dl class="kv">#{inputs}#{outputs}</dl>#{gap_note}</div>
+        """
+    end
+  end
+
+  defp requirements_section(%{requirements: req}) when req == %{}, do: ""
+
+  defp requirements_section(%{requirements: req}) do
+    rows =
+      [
+        {"isolation", req["trust_tier"]},
+        {"connectors", List.wrap(req["connectors"]) |> Enum.join(", ")},
+        {"egress", List.wrap(req["egress"]) |> Enum.join(", ")}
+      ]
+      |> Enum.reject(fn {_, v} -> v in [nil, ""] end)
+      |> Enum.map_join("\n", fn {k, v} -> ~s(<dt>#{esc(k)}</dt><dd>#{esc(v)}</dd>) end)
+
+    if rows == "" do
+      ""
+    else
+      """
+      #{eyebrow("requires — declared before anything runs")}
+      <div class="card"><dl class="kv">#{rows}</dl></div>
+      """
+    end
+  end
+
+  defp plural(1, singular), do: singular
+  defp plural(_, singular), do: singular <> "s"
+  defp plural(1, singular, _plural), do: singular
+  defp plural(_, _singular, plural), do: plural
 
   def order_form(app_id, ep_id, role) do
     with app when not is_nil(app) <- Catalog.find_app(app_id),
@@ -166,9 +409,10 @@ defmodule Mitos.Web.Pages do
       params =
         Enum.map_join(ep.parameters, "\n", fn p ->
           name = p["name"]
+          hint = [p["type"] || "string", p["description"]] |> Enum.reject(&is_nil/1) |> Enum.join(" — ")
 
           """
-          <label>#{esc(name)} <span class="faint">#{esc(p["type"] || "string")}</span></label>
+          <label>#{esc(name)} <span class="faint">#{esc(hint)}</span></label>
           <input type="text" name="param_#{esc(name)}" value="#{esc(p["default"])}">
           """
         end)
@@ -180,7 +424,7 @@ defmodule Mitos.Web.Pages do
 
           %{kind: kind} ->
             """
-            <label>workspace <span class="faint">#{esc(kind)} — resolved server-side, never in the browser</span></label>
+            <label>workspace <span class="faint">#{esc(kind)} — fetched by the server; credentials never touch the browser</span></label>
             <input type="text" name="workspace" placeholder="path or ref">
             """
         end
@@ -207,18 +451,21 @@ defmodule Mitos.Web.Pages do
 
       body = """
       <h1>#{esc(ep.title || ep.id)}</h1>
-      <p class="sub">#{esc(app.name)} · pipeline <code>#{esc(ep.pipeline)}</code></p>
+      <p class="sub">#{esc(app.name)} · runs pipeline <code>#{esc(ep.pipeline)}</code>#{if ep.description, do: "<br>" <> esc(ep.description), else: ""}</p>
       <div class="card">
       <form method="post" action="/web/apps/#{app_id}/entrypoints/#{esc(ep.id)}/run">
         #{workspace_field}
         #{input_fields}
         #{params}
+        <label>budget ceiling <span class="faint">USD · optional — the run stops rather than spend past it</span></label>
+        <input type="text" name="budget_usd" placeholder="e.g. 5.00">
         <button type="submit">Run</button>
       </form>
       </div>
+      <p class="sub">you'll land on the run as it executes — every decision shows up there as it's made</p>
       """
 
-      {:ok, layout("order · #{ep.id}", body, role: role, active: "applications")}
+      {:ok, layout("run · #{ep.id}", body, role: role, active: "applications")}
     else
       _ -> :not_found
     end
@@ -267,15 +514,126 @@ defmodule Mitos.Web.Pages do
           do: ~s(<a href="#{report_href}">→ deliverable</a>),
           else: ~s(<span class="pill s-running"><span class="dot"></span>live — refreshing</span>)
 
+      title =
+        case {cut, pipeline_name(run_id)} do
+          {:dev, name} when is_binary(name) -> esc(name)
+          _ -> mono(run_id)
+        end
+
       body = """
-      <h1>#{mono(run_id)} #{status_badge(state.status)}</h1>
-      <p class="sub">#{cut_note(cut)} · #{live_note}</p>
+      <h1>#{title} #{status_badge(state.status)}</h1>
+      <p class="sub">#{if cut == :dev, do: mono(run_id) <> " · ", else: ""}#{cut_note(cut)} · #{live_note}</p>
+      #{if cut == :dev, do: failure_callout(run_id, state), else: ""}
+      #{if cut == :dev and State.terminal?(state), do: run_actions(run_id, :watch), else: ""}
       #{stage_cards}
-      #{eyebrow("timeline — the run as decision / effect events")}
+      #{if cut == :dev, do: order_panel(run_id), else: ""}
+      #{eyebrow("timeline — every decision and its effects, in order")}
       <ul class="timeline">#{timeline}</ul>
       """
 
       {:ok, layout("watch · #{run_id}", body, role: role, refresh: refresh, active: "runs")}
+    end
+  end
+
+  # --- run diagnosis + iteration (11 §13.3: "why did it fail?" → next run) ---
+
+  # Surface the failure reason at the top instead of leaving it buried in the
+  # timeline: the aborting decision's rationale, and any stage that reported a
+  # failing signal (with its trace link — that's where the answer usually is).
+  defp failure_callout(run_id, state) do
+    aborted =
+      if state.status == :aborted do
+        case state.decisions |> Enum.filter(&(&1.type == :abort)) |> List.last() do
+          %Decision{rationale: r} when is_binary(r) and r != "" ->
+            ~s(<p><span class="kx">aborted</span> — #{esc(r)}</p>)
+
+          _ ->
+            ~s(<p><span class="kx">aborted</span> — no reason was recorded; the timeline below has the last decision taken</p>)
+        end
+      end
+
+    failing =
+      for id <- state.stage_order,
+          s = state.stages[id],
+          s.result && s.result["signal"] in ["fail", "failure", "error"] do
+        trace =
+          if Runs.trace(run_id, id, limit: 1).events != [],
+            do: ~s( — <a href="/web/runs/#{run_id}/trace/#{esc(id)}">read its trace</a>),
+            else: ""
+
+        summary = if s.result["summary"], do: ": #{esc(s.result["summary"])}", else: ""
+        ~s(<p><b>#{esc(id)}</b> reported <code>#{esc(s.result["signal"])}</code>#{summary}#{trace}</p>)
+      end
+
+    cond do
+      aborted ->
+        ~s(<div class="callout callout-bad">#{aborted}#{Enum.join(failing)}</div>)
+
+      failing != [] ->
+        ~s(<div class="callout callout-warn">#{Enum.join(failing)}</div>)
+
+      true ->
+        ""
+    end
+  end
+
+  # The iterate step is one click (11 §13.3): re-start from the run's stored
+  # order. Plus the two places a developer goes next, and the pre-publish check
+  # of what a buyer would be shown.
+  defp run_actions(run_id, current) do
+    rerun = """
+    <form method="post" action="/web/runs/#{run_id}/rerun">
+      <button type="submit" title="start a fresh run from this run's stored order">Run again</button>
+    </form>
+    """
+
+    links =
+      [
+        if(current != :watch, do: ~s(<a class="btn btn-ghost" href="/web/runs/#{run_id}">timeline</a>)),
+        if(current != :report, do: ~s(<a class="btn btn-ghost" href="/web/runs/#{run_id}/report">report</a>)),
+        ~s(<a class="btn btn-ghost" href="/web/runs/#{run_id}/proof" title="the redacted page a paying buyer would see">buyer's view</a>)
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
+    ~s(<div class="actions">#{rerun}#{links}</div>)
+  end
+
+  # What this run was asked to do — inputs, knobs, workspace, ceiling. Reads
+  # the stored order (config.json), so it works long after the run finished.
+  defp order_panel(run_id) do
+    case Mitos.Run.Config.load(run_id) do
+      {:ok, c} ->
+        rows =
+          [
+            {"inputs", if(c.inputs != %{}, do: Mitos.JSON.encode!(c.inputs))},
+            {"parameters", if(c.parameters != %{}, do: Mitos.JSON.encode!(c.parameters))},
+            {"workspace", c.workspace},
+            {"budget", if(c.budget != %{}, do: Mitos.JSON.encode!(c.budget))}
+          ]
+          |> Enum.reject(fn {_, v} -> v in [nil, ""] end)
+          |> Enum.map_join("\n", fn {k, v} -> ~s(<dt>#{esc(k)}</dt><dd><code>#{esc(v)}</code></dd>) end)
+
+        if rows == "" do
+          ""
+        else
+          """
+          <details class="fold">
+            <summary>the order — what this run was asked to do</summary>
+            <div class="fold-body"><dl class="kv">#{rows}</dl></div>
+          </details>
+          """
+        end
+
+      _ ->
+        ""
+    end
+  end
+
+  defp pipeline_name(run_id) do
+    case Mitos.Run.Config.load(run_id) do
+      {:ok, config} -> Mitos.Pipeline.parse(config.pipeline).name
+      _ -> nil
     end
   end
 
@@ -293,8 +651,8 @@ defmodule Mitos.Web.Pages do
 
       body = """
       <h1>inner trace · #{esc(stage)}</h1>
-      <p class="sub">the harness's own steps inside one capability — an observability surface,
-      never an orchestrator input · <a href="#{run_link(run_id)}">← run</a></p>
+      <p class="sub">every step the agent took inside this capability — reasoning, tool calls,
+      results · <a href="#{run_link(run_id)}">← run</a></p>
       #{banner}
       <div class="trace">
         #{render_trace_setup(setup)}
@@ -543,27 +901,36 @@ defmodule Mitos.Web.Pages do
       totals =
         stat_tiles([
           {"tokens", proof["token_totals"]["tokens"], nil},
-          {"model spend", usd(proof["token_totals"]["usd"]), "seller's own key"},
+          {"model spend", usd(proof["token_totals"]["usd"]),
+           if(cut == :dev, do: "on your key", else: "on the seller's key")},
           {"wall", "#{proof["wall_ms"]} ms", nil},
           {"egress crossings", length(proof["egress"]), "brokered, logged"},
           {"artifacts", length(proof["artifacts"]), "content-addressed"}
         ])
 
+      hash_note =
+        if cut == :dev,
+          do: "— recompute it from the event excerpt; the replay and audit anchor",
+          else: "— recompute it from the event excerpt; a third party can verify this record"
+
       body = """
       <h1>#{if cut == :dev, do: "Run report", else: "Proof of work"} #{status_badge(proof["status"])}</h1>
       <p class="sub">#{cut_note(cut)}</p>
+      #{if cut == :dev, do: failure_callout(run_id, state), else: ""}
+      #{if cut == :dev, do: run_actions(run_id, :report), else: ""}
       #{header}
       #{eyebrow("deliverables")}
       #{result_section(deliverable)}
       #{artifacts_section(run_id, deliverable["artifacts"])}
       #{diff_section(deliverable["diff"])}
-      #{eyebrow("totals — fold of budget_charged")}
+      #{eyebrow("totals")}
       #{totals}
       <div class="card"><dl class="kv">
         <dt>log hash</dt><dd>#{mono(proof["log_hash"])}
-          <span class="faint">— recompute-able from the excerpt; the replay/audit anchor</span></dd>
+          <span class="faint">#{hash_note}</span></dd>
       </dl></div>
       #{receipt}
+      #{if cut == :dev, do: order_panel(run_id), else: ""}
       #{inner}
       #{eyebrow("timeline")}
       <ul class="timeline">#{timeline}</ul>
@@ -577,7 +944,7 @@ defmodule Mitos.Web.Pages do
     end
   end
 
-  # --- endpoints (offers) + buy instructions (11 §9: buy is a URL) ---
+  # --- the storefront: what's for sale + buy instructions (11 §9: buy is a URL) ---
 
   def capabilities(role) do
     caps = Catalog.capabilities()
@@ -599,23 +966,33 @@ defmodule Mitos.Web.Pages do
 
     table =
       if caps == %{} do
-        ~s(<div class="empty">nothing published — <code>mitos serve &lt;cap_dir&gt; --price … --payout …</code></div>)
+        if role in ["operator", "seller"] do
+          """
+          <div class="callout">
+            <p><b>Nothing is for sale yet.</b> Publish a capability as a paid endpoint:</p>
+            <pre>mitos serve path/to/capability --price 5.00 --payout 0xYOU --seller you</pre>
+            <p class="dim">buyers then order it from this page — or from a script, with a wallet; no account needed</p>
+          </div>
+          """
+        else
+          ~s(<div class="empty">nothing is for sale on this control plane yet</div>)
+        end
       else
         """
         <div class="table-wrap"><table>
-          <thead><tr><th>capability</th><th>identity</th><th>tier</th><th>flat price</th><th></th></tr></thead>
+          <thead><tr><th>what you get</th><th>identity</th><th>isolation</th><th>price per job</th><th></th></tr></thead>
           <tbody>#{rows}</tbody>
         </table></div>
         """
       end
 
     body = """
-    <h1>Paid endpoints</h1>
-    <p class="sub">a completed job for a flat price — executed in a sandbox, delivered with proof</p>
+    <h1>Storefront</h1>
+    <p class="sub">completed jobs at a flat price — each runs isolated and ships with proof of what happened#{if role in ["operator", "seller"], do: ". This is the page buyers see.", else: ""}</p>
     #{table}
     """
 
-    layout("endpoints", body, role: role, active: active_for(role))
+    layout("storefront", body, role: role, active: active_for(role))
   end
 
   def buy(capability_id, role) do
@@ -638,16 +1015,17 @@ defmodule Mitos.Web.Pages do
 
         body = """
         <h1>#{esc(offer.name)} <span class="pill"><span class="dot"></span>#{usd(offer.price_usd)} per job</span></h1>
-        <p class="sub">no account, no install — a wallet and a URL (x402)</p>
+        <p class="sub">no account, no install — a wallet and a URL. Three HTTP calls, whether you're a person or an agent.</p>
         <div class="card">
-        #{eyebrow("1 · request a quote — the endpoint answers 402")}
+        #{eyebrow("1 · ask the price — the endpoint answers 402 with a quote")}
         <pre>#{esc(quote_cmd)}</pre>
-        #{eyebrow("2 · pay the quote — repeat with the x-payment proof")}
+        #{eyebrow("2 · pay it — repeat the call with the payment attached")}
         <pre>#{esc(pay_cmd)}</pre>
         #{eyebrow("3 · receive")}
-        <p class="dim">the response carries your <code>status_url</code> and <code>proof_url</code>;
-        watch read-only at <code>/web/runs/&lt;run_id&gt;/watch</code>, and the deliverable —
-        artifacts, diff, receipt — stands alone at <code>/web/runs/&lt;run_id&gt;/proof</code>.</p>
+        <p class="dim">the response carries your <code>status_url</code> and <code>proof_url</code>:
+        watch progress read-only at <code>/web/runs/&lt;run_id&gt;/watch</code>, and collect the
+        deliverable — artifacts, diff, receipt — at <code>/web/runs/&lt;run_id&gt;/proof</code>.
+        If the run fails, you're refunded; delivery is decided by the run's own record, not by the seller.</p>
         </div>
         """
 
@@ -655,7 +1033,7 @@ defmodule Mitos.Web.Pages do
     end
   end
 
-  # --- seller attribution: the flat revenue list (11 §7 MVP, 08 §6) ---
+  # --- sales: published offers + the flat revenue list (11 §7, 08 §6) ---
 
   def attribution(role) do
     settlements = Facilitator.settlements()
@@ -669,11 +1047,41 @@ defmodule Mitos.Web.Pages do
       |> Enum.map(fn {_r, s} -> s.charge.buyer_charge end)
       |> Enum.sum()
 
+    offers =
+      for {id, m} <- Catalog.capabilities(), offer = Catalog.get_offer(id), offer != nil do
+        """
+        <tr>
+          <td>#{esc(m.name)} <span class="faint">v#{esc(m.version)}</span></td>
+          <td>#{mono(digest(id))}</td>
+          <td class="num">#{usd(offer.price_usd)}</td>
+          <td><a href="/web/capabilities/#{id}">storefront page →</a></td>
+        </tr>
+        """
+      end
+
+    offers_section =
+      if offers == [] do
+        """
+        <div class="callout">
+          <p><b>Nothing published yet.</b> Turn a capability into a paid endpoint:</p>
+          <pre>mitos serve path/to/capability --price 5.00 --payout 0xYOU --seller you</pre>
+          <p class="dim">repricing never changes the capability's identity — the offer lives beside it</p>
+        </div>
+        """
+      else
+        """
+        <div class="table-wrap"><table>
+          <thead><tr><th>published</th><th>identity</th><th>price per job</th><th></th></tr></thead>
+          <tbody>#{Enum.join(offers, "\n")}</tbody>
+        </table></div>
+        """
+      end
+
     tiles =
       stat_tiles([
         {"settled runs", map_size(settlements), nil},
-        {"gmv", usd(total_gmv), "delivered buyer charges"},
-        {"net revenue", usd(total_net), "after take + surcharge"}
+        {"delivered sales", usd(total_gmv), "what buyers paid"},
+        {"net revenue", usd(total_net), "yours, after the platform take"}
       ])
 
     sections =
@@ -691,7 +1099,7 @@ defmodule Mitos.Web.Pages do
               <td>#{if s.charge.delivered?, do: status_badge(:finished), else: status_badge(:aborted)}</td>
               <td class="num">#{usd(s.charge.buyer_charge)}</td>
               <td class="num">#{usd(s.charge.seller_net)}</td>
-              <td class="num">#{usd(s.charge.provider_cost)} own-key</td>
+              <td class="num">#{usd(s.charge.provider_cost)}</td>
               <td class="num">#{s.charge.compute_ms} ms · #{s.charge.egress_units} crossings</td>
             </tr>
             """
@@ -700,21 +1108,24 @@ defmodule Mitos.Web.Pages do
         """
         #{eyebrow("#{(m && m.name) || digest(cap_id)} · #{digest(cap_id)} — net #{usd(net)}")}
         <div class="table-wrap"><table>
-          <thead><tr><th>run</th><th>outcome</th><th>charge</th><th>net</th><th>provider cost</th><th>operations</th></tr></thead>
+          <thead><tr><th>run</th><th>outcome</th><th>buyer paid</th><th>your net</th><th>model cost (your key)</th><th>operations</th></tr></thead>
           <tbody>#{rows}</tbody>
         </table></div>
         """
       end)
 
     body = """
-    <h1>Attribution</h1>
-    <p class="sub">the same log, cut the seller's way: revenue per capability, own-key spend,
-    operations — never the buyer's data</p>
+    <h1>Sales</h1>
+    <p class="sub">what you've published and what it has earned — you see revenue and operations,
+    never the buyer's data</p>
+    #{eyebrow("published offers")}
+    #{offers_section}
+    #{eyebrow("settled")}
     #{tiles}
-    #{if sections == "", do: ~s(<div class="empty">no settled runs yet — publish an endpoint and let a stranger pay</div>), else: sections}
+    #{if sections == "", do: ~s(<div class="empty">no settled sales yet — share a storefront link and let a stranger pay</div>), else: sections}
     """
 
-    layout("attribution", body, role: role, active: "attribution")
+    layout("sales", body, role: role, active: "sales")
   end
 
   # --- shared fragments ---
@@ -770,18 +1181,14 @@ defmodule Mitos.Web.Pages do
       |> Enum.uniq()
       |> Enum.map_join(", ", &digest/1)
 
-    pipeline =
-      case Mitos.Run.Config.load(run_id) do
-        {:ok, config} -> Mitos.Pipeline.parse(config.pipeline).name
-        _ -> nil
-      end
+    pipeline = pipeline_name(run_id)
 
     """
     <div class="card"><dl class="kv">
       <dt>run</dt><dd>#{mono(run_id)}</dd>
       #{if pipeline, do: "<dt>pipeline</dt><dd>#{esc(pipeline)}</dd>", else: ""}
       <dt>capability ids</dt><dd>#{mono(caps)}</dd>
-      #{if cut == :dev, do: ~s(<dt>watch</dt><dd><a href="#{run_link(run_id)}">outer timeline + inner traces</a></dd>), else: ""}
+      #{if cut == :dev, do: ~s(<dt>watch</dt><dd><a href="#{run_link(run_id)}">live timeline + inner traces</a></dd>), else: ""}
     </dl></div>
     """
   end
@@ -794,7 +1201,7 @@ defmodule Mitos.Web.Pages do
       r ->
         """
         <div class="card"><dl class="kv">
-          <dt>signal</dt><dd><b>#{esc(r["signal"])}</b> <span class="faint">soft, advisory — never drives control flow</span></dd>
+          <dt>signal</dt><dd><b>#{esc(r["signal"])}</b> <span class="faint">the capability's own assessment — advisory</span></dd>
           <dt>confidence</dt><dd>#{esc(r["confidence"])}</dd>
           <dt>summary</dt><dd>#{esc(r["summary"])}</dd>
           #{if r["metrics"] not in [%{}, nil], do: "<dt>metrics</dt><dd><code>#{esc(Mitos.JSON.encode!(r["metrics"]))}</code></dd>", else: ""}
@@ -889,15 +1296,14 @@ defmodule Mitos.Web.Pages do
   end
 
   defp cut_note(:dev),
-    do: "dev cut — adds rationale + inner traces; the proof page is the same render, redacted"
+    do: "your run, full fidelity — every decision with its reasoning, and each capability's inner trace"
 
   # Buyer-side copy: say what they get, not what the system withheld.
   defp cut_note(:commercial),
-    do:
-      "what happened, verifiable from the event-log excerpt — the seller's method stays server-side"
+    do: "what happened, verifiable from this run's event record — the seller's method stays private"
 
   defp active_for("buyer"), do: "order"
-  defp active_for(_), do: "endpoints"
+  defp active_for(_), do: "storefront"
 
   defp base_url, do: "http://localhost:#{Application.fetch_env!(:mitos, :http_port)}"
 

@@ -62,10 +62,11 @@ defmodule Mitos.Web.HTML do
       <nav>#{nav(role, opts[:active])}</nav>
       <div class="who">#{role_chip(role)}</div>
     </header>
+    #{view_as_banner(role)}
     <main>
     #{body}
     </main>
-    <footer>surfaces are readers of the log — render(fold(events), cut)</footer>
+    <footer>mitos · local console · <a href="/">about</a> · <a href="/health">health</a></footer>
     </body>
     </html>
     """
@@ -79,27 +80,48 @@ defmodule Mitos.Web.HTML do
       case role do
         "operator" ->
           [
-            {"runs", "/web"},
-            {"applications", "/web/apps"},
-            {"endpoints", "/web/capabilities"},
-            {"attribution", "/web/attribution"}
+            {"home", "Home", "/web"},
+            {"runs", "Runs", "/web/runs"},
+            {"applications", "Applications", "/web/apps"},
+            {"sales", "Sales", "/web/attribution"}
           ]
 
         "seller" ->
-          [{"attribution", "/web/attribution"}, {"endpoints", "/web/capabilities"}]
+          [{"sales", "Sales", "/web/attribution"}, {"storefront", "Storefront", "/web/capabilities"}]
 
         "buyer" ->
-          [{"order", "/web/capabilities"}]
+          [{"order", "Order", "/web/capabilities"}]
 
         _ ->
           []
       end
 
-    Enum.map_join(items, "", fn {label, href} ->
-      current = if active == label, do: ~s( class="current"), else: ""
+    Enum.map_join(items, "", fn {key, label, href} ->
+      current = if active == key, do: ~s( class="current"), else: ""
       ~s(<a href="#{href}"#{current}>#{label}</a>)
     end)
   end
+
+  # "View as" (11 §13.2): while previewing another party's cut on a local
+  # deployment, say so persistently and offer the way back.
+  defp view_as_banner(role) when role in ["seller", "buyer"] do
+    if Application.get_env(:mitos, :web_default_role) == "operator" do
+      what =
+        case role do
+          "seller" -> "what a seller sees of runs bought from them — never the buyer's data"
+          "buyer" -> "what a paying buyer sees — progress and proof, never the recipe"
+        end
+
+      """
+      <div class="banner">viewing as <b>#{esc(role)}</b> — #{what}.
+      <a href="/web/logout">back to your console</a></div>
+      """
+    else
+      ""
+    end
+  end
+
+  defp view_as_banner(_), do: ""
 
   defp role_chip(nil), do: ~s(<a class="chip chip-link" href="/web/login">sign in</a>)
 
@@ -108,7 +130,7 @@ defmodule Mitos.Web.HTML do
 
     """
     <span class="chip #{class}"><span class="dot"></span>#{esc(label)}</span>
-    <a class="chip chip-link" href="/web/logout" title="mock identity — an IdP replaces this">switch</a>
+    <a class="chip chip-link" href="/web/login" title="preview the console as another party">view as…</a>
     """
   end
 
@@ -278,6 +300,55 @@ defmodule Mitos.Web.HTML do
     .dim { color:var(--dim); } .faint { color:var(--faint); }
     .empty { color:var(--dim); text-align:center; padding:2.5rem 1rem;
              border:1px dashed var(--line); border-radius:8px; margin:.7rem 0; }
+
+    /* view-as preview banner (11 §13.2) */
+    .banner { background:var(--accent-soft); color:var(--fg); font-size:13px;
+              padding:.5rem 1.4rem; border-bottom:1px solid var(--line); }
+    .banner b { color:var(--accent); text-transform:capitalize; }
+    .banner a { color:var(--info); margin-left:.6rem; }
+
+    /* action rows (run again · report · preview) */
+    .actions { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin:.9rem 0; }
+    .actions form { display:inline; margin:0; }
+    .actions button, .actions .btn { margin-top:0; }
+    .btn-ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+    .btn-ghost:hover { border-color:var(--dim); filter:none; }
+    .btn-sm { padding:.35rem .9rem; font-size:12.5px; }
+
+    /* callouts (failure reason, onboarding) */
+    .callout { border:1px solid var(--line); border-left:3px solid var(--info);
+               background:var(--panel); border-radius:8px; padding:.8rem 1.1rem;
+               margin:.7rem 0; font-size:13.5px; }
+    .callout-bad { border-left-color:var(--bad); }
+    .callout-bad .kx { color:var(--bad); font-weight:600; }
+    .callout-warn { border-left-color:var(--warn); }
+    .callout p { margin:.2rem 0; }
+
+    /* home launcher: one card per application, entrypoints as runnable rows */
+    .app-card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+                padding:1.05rem 1.2rem; margin:.7rem 0; }
+    .app-card .app-head { display:flex; align-items:baseline; gap:.7rem; flex-wrap:wrap; }
+    .app-card .app-head h3 { margin:0; font-size:15.5px; }
+    .app-card .app-desc { color:var(--dim); font-size:13px; margin:.25rem 0 .4rem; }
+    .ep-row { display:flex; align-items:center; gap:1rem; padding:.65rem 0;
+              border-top:1px solid var(--line-soft); }
+    .ep-row .ep-copy { flex:1; min-width:0; }
+    .ep-row .ep-title { font-weight:600; font-size:13.5px; }
+    .ep-row .ep-desc { color:var(--dim); font-size:12.5px; margin-top:.1rem; }
+    .ep-row .btn { flex-shrink:0; }
+
+    /* collapsible section (pipeline intent, the order, raw json) */
+    details.fold { background:var(--panel); border:1px solid var(--line);
+                   border-radius:8px; margin:.7rem 0; overflow:hidden; }
+    details.fold > summary { list-style:none; cursor:pointer; padding:.6rem .9rem;
+                             font-size:13px; color:var(--dim); user-select:none; }
+    details.fold > summary::-webkit-details-marker { display:none; }
+    details.fold > summary::before { content:"▸ "; color:var(--faint); font-size:10px; }
+    details.fold[open] > summary::before { content:"▾ "; }
+    details.fold > summary:hover { color:var(--fg); background:var(--panel-2); }
+    details.fold[open] > summary { border-bottom:1px solid var(--line-soft); }
+    details.fold > pre { margin:0; border:0; border-radius:0; }
+    details.fold > .fold-body { padding:.8rem 1rem; }
 
     /* login / role picker */
     .login { max-width:820px; margin:7vh auto 0; text-align:center; }

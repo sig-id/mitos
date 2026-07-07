@@ -64,6 +64,11 @@ config :mitos,
   # planes don't collide on :eaddrinuse.
   http_port: http_port,
   broker_port: broker_port,
+  # The console's identity default (11 §13.2). A local deployment is the
+  # operator's own machine — no sign-in wall; the role picker survives as a
+  # "view as" cut preview. A hosted deployment sets this to nil to require
+  # sign-in (the IdP seam, 08 §2, is unchanged — only the default differs).
+  web_default_role: "operator",
   # The host-side model-egress proxy (05 R1): the edge a harness's model calls
   # route through so the model key (in the Vault) never enters the sandbox.
   # Nucleus points its `--credential-broker` here; the Local provider sets the

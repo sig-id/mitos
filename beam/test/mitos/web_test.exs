@@ -1,10 +1,14 @@
 defmodule Mitos.WebTest do
   @moduledoc """
-  11 §1/§3/§4/§5: the surfaces are readers of the log — the mock role selects
+  11 §1/§3/§4/§5: the surfaces are readers of the log — the role selects
   navigation + redaction cut (operator = dev cut, buyer = commercial cut,
   seller = attribution), the one renderer serves both report and proof, and
   the commercial cut never shows rationale, inner trace, or harness identity.
   Buyer proof/watch URLs work without sign-in (11 §9: buy is a URL).
+
+  11 §13.2: a local deployment has no sign-in wall — no cookie defaults to
+  the operator view (:web_default_role); hosted sets it nil, restoring the
+  sign-in redirect. The picker at /web/login is the "view as" cut preview.
   """
   use ExUnit.Case, async: false
   import Plug.Test
@@ -38,12 +42,14 @@ defmodule Mitos.WebTest do
     run_id
   end
 
-  # --- mock identity: role cookie selects landing + cut ---
+  # --- identity: local default is the operator view; cookie selects the cut ---
 
-  test "no role: /web redirects to the role picker; picking a role sets the cookie" do
-    {303, _, conn} = get_page("/web")
-    assert get_resp_header(conn, "location") == ["/web/login"]
+  test "no cookie: the console is the operator's (11 §13.2); hosted default restores sign-in" do
+    # a local deployment boots straight into the workbench
+    {200, body, _} = get_page("/web")
+    assert body =~ "run something"
 
+    # the picker survives as the "view as" cut preview
     {200, body, _} = get_page("/web/login")
     assert body =~ "Operator"
     assert body =~ "Seller"
@@ -53,6 +59,19 @@ defmodule Mitos.WebTest do
     {303, _, conn} = get_page("/web/login/operator")
     assert get_resp_header(conn, "location") == ["/web"]
     assert conn.resp_cookies["mitos_role"].value == "operator"
+
+    # hosted deployments set the default to nil: sign-in required again
+    Application.put_env(:mitos, :web_default_role, nil)
+
+    try do
+      {303, _, conn} = get_page("/web")
+      assert get_resp_header(conn, "location") == ["/web/login"]
+
+      {303, _, conn} = get_page("/web/apps")
+      assert get_resp_header(conn, "location") == ["/web/login"]
+    after
+      Application.put_env(:mitos, :web_default_role, "operator")
+    end
   end
 
   test "roles land on their own surface; dev pages are operator-only" do
@@ -65,10 +84,16 @@ defmodule Mitos.WebTest do
     # seller/buyer cannot reach the operator's app surface
     {303, _, conn} = get_page("/web/apps", "buyer")
     assert get_resp_header(conn, "location") == ["/web/capabilities"]
+  end
 
-    # unauthenticated dev-cut page → sign in
-    {303, _, conn} = get_page("/web/apps")
-    assert get_resp_header(conn, "location") == ["/web/login"]
+  test "previewing another party's cut shows the way back (view-as banner)" do
+    {200, body, _} = get_page("/web/capabilities", "buyer")
+    assert body =~ "viewing as"
+    assert body =~ "back to your console"
+
+    # the operator's own pages carry no banner
+    {200, body, _} = get_page("/web", "operator")
+    refute body =~ "viewing as"
   end
 
   test "a buyer asking for a run is routed to the commercial cut, never the dev cut" do
@@ -87,14 +112,43 @@ defmodule Mitos.WebTest do
 
   # --- the surfaces themselves ---
 
-  test "dashboard lists runs from the log directory (operator)" do
+  test "run history lists runs from the log directory; home shows the most recent" do
     run_id = finished_run()
-    {200, body, _} = get_page("/web", "operator")
 
+    {200, body, _} = get_page("/web/runs", "operator")
     assert body =~ run_id
     assert body =~ "finished"
     # stat tiles present
     assert body =~ "model spend"
+
+    # home = launcher + recent runs (11 §13.3)
+    {200, home, _} = get_page("/web", "operator")
+    assert home =~ "run something"
+    assert home =~ run_id
+  end
+
+  test "run again: rerun re-starts from the stored order; preview roles cannot" do
+    run_id = finished_run()
+
+    conn =
+      conn(:post, "/web/runs/#{run_id}/rerun")
+      |> put_req_header("cookie", "mitos_role=operator")
+      |> Router.call(@opts)
+
+    assert conn.status == 303
+    [location] = get_resp_header(conn, "location")
+    new_id = String.replace_prefix(location, "/web/runs/", "")
+    assert new_id != run_id
+    assert Run.await(new_id).status == :finished
+
+    # the buyer preview is read-only
+    conn =
+      conn(:post, "/web/runs/#{run_id}/rerun")
+      |> put_req_header("cookie", "mitos_role=buyer")
+      |> Router.call(@opts)
+
+    assert conn.status == 303
+    assert get_resp_header(conn, "location") == ["/web/login"]
   end
 
   test "watch page (dev cut): outer timeline with decisions + inner trace link" do
@@ -222,6 +276,12 @@ defmodule Mitos.WebTest do
     app = Mitos.App.Manifest.load!(dir)
     Mitos.Catalog.put_app(app)
 
+    # the app's manage surface: entrypoints, pipeline intent, capabilities
+    {200, detail, _} = get_page("/web/apps/#{app.app_id}", "operator")
+    assert detail =~ "Do the thing"
+    assert detail =~ "pipelines/main.md"
+    assert detail =~ "former"
+
     {200, form, _} = get_page("/web/apps/#{app.app_id}/entrypoints/go", "operator")
     assert form =~ "Do the thing"
     assert form =~ ~s(name="param_tone")
@@ -261,7 +321,9 @@ defmodule Mitos.WebTest do
     {200, body, _} = get_page("/web/attribution", "seller")
     assert body =~ "attrcap"
     assert body =~ run_id
-    assert body =~ "own-key"
+    assert body =~ "model cost (your key)"
     assert body =~ "net revenue"
+    # the sales page also lists what's published
+    assert body =~ "published offers"
   end
 end

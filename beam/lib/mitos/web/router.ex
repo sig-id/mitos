@@ -25,10 +25,12 @@ defmodule Mitos.Web.Router do
 
   # --- the web surfaces (11): server-rendered readers of the log ---
   #
-  # Identity is a mock role cookie (operator | seller | buyer) standing in for
-  # an IdP. The role selects navigation and the redaction cut (08 §2); buyer
-  # proof/watch URLs stay reachable without sign-in — "buy is a URL, no
-  # account" (11 §9), and those pages are redacted by construction.
+  # Identity is a role cookie (operator | seller | buyer) standing in for an
+  # IdP. Locally there is no sign-in wall: with no cookie the console defaults
+  # to the operator view (11 §13.2, :web_default_role); the role picker
+  # survives as a "view as" cut preview. The role selects navigation and the
+  # redaction cut (08 §2); buyer proof/watch URLs stay reachable without
+  # sign-in — "buy is a URL, no account" (11 §9), redacted by construction.
 
   # The customer-facing site (02/08 told to the counterparties) — same BEAM,
   # same brand as the console.
@@ -37,7 +39,7 @@ defmodule Mitos.Web.Router do
   end
 
   get "/web/login" do
-    html(conn, 200, Pages.login())
+    html(conn, 200, Pages.login(role(conn)))
   end
 
   get "/web/login/:role_name" when role_name in ~w(operator seller buyer) do
@@ -50,20 +52,33 @@ defmodule Mitos.Web.Router do
   get "/web/logout" do
     conn
     |> delete_resp_cookie("mitos_role")
-    |> put_resp_header("location", "/web/login")
+    |> put_resp_header("location", if(default_role(), do: "/web", else: "/web/login"))
     |> send_resp(303, "")
   end
 
   get "/web" do
     case role(conn) do
-      "operator" -> html(conn, 200, Pages.dashboard("operator"))
+      "operator" -> html(conn, 200, Pages.home("operator"))
       nil -> redirect(conn, "/web/login")
       other -> redirect(conn, landing(other))
     end
   end
 
+  get "/web/runs" do
+    require_role(conn, ["operator"], fn r -> html(conn, 200, Pages.runs(r)) end)
+  end
+
   get "/web/apps" do
     require_role(conn, ["operator"], fn r -> html(conn, 200, Pages.apps(r)) end)
+  end
+
+  get "/web/apps/:app_id" do
+    require_role(conn, ["operator"], fn r ->
+      case Pages.app_detail(app_id, r) do
+        {:ok, page} -> html(conn, 200, page)
+        :not_found -> not_found_page(conn, r, "no such application")
+      end
+    end)
   end
 
   get "/web/apps/:app_id/entrypoints/:ep_id" do
@@ -87,7 +102,7 @@ defmodule Mitos.Web.Router do
           not_found_page(conn, r, "no such entrypoint")
 
         Mitos.App.Manifest.draft?(app, ep_id) ->
-          html(conn, 422, Mitos.Web.HTML.layout("draft entrypoint", "<p>This entrypoint is a draft: its order form must be typed before it can run (12 §10).</p>", role: r))
+          html(conn, 422, Mitos.Web.HTML.layout("draft entrypoint", "<p>This entrypoint is still a draft — give it a typed order form (an inputs schema in <code>app.yaml</code>) and it becomes runnable.</p>", role: r))
 
         true ->
           p = conn.body_params
@@ -108,17 +123,24 @@ defmodule Mitos.Web.Router do
           parameters = for {"param_" <> name, v} <- p, into: %{}, do: {name, v}
           workspace = if p["workspace"] in [nil, ""], do: nil, else: p["workspace"]
 
+          # optional spend ceiling (a declared budget, enforced by the meter)
+          budget =
+            case Float.parse(p["budget_usd"] || "") do
+              {usd, _} when usd > 0 -> %{"usd" => usd}
+              _ -> %{}
+            end
+
           case Mitos.App.run_entrypoint(app, ep_id, %{"org" => "local", "project" => app.name},
-                 %{inputs: inputs, workspace: workspace, parameters: parameters}
+                 %{inputs: inputs, workspace: workspace, parameters: parameters, budget: budget}
                ) do
             {:ok, run_id} ->
               redirect(conn, "/web/runs/#{run_id}")
 
             {:error, {:missing_required, fields}} ->
-              html(conn, 422, Mitos.Web.HTML.layout("missing inputs", "<p>Missing required inputs: #{Enum.join(fields, ", ")}.</p>", role: r))
+              html(conn, 422, Mitos.Web.HTML.layout("missing inputs", "<p>These required inputs are missing: <b>#{Mitos.Web.HTML.esc(Enum.join(fields, ", "))}</b>. Go back and fill them in.</p>", role: r))
 
             {:error, {:bad_type, type, _v}} ->
-              html(conn, 422, Mitos.Web.HTML.layout("bad input", "<p>An input did not match its declared type (#{type}).</p>", role: r))
+              html(conn, 422, Mitos.Web.HTML.layout("bad input", "<p>An input doesn't match its declared type (<code>#{Mitos.Web.HTML.esc(type)}</code>). Go back and correct it.</p>", role: r))
 
             {:error, _} ->
               not_found_page(conn, r, "no such entrypoint")
@@ -143,6 +165,56 @@ defmodule Mitos.Web.Router do
     require_role(conn, ["seller", "operator"], fn r ->
       html(conn, 200, Pages.attribution(r))
     end)
+  end
+
+  # The iterate step (11 §13.3): re-start a run from its durable config. The
+  # config.json holds everything needed to run again (04 §7); a fresh run_id
+  # is minted. Deliberately NOT copied: offer_key (a paid run's re-run must
+  # not re-settle), task_id and ingress (this is a fresh dev iteration, not
+  # the original signal).
+  post "/web/runs/*path" do
+    case {Enum.reverse(path), role(conn)} do
+      {["rerun" | rid], "operator"} ->
+        run_id = rejoin(rid)
+
+        with {:ok, config} <- Mitos.Run.Config.load(run_id),
+             {:ok, new_id} <-
+               Run.start_run(
+                 tenant: config.tenant,
+                 pipeline: config.pipeline,
+                 capabilities: config.capabilities,
+                 workspace: config.workspace,
+                 inputs: config.inputs,
+                 parameters: config.parameters,
+                 budget: config.budget,
+                 scope: config.scope,
+                 trust_tier: config.trust_tier,
+                 policy: config.policy,
+                 max_iterations: config.max_iterations
+               ) do
+          redirect(conn, "/web/runs/#{new_id}")
+        else
+          {:error, :no_config} ->
+            not_found_page(conn, "operator", "no such run")
+
+          {:error, reason} ->
+            html(
+              conn,
+              422,
+              Mitos.Web.HTML.layout(
+                "run again",
+                "<p>Could not start the run: <code>#{Mitos.Web.HTML.esc(inspect(reason))}</code></p>",
+                role: "operator"
+              )
+            )
+        end
+
+      {["rerun" | _], _} ->
+        redirect(conn, "/web/login")
+
+      _ ->
+        json(conn, 405, %{error: "method_not_allowed"})
+    end
   end
 
   get "/web/runs/*path" do
@@ -408,14 +480,20 @@ defmodule Mitos.Web.Router do
     |> send_resp(status, body)
   end
 
-  # --- mock identity (role cookie; an IdP replaces this seam) ---
+  # --- identity (role cookie; an IdP replaces this seam) ---
+  #
+  # Locally the default is the operator view (11 §13.2): no cookie means the
+  # machine's owner, and the picker at /web/login is a "view as" preview.
+  # Hosted deployments set :web_default_role to nil, restoring sign-in.
+
+  defp default_role, do: Application.get_env(:mitos, :web_default_role)
 
   defp role(conn) do
     conn = fetch_cookies(conn)
 
     case conn.cookies["mitos_role"] do
       r when r in ["operator", "seller", "buyer"] -> r
-      _ -> nil
+      _ -> default_role()
     end
   end
 

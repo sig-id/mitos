@@ -246,7 +246,7 @@ default for a phase, never capability gating.
 
 ## 10. Scope
 
-The frontend owns the **read surfaces**: Run & Watch (two zooms + cuts, §4), the Deliverable (report ⇄ proof, §5), Author & Test (§6), and Publish & Attribute (§7). The **Fleet** operate surface (§8) is demand-gated — built when operating many sellers requires it, not for parity. Web surfaces are server-rendered folds over the log with no client framework; identity is provided by **sigid** (`01` §0).
+The frontend owns the **read surfaces**: Run & Watch (two zooms + cuts, §4), the Deliverable (report ⇄ proof, §5), Author & Test (§6), and Publish & Attribute (§7). The **Fleet** operate surface (§8) is demand-gated — built when operating many sellers requires it, not for parity. Web surfaces are server-rendered folds over the log with no client framework; identity is provided by **sigid** (`01` §0). How these surfaces present themselves as a *product* — the local console's positioning, defaults, and voice — is §13.
 
 
 
@@ -272,3 +272,79 @@ The frontend owns the **read surfaces**: Run & Watch (two zooms + cuts, §4), th
    asks (`09 §2`).
 4. **Web/CLI parity surface:** which operate actions need CLI parity for
    headless automation.
+
+---
+
+## 13. Product — the local console
+
+§1–§9 fix *what the surfaces read*; this section fixes *what the product is*
+when mitos is deployed locally (`mitos serve`), which is the primary
+deployment until the hosted facilitator ships. The one-line positioning:
+
+> **The local console is the workbench for developing and operating agent
+> pipelines.** Authoring stays in the developer's editor (P5); everything that
+> is better on a screen — launching, watching, diagnosing, re-running,
+> managing what's installed, reading the money — lives here.
+
+### 13.1 The user and their loop
+
+The local user is one person wearing the operator and seller hats at once: a
+developer building an agentic application. Their loop, which every screen MUST
+serve a step of:
+
+```
+edit (own editor) → run → watch → diagnose → re-run → wire I/O → publish → read sales
+```
+
+A screen that serves no step of this loop is scope creep (the Fleet, §8,
+stays demand-gated). The measure of the console is **time from "it failed" to
+"I know why", and from "I know why" to the next run.**
+
+### 13.2 Defaults follow trust — no sign-in wall on localhost
+
+A local deployment is the operator's own machine; making them pick a mock
+role before seeing their own runs is demo theater. Therefore:
+
+- With no role cookie, the console MUST default to the operator view
+  (config `web_default_role: "operator"`). A hosted deployment sets it to
+  `nil`, restoring sign-in-required — the IdP seam (`08 §2`) is unchanged;
+  only the local default differs.
+- The role picker survives as **"view as"** — a development feature, not a
+  front door. Because report ⇄ proof are one renderer at two cuts (§5),
+  previewing "what the buyer sees" and "what the seller sees" is free and
+  genuinely useful before publishing. While previewing, the console MUST show
+  a persistent banner naming the cut and offering the way back.
+- Commercial-cut URLs (watch/proof) remain public by URL (§9) — redacted by
+  construction, never by who is asking.
+
+### 13.3 Surfaces, restated as product
+
+| Surface | The question it answers | Front and center |
+|---|---|---|
+| **Home** `/web` | "what can I run, and what just happened?" | entrypoint launcher per app; recent runs; totals |
+| **Runs** `/web/runs` | "what has this machine done?" | full history: status, stages, spend |
+| **Application** `/web/apps/:id` | "what is installed and how is it wired?" | entrypoints (runnable), pipeline intent, capabilities, I/O bindings with their ingest URLs, requirements |
+| **Watch** (§4) | "is it working / why did it fail?" | failure reason surfaced at the top; the order (inputs/params/workspace) visible; two-zoom timeline; actions: run again · report · buyer preview |
+| **Report** (§5) | "what did I get and what did it cost?" | deliverable first; totals; run again |
+| **Sales** | "what am I selling and what has it earned?" | published offers + settled revenue, one page |
+| **Storefront** `/web/capabilities` | the buyer's door | what's for sale, how to buy — human and agent instructions |
+
+**Run again** is load-bearing: a run's `config.json` already holds everything
+needed to restart it (`04 §7`), so the iterate step is one click and MUST stay
+one click. Steer (approve/interrupt, §4) requires a run-level control op the
+substrate doesn't expose yet; the console MUST NOT fake it — it arrives with
+that op.
+
+### 13.4 Voice
+
+- **Product language, not spec language.** No spec-section citations, no
+  `fold(events)`/`cut` vocabulary, no "mock — an IdP replaces this" asides in
+  UI copy. Terms that *are* the product stay: run, pipeline, capability,
+  entrypoint, deliverable, proof, decision.
+- **Say the benefit, once, where it's earned.** "The bill, the report, and
+  the payout are three reads of the same record — they cannot drift" belongs
+  on the proof page; it does not belong in a footer on every page.
+- **Empty states teach the next command.** This is a CLI-first product (§9);
+  an empty page names the `mitos …` invocation that fills it.
+- **Errors name the fix**, not the violated invariant: "this entrypoint needs
+  a typed order form before it can run", not "12 §10 violation".
