@@ -28,6 +28,16 @@ defmodule Mitos.Harness.PiProxyTest do
 
   defp sandbox(home), do: %{home: home, workspace: home}
 
+  # `System.unique_integer/1` restarts from 1 on every BEAM boot, so a path built
+  # from it collides with whatever a PREVIOUS suite run left in /tmp — and these
+  # no-op assertions then failed on a models.json this run never wrote. Key on a
+  # per-run id instead, and clean up after.
+  defp tmp_home do
+    home = Path.join(System.tmp_dir!(), "mitos-pi-proxy-" <> Mitos.id())
+    on_exit(fn -> File.rm_rf(home) end)
+    home
+  end
+
   test "writes models.json with per-provider baseUrl overrides when the reverse proxy is engaged" do
     Application.put_env(:mitos, :model_proxy_port, 4648)
     Application.delete_env(:mitos, :model_proxy_url)
@@ -35,7 +45,7 @@ defmodule Mitos.Harness.PiProxyTest do
     # a model credential is seeded at the edge → its provider is routable
     Mitos.Vault.put("model", "open.bigmodel.cn", "sk-real-zai")
 
-    home = Path.join(System.tmp_dir!(), "mitos-pi-proxy-#{System.unique_integer([:positive])}")
+    home = tmp_home()
     Pi.prepare_proxy_models(sandbox(home))
 
     models = home |> Path.join(".pi/agent/models.json") |> File.read!() |> Mitos.JSON.decode!()
@@ -54,7 +64,7 @@ defmodule Mitos.Harness.PiProxyTest do
     Application.put_env(:mitos, :pi_dev_auth, true)
     Mitos.Vault.put("model", "open.bigmodel.cn", "sk-real-zai")
 
-    home = Path.join(System.tmp_dir!(), "mitos-pi-proxy-#{System.unique_integer([:positive])}")
+    home = tmp_home()
     assert Pi.prepare_proxy_models(sandbox(home)) == :ok
     refute File.exists?(Path.join(home, ".pi/agent/models.json"))
   end
@@ -64,7 +74,7 @@ defmodule Mitos.Harness.PiProxyTest do
     Application.delete_env(:mitos, :model_proxy_url)
     Mitos.Vault.put("model", "open.bigmodel.cn", "sk-real-zai")
 
-    home = Path.join(System.tmp_dir!(), "mitos-pi-proxy-#{System.unique_integer([:positive])}")
+    home = tmp_home()
     assert Pi.prepare_proxy_models(sandbox(home)) == :ok
     refute File.exists?(Path.join(home, ".pi/agent/models.json"))
   end
@@ -72,7 +82,7 @@ defmodule Mitos.Harness.PiProxyTest do
   test "no-op when nothing is seeded (no provider to route)" do
     Application.put_env(:mitos, :model_proxy_port, 4648)
     # Vault empty → seeded_providers/0 is []
-    home = Path.join(System.tmp_dir!(), "mitos-pi-proxy-#{System.unique_integer([:positive])}")
+    home = tmp_home()
     assert Pi.prepare_proxy_models(sandbox(home)) == :ok
     refute File.exists?(Path.join(home, ".pi/agent/models.json"))
   end
