@@ -4,7 +4,10 @@ defmodule Mitos.CLI do
   command is the same backend operation the web router calls (01 §10.11).
 
       mitos run <app_dir> [--entrypoint ID] [--workspace DIR] [-i k=v]...
-                          [--budget-usd X] [--org ORG] [--dev]
+                          [--budget-usd X] [--org ORG] [--dev] [--no-sandbox]
+                          # --no-sandbox works on the workspace IN PLACE: no copy,
+                          # no clone ceiling, and the agent's edits land in your
+                          # real tree. For a repo you own at T1; refused at T2.
                           [--http-port N] [--broker-port N]
                           # --dev lets pi read ~/.pi so runs boot locally;
                           # ports let a CLI run coexist with a live control plane.
@@ -15,6 +18,16 @@ defmodule Mitos.CLI do
       mitos status <run_id>
       mitos publish <cap_dir> --price X --payout ADDR --seller ORG
       mitos deliver <run_id>                       # idempotent egress re-drive (10 §5.3)
+      mitos decisions [<run_id>]                   # cards waiting on you (15, 11 §4a)
+      mitos resolve <decision_id> <choice> [--note TEXT] [--value V]
+      mitos autonomy [<run_id>...]                 # autonomy ratio / horizon / precision (16 §6)
+      mitos contract [--live] [--quarantine]       # adapter observation contracts (14 §5)
+      mitos interrupts                             # the interrupt distribution (02 §6.1)
+      mitos eval [--strict]                        # replay the corpus against today's policy (16 §6.1)
+      mitos gc [--all] [--dry-run] [--older-than N]  # reclaim sandboxes + per-stage copies
+                          # Evidence is never touched: events.jsonl, artifacts,
+                          # trace and spool stay. --all ignores age; a LIVE run's
+                          # sandbox is never removed.
       mitos import eve <agent_dir> [--out <dir>]   # Eve agent/ → app scaffold (12 §10)
       mitos serve [<cap_dir>...] [--price X --payout ADDR --seller ORG]
                   [--app <app_dir>]...                       # register apps for the web UI
@@ -37,9 +50,17 @@ defmodule Mitos.CLI do
           trust_tier: :string,
           app: :keep,
           out: :string,
+          note: :string,
+          value: :string,
+          live: :boolean,
+          quarantine: :boolean,
+          all: :boolean,
+          dry_run: :boolean,
+          older_than: :integer,
           http_port: :integer,
           broker_port: :integer,
-          dev: :boolean
+          dev: :boolean,
+          no_sandbox: :boolean
         ],
         aliases: [i: :input, e: :entrypoint, w: :workspace]
       )
@@ -52,6 +73,15 @@ defmodule Mitos.CLI do
       ["status", run_id] -> boot() && print_status(run_id)
       ["publish", cap_dir] -> boot() && publish(cap_dir, opts)
       ["deliver", run_id] -> boot() && deliver(run_id)
+      ["decisions"] -> boot() && print_decisions(nil)
+      ["decisions", run_id] -> boot() && print_decisions(run_id)
+      ["resolve", id, choice] -> boot() && resolve_decision(id, choice, opts)
+      ["autonomy"] -> boot() && print_autonomy(Mitos.Runs.list() |> Enum.map(& &1.run_id))
+      ["autonomy" | run_ids] -> boot() && print_autonomy(run_ids)
+      ["contract"] -> boot() && print_contract(opts)
+      ["interrupts"] -> boot() && print_interrupts()
+      ["eval"] -> boot() && print_eval(opts)
+      ["gc"] -> boot() && print_gc(opts)
       ["import", "eve", agent_dir] -> import_eve(agent_dir, opts)
       ["serve" | cap_dirs] -> serve(cap_dirs, opts)
       _ -> usage()
@@ -85,7 +115,8 @@ defmodule Mitos.CLI do
       inputs: Map.merge(ep.defaults, inputs(opts)),
       budget: budget(opts),
       tenant: %{"org" => opts[:org] || "local", "project" => app.name},
-      trust_tier: opts[:trust_tier]
+      trust_tier: opts[:trust_tier],
+      workspace_mode: workspace_mode(opts)
     )
   end
 
@@ -107,7 +138,8 @@ defmodule Mitos.CLI do
       inputs: inputs(opts),
       budget: budget(opts),
       tenant: %{"org" => opts[:org] || "local", "project" => "cli"},
-      trust_tier: opts[:trust_tier]
+      trust_tier: opts[:trust_tier],
+      workspace_mode: workspace_mode(opts)
     )
   end
 
@@ -292,6 +324,10 @@ defmodule Mitos.CLI do
     end
   end
 
+  # nil means "use the configured default" — only an explicit --no-sandbox turns
+  # the boundary off, and the run records the choice on its own log.
+  defp workspace_mode(opts), do: if(opts[:no_sandbox], do: :in_place, else: nil)
+
   defp workspace_from(%{workspace: %{kind: "repo", ref: ref}}) when is_binary(ref), do: ref
   defp workspace_from(_), do: nil
 
@@ -301,6 +337,110 @@ defmodule Mitos.CLI do
       _ -> nil
     end
   end
+
+  # 11 §4a rendered for a terminal: the same card the phone gets, at list
+  # density. The console and the push are one renderer, two densities.
+  defp print_decisions(run_id) do
+    case Mitos.Decision.open(run_id) do
+      [] ->
+        IO.puts("nothing waiting on you.")
+
+      cards ->
+        Enum.each(cards, fn c ->
+          waiting = if is_nil(c.default), do: "WAITING FOR YOU", else: "defaults to [#{c.default}] in #{div(c.ttl_ms, 60_000)}m"
+
+          IO.puts("""
+          #{c.decision_id}  (#{c.reversibility}, #{c.kind})  #{waiting}
+            run:      #{c.run_id}#{if c.stage_id, do: " / " <> to_string(c.stage_id), else: ""}
+            #{c.question}
+            tried:    #{c.context.attempted || "-"}
+            blocked:  #{c.context.blocked_by || "-"}
+            options:  #{Enum.map_join(c.options, "  ", &("[" <> &1.id <> "] " <> &1.label))}
+            resolve:  mitos resolve #{c.decision_id} <choice>
+          """)
+        end)
+    end
+  end
+
+  defp resolve_decision(id, choice, opts) do
+    resolution = %{
+      resolver: System.get_env("USER") || "operator",
+      choice: choice,
+      note: opts[:note],
+      value: opts[:value],
+      via: "cli"
+    }
+
+    case Mitos.Decision.resolve(id, resolution) do
+      :ok -> IO.puts("resolved #{id} as #{choice}")
+      {:error, reason} -> halt("could not resolve #{id}: #{inspect(reason)}")
+    end
+  end
+
+  defp print_autonomy([]), do: IO.puts("no runs yet.")
+
+  defp print_autonomy(run_ids) do
+    m = Mitos.Autonomy.fleet(run_ids)
+
+    IO.puts("""
+    runs                  #{m.runs}
+    autonomy ratio        #{fmt_ratio(m.autonomy_ratio)}  (productive wall-clock per human decision)
+    unattended horizon    #{fmt_ms(m.unattended_horizon_p50_ms)} p50  (to the first decision with no default)
+    decision precision    #{fmt_pct(m.decision_precision)}  (cards NOT resolved as their default)
+    rewind depth          #{m.rewind_depth}
+    green rate            #{fmt_pct(m.green_rate)}
+    """)
+  end
+
+  defp print_contract(opts) do
+    results = Mitos.Observation.Contract.check_all(live: opts[:live], quarantine: opts[:quarantine])
+    IO.puts(Mitos.Observation.Contract.report(results))
+    if Enum.all?(results, & &1.ok), do: :ok, else: System.halt(1)
+  end
+
+  # Build-order item 0 (02 §6.1): measure before building. This distribution,
+  # not an opinion, decides whether the next thing to build is a gate, a broker,
+  # or a supervisor.
+  defp print_interrupts do
+    d = Mitos.Eval.interrupt_distribution()
+
+    if d.total == 0 do
+      IO.puts("no human decisions on the record yet — nothing to measure.")
+    else
+      IO.puts("#{d.total} interrupts (#{d.defaulted} answered by silence)\n")
+
+      Enum.each(d.shares, fn {bucket, share} ->
+        IO.puts("  #{String.pad_trailing(to_string(bucket), 22)} #{fmt_pct(share)}")
+      end)
+
+      IO.puts("\nimplication: #{d.implication}")
+    end
+  end
+
+  defp print_gc(opts) do
+    result =
+      Mitos.GC.sweep(all: opts[:all], dry_run: opts[:dry_run], older_than: opts[:older_than])
+
+    IO.puts(Mitos.GC.report(result))
+  end
+
+  defp print_eval(opts) do
+    result = Mitos.Eval.replay_all(nil, strict: opts[:strict])
+    IO.puts(Mitos.Eval.report(result))
+    if result.ok, do: :ok, else: System.halt(1)
+  end
+
+  defp fmt_ratio(:infinity), do: "no human decisions"
+  defp fmt_ratio(r) when is_number(r), do: fmt_ms(round(r))
+  defp fmt_ratio(_), do: "-"
+
+  defp fmt_ms(nil), do: "-"
+  defp fmt_ms(ms) when ms < 1000, do: "#{ms}ms"
+  defp fmt_ms(ms) when ms < 60_000, do: "#{Float.round(ms / 1000, 1)}s"
+  defp fmt_ms(ms), do: "#{Float.round(ms / 60_000, 1)}m"
+
+  defp fmt_pct(nil), do: "-"
+  defp fmt_pct(v), do: "#{round(v * 100)}%"
 
   defp print_json(term), do: IO.puts(Mitos.JSON.encode!(term))
 

@@ -326,4 +326,105 @@ defmodule Mitos.WebTest do
     # the sales page also lists what's published
     assert body =~ "published offers"
   end
+  describe "the decisions surface (11 §4a, §13.3)" do
+    setup do
+      Mitos.Decision.clear()
+      Mitos.Sink.Decide.Destination.clear()
+      :ok
+    end
+
+    test "shows what is waiting on you, and says what silence will do" do
+      run_id = parked_run()
+
+      {:ok, waiting} =
+        Mitos.Decision.Card.new(
+          run_id: run_id,
+          reversibility: :external,
+          question: "Push the branch to origin?",
+          options: [%{id: "push", label: "Push", consequence: "the remote moves"}]
+        )
+
+      {:ok, on_a_clock} =
+        Mitos.Decision.Card.new(
+          run_id: run_id,
+          reversibility: :internal,
+          question: "Write the migration file?",
+          options: [
+            %{id: "approve", label: "Write it", consequence: "the file appears"},
+            %{id: "deny", label: "Skip it", consequence: "nothing is written"}
+          ],
+          default: "approve",
+          ttl_ms: 600_000
+        )
+
+      {:ok, _} = Mitos.Decision.raise_card(waiting)
+      {:ok, _} = Mitos.Decision.raise_card(on_a_clock)
+
+      {200, body, _} = get_page("/web/decisions", "operator")
+
+      assert body =~ "Push the branch to origin?"
+      # 15 §4 rendered honestly, in both directions.
+      assert body =~ "waiting for you"
+      assert body =~ "defaults to"
+      # 15 §3.1: every option states its consequence.
+      assert body =~ "the remote moves"
+      # Folded state, not a transcript: the card shows what was tried and what
+      # is blocked, and never renders a Decision's `rationale` (15 §3.1) — the
+      # timeline's rationale element must not appear on this surface.
+      assert body =~ "tried"
+      assert body =~ "blocked"
+      refute body =~ ~s(<span class="rationale">)
+    end
+
+    test "resolving from the console goes through the same connector a phone does" do
+      run_id = parked_run()
+
+      {:ok, card} =
+        Mitos.Decision.Card.new(
+          run_id: run_id,
+          reversibility: :external,
+          question: "Approve the egress?",
+          options: [%{id: "allow", label: "Allow", consequence: "the call goes out"}]
+        )
+
+      {:ok, _} = Mitos.Decision.raise_card(card)
+
+      conn =
+        conn(:post, "/web/decisions/#{card.decision_id}", %{"choice" => "allow"})
+        |> put_req_header("cookie", "mitos_role=operator")
+        |> Router.call(@opts)
+
+      assert conn.status == 303
+      assert Mitos.Decision.open(run_id) == []
+    end
+
+    test "a choice that is not on the card is refused, not applied" do
+      run_id = parked_run()
+
+      {:ok, card} =
+        Mitos.Decision.Card.new(
+          run_id: run_id,
+          reversibility: :external,
+          question: "Approve?",
+          options: [%{id: "yes", label: "Yes", consequence: "proceeds"}]
+        )
+
+      {:ok, _} = Mitos.Decision.raise_card(card)
+
+      conn =
+        conn(:post, "/web/decisions/#{card.decision_id}", %{"choice" => "something_else"})
+        |> put_req_header("cookie", "mitos_role=operator")
+        |> Router.call(@opts)
+
+      assert conn.status == 404
+      assert [_still_open] = Mitos.Decision.open(run_id)
+    end
+  end
+
+  defp parked_run do
+    run_id = "webtest/" <> Mitos.id("run")
+    {:ok, _} = Run.start_run(run_id: run_id, pipeline: "# Pipeline: p\n", capabilities: %{})
+    Run.await(run_id)
+    run_id
+  end
 end

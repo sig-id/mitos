@@ -18,8 +18,11 @@ defmodule Mitos.LaunchSpec do
             provider: nil,
             # oci ref (or dir: digest for local dev)
             image: nil,
-            # %{source: <path|git-ref|nil>, mode: :rw} — input, cloned IN at prepare
-            workspace: %{source: nil, mode: :rw},
+            # %{source: <path|git-ref|nil>, mode: :rw, materialize: :clone|:in_place}
+            # Input, cloned IN at prepare (05 §5.1) — unless the operator turned
+            # the sandbox off for their own workspace, which T2 refuses
+            # (Mitos.Workspace.mode/2).
+            workspace: %{source: nil, mode: :rw, materialize: :clone},
             # %{snapshot, mount, ro} | nil
             data: nil,
             # [ctx-slice ref] — curated context (07), RO

@@ -34,8 +34,13 @@ defmodule Mitos.Capability.Manifest do
             resources: %{},
             # [%{dest, credential, requires_approval}] consumed by the broker (01 §8.5)
             egress_policy: [],
-            # %{schema, evidence: [...]} — soft result + evidence (03 §7)
+            # %{schema, evidence: [...]} — soft result + evidence (03 §7). SOFT:
+            # the capability's self-report, advisory only.
             result: %{},
+            # %{cmd, oracle_paths, timeout_ms, measure} — the HARD verdict
+            # (03 §7.1, 16 §3.2). Machine-checkable, executed outside the
+            # workspace. Absent ⇒ zero unattended horizon (16 §6).
+            acceptance: nil,
             # %{pre: [...], post: [...]} — deterministic entry/exit (03 §6)
             hooks: %{pre: [], post: []},
             capability_id: nil
@@ -97,6 +102,7 @@ defmodule Mitos.Capability.Manifest do
         resources: normalize_keys(raw["resources"] || %{}),
         egress_policy: raw["egress_policy"] || [],
         result: normalize_keys(raw["result"] || %{}),
+        acceptance: normalize_acceptance(raw["acceptance"]),
         hooks: normalize_hooks(raw["hooks"] || %{}),
         capability_id: capability_id
       }
@@ -116,6 +122,21 @@ defmodule Mitos.Capability.Manifest do
 
   defp normalize_data(%{} = d),
     do: %{snapshot: d["snapshot"], mount: d["mount"] || "/data", ro: Map.get(d, "ro", true)}
+
+  # 03 §7.1: a declared acceptance block MUST name a command and the paths that
+  # constitute its oracle. Without `oracle_paths` there is nothing to check the
+  # diff against, so the anti-gaming rule (16 §3.2) would silently not apply —
+  # an oracle you cannot detect tampering with is not an oracle.
+  defp normalize_acceptance(nil), do: nil
+
+  defp normalize_acceptance(%{} = a) do
+    %{
+      cmd: List.wrap(a["cmd"]),
+      oracle_paths: List.wrap(a["oracle_paths"] || []),
+      timeout_ms: a["timeout_ms"] || 600_000,
+      measure: a["measure"] && List.wrap(a["measure"])
+    }
+  end
 
   defp normalize_hooks(%{} = h) do
     %{
@@ -138,6 +159,11 @@ defmodule Mitos.Capability.Manifest do
 
   # 03 §9 / 05 §4: a T2 capability that declares a baked secret or a bind mount
   # MUST be rejected at launch, not runtime. Here we reject at load.
+  defp validate(%__MODULE__{acceptance: %{cmd: []}}), do: {:error, :acceptance_requires_cmd}
+
+  defp validate(%__MODULE__{acceptance: %{oracle_paths: []}}),
+    do: {:error, :acceptance_requires_oracle_paths}
+
   defp validate(%__MODULE__{trust_tier: "T2"} = m) do
     cond do
       m.data && m.data.mount && String.starts_with?(to_string(m.data.mount), "bind:") ->

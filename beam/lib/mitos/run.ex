@@ -23,7 +23,7 @@ defmodule Mitos.Run do
   """
   use GenServer, restart: :temporary
 
-  alias Mitos.{Broker, Hooks, LaunchPolicy, Log, LoopManager, Pipeline}
+  alias Mitos.{Acceptance, Broker, Checkpoint, Hooks, LaunchPolicy, Log, LoopManager, Pipeline, Supervision}
   alias Mitos.Event.{Decision, Effect}
   alias Mitos.Run.{Config, State}
 
@@ -62,11 +62,33 @@ defmodule Mitos.Run do
   @doc "Broker listener → run log: append a brokered-crossing Effect (04 §11)."
   def record_broker_effect(run_id, fields), do: append_effect(run_id, fields)
 
+  @doc """
+  Fleet supervisor → run log: append a Decision through the run's single writer
+  (04 §11). The supervisor acts on ANOTHER run, so its move must enter that
+  run's log the same way every other Decision does — one totally-ordered stream,
+  no side channel (16 §5.2).
+  """
+  def append_decision(run_id, %Decision{} = d) do
+    GenServer.call(via(run_id), {:append_decision, d})
+  catch
+    :exit, _ -> {:error, :run_not_running}
+  end
+
   @doc "I/O plane → run log: append an Effect through the run's single writer (04 §11)."
   def append_effect(run_id, fields) do
     GenServer.call(via(run_id), {:append_effect, fields})
   catch
-    :exit, _ -> :ok
+    # The run released its writer between the lookup and the call (it finished,
+    # or parked and stopped). Silently dropping the Effect here used to be
+    # invisible and is exactly how a decision resolved after a park — the record
+    # `decision_precision` (16 §6) is computed from — would vanish. Fall back to
+    # a detached append instead, which is safe precisely because no process
+    # holds the writer (01 §4).
+    :exit, _ ->
+      case Mitos.Log.append_detached(run_id, Effect.new(Map.new(fields))) do
+        {:ok, _stamped} -> :ok
+        other -> other
+      end
   end
 
   def start_link(%Config{} = config) do
@@ -99,13 +121,27 @@ defmodule Mitos.Run do
       # caller (task/purchase) sets one — caller wins per axis.
       budget: Map.merge(intent.budget, config.budget),
       running: nil,
+      # 16 §4: the outer bound on the ladder. Per-signal counters are first
+      # responses; this is what stops a run retrying forever by rotating which
+      # signal trips.
+      sup: Supervision.new(max_iterations: config.max_iterations),
       waiters: []
     }
 
     srv =
       if events == [] do
         srv = emit_ingress(config, srv)
-        commit_effect(srv, type: :run_started, payload: %{"tenant" => config.tenant})
+        commit_effect(srv,
+          type: :run_started,
+          payload: %{
+            "tenant" => config.tenant,
+            "workspace" => config.workspace,
+            # 05 §5.1 relaxed by explicit operator choice: an unsandboxed run
+            # edits the real tree, so the record has to say so — a reader of
+            # this log must never have to guess whether the boundary was there.
+            "workspace_mode" => to_string(config.workspace_mode || :clone)
+          }
+        )
       else
         srv
       end
@@ -122,10 +158,18 @@ defmodule Mitos.Run do
       State.terminal?(state) ->
         finalize(srv, state)
 
-      # A parked run (request_approval) waits for approval_resolved — the MVP
-      # Linear policy never parks; an approval surface resumes it post-gate.
+      # A parked run (request_approval) waits for approval_resolved (15 §4).
+      #
+      # But it must still accept an OVERRIDE: a fleet supervisor's `rewind` /
+      # `abort` / `retry` (16 §5.2), or a human's abort. The runs most in need
+      # of a supervisor move are precisely the stuck ones, so a park that
+      # swallowed those decisions would make the supervisor useless exactly
+      # where it matters.
       state.status == :parked ->
-        {:noreply, srv}
+        case override_decision(state) do
+          nil -> {:noreply, srv}
+          d -> {:noreply, execute(srv, state, d)}
+        end
 
       srv.running != nil ->
         {:noreply, srv}
@@ -148,6 +192,15 @@ defmodule Mitos.Run do
       case result do
         :ok ->
           srv
+
+        {:ok, %{signals: []}} ->
+          srv
+
+        # 04 §4.4 / 16 §4: the loop-manager climbed its local ladder and a
+        # signal is still tripping. Restart intensity decides whether there is
+        # a move left, and which — never the signal alone.
+        {:ok, %{signals: [signal | _]} = outcome} ->
+          handle_signal(srv, decision, signal, outcome)
 
         {:error, reason} ->
           substrate_abort(srv, decision, "launch refused: #{inspect(reason)}", :policy)
@@ -173,6 +226,12 @@ defmodule Mitos.Run do
     {:reply, :ok, commit_effect(srv, fields)}
   end
 
+  def handle_call({:append_decision, %Decision{} = d}, _from, srv) do
+    {stamped, srv} = append(srv, d)
+    send(self(), :step)
+    {:reply, {:ok, stamped.seq}, srv}
+  end
+
   def handle_call(:await, from, srv) do
     state = fold(srv)
 
@@ -181,6 +240,14 @@ defmodule Mitos.Run do
     else
       {:noreply, %{srv | waiters: [from | srv.waiters]}}
     end
+  end
+
+  # A pending Decision that outranks the park: anything a supervisor emitted
+  # (its whole vocabulary is override-shaped, 16 §5.2) plus a terminal abort.
+  defp override_decision(state) do
+    state
+    |> State.pending_decisions()
+    |> Enum.find(fn d -> d.actor == "supervisor" or d.type == :abort end)
   end
 
   # --- the control loop body ---
@@ -258,13 +325,41 @@ defmodule Mitos.Run do
     srv
   end
 
+  # 15: an approval is a typed card, not a question in a payload. The card is
+  # raised from a task because the decision driver appends through THIS
+  # process's writer (04 §11) — calling it inline would deadlock the writer.
   defp execute(srv, _state, %Decision{type: :request_approval} = d) do
+    raise_card_async(srv, d, d.params)
+    send(self(), :step)
+    srv
+  end
+
+  # 16 §3.3: restore the last green state and re-open. Rewind APPENDS — the
+  # abandoned segment stays on the log, which is what keeps attribution
+  # possible (16 §6.1) — and `memo` is required, because a rewind without one
+  # repeats the failure it rewound from.
+  defp execute(srv, state, %Decision{type: :rewind} = d) do
+    target = param(d, "checkpoint_id")
+    memo = param(d, "memo")
+
+    checkpoint =
+      cond do
+        target -> State.checkpoint(state, target)
+        param(d, "allow_non_green") -> List.last(state.checkpoints)
+        true -> State.last_green(state)
+      end
+
     srv =
-      commit_effect(srv,
-        type: :approval_requested,
-        caused_by: d.seq,
-        payload: d.params
-      )
+      cond do
+        is_nil(memo) or memo == "" ->
+          substrate_abort(srv, d, "rewind without a memo repeats the failure", :policy)
+
+        is_nil(checkpoint) ->
+          substrate_abort(srv, d, "no green checkpoint to rewind to", :unrecoverable)
+
+        true ->
+          restore_checkpoint(srv, d, checkpoint, memo)
+      end
 
     send(self(), :step)
     srv
@@ -297,6 +392,179 @@ defmodule Mitos.Run do
     )
   end
 
+  # The loop-manager exhausted its intra-step ladder. Ask supervision what is
+  # left: a bounded retry, a rewind to the last green state, or a human.
+  defp handle_signal(srv, decision, signal, outcome) do
+    {move, sup} = Supervision.next_move(srv.sup, signal, decision.target)
+    srv = %{srv | sup: sup}
+
+    case move do
+      {:retry, _} ->
+        {_d, srv} = append(srv, ladder_decision(:retry, decision, signal, outcome))
+        srv
+
+      {:rewind, scope} ->
+        {_d, srv} = append(srv, rewind_decision(decision, signal, scope, outcome))
+        srv
+
+      {:escalate, reason} ->
+        {d, srv} = append(srv, ladder_decision(:escalate, decision, signal, outcome))
+
+        # 15 §2: the substrate has run out of moves. That is exactly when a
+        # human is worth interrupting, and the kind is `judgment` — unguessable
+        # by construction, so no default may advance it.
+        raise_card_async(srv, d, %{
+          kind: :approve,
+          act: %{kind: :judgment},
+          question: "#{decision.target}: #{signal} and the ladder is exhausted. Continue?",
+          attempted: "#{decision.target} (#{signal})",
+          blocked_by: inspect(reason),
+          options: [
+            %{id: "retry", label: "Retry the step", consequence: "one more attempt, same approach"},
+            %{id: "rewind", label: "Rewind to last green", consequence: "discard this segment and re-attempt"},
+            %{id: "abort", label: "Stop the run", consequence: "the run ends; work so far is kept"}
+          ]
+        })
+
+        srv
+    end
+  end
+
+  defp ladder_decision(type, opening, signal, outcome) do
+    Decision.new(
+      actor: "loop_manager",
+      type: type,
+      target: opening.target,
+      params: %{
+        signal: to_string(signal),
+        feedback: memo_for(signal, outcome),
+        climb_history: outcome[:signals] || []
+      },
+      inputs_hash: opening.inputs_hash,
+      rationale: "loop-manager: #{signal}",
+      budget: opening.budget
+    )
+  end
+
+  defp rewind_decision(opening, signal, scope, outcome) do
+    Decision.new(
+      actor: "loop_manager",
+      type: :rewind,
+      target: nil,
+      params: %{
+        scope: to_string(scope),
+        stage_id: opening.target,
+        memo: memo_for(signal, outcome),
+        reason_signal: to_string(signal)
+      },
+      inputs_hash: opening.inputs_hash,
+      rationale: "loop-manager: rewind on #{signal}",
+      budget: opening.budget
+    )
+  end
+
+  # The failure memo carried into the retry (04 §4.2). Repairing forward
+  # without it is how a long run loops on the same mistake.
+  defp memo_for(signal, outcome) do
+    "previous attempt tripped #{signal}" <>
+      case outcome[:acceptance] do
+        nil -> ""
+        v -> "; acceptance verdict was #{v}"
+      end
+  end
+
+  defp restore_checkpoint(srv, d, checkpoint, memo) do
+    if srv.config.workspace_mode == :in_place do
+      restore_in_place(srv, d, checkpoint, memo)
+    else
+      restore_by_clone(srv, d, checkpoint, memo)
+    end
+  end
+
+  # Unsandboxed: there is no copy to repoint at, so the rewind happens in the
+  # operator's own tree. Tracked content only — see `Checkpoint.restore_in_place/2`.
+  defp restore_in_place(srv, d, checkpoint, memo) do
+    case Checkpoint.restore_in_place(checkpoint, srv.config.workspace) do
+      {:ok, how} ->
+        commit_effect(srv,
+          type: :rewound,
+          caused_by: d.seq,
+          ref: %{"checkpoint_id" => checkpoint.checkpoint_id, "stage_id" => checkpoint.stage_id},
+          payload: %{
+            "via" => to_string(how),
+            "memo" => memo,
+            "green" => checkpoint.green,
+            "commit" => checkpoint.workspace_commit,
+            "note" => "tracked content only; untracked files were left in place"
+          }
+        )
+
+      {:error, reason} ->
+        substrate_abort(srv, d, "in-place rewind failed: #{inspect(reason)}", :unrecoverable)
+    end
+  end
+
+  defp restore_by_clone(srv, d, checkpoint, memo) do
+    dest = Path.join([Mitos.run_dir(srv.config.run_id), "rewind", checkpoint.checkpoint_id])
+
+    case Checkpoint.restore(checkpoint, dest) do
+      {:ok, how} ->
+        # The next `prepare` clones from here (05 §5.1), so the rewound state
+        # becomes the run's input without touching the log or the sandbox that
+        # produced it.
+        config = %{srv.config | workspace: dest}
+        Mitos.Run.Config.store(config)
+
+        %{srv | config: config}
+        |> commit_effect(
+          type: :rewound,
+          caused_by: d.seq,
+          ref: %{"checkpoint_id" => checkpoint.checkpoint_id, "stage_id" => checkpoint.stage_id},
+          payload: %{"via" => to_string(elem_or(how)), "memo" => memo, "green" => checkpoint.green}
+        )
+
+      {:error, reason} ->
+        substrate_abort(srv, d, "rewind failed: #{inspect(reason)}", :unrecoverable)
+    end
+  end
+
+  defp elem_or({tag, _}), do: tag
+  defp elem_or(tag), do: tag
+
+  defp param(%Decision{params: p}, key), do: p[key] || p[String.to_atom(key)]
+
+  # Raised off-process: the decision driver appends through this process's
+  # writer, so an inline call would deadlock (04 §11).
+  defp raise_card_async(srv, %Decision{} = d, fields) do
+    run_id = srv.config.run_id
+    tenant = srv.config.tenant
+    fields = Map.new(fields)
+
+    Task.Supervisor.start_child(Mitos.Run.TaskSupervisor, fn ->
+      act = fields[:act] || %{kind: :judgment}
+
+      built =
+        Mitos.Decision.Policy.card_for(act, %{
+          run_id: run_id,
+          caused_by: d.seq,
+          tenant: tenant,
+          stage_id: d.target,
+          kind: fields[:kind] || :approve,
+          question: fields[:question] || to_string(fields["question"] || "Approval required"),
+          context: %{attempted: fields[:attempted], blocked_by: fields[:blocked_by], evidence_refs: []},
+          options: fields[:options] || [],
+          cost_of_wrong: fields[:cost_of_wrong] || %{}
+        })
+
+      case built do
+        {:ok, card} -> Mitos.Decision.raise_card(card, to: "operator")
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+
+    :ok
+  end
+
   # --- the step runtime (03 §6 bracket), in a supervised task ---
 
   defp execute_stage(run_id, %Decision{} = d, config, manifests, intent, append) do
@@ -309,6 +577,7 @@ defmodule Mitos.Run do
       workspace: config.workspace,
       scope: config.scope,
       trust_tier: config.trust_tier,
+      workspace_mode: config.workspace_mode,
       context: []
     }
 
@@ -337,7 +606,7 @@ defmodule Mitos.Run do
           case Hooks.run(manifest.hooks.pre, handle, :pre, fn f -> append.([{:caused_by, d.seq} | f]) end) do
             {:blocked, hook} ->
               # 03 §6: a blocking pre gate aborts the step BEFORE model spend.
-              {%{iterations: 0, tokens: 0, usd: 0.0, wall_ms: 0, ok: false}, hook}
+              {%{iterations: 0, tokens: 0, usd: 0.0, wall_ms: 0, ok: false, signals: []}, hook}
 
             :ok ->
               env = %{
@@ -353,6 +622,19 @@ defmodule Mitos.Run do
                   env: env,
                   append: fn f -> append.([{:caused_by, d.seq} | f]) end,
                   max_iterations: config.max_iterations,
+                  run_id: run_id,
+                  stage_id: name,
+                  # 14 §2.1: T_block comes from the harness's observed think
+                  # time, never a fixed guess — a harness that legitimately
+                  # thinks for minutes must not read as blocked at 45s.
+                  thresholds: %{block: Mitos.Harness.block_threshold(spec.harness_mod)},
+                  # Signals read the workspace, not the narration (04 §4.3).
+                  diff_sha: fn -> workspace_sha(handle.workspace) end,
+                  # 16 §2 `blocked_on_human`: no iteration boundary will ever
+                  # report this, so the clock does.
+                  on_blocked: fn window ->
+                    on_blocked(run_id, d, name, handle, spec, window, append)
+                  end,
                   # inner-zoom trace, dev cut only (11 §4)
                   trace: Path.join([Mitos.run_dir(run_id), "trace", name <> ".jsonl"])
                 })
@@ -371,6 +653,35 @@ defmodule Mitos.Run do
           loop: loop
         })
 
+        # 16 §3.2: the hard verdict, run OUTSIDE the workspace against an oracle
+        # restored from the capability dir. `result` above is the capability's
+        # self-report; this is whether it happened.
+        acceptance =
+          Acceptance.run(%{
+            manifest: manifest,
+            run_id: run_id,
+            stage_id: name,
+            workspace: handle.workspace,
+            diff_paths: diff_paths(harvested.diff),
+            append: append,
+            caused_by: d.seq
+          })
+
+        # 16 §3.1: the segment boundary. `green` is the predicate's verdict and
+        # nothing else — a step that looks done with no passing oracle is not a
+        # state worth rewinding to.
+        Checkpoint.take(%{
+          run_id: run_id,
+          stage_id: name,
+          seq: d.seq,
+          workspace: handle.workspace,
+          workspace_mode: handle[:workspace_mode] || :clone,
+          provider: spec.provider,
+          acceptance: acceptance,
+          append: append,
+          caused_by: d.seq
+        })
+
         append.(
           type: :budget_charged,
           caused_by: d.seq,
@@ -381,7 +692,12 @@ defmodule Mitos.Run do
           }
         )
 
-        :ok
+        {:ok,
+         %{
+           signals: signals_after(loop, acceptance),
+           acceptance: acceptance.verdict,
+           tampered: acceptance.tampered
+         }}
       after
         Broker.revoke(token)
         spec.provider.stop(%{handle: handle})
@@ -390,6 +706,118 @@ defmodule Mitos.Run do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # A failing oracle is a signal in its own right (04 §4.3 `verify_fail`), and a
+  # tampered one is never merely a failure — it is an escalation (16 §3.2).
+  defp signals_after(loop, acceptance) do
+    cond do
+      acceptance.tampered -> [:oracle_tampered]
+      Map.get(loop, :signals, []) != [] -> loop.signals
+      acceptance.verdict == :fail -> [:verify_fail]
+      true -> []
+    end
+  end
+
+  # The workspace as one fingerprint — what `no_progress` and `oscillation` are
+  # computed from (04 §4.3). Path + size + mtime over the gitignore-honouring
+  # file set, never file contents: the signal only needs to know whether the
+  # tree moved, and reading a real checkout on every iteration is an I/O storm,
+  # not a measurement.
+  defp workspace_sha(workspace) do
+    case Mitos.Workspace.fingerprint(workspace) do
+      {:ok, digest} -> digest
+      {:error, _} -> nil
+    end
+  end
+
+  defp diff_paths(%{patch: patch}) when is_binary(patch) do
+    Regex.scan(~r/^\+\+\+ b\/(.+)$/m, patch)
+    |> Enum.map(fn [_, path] -> String.trim(path) end)
+    |> Enum.uniq()
+  end
+
+  defp diff_paths(_), do: []
+
+  # 16 §2: the run went quiet past T_block with an open step. Classify the modal
+  # state if there is a terminal to read (14 §3.2); on `:unknown`, or with no
+  # terminal at all, escalate anyway — a stall detected with an unreadable
+  # screen still escalates, with less information, on time.
+  defp on_blocked(run_id, %Decision{} = d, stage_id, handle, spec, window, append) do
+    append.(
+      caused_by: d.seq,
+      type: :escalation_raised,
+      ref: %{"stage_id" => stage_id},
+      payload: %{
+        "signal" => "blocked_on_human",
+        "quiet_for_ms" => window.quiet_for_ms,
+        "distinct_execs_since" => window.distinct_execs_since
+      }
+    )
+
+    modal = classify_modal(handle, spec)
+
+    Task.Supervisor.start_child(Mitos.Run.TaskSupervisor, fn ->
+      built =
+        Mitos.Decision.Policy.card_for(%{kind: :missing_input}, %{
+          run_id: run_id,
+          caused_by: d.seq,
+          stage_id: stage_id,
+          kind: :approve,
+          question: blocked_question(stage_id, modal),
+          context: %{
+            attempted: "#{stage_id} ran for #{div(window.quiet_for_ms, 1000)}s then went quiet",
+            blocked_by: modal_summary(modal),
+            evidence_refs: []
+          },
+          options: modal_options(modal)
+        })
+
+      case built do
+        {:ok, card} -> Mitos.Decision.raise_card(card, to: "operator")
+        {:error, _reason} -> :ok
+      end
+    end)
+
+    :ok
+  end
+
+  # No terminal means no modal state to read — which is an answer, not a
+  # failure. C3 is optional; C1+C2 carry the run (14 §3.4).
+  defp classify_modal(handle, spec) do
+    case handle[:terminal] do
+      nil ->
+        nil
+
+      terminal ->
+        classifier = Mitos.Observation.Classifier.for_harness(spec.harness_mod)
+
+        case Mitos.Observation.Terminal.snapshot(terminal) do
+          {:ok, grid} -> classifier.classify(grid)
+          {:error, _} -> nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp blocked_question(stage_id, %{kind: kind, prompt_text: text}) when kind != :unknown,
+    do: String.slice("#{stage_id} is waiting: #{text || kind}", 0, 200)
+
+  defp blocked_question(stage_id, _modal),
+    do: "#{stage_id} has been idle with no progress. What should it do?"
+
+  defp modal_summary(nil), do: "no terminal to read"
+  defp modal_summary(%{kind: :unknown}), do: "an unrecognized prompt is on screen"
+  defp modal_summary(%{kind: kind}), do: "waiting at a #{kind}"
+
+  defp modal_options(%{kind: :menu, options: [_ | _] = options}),
+    do: Enum.map(options, &%{id: &1.id, label: &1.label, consequence: "selects #{&1.label}"})
+
+  defp modal_options(_),
+    do: [
+      %{id: "approve", label: "Approve and continue", consequence: "the step proceeds"},
+      %{id: "abort", label: "Stop the step", consequence: "the step ends; work so far is kept"}
+    ]
 
   defp harvest_effects(append, caused_by, run_id, stage_id, manifest, harvested, meta) do
     diff_artifacts = register_diff(append, caused_by, run_id, harvested.diff)
@@ -601,6 +1029,11 @@ defmodule Mitos.Run do
     # driver is idempotent, so a crash between here and delivery is recovered by
     # `mitos deliver <run_id>` / resume.
     maybe_schedule_delivery(srv.config)
+
+    # The sandbox is a copy; the evidence was content-addressed into the run
+    # store at harvest (05 §5.4). Keeping it for every successful run is how a
+    # disk fills, so a clean finish reclaims it — and a failure keeps it.
+    Mitos.GC.reap_after_run(srv.config.run_id, state.status)
 
     Enum.each(srv.waiters, &GenServer.reply(&1, state))
     {:stop, :normal, %{srv | waiters: []}}

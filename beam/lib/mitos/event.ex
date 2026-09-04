@@ -16,12 +16,12 @@ defmodule Mitos.Event do
     defstruct run_id: nil,
               seq: nil,
               ts: nil,
-              # "orchestrator" | "loop_manager"
+              # "orchestrator" | "loop_manager" | "supervisor"
               actor: nil,
               # advance | insert | retry | switch | skip
-              #   | request_approval | escalate | finish | abort
+              #   | request_approval | escalate | finish | abort | rewind
               type: nil,
-              # capability_ref | stage_id | null
+              # capability_ref | stage_id | checkpoint_id | null
               target: nil,
               # type-specific (e.g. switch -> {model,effort,harness})
               params: %{},
@@ -32,9 +32,15 @@ defmodule Mitos.Event do
               # { tokens, usd, wall_ms, remaining }
               budget: %{}
 
-    @types ~w(advance insert retry switch skip request_approval escalate finish abort)a
+    @types ~w(advance insert retry switch skip request_approval escalate finish abort rewind)a
+
+    # 16 §5.2: a fleet supervisor acts on ANOTHER run and is restricted to the
+    # moves that cannot declare that run's own pipeline judgment. It MUST NOT
+    # emit advance/insert/skip/finish.
+    @supervisor_types ~w(retry switch rewind escalate abort request_approval)a
 
     def types, do: @types
+    def supervisor_types, do: @supervisor_types
 
     def new(fields) do
       fields = Map.new(fields)
@@ -42,6 +48,14 @@ defmodule Mitos.Event do
 
       unless type in @types do
         raise ArgumentError, "unknown Decision type: #{inspect(type)}"
+      end
+
+      # 16 §5.2 is enforced here, not by convention: the restricted set is a
+      # property of the record, so a supervisor cannot finish another run even
+      # by constructing the event by hand.
+      if to_string(fields[:actor]) == "supervisor" and type not in @supervisor_types do
+        raise ArgumentError,
+              "supervisor may not emit #{type} (16 §5.2: restricted to #{inspect(@supervisor_types)})"
       end
 
       struct!(__MODULE__, %{fields | type: type})
@@ -84,6 +98,9 @@ defmodule Mitos.Event do
       task_failed task_parked task_cancelled invoke_requested subtask_returned
       signal_received delivery_attempted delivery_sent delivery_failed
       run_started run_finished
+      quiescent steer_applied steer_rejected harness_quarantined
+      decision_delivered decision_defaulted decision_rejected
+      checkpoint_taken oracle_tampered acceptance_recorded rewound
     )a
 
     def types, do: @types

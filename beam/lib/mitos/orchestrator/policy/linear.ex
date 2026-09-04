@@ -57,7 +57,7 @@ defmodule Mitos.Orchestrator.Policy.Linear do
       for {id, %{status: :finished}} <- state.stages, into: MapSet.new(), do: id
 
     skipped =
-      for %Decision{type: :skip, target: t} <- state.decisions,
+      for %Decision{type: :skip, target: t} <- state.decision_log,
           not is_nil(t),
           into: MapSet.new(),
           do: t

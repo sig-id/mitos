@@ -162,6 +162,75 @@ defmodule Mitos.Web.Pages do
     layout("runs", body, role: role, active: "runs")
   end
 
+  @doc """
+  "What is waiting on me?" (`11 §13.3`) — the console rendering of the decision
+  card (`11 §4a`), the same list the phone pushes from. One renderer, two
+  densities; the phone is this surface when the operator is not at the console.
+  """
+  def decisions(role) do
+    cards = Mitos.Decision.open()
+
+    waiting = Enum.count(cards, &is_nil(&1.default))
+
+    tiles =
+      stat_tiles([
+        {"open", length(cards), nil},
+        {"waiting on you", waiting, "no default — nothing happens until you answer"},
+        {"on a clock", length(cards) - waiting, "silence advances these"}
+      ])
+
+    body = """
+    <h1>Decisions</h1>
+    <p class="sub">what is waiting on you — oldest first. A card you can't answer in a minute is a card that shouldn't have been raised.</p>
+    #{tiles}
+    #{decision_cards(cards)}
+    """
+
+    layout("decisions", body, role: role, active: "decisions")
+  end
+
+  defp decision_cards([]),
+    do: ~s(<div class="empty">nothing waiting on you — runs are proceeding unattended</div>)
+
+  defp decision_cards(cards) do
+    Enum.map_join(cards, "\n", fn c ->
+      # 15 §4 rendered honestly: an `external` card says "waiting for you" and
+      # means it; a reversible one shows what silence will do.
+      countdown =
+        if is_nil(c.default) do
+          ~s(<span class="pill s-parked"><span class="dot"></span>waiting for you</span>)
+        else
+          ~s(<span class="pill">defaults to <code>#{esc(c.default)}</code> in #{div(c.ttl_ms, 60_000)}m</span>)
+        end
+
+      options =
+        Enum.map_join(c.options, " ", fn o ->
+          rec = if o.recommended, do: " ★", else: ""
+          ~s(<form method="post" action="/web/decisions/#{esc(c.decision_id)}" style="display:inline">) <>
+            ~s(<input type="hidden" name="choice" value="#{esc(o.id)}">) <>
+            ~s(<button type="submit" title="#{esc(o.consequence)}">#{esc(o.label)}#{rec}</button></form>)
+        end)
+
+      """
+      <section class="card">
+        <h2>#{esc(c.question)}</h2>
+        <p class="sub">#{esc(to_string(c.reversibility))} · #{mono_raw(~s(<a href="#{run_link(c.run_id)}">#{esc(c.run_id)}</a>))}#{if c.stage_id, do: " / " <> esc(to_string(c.stage_id)), else: ""} #{countdown}</p>
+        <dl>
+          <dt>tried</dt><dd>#{esc(to_string(c.context.attempted || "-"))}</dd>
+          <dt>blocked</dt><dd>#{esc(to_string(c.context.blocked_by || "-"))}</dd>
+          <dt>if wrong</dt><dd>#{esc(cost_line(c))}</dd>
+        </dl>
+        <p>#{options}</p>
+      </section>
+      """
+    end)
+  end
+
+  defp cost_line(c) do
+    recoverable = if c.cost_of_wrong.recoverable, do: "recoverable", else: "NOT recoverable"
+    "#{div(c.cost_of_wrong.wasted_wall_ms, 60_000)}m of work, #{recoverable}"
+  end
+
   defp runs_table(runs) do
     rows =
       Enum.map_join(runs, "\n", fn r ->
@@ -543,7 +612,7 @@ defmodule Mitos.Web.Pages do
   defp failure_callout(run_id, state) do
     aborted =
       if state.status == :aborted do
-        case state.decisions |> Enum.filter(&(&1.type == :abort)) |> List.last() do
+        case state.decision_log |> Enum.filter(&(&1.type == :abort)) |> List.last() do
           %Decision{rationale: r} when is_binary(r) and r != "" ->
             ~s(<p><span class="kx">aborted</span> — #{esc(r)}</p>)
 

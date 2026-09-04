@@ -73,6 +73,37 @@ defmodule Mitos.Log do
     end
   end
 
+  @doc """
+  Append when **no run process holds the writer** — the run has finished or
+  parked and released it (cf. `Mitos.IO.deliver_for/1`).
+
+  This does not weaken the single-writer invariant (`01 §4`): it is used only
+  once the owning process is gone, and callers serialize per run so a concurrent
+  resume cannot interleave. It exists because a decision resolved after a run
+  parks is exactly the event the log must not lose — `decision_precision`
+  (`16 §6`) is computed from those records.
+  """
+  def append_detached(run_id, %mod{} = event) when mod in [Decision, Effect] do
+    :global.trans({__MODULE__, {:detached, run_id}}, fn ->
+      {:ok, writer, _} = open_writer(run_id)
+
+      try do
+        {stamped, _writer} = append(writer, event)
+        {:ok, stamped}
+      after
+        close(writer)
+      end
+    end)
+  end
+
+  @doc "Is a run process currently holding this run's writer?"
+  def writer_held?(run_id) do
+    case Registry.lookup(Mitos.Run.Registry, run_id) do
+      [] -> false
+      _ -> true
+    end
+  end
+
   @doc "Does a log exist (has at least one committed event) for this run?"
   def exists?(run_id), do: File.exists?(path(run_id))
 end

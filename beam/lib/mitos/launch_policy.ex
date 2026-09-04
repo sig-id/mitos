@@ -27,7 +27,11 @@ defmodule Mitos.LaunchPolicy do
     tier = run_ctx[:trust_tier] || m.trust_tier
 
     with {:ok, provider} <- select_provider(tier, run_ctx),
-         {:ok, harness_name, harness_mod} <- select_harness(m) do
+         {:ok, harness_name, harness_mod} <- select_harness(m),
+         # An unsandboxed workspace is an operator choice at T0/T1 and a spec
+         # violation at T2 — refused here, never downgraded, exactly like an
+         # ineligible provider (05 §4).
+         {:ok, ws_mode} <- Mitos.Workspace.mode(run_ctx[:workspace_mode], tier) do
       {:ok,
        %LaunchSpec{
          run_id: run_ctx.run_id,
@@ -36,7 +40,7 @@ defmodule Mitos.LaunchPolicy do
          trust_tier: tier,
          provider: provider,
          image: m.image || "dir:" <> m.dir,
-         workspace: %{source: run_ctx[:workspace], mode: :rw},
+         workspace: %{source: run_ctx[:workspace], mode: :rw, materialize: ws_mode},
          data: m.data,
          context: run_ctx[:context] || [],
          harness: harness_name,

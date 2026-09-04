@@ -18,6 +18,9 @@ defmodule Mitos.Run.Config do
             capabilities: %{},
             # input workspace source (dir path) | nil
             workspace: nil,
+            # :clone (default, 05 §5.1) | :in_place — turn the sandbox off for a
+            # workspace the operator already owns. T2 refuses it (05 §4).
+            workspace_mode: nil,
             # the run's SUBJECT data (01 §8.7 payload.inputs)
             inputs: %{},
             # per-run knobs (01 §8.7 payload.parameters)
@@ -76,6 +79,7 @@ defmodule Mitos.Run.Config do
          pipeline: raw["pipeline"] || "",
          capabilities: raw["capabilities"] || %{},
          workspace: raw["workspace"],
+         workspace_mode: raw["workspace_mode"] && String.to_existing_atom(raw["workspace_mode"]),
          inputs: raw["inputs"] || %{},
          parameters: raw["parameters"] || %{},
          budget: raw["budget"] || %{},

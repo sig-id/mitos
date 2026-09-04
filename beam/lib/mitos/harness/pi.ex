@@ -96,6 +96,24 @@ defmodule Mitos.Harness.Pi do
       effort_levels: ["low", "medium", "high"]
     }
 
+  @impl true
+  def observation do
+    %{
+      structured_output: :stream,
+      # 14 §4: the substrate never probes or assumes, and neither does this
+      # declaration. A session-artifact path is claimed only once its record
+      # format has been verified by a live contract check (14 §5) — an
+      # unverified C2 is worse than none, because a run would be granted an
+      # unattended horizon it cannot actually be observed through.
+      session_artifacts: nil,
+      interactive: true,
+      modal_classifier: Mitos.Observation.Classifier.Heuristic,
+      pty_control: true,
+      resume: :session_id,
+      think_time_p95_ms: 45_000
+    }
+  end
+
   # --- pi JSON → normalized events ---
 
   def normalize(line) do

@@ -21,6 +21,9 @@ defmodule Mitos.Application do
       # cross-run knowledge service (07) — two-track memory + distill.
       Mitos.Memory,
       Mitos.Sink.Notify.Destination,
+      # The decision plane (15): open cards, TTL defaults, dedupe, digest.
+      Mitos.Decision,
+      Mitos.Sink.Decide.Destination,
       Mitos.Sink.Reply.Destination,
       Mitos.Broker.Destinations,
       Mitos.Settlement.Mock,

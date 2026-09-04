@@ -64,6 +64,19 @@ defmodule Mitos.Harness.Opencode do
       effort_levels: ["minimal", "low", "high", "max"]
     }
 
+  @impl true
+  def observation do
+    %{
+      structured_output: :stream,
+      session_artifacts: nil,
+      interactive: true,
+      modal_classifier: Mitos.Observation.Classifier.Heuristic,
+      pty_control: true,
+      resume: :none,
+      think_time_p95_ms: 45_000
+    }
+  end
+
   # --- opencode JSON → normalized events ---
 
   def normalize(line) do

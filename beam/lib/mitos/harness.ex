@@ -56,7 +56,91 @@ defmodule Mitos.Harness do
   @callback argv(prompt :: String.t(), opts :: keyword()) ::
               {exe :: String.t(), args :: [String.t()]}
 
-  @optional_callbacks [argv: 2]
+  @doc """
+  The **observation matrix** (14 §4): what can be observed about this harness.
+  The substrate computes the observable set from this and refuses configurations
+  it cannot observe — it never probes and never assumes.
+
+      %{
+        structured_output : :stream | :artifact | :none,
+        session_artifacts : %{path_template, format, schema_version, tail} | nil,
+        interactive       : boolean,
+        modal_classifier  : module | nil,
+        pty_control       : boolean,
+        resume            : :session_id | :none,
+        think_time_p95_ms : integer          # seeds T_block (14 §2.1)
+      }
+  """
+  @callback observation() :: map
+
+  @doc """
+  Normalize one line of the harness's session artifact into the `01 §8.6`
+  vocabulary (C2, 14 §1.1). A session record is a different shape from a
+  headless stdout frame even where they rhyme, so the adapter owns both.
+  """
+  @callback normalize_session_line(line :: String.t()) :: [map]
+
+  @optional_callbacks [argv: 2, normalize_session_line: 1]
+
+  @doc """
+  The matrix for an adapter, with defaults filled in. An adapter that predates
+  `14` declares nothing and is treated as headless-only — the conservative
+  reading, since claiming an unverified channel is how a run goes blind.
+  """
+  def observation(mod) do
+    declared =
+      try do
+        mod.observation()
+      rescue
+        UndefinedFunctionError -> %{}
+      end
+
+    Map.merge(
+      %{
+        structured_output: :stream,
+        session_artifacts: nil,
+        interactive: false,
+        modal_classifier: nil,
+        pty_control: false,
+        resume: :none,
+        think_time_p95_ms: 30_000
+      },
+      declared
+    )
+  end
+
+  @doc """
+  Which channels (14 §1) are available for this adapter, and whether the
+  resulting posture may run unattended (16 §6).
+
+  A harness observable only through C1+C3 may be watched by a human but MUST NOT
+  be granted an unattended horizon, and MUST NOT serve a Market run — a buyer's
+  proof cannot be built from a screen (14 §4).
+  """
+  def channels(mod) do
+    o = observation(mod)
+    c2 = o.structured_output == :stream or match?(%{}, o.session_artifacts)
+    c3 = o.interactive and o.pty_control
+
+    %{
+      c1: true,
+      c2: c2,
+      c3: c3,
+      unattended_ok: c2,
+      market_ok: c2,
+      reason: if(c2, do: nil, else: :no_structured_channel)
+    }
+  end
+
+  @doc """
+  `T_block` for this harness (14 §2.1). Derived from observed think-time, never
+  guessed: a harness that legitimately thinks for minutes must not be reported
+  as blocked on a human at 45 seconds.
+  """
+  def block_threshold(mod) do
+    o = observation(mod)
+    max(o.think_time_p95_ms * 2, Mitos.Observation.Clock.thresholds().block)
+  end
 
   @doc """
   The model-egress proxy env for a harness (05 R1): the harness's model base

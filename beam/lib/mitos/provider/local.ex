@@ -33,15 +33,14 @@ defmodule Mitos.Provider.Local do
     File.rm_rf!(dir)
     File.mkdir_p!(dir)
 
-    workspace = Path.join(dir, "workspace")
     cap_dir = Path.join(dir, "cap")
     home = Path.join(dir, "home")
     ctx_dir = Path.join(dir, "ctx")
     skill_dir = Path.join(dir, "skill")
-    Enum.each([workspace, home, ctx_dir, skill_dir], &File.mkdir_p!/1)
+    Enum.each([home, ctx_dir, skill_dir], &File.mkdir_p!/1)
 
-    with :ok <- clone_workspace(spec.workspace, workspace),
-         {:ok, baseline} <- git_baseline(workspace),
+    with {:ok, workspace} <- materialize_workspace(spec.workspace, Path.join(dir, "workspace")),
+         {:ok, baseline} <- baseline_for(spec.workspace, workspace),
          :ok <- copy_capability(spec.manifest, cap_dir),
          {:ok, skill_path, skill_sha} <- resolve_skill(spec.manifest, cap_dir, skill_dir),
          {:ok, data_mount} <- mount_data(spec, dir) do
@@ -59,6 +58,13 @@ defmodule Mitos.Provider.Local do
          skill_sha: skill_sha,
          data_mount: data_mount,
          baseline: baseline,
+         # :clone — the workspace is a copy inside the sandbox, and `baseline` is
+         # a commit this provider made in it.
+         # :in_place — the workspace IS the operator's tree; `baseline` is
+         # whatever their HEAD already was, and nothing here writes to their
+         # branch or index (05 §5.1's clone rule relaxed only by explicit,
+         # recorded operator choice; never at T2).
+         workspace_mode: spec.workspace[:materialize] || :clone,
          broker: nil
        }}
     end
@@ -141,24 +147,38 @@ defmodule Mitos.Provider.Local do
     Path.join([Mitos.data_dir(), "sandboxes", spec.run_id, spec.stage_id || "step"])
   end
 
-  defp clone_workspace(%{source: nil}, _dest), do: :ok
+  # 05 §5.1 clone-in, but only over the gitignore-honouring file set and under a
+  # size ceiling (Mitos.Workspace) — or not at all, when the operator has turned
+  # the sandbox off for a workspace they own.
+  defp materialize_workspace(%{source: nil}, dest) do
+    File.mkdir_p!(dest)
+    {:ok, dest}
+  end
 
-  defp clone_workspace(%{source: source}, dest) do
-    cond do
-      is_binary(source) and File.dir?(source) ->
-        # Clone the input INTO the sandbox (05 §5.1) — never bind the original.
-        File.cp_r!(Path.expand(source), dest)
-        :ok
+  defp materialize_workspace(%{source: source} = ws, dest) when is_binary(source) do
+    Mitos.Workspace.materialize(source, dest, mode: ws[:materialize] || :clone)
+  end
 
-      is_binary(source) ->
-        {:error, {:workspace_source_not_found, source}}
+  defp materialize_workspace(_ws, dest) do
+    File.mkdir_p!(dest)
+    {:ok, dest}
+  end
 
-      true ->
-        :ok
+  # A git baseline makes harvest a pure `diff` even for non-repo inputs — but
+  # ONLY when the workspace is ours. In `:in_place` the tree belongs to the
+  # operator: `git init`/`add`/`commit` there would write to their repository,
+  # so the baseline is the commit their HEAD already points at and harvest diffs
+  # the working tree against it.
+  defp baseline_for(%{materialize: :in_place}, workspace) do
+    case git(workspace, ["rev-parse", "HEAD"]) do
+      {sha, 0} -> {:ok, String.trim(sha)}
+      # An in-place workspace with no commits yet: diff against the empty tree.
+      _ -> {:ok, empty_tree(workspace)}
     end
   end
 
-  # A git baseline makes harvest a pure `diff` even for non-repo inputs.
+  defp baseline_for(_ws, workspace), do: git_baseline(workspace)
+
   defp git_baseline(workspace) do
     with {_, 0} <- git(workspace, ["init", "-q"]),
          {_, 0} <- git(workspace, ["add", "-A"]),
@@ -168,6 +188,13 @@ defmodule Mitos.Provider.Local do
       {:ok, String.trim(sha)}
     else
       {out, code} -> {:error, {:git_baseline_failed, code, out}}
+    end
+  end
+
+  defp empty_tree(workspace) do
+    case git(workspace, ["hash-object", "-t", "tree", "/dev/null"]) do
+      {sha, 0} -> String.trim(sha)
+      _ -> "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     end
   end
 
@@ -225,6 +252,23 @@ defmodule Mitos.Provider.Local do
 
   defp handle_of(%{handle: handle}), do: handle
   defp handle_of(%{workspace: _} = handle), do: handle
+
+  # `:clone` stages into the sandbox's own index, which is ours to move.
+  # `:in_place` MUST NOT: `git add -A` would stage the operator's whole tree in
+  # their real repository. Diff the working tree against the baseline instead,
+  # and list untracked-but-not-ignored files separately.
+  defp workspace_diff(%{workspace_mode: :in_place} = handle) do
+    ws = handle.workspace
+    {patch, _} = git(ws, ["diff", handle.baseline])
+    {stat, _} = git(ws, ["diff", "--stat", handle.baseline])
+    {untracked, _} = git(ws, ["ls-files", "--others", "--exclude-standard"])
+
+    extra = String.trim(untracked)
+    stat = String.trim(stat)
+    stat = if extra == "", do: stat, else: stat <> "\n untracked: " <> String.replace(extra, "\n", ", ")
+
+    %{patch: patch, stat: stat}
+  end
 
   defp workspace_diff(handle) do
     ws = handle.workspace

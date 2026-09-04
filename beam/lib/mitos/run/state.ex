@@ -15,7 +15,7 @@ defmodule Mitos.Run.State do
             # :pending | :running | :finished | :aborted | :parked
             status: :pending,
             events: [],
-            decisions: [],
+            decision_log: [],
             effects: [],
             # stage_id/capability_ref => stage read model (below)
             stages: %{},
@@ -28,6 +28,17 @@ defmodule Mitos.Run.State do
             # I/O-plane deliveries (10 §5.3), folded from delivery_* Effects —
             # consumed here so no Effect subtype is silently ignored (01 §4).
             deliveries: %{sent: [], failed: []},
+            # 16 §3.1 — segment boundaries, newest last. `green` is the
+            # acceptance verdict and nothing else.
+            checkpoints: [],
+            # 15 — cards raised on this run, and how each was answered. The
+            # human/default split is preserved forever because
+            # `decision_precision` (16 §6) is computed from it.
+            decisions: %{open: %{}, resolved: [], defaulted: [], rejected: []},
+            # 14 §2 — the last quiescence edge seen, per level.
+            quiescence: %{},
+            # 16 §2 — set while a card is open with no default (fail-secure park).
+            blocked_on_human: false,
             result_ref: nil,
             last_seq: -1
 
@@ -40,7 +51,7 @@ defmodule Mitos.Run.State do
   end
 
   defp apply_event(%Decision{} = d, st) do
-    st = %{st | decisions: [d | st.decisions], last_seq: d.seq, budget: budget_of(d, st)}
+    st = %{st | decision_log: [d | st.decision_log], last_seq: d.seq, budget: budget_of(d, st)}
     apply_decision(d, st)
   end
 
@@ -82,6 +93,19 @@ defmodule Mitos.Run.State do
 
   defp apply_decision(%Decision{type: :request_approval}, st), do: %{st | status: :parked}
 
+  # 16 §3.3: rewind APPENDS. The abandoned segment stays on the record — that is
+  # what makes attribution (16 §6.1) possible at all — and the targeted stage is
+  # re-opened rather than rewritten.
+  defp apply_decision(%Decision{type: :rewind, params: p}, st) do
+    stage_id = p["stage_id"] || p[:stage_id]
+
+    st
+    |> Map.put(:status, :running)
+    |> then(fn s ->
+      if stage_id, do: update_stage(s, stage_id, &%{&1 | status: :opened, result: nil, evidence: []}), else: s
+    end)
+  end
+
   defp apply_decision(_d, st), do: st
 
   # --- effect effects on state ---
@@ -109,8 +133,55 @@ defmodule Mitos.Run.State do
     }
   end
 
-  defp apply_effect(%Effect{type: :approval_resolved}, st),
-    do: if(st.status == :parked, do: %{st | status: :running}, else: st)
+  defp apply_effect(%Effect{type: :checkpoint_taken} = e, st),
+    do: %{st | checkpoints: st.checkpoints ++ [Mitos.Checkpoint.from_effect(e)]}
+
+  defp apply_effect(%Effect{type: :acceptance_recorded} = e, st) do
+    verdict = e.payload["verdict"]
+
+    update_stage(st, e.ref["stage_id"], fn s ->
+      Map.merge(s, %{
+        acceptance: verdict,
+        score: e.payload["score"],
+        delta: e.payload["delta"],
+        tampered: !!e.payload["tampered"]
+      })
+    end)
+  end
+
+  defp apply_effect(%Effect{type: :quiescent} = e, st),
+    do: %{st | quiescence: Map.put(st.quiescence, e.ref["level"], e.payload["for_ms"])}
+
+  defp apply_effect(%Effect{type: :approval_requested} = e, st) do
+    card = Mitos.Decision.Card.from_payload(st.run_id, e.payload, e.caused_by)
+
+    %{
+      st
+      | decisions: %{st.decisions | open: Map.put(st.decisions.open, card.decision_id, card)},
+        # A card with no default parks indefinitely (15 §4) — that is what
+        # "blocked on a human" means to every reader of this fold.
+        blocked_on_human: st.blocked_on_human or is_nil(card.default)
+    }
+  end
+
+  defp apply_effect(%Effect{type: :decision_defaulted} = e, st),
+    do: %{st | decisions: %{st.decisions | defaulted: st.decisions.defaulted ++ [e.payload]}}
+
+  defp apply_effect(%Effect{type: :decision_rejected} = e, st),
+    do: %{st | decisions: %{st.decisions | rejected: st.decisions.rejected ++ [e.payload]}}
+
+  defp apply_effect(%Effect{type: :approval_resolved} = e, st) do
+    id = e.ref["decision_id"] || e.payload["decision_id"]
+    open = Map.delete(st.decisions.open, id)
+
+    st = %{
+      st
+      | decisions: %{st.decisions | open: open, resolved: st.decisions.resolved ++ [e.payload]},
+        blocked_on_human: Enum.any?(Map.values(open), &is_nil(&1.default))
+    }
+
+    if st.status == :parked, do: %{st | status: :running}, else: st
+  end
 
   # I/O-plane deliveries (10 §5.3) — consumed so the read model is complete.
   defp apply_effect(%Effect{type: :delivery_sent} = e, st) do
@@ -135,7 +206,13 @@ defmodule Mitos.Run.State do
       opened_by: nil,
       capability_ref: nil,
       result: nil,
-      evidence: []
+      evidence: [],
+      # 16 §3.2 — the HARD verdict, kept beside the soft `result` and never
+      # merged into it: they answer different questions.
+      acceptance: nil,
+      score: nil,
+      delta: nil,
+      tampered: false
     }
 
   defp update_stage(st, nil, _f), do: st
@@ -145,6 +222,20 @@ defmodule Mitos.Run.State do
     order = if stage_id in st.stage_order, do: st.stage_order, else: st.stage_order ++ [stage_id]
     %{st | stages: Map.put(st.stages, stage_id, f.(stage)), stage_order: order}
   end
+
+  @doc "The last green checkpoint (16 §3.3's default rewind target)."
+  def last_green(%__MODULE__{checkpoints: cps}, seq \\ nil),
+    do: Mitos.Checkpoint.last_green(cps, seq)
+
+  @doc "A checkpoint by id."
+  def checkpoint(%__MODULE__{checkpoints: cps}, id),
+    do: Enum.find(cps, &(&1.checkpoint_id == id))
+
+  @doc """
+  Is this run currently parked on a human with no default to advance it?
+  `15 §4`'s fail-secure state, read straight off the fold.
+  """
+  def blocked?(%__MODULE__{blocked_on_human: b}), do: b
 
   @doc "Is the run in a terminal state? (04 §3.4 `terminal(state)`)"
   def terminal?(%__MODULE__{status: s}), do: s in [:finished, :aborted]
@@ -157,7 +248,7 @@ defmodule Mitos.Run.State do
   def pending_decisions(%__MODULE__{} = st) do
     caused = st.effects |> Enum.map(& &1.caused_by) |> MapSet.new()
 
-    st.decisions
+    st.decision_log
     |> Enum.reject(fn d ->
       d.type in [:finish, :abort, :skip] or MapSet.member?(caused, d.seq)
     end)

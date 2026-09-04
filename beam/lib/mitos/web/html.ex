@@ -82,6 +82,7 @@ defmodule Mitos.Web.HTML do
           [
             {"home", "Home", "/web"},
             {"runs", "Runs", "/web/runs"},
+            {"decisions", "Decisions", "/web/decisions"},
             {"applications", "Applications", "/web/apps"},
             {"sales", "Sales", "/web/attribution"}
           ]

@@ -1,10 +1,17 @@
 defmodule Mitos.Harness.ClaudeCode do
   @moduledoc """
-  The Claude Code adapter (01 §8.6) — **structured** observation via
-  `claude -p --output-format stream-json`, normalized into the one event
-  stream. No PTY, no session-log tailing (09 §1 discards that path); the CLI's
-  own structured output is the observation channel, re-specced per harness
-  generation.
+  The Claude Code adapter (01 §8.6) — observed on the three channels of `14 §1`.
+
+  `launch/3` runs the headless path (`-p --output-format stream-json`), which is
+  what a Market run wants: no TUI, no prompts, a machine-readable stream. A
+  Studio run wants the opposite — the operator's own harness, unmodified — and
+  gets the same normalized vocabulary from `normalize_session_line/1` tailing
+  the CLI's own session record (C2), whose location mitos already controls
+  because `hermetic_env/1` points `CLAUDE_CONFIG_DIR` into the sandbox.
+
+  The terminal (C3) contributes modal state only, never semantics, and only as
+  a digested snapshot at a quiescence edge (`14 §3`). `observation/0` declares
+  all of this; the substrate reads that matrix and never probes.
 
   Hermeticity (05 §6): `HOME` and `CLAUDE_CONFIG_DIR` are redirected into the
   sandbox so no cross-run config, session store, or auto-loaded project memory
@@ -127,9 +134,39 @@ defmodule Mitos.Harness.ClaudeCode do
       structured_output: true,
       mcp_tools?: true,
       sessions?: true,
-      effort_levels: ["low", "medium", "high"]
+      effort_levels: ["low", "medium", "high"],
+      observation: observation()
     }
   end
+
+  @impl true
+  def observation do
+    %{
+      # Headless (`-p --output-format stream-json`) for a Market run...
+      structured_output: :stream,
+      # ...and, for a Studio run against an UNMODIFIED interactive session, a
+      # tail of the CLI's own session record. `hermetic_env/1` sets
+      # CLAUDE_CONFIG_DIR into the sandbox (05 §6), so mitos already knows where
+      # that record lands — the whole of 14 §1.1 in one line.
+      session_artifacts: %{
+        path_template: "{home}/.claude/projects/{project_slug}/*.jsonl",
+        format: :jsonl,
+        schema_version: "1",
+        tail: true
+      },
+      interactive: true,
+      modal_classifier: Mitos.Observation.Classifier.Heuristic,
+      pty_control: true,
+      resume: :session_id,
+      think_time_p95_ms: 60_000
+    }
+  end
+
+  @impl true
+  # The session record shares the assistant/user/result framing of the headless
+  # stream, so one normalizer serves both sources (14 §1.1). Where a future
+  # generation diverges, the contract test (14 §5) catches it before a user does.
+  def normalize_session_line(line), do: normalize(line)
 
   # --- stream-json → normalized events (01 §8.6) ---
 

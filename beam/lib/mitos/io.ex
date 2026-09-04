@@ -70,13 +70,18 @@ defmodule Mitos.IO do
   @connectors %{
     "webhook" => Mitos.Connector.Webhook,
     "manual" => Mitos.Connector.Manual,
-    "web" => Mitos.Connector.Manual
+    "web" => Mitos.Connector.Manual,
+    # 15 §5.2 — the return half of the decision round trip. Unlike every other
+    # connector it produces no Task: it applies a resolution to a parked run.
+    "decision" => Mitos.Connector.Decision
   }
   @sinks %{
     "notify" => Mitos.Sink.Notify,
     "deliver" => Mitos.Sink.Deliver,
     "reply" => Mitos.Sink.Reply,
-    "web" => Mitos.Sink.Web
+    "web" => Mitos.Sink.Web,
+    # 15 §5.1 — a decision card is a payload, not a new plane (10 §5.3a).
+    "decide" => Mitos.Sink.Decide
   }
 
   def connector_module(name), do: @connectors[to_string(name)]

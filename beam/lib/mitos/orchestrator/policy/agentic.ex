@@ -135,7 +135,7 @@ defmodule Mitos.Orchestrator.Policy.Agentic do
 
   defp next_stage(ctx) do
     done = for {id, %{status: s}} <- ctx.state.stages, s in [:finished], into: MapSet.new(), do: id
-    skipped = for %Decision{type: :skip, target: t} <- ctx.state.decisions, t, into: MapSet.new(), do: t
+    skipped = for %Decision{type: :skip, target: t} <- ctx.state.decision_log, t, into: MapSet.new(), do: t
     (ctx.intent.stages |> Enum.map(& &1.name)) |> Enum.find(&(&1 not in MapSet.union(done, skipped)))
   end
 

@@ -68,6 +68,33 @@ defmodule Mitos.Web.Router do
     require_role(conn, ["operator"], fn r -> html(conn, 200, Pages.runs(r)) end)
   end
 
+  get "/web/decisions" do
+    require_role(conn, ["operator"], fn r -> html(conn, 200, Pages.decisions(r)) end)
+  end
+
+  # The console half of the decision round trip (10 §5.3a). It goes through the
+  # same connector a phone button press does, so the authorization path is one
+  # path — the transport is untrusted either way (15 §5.2).
+  post "/web/decisions/:decision_id" do
+    require_role(conn, ["operator"], fn _r ->
+      params = conn.body_params || %{}
+
+      raw = %{
+        "decision_id" => decision_id,
+        "resolver" => role(conn) || "operator",
+        "choice" => params["choice"],
+        "note" => params["note"],
+        "via" => "web"
+      }
+
+      case Mitos.Connector.Decision.ingest(%{}, raw) do
+        {:ok, _} -> redirect(conn, "/web/decisions")
+        # 15 §5.2: a rejected resolution is reported, never quietly applied.
+        {:error, reason} -> not_found_page(conn, role(conn), "could not resolve: #{inspect(reason)}")
+      end
+    end)
+  end
+
   get "/web/apps" do
     require_role(conn, ["operator"], fn r -> html(conn, 200, Pages.apps(r)) end)
   end

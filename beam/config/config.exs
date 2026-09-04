@@ -53,7 +53,52 @@ config :mitos,
   # is empty by default to keep the posture spec-clean.
   harness_passthrough_env: [],
   # Loop-manager defaults (04 §4.3 trip thresholds; MVP: one iteration).
-  loop_manager: [max_iterations: 1, no_progress_n: 3, repeated_error_m: 2, verify_fail_k: 2],
+  loop_manager: [
+    max_iterations: 1,
+    no_progress_n: 3,
+    repeated_error_m: 2,
+    verify_fail_k: 2,
+    # 16 §2: Δpredicate ≈ 0 across K segments. Diff-based no_progress is
+    # trivially satisfied by an agent that keeps editing; this is not.
+    predicate_stall_k: 3,
+    predicate_epsilon: 1.0e-9
+  ],
+  # What enters the sandbox as the run's subject (Mitos.Workspace).
+  #
+  #   mode: :clone     — 05 §5.1's default: copy the input INTO the sandbox.
+  #                      The copy honours .gitignore, so build output, caches
+  #                      and VM images never cross the boundary.
+  #   mode: :in_place  — turn the sandbox off and work on the operator's real
+  #                      tree. A per-run choice for a workspace you already own;
+  #                      T2 refuses it outright (05 §4).
+  #
+  # max_bytes backstops a clone: a workspace over the ceiling is refused with
+  # its largest offenders named, rather than started and discovered at 94% disk.
+  # 0 disables the check.
+  workspace: [mode: :clone, max_bytes: 2_000_000_000],
+  # Reclaiming what a run leaves behind (Mitos.GC). `reap_on_finish` drops the
+  # sandbox of a run that SUCCEEDED — a failed run's sandbox is the first thing
+  # you want to look at, so it is kept until `mitos gc` ages it out.
+  gc: [reap_on_finish: true, keep_days: 7],
+  # Observation plane (14). The thresholds MUST satisfy snap < steer < block
+  # (14 §2.1) — Clock.thresholds/1 refuses a misordered set rather than
+  # reordering it, because a steer inside a repaint is a wrong keystroke.
+  observation: [
+    thresholds: [snap: 200, steer: 750, block: 45_000],
+    rows: 24,
+    cols: 80,
+    session_poll_ms: 100
+  ],
+  # Decision plane (15 §4). `external` acts take NO default from here or
+  # anywhere else — a configurable fail-secure is a fail-safe with extra steps.
+  decision: [
+    ttl_ms: [internal: 5 * 60_000, recoverable: 30 * 60_000],
+    escalation_floor: %{}
+  ],
+  # Restart intensity (16 §4) — OTP semantics, the outer bound on the ladder.
+  supervision: [max_restarts: 3, max_seconds: 3600, strategy: :rewind_to_green],
+  # Unattended horizon granted to a run that clears 16 §6's preconditions.
+  autonomy: [horizon_ms: 8 * 60 * 60 * 1000],
   # Facilitator economics (08 §4.2).
   take_rate: 0.12,
   take_floor_usd: 0.05,

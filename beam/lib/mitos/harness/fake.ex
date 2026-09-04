@@ -87,7 +87,29 @@ defmodule Mitos.Harness.Fake do
 
   @impl true
   def capabilities do
-    %{structured_output: true, mcp_tools?: false, sessions?: false, effort_levels: []}
+    %{
+      structured_output: true,
+      mcp_tools?: false,
+      sessions?: false,
+      effort_levels: [],
+      observation: observation()
+    }
+  end
+
+  @impl true
+  # Deterministic and headless: C1 + a structured stream, no terminal. Enough to
+  # be granted an unattended horizon (16 §6), which is what makes it usable as
+  # the fixture harness for the autonomy tests.
+  def observation do
+    %{
+      structured_output: :stream,
+      session_artifacts: nil,
+      interactive: false,
+      modal_classifier: nil,
+      pty_control: false,
+      resume: :none,
+      think_time_p95_ms: 1_000
+    }
   end
 
   defp run_env(sandbox, prompt) do
