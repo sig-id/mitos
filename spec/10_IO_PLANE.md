@@ -85,6 +85,7 @@ unit of mitos work. It is the generalization of `06 §6.2`'s tracker connectors
 | `event` | an Effect on the log matches a subscription | a trigger event (`06 §6.1` `event`) |
 | `tracker` (GitHub/Linear/kanban) | issue/card created/updated | a Task (`06 §6.2`, KEPT) |
 | `manual` / `web` | operator UI / API / CLI | a Task (the web app is a connector, §6) |
+| `decision` | a resolution of a decision card — a button press, a link, a CLI answer | an `approval_resolved` Effect on an **existing** run, never a new Task (`15 §5.2`) |
 
 Every connector resolves to the **same durable unit — a Task** — enqueued into a
 pool, never run directly (`06 §6`). One pool, many provenances; `task.source`
@@ -210,6 +211,7 @@ run/Task lifecycle Effect (`01 §8.2`).
 | `deliver` | the artifact payload | POST `{result, artifacts}` to a webhook; write to object store |
 | `reply` | round-trip back to the originating connector | reply in the same Slack thread / email (§5.4) |
 | `web` | the web app surface | live trace + the deliverable page (`11 §4`, `11 §5`) |
+| `decide` | a **decision card** awaiting a human (`01 §8.9`) | push / chat with inline buttons / email with resolution links / console / CLI (`15 §5.1`) |
 
 ### 5.3 Sink behaviour
 
@@ -232,6 +234,33 @@ capabilities()                :: %{egress: true, round_trip?: bool, retries: _}
   log — auditable, replayable, and metered like every other crossing.
 - Delivery is **at-least-once with idempotency**: a `delivery_sent` keyed by
   `(run_id, sink, dest)` suppresses duplicates on re-drive (cf. `04 §7.1`).
+
+### 5.3a The decision round-trip is the same round-trip
+
+`decide` + `decision` are §5.4's pattern with the payload being a card instead
+of a result. This is why pushing decisions to a phone costs almost no new
+architecture — it is an existing shape with a new render:
+
+```
+run parks (05 §5.3 / 04 §4.3 blocked_on_human)
+   ─► request_approval Decision ─► approval_requested{HumanDecision} Effect
+   ─► decide sink: render card (folded state + cut) ─► deliver ─► decision_delivered
+   ─► [human taps]  OR  [ttl expires → decision_defaulted]
+   ─► decision connector: authenticate resolver, dedupe on decision_id
+   ─► approval_resolved ─► run resumes (04 §7 resume path, unchanged)
+```
+
+Three rules the ordinary sink contract does not carry:
+
+- **The transport is untrusted.** A card's authority lives on the log, not in
+  the message. Before executing a resolution the substrate re-checks the act
+  against the run's grants, so a forged press cannot widen `blast_radius`.
+- **Resolution is idempotent on `decision_id`**; the first valid one wins, later
+  ones are recorded and not applied. An out-of-tenant or unauthenticated
+  resolver yields `decision_rejected`, never an application.
+- **Below the escalation floor, deliver a digest, not a push** (`15 §5.3`);
+  identical cards across parallel workers collapse on `dedupe_key` and resolve
+  together.
 
 ### 5.4 Round-trip (connector ⇄ sink)
 

@@ -271,6 +271,32 @@ harvests it as `01` §8.4's `result`. Its shape is declared by the manifest's
 - Missing/invalid RESULT ⇒ the runtime harvests `diff + artifacts` and a synthetic
   `signal: "unknown"`; the orchestrator handles it, never the substrate.
 
+### 7.1 The hard oracle beside the soft result (`acceptance`)
+
+The soft result is the capability's **self-report**, and the orchestrator is a
+model reading it. Over one step that is the right trade. Over an unattended
+multi-hour horizon it is a closed loop with no ground truth, so `16 §3.2` adds a
+second, non-negotiable channel:
+
+```yaml
+acceptance:
+  cmd: [just, verify]              # exit 0 = pass. MACHINE-checkable.
+  oracle_paths: ["test/**", "justfile"]
+  timeout_ms: 600000
+  measure: [just, verify, --json]  # optional: a scalar/vector for Δ (progress)
+```
+
+| Rule | Why |
+|---|---|
+| Machine-checkable; an LLM judge MAY supplement it but MUST NOT be the sole verdict for a run granted an unattended horizon | a model grading its own work is not evidence |
+| Executed **outside** the workspace — pristine checkout + harvested patch + oracle fetched from a path the sandbox never mounted writable | "make the tests pass" and "make the runner lie" are the same gradient until the oracle is out of reach |
+| A harvested diff intersecting `oracle_paths` ⇒ `oracle_tampered` Effect + escalate as `judgment` (`15 §2`) | a path check on a diff is cheap and removes the commonest confidently-wrong green |
+| **Absent ⇒ zero unattended horizon** (`16 §6`) | such a capability may be watched, not left |
+
+`result` stays soft and advisory; `acceptance` is the verdict. They answer
+different questions — *what does the capability think happened* versus *did it
+happen* — and neither substitutes for the other.
+
 ---
 
 ## 8. The capability manifest (annotated)
@@ -306,9 +332,15 @@ egress_policy:                                   # consumed by broker, 01 §8.5
   - { dest: "api.figma.com", credential: figma_pat, requires_approval: false }
   # default: deny-all-except-broker; secrets live ONLY at the broker
 
-result:                                          # §7 — soft result + evidence
+result:                                          # §7 — soft result + evidence (ADVISORY)
   schema: ./result.schema.json                   # declares signal vocab: ship|revise|block
   evidence: [ "critique.md", "annotated.svg", "scores.json" ]
+
+acceptance:                                      # §7.1/16 §3.2 — the hard verdict
+  cmd: [/oracle/check_critique.py, /harvest]     # runs OUTSIDE the workspace
+  oracle_paths: ["/oracle/**"]                   # a diff touching these ⇒ oracle_tampered
+  timeout_ms: 120000
+  measure: [/oracle/check_critique.py, --score]  # Δ per segment = progress
 
 hooks:                                           # §6 — deterministic entry/exit
   pre:  [ { name: snapshot_input, run: [git, -C, /workspace, stash, --include-untracked],
@@ -320,8 +352,9 @@ hooks:                                           # §6 — deterministic entry/e
 
 A **software-engineer** capability differs mainly in pillars, not shape: `data`
 is often absent, `tools` wrap build/test/lint, `result.schema` defines a
-`signal` like `done|needs_work|blocked`, and `egress_policy` is typically empty
-(hermetic). See §10 for the worked port.
+`signal` like `done|needs_work|blocked`, `acceptance.cmd` is the repo's own test
+or verify target (the case where the hard oracle is nearly free), and
+`egress_policy` is typically empty (hermetic). See §10 for the worked port.
 
 ---
 

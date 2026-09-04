@@ -190,6 +190,35 @@ the **workspace** (input repo **cloned INTO** the sandbox, RW ephemeral); the
 `/data`, §7, versioned with the capability); **curated context slices** (selected
 by `07_MEMORY`, RO `/ctx`); and the **mitos CA** for brokered-TLS (§5.3).
 
+**What "cloned in" means.** The clone MUST honour the source's ignore rules —
+tracked files plus untracked-but-not-ignored ones. Build output, caches, VM
+images, and fuzz corpora are not the subject of the work and were never meant to
+cross the boundary; copying them wholesale is not an isolation guarantee but a
+disk-exhaustion path (a 302 GB checkout copied per stage, before any model
+spend). A clone that would exceed the configured ceiling MUST be **refused with
+its largest contributors named**, never started and discovered at 94% disk.
+
+**Turning the sandbox off (`mode: :in_place`).** A T0/T1 operator working on
+their own repo MAY run without the copy: the workspace *is* their tree. This is
+a per-run, explicitly-requested, **logged** choice (`run_started.workspace_mode`)
+— never a default and never inferred — because it changes the authority story:
+there is no copy to throw away, so an `internal` act is now an edit to the
+operator's real files, and `16 §3.3`'s rewind becomes a git restore rather than
+a tree swap.
+
+Three obligations follow, and they are normative:
+
+| In `:in_place`, mitos MUST NOT | because |
+|---|---|
+| `git init` / `git add -A` / `git commit` in the workspace | it is the operator's repository; a baseline or checkpoint that moves their branch or stages their tree is a side effect they never asked for. Use a non-mutating commit object (`git stash create`) pinned under `refs/mitos/`. |
+| archive the tree per checkpoint | the copy is the thing being avoided; the pinned commit is the recovery path |
+| delete untracked files on rewind | a rewind may undo the run's edits, not a file the operator made that git never knew about. An in-place rewind is **not a perfect inverse**, and says so. |
+
+**T2 MUST refuse `:in_place` outright.** The sandbox boundary is the security
+boundary (`01 §1.3`); distrust scales isolation and an operator convenience may
+not relax it. The launch policy fails closed here exactly as it does for an
+ineligible provider (§4).
+
 **No secrets enter the sandbox.** `env` carries non-secret config only (model id,
 effort, paths, flags). Any credential the capability needs is named by
 `egress_policy` *by id* and materialized only at the broker (§5.3). Injecting a
@@ -202,10 +231,36 @@ Mitos **drives** the harness process and **reads its normalized event stream**
 final_result`. Steering goes the other way via `control(session, command)` —
 `approve | answer | interrupt | select | prompt`. This is **mitos-initiated**, not
 an agent callback: the agent never "calls home" for authority. Per `01` §7, the
-**Zig engine** owns local transports (pty/stdio, terminal codec, raw spool +
+**Zig engine** owns local transports (pty/stdio, VT parser, raw spool +
 first-pass redaction) and the **BEAM control plane** owns remote provider streams
 (HTTP/WS); both normalize via the harness adapter into one stream feeding the
-loop-manager (`04`). PTY screen-scraping is a **fallback codec** only (`01` §8.6).
+loop-manager (`04`).
+
+**The stream has two possible sources, and the boundary hides which** (`14 §1.1`).
+For a headless/structured harness it is stdout. For an **unmodified interactive**
+harness it is a tail of the harness's own session artifacts — which mitos can
+read precisely because §6's hermeticity already redirects `HOME` and the session
+store to mitos-controlled paths inside the sandbox. Structured observation of an
+interactive session therefore needs no mode change and no screen parsing.
+
+**The terminal is a third channel with one job.** Semantics never come from it
+(`14 §1`); it answers only *what is this terminal waiting for*. Its three
+operations, all owned by `14 §3`:
+
+| Op | Cadence | Rule |
+|---|---|---|
+| `spool` | continuous | raw bytes → append-only redacted artifact; **never parsed for control**. This is evidence, and it is what makes the channel compose with proof and replay. |
+| `snapshot` | **on demand only** | refuses unless the VT parser is at a consistent boundary *and* the session is at a quiescence edge ≥ `T_snap`. Returns a digested grid anchored to a spool offset — a pure function of the spool prefix, so any later replay or audit recomputes it. |
+| `steer` | on a quiescence edge ≥ `T_steer` | a verified transaction: snapshot-before → write → snapshot-after → assert the classifier's predicted transition, else `steer_rejected`, send ESC, and escalate. Never a fire-and-forget keystroke. |
+
+Continuous screen parsing remains banned (`01 §8.6`): the prior implementation's
+failure was **streaming a display protocol**, and every error class it hit —
+torn frames, split escape sequences, redraws read as new content — follows from
+sampling a moving surface rather than reading a stable one. No run-control
+decision may rest on a screen read alone; a Decision triggered by a
+classification MUST carry the grid digest and spool offset in its `inputs_hash`
+preimage. An `:unknown` classification escalates to a human (`15`), never
+guesses.
 
 ### 5.3 ③ Outbound — egress credential broker (the only way out)
 
@@ -317,6 +372,14 @@ and replayable (`01` §4).
 ---
 
 ## 8. Snapshot / resume, timeouts, failure handling
+
+> `snapshot`/`resume` here is **crash** recovery. `16 §3` layers **semantic**
+> recovery on the same primitive: a checkpoint pairs this snapshot with a
+> workspace commit, a log offset, and an acceptance-predicate verdict, so a run
+> can rewind to the last *green* state rather than only to the last live one. A
+> provider returning `:unsupported` still checkpoints on commit + log offset;
+> rewind then replays from the commit.
+
 
 **Snapshot / resume.** `snapshot(session)` captures filesystem (+ optional harness
 session, §6) as an opaque content-addressed `snap`; resume is

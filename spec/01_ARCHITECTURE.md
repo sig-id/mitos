@@ -56,6 +56,16 @@ anything is a new behaviour impl, never an inline branch.
 6. **Cloud-first, locally runnable.** The primary target is a hosted multi-tenant
    service; running the whole thing on one developer machine is a supported
    secondary mode.
+7. **One substrate, two products.** The same run, cut two ways. **Studio** is a
+   single operator's unattended work on their own repos (read side: the
+   operator, the supervisor, mitos's own eval corpus). **Market** is paid
+   completed work for strangers (read side: buyer proof, meter, seller
+   attribution, auditor — `08`). They share every mechanism in this document and
+   differ only in **policy**, tabulated in `02 §2.1`. Studio is Market's staging
+   environment: a run that cannot go unattended for its own operator cannot be
+   sold unattended to a stranger, so Studio is on Market's critical path, not
+   beside it. A mechanism that serves only one of the two is a defect in this
+   constitution, not a feature of that product.
 
 ---
 
@@ -179,6 +189,14 @@ mitos is Elixir/BEAM. The engine and sandbox providers are external products
 with their own implementation-language choices (the engine may be Zig); mitos
 constrains only the seam, not their language.
 
+**The engine's job, restated by `14`.** Local transports own the *byte* level:
+spool the PTY continuously to an append-only redacted artifact, feed a VT parser
+that emits nothing, and materialize a digested grid **only** when the control
+plane calls `snapshot` at a quiescence edge (`14 §3.1`). It does not interpret,
+diff, or stream screens, and it is not the source of any run semantic. Tailing
+the harness's session artifacts (C2) and computing the quiescence clock MAY live
+on either side of the seam; the contract is the Effect, not the process.
+
 ---
 
 ## 8. Canonical contracts (source of truth)
@@ -192,10 +210,10 @@ DecisionEvent {
   run_id      : string
   seq         : u64                 # monotonic per run
   ts          : iso8601
-  actor       : "orchestrator" | "loop_manager"
+  actor       : "orchestrator" | "loop_manager" | "supervisor"
   type        : advance | insert | retry | switch | skip
-              | request_approval | escalate | finish | abort
-  target      : capability_ref | stage_id | null
+              | request_approval | escalate | finish | abort | rewind
+  target      : capability_ref | stage_id | checkpoint_id | null
   params      : object              # type-specific (e.g. switch → {model,effort,harness})
   inputs_hash : string             # hash of the state the decision was taken on (replay integrity)
   rationale   : string             # NL justification — AUDIT ONLY, never controls flow
@@ -211,7 +229,11 @@ EffectEvent {
   type      : capability_started | capability_finished | tool_brokered
             | egress_allowed | egress_denied | artifact_registered | commit
             | approval_requested | approval_resolved | memory_written | budget_charged
-            | task_enqueued | task_blocked | task_done | invoke_requested | subtask_returned | ...
+            | task_enqueued | task_blocked | task_done | invoke_requested | subtask_returned
+            | quiescent | steer_applied | steer_rejected | harness_quarantined     # 14
+            | decision_delivered | decision_defaulted | decision_rejected          # 15
+            | checkpoint_taken | oracle_tampered                                   # 16
+            | ...
   caused_by : seq                   # the DecisionEvent that led here (causality)
   ref       : object                # ids / paths
   payload   : object
@@ -235,6 +257,9 @@ trust_tier   : T0 | T1 | T2
 resources    : { cpu, mem, timeout }
 egress_policy: [ {dest, credential, requires_approval} ]   # consumed by the broker (§8.5)
 result       : { schema, evidence: [path|artifact, ...] }  # soft result + evidence
+acceptance   : { cmd, oracle_paths, timeout_ms, measure? }  # machine-checkable oracle (16 §3.2);
+                                                            # runs OUTSIDE the workspace. Absent ⇒
+                                                            # zero unattended horizon (16 §6).
 hooks        : { pre: [...], post: [...] }    # deterministic entry/exit (git, setup, checks)
 ```
 
@@ -272,21 +297,37 @@ capabilities()              :: %{isolation, remote?, egress: :broker, data_mount
 launch(argv, env, cwd)
 events()      -> normalized stream of: assistant_text | tool_use | tool_result
                  | token_usage | status | final_result
-steer(cmd)
+                 # ONE vocabulary, TWO possible sources (14 §1.1): headless stdout,
+                 # or a tail of the harness's own session artifacts written to the
+                 # mitos-controlled HOME (§8.6 hermeticity). Downstream cannot tell.
+steer(cmd)    -> approve | answer | interrupt | select | prompt
+                 # a verified transaction on a quiescence edge, never a keystroke (14 §3.3)
+snapshot()    -> {:ok, grid} | {:error, :unstable}   # on demand ONLY; never streamed (14 §3.1)
 result()      -> structured
 hermeticity   : redirect/neutralize native cross-run memory (HOME, config, session
                 store, auto-loaded project memory) UNLESS the capability opts into reuse
-capabilities  : { structured_output, mcp_tools?, sessions?, effort_levels, ... }
+capabilities  : { structured_output, mcp_tools?, sessions?, effort_levels,
+                  observation: {...} }              # the observation matrix, 14 §4
 ```
 
-**Normative posture.** The harness is observed through its **structured
-output**, drained to completion per iteration (fire-and-drain). Interactive PTY
-steering of a live agent is **out of scope**: a prior implementation centered on
-a long-lived interactive PTY session and it did not compose with
-audit/proof/metering — do not reintroduce it. The `steer` callback is reserved
-as a seam for future mitos-initiated control, not a live-conversation channel.
-PTY survives only as a codec of last resort for harnesses with no structured
-output.
+**Normative posture — three channels, one clock (`14`).** The harness is
+observed on three channels ranked by trust: **C1** the effect surface (fs / exec
+/ net crossings — ground truth of what happened), **C2** the harness's own
+session artifacts (structured, and available from an *unmodified interactive*
+session because `05 §6` already makes mitos choose where they are written), and
+**C3** the terminal. **Run semantics MUST come from C1 and C2**; C3 answers only
+the bounded question of what a terminal is waiting for.
+
+A prior implementation **streamed** the PTY — parsed a redrawing TUI
+continuously — and it did not compose with audit, proof, or metering. The defect
+was *streaming*, not the PTY: a display protocol sampled mid-repaint yields torn
+frames, split escape sequences, and no way to distinguish new information from a
+redraw. `14 §3` re-admits the terminal under three separations — parse
+continuously but **materialize only on demand**, read only at a **quiescence
+edge**, answer only a **bounded modal-state question** — which makes a screen
+read a pure, digested function of the spool prefix, and therefore replayable and
+auditable. **Continuous screen parsing stays banned**; so does PTY as a
+live-conversation channel.
 
 ### 8.7 Task (work-pool unit — elaborated in `06`)
 
@@ -341,6 +382,36 @@ ApplicationManifest {
 
 A user **runs a pipeline** named by an `entrypoint`, never a bare capability; an
 entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
+
+### 8.9 Human decision card (skeleton — elaborated in `15`)
+
+The one shape every request for a human takes, carried in the
+`approval_requested` Effect payload. It is an *input* to the substrate, never an
+authority path: the agent asks no one for anything (§8.5).
+
+```
+HumanDecision {
+  decision_id, run_id, caused_by: seq, tenant
+  kind          : approve | choose | supply_value | amend_brief | rewind | abort
+  reversibility : internal | recoverable | external      # DERIVED deterministically (15 §2)
+  question      : string                                  # imperative, <= 200 chars
+  context       : { attempted, blocked_by, evidence_refs[] }   # FOLDED state; never a transcript
+  options       : [ {id, label, consequence, recommended?} ]
+  default       : option_id | null    # MUST be null when reversibility = external
+  ttl_ms        : int | null          # MUST be null when default is null, and vice versa
+  blast_radius  : { paths[], destinations[], spend }
+  cost_of_wrong : { wasted_wall_ms, wasted_usd, recoverable }
+  value_schema  : json-schema | null  # kind = supply_value
+  dedupe_key    : string
+}
+HumanResolution { decision_id, resolver, choice, value?, note?, resolved_at, via }
+```
+
+**The invariant that must never invert:** reversible acts **fail safe** (a
+default, on a clock — silence advances the run); externally-visible acts **fail
+secure** (no default, park indefinitely — silence never authorizes an
+irreversible action). Reversibility that cannot be derived is `external`;
+unclassifiable is not permission (`15 §2.1`).
 
 ---
 
@@ -413,3 +484,7 @@ entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
 | `10_IO_PLANE` | **I/O plane**: connectors (ingress: chat/email/calendar/webhook/event/web), sinks (egress: notify/deliver/reply/web), application I/O bindings; distinct from the in-sandbox broker (`05`) |
 | `11_FRONTEND` | **Frontend**: surfaces as readers of the log (`08 §2`); personas seller/buyer/operator; Run & Watch (two-zoom + cuts); the Deliverable (report ⇄ proof, one renderer); Author & Test (thin, CLI-first, import); Publish & Attribute; Fleet (deferred); CLI/web/URL primacy |
 | `12_APPLICATION` | **Application packaging & manifest** (`§8.8`): the unit of sale; entrypoints as order forms (input→Task, validate-before-quote), ship-vs-bind I/O defaults, composition root, `app_id` identity vs facilitator-side offer, OCI bundling, Eve import (app cut) |
+| `13_COMPETITIVE_LANDSCAPE` | Descriptive map of adjacent players and surface overlaps; carries **no** direction decisions |
+| `14_OBSERVATION` | **Observation plane**: three channels (effect surface / session artifacts / terminal) + trust ranking; the quiescence clock; PTY re-admitted as discrete snapshot + verified steer, never a stream; observation capability matrix + nightly contract tests |
+| `15_DECISION_PLANE` | **Decision plane**: escalate on irreversibility × uncertainty (not category); the decision card; fail-safe vs fail-secure defaults; parking tiers; transport as `decide` sink + `decision` connector; one mechanism, two policies (Studio / Market) |
+| `16_AUTONOMY` | **Autonomy plane**: `blocked_on_human` + `predicate_stall`; checkpoints + `rewind`; the acceptance predicate as the only ground truth; OTP restart intensity; the fleet supervisor; autonomy metrics + replay-as-eval |

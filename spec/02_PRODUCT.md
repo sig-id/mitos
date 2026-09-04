@@ -19,6 +19,31 @@ BEAM runtime skeleton — two half-built control planes that this redesign colla
 > deterministic code records every decision and enforces every limit.**
 > — `01_ARCHITECTURE §0`
 
+### Two products, one substrate
+
+The thesis names the substrate. The substrate ships as **two products** that are
+the same run cut differently (`01 §1.7`):
+
+| | **Studio** — the operator's product | **Market** — the commerce product (`08`) |
+|---|---|---|
+| Sells | **unattended hours**: a standing brief that produces green checkpoints while you sleep | **completed jobs with proof**, to strangers |
+| Customer | one developer/team, on their own repos | buyer ↔ seller, no prior relationship |
+| Read side | the operator, the supervisor, mitos's own eval corpus (`16 §6.1`) | buyer proof, meter, seller attribution, auditor |
+| Unit felt | a decision-free hour | a receipt |
+| Success | `16 §6`'s autonomy ratio and unattended horizon | `§6`'s one stranger-paid transaction |
+
+**Studio is Market's staging environment, not a detour.** Every Market
+requirement is a Studio requirement with the human removed and the reader set
+widened: unattended execution, a machine-checkable oracle, checkpointed
+recovery, replayable evidence. A capability that cannot run unattended for the
+operator who wrote it cannot be sold unattended to a stranger. So Studio ships
+first *because* it is on Market's critical path — the sequencing in `09 §2` is a
+build order over one substrate, not a change of business.
+
+The cost is honest and belongs on the record: **the facilitator's revenue moves
+right.** That is a timing decision (`§8` R6), taken in exchange for reaching the
+`§6` gate on a substrate that has already been proven by real load.
+
 Mitos is the **substrate / OS** for selling *completed work*, not the seller's
 prompt and not the model. It owns everything outside the harness: the run
 lifecycle, the event log, the sandbox boundary, the egress broker, metering, and
@@ -89,6 +114,25 @@ a fold of the same log — no reconciliation). The product, stated in one line:
 | a seller of **finished jobs with proof**, metered off the event log (`08`) | a seller of chat turns or raw tokens |
 | the **commerce layer where frameworks stop** — jobs that complete, sold to strangers | an agent framework competing for the authoring slot (Eve-class, `13 §1`) — frameworks are funnel, not foe |
 
+### 2.1 Studio vs Market — where the two products actually differ
+
+Everything not in this table is shared. This table is the whole delta, and it is
+**policy**, not mechanism — which is what makes one substrate honest rather than
+a slogan.
+
+| Axis | **Studio** | **Market** | Owned by |
+|---|---|---|---|
+| Trust tier | T0 / T1, local | **T2** remote µVM | `05 §4` |
+| Harness mode | interactive, **unmodified** | headless / structured | `14 §4` |
+| Observation | C1 effect surface + C2 session artifacts + C3 terminal | C1 + structured stream; **no C3** | `14 §1` |
+| Human on happy path | yes — asynchronous, by exception | **no**, by construction | `15 §6` |
+| Decision defaults | permitted for `internal`/`recoverable` | **never** — a stranger's silence authorizes nothing | `15 §4`, `§6` |
+| Acceptance oracle | operator-declared repo predicate | capability-declared `acceptance` + `result.schema` | `16 §3.2`, `03 §8` |
+| Egress | operator's own keys, local broker | seller keys at the broker, `egress_policy` per destination | `05 §5.3`, `08 §3.2` |
+| Log readers | operator · supervisor · eval corpus | buyer · meter · seller · auditor | `08 §2` |
+| Primary surface | CLI + phone (`11 §13`, `15 §5`) | entrypoint URL + proof page (`11 §4`, `§5`) | `11 §3` |
+| Redaction cut | full dev cut | commercial cut — no `rationale`, no inner trace | `08 §5` |
+
 The "not a fixed pipeline tool" line is the hard one and the reason for the
 redesign: a pipeline is **enforced at runtime by an orchestrator agent**, not
 declared as a state machine. chief-wiggum's pipeline is a fixed bash kanban loop
@@ -101,7 +145,27 @@ emits Decision events (`01 §8.1`) and a deterministic loop-manager (`04`).
 
 ## 3. Target users
 
-### PRIMARY — hosted multi-tenant orgs (via the Gentix facilitator)
+Two customers, sequenced. **Revenue primacy and build primacy are different
+things** and this doc previously conflated them: the facilitator is where the
+money is, the operator is where the first real load is, and the second is a
+prerequisite for the first (`§1`, `01 §1.7`).
+
+### FIRST CUSTOMER — the single operator (Studio)
+
+A developer or small team running agentic work on **their own repos**, on their
+own machine or their own cloud, at T1. Their pain is not cost per token; it is
+that a long-horizon run needs a human every few minutes, so it cannot run while
+they sleep. Mitos's job is to convert *supervision* into *exception handling*:
+unattended segments, green checkpoints, and a small number of well-formed
+decisions pushed to a phone (`15`, `16`).
+
+This is **not** the local dev mode of the hosted product. It is a product with
+its own success gate (`§6.1`), its own surfaces (`11 §13`, `15 §5`), and its own
+metric (`16 §6`). It is also mitos's first workload: **mitos's own development
+runs on it**, which is the fastest available source of the eval corpus that
+every later change is regression-tested against (`16 §6.1`).
+
+### REVENUE CUSTOMER — hosted multi-tenant orgs (via the Gentix facilitator)
 
 Two roles inside one hosted service:
 
@@ -114,23 +178,27 @@ Two roles inside one hosted service:
 
 This is the revenue surface and the reason mitos is cloud-first and multi-tenant
 rather than a local runner. Multi-tenancy, key custody, metering, and settlement
-are owned by `08`.
+are owned by `08`. Nothing in `08` is deprioritized by the sequencing above;
+what changes is only *when* it is reached and *on what* it is built.
 
-### SECONDARY — a single developer running the whole stack on one machine
-
-The same backend operations (`01 §10.11`), run locally: author a capability, run a
-pipeline against your own repo, watch the event log. Trust tier `T1` (`01 §6`),
-local broker, Docker/Nucleus sandbox. This is a **supported** mode and the daily
-authoring/debug loop — but it is not the business. Cloud is the product; local is
-the workbench.
+**Why this order rather than the reverse.** The facilitator wedge needs
+strangers on both sides of a market that has neither, and asks them to trust
+unattended machine fulfillment on transaction #1. The operator wedge needs one
+user with a real workload and proves the same unattended fulfillment against
+load you control, on a corpus you keep. Studio's mechanisms are Market's
+prerequisites (`§2.1`); the reverse is not true.
 
 ```
+            ┌──────────── Studio (the operator's product) ───┐
+  operator ►│ brief · unattended segments · green checkpoints │──► merged work
+            │ decisions by exception → phone (15)             │    + the eval corpus
+            └─────────────────────────────────────────────────┘
             ┌──────────── Gentix facilitator (08) ───────────┐
   seller ──►│ package capability · own keys · price · publish │
             │                  M I T O S                      │──► proof page
   buyer  ──►│ pay · submit input · receive completed job      │     + receipt
             └─────────────────────────────────────────────────┘
-  dev ────► same backend ops, one machine, T1, local broker   (secondary)
+  same substrate, same log, same sandbox — different policy (§2.1)
 ```
 
 ---
@@ -190,6 +258,11 @@ page**, not a chat reply.
 
 > ONE stranger-paid, machine-fulfilled transaction, with proof.
 
+This stays the **Market** gate. It is now preceded by a Studio gate (§6.1) that
+is strictly easier to reach, uses the same substrate, and produces the evidence
+that the harder clause of this one — *machine-fulfilled, no human in the loop* —
+is achievable at all.
+
 Decomposed, every clause is a hard requirement:
 
 | Clause | Means | Owned by |
@@ -201,6 +274,33 @@ Decomposed, every clause is a hard requirement:
 
 Everything on the launch path exists to make that one sentence true once. Nothing that is
 not on the path to it is in scope.
+
+### 6.1 The Studio gate (reached first)
+
+> **ONE overnight run**: a brief accepted at night, executed unattended across
+> multiple segments, producing a green, verifier-checked change by morning, with
+> **zero or one** human decisions, each resolvable in under a minute from a
+> phone.
+
+| Clause | Means | Owned by |
+|---|---|---|
+| **unattended** | no human watching; stalls detected by `blocked_on_human`, not by a person noticing | `16 §2`, `14 §2` |
+| **multiple segments** | checkpointed; a failed segment rewinds to green rather than repairing forward | `16 §3` |
+| **green** | a machine-checkable acceptance predicate, executed outside the workspace, passed | `16 §3.2` |
+| **zero or one decisions** | escalation on irreversibility × uncertainty, not category | `15 §1`, `§2` |
+| **under a minute** | a typed card with options, a recommendation, and a cost of being wrong — never a transcript | `15 §3.1` |
+
+Why this gate and not "it works": every clause is a mechanism Market also needs
+(`§2.1`), and the pair (`autonomy ratio`, `unattended horizon`) is measurable
+from the log on day one (`16 §6`), so the product can be steered before most of
+it is built.
+
+**Measure before building.** The first instrument is not a feature: replay two
+weeks of real sessions off the existing log and produce the **interrupt
+distribution** — what fraction of human touches were approve-the-boring,
+missing-information, genuine judgment, or rescue-from-thrash. That distribution
+decides whether the first build is mostly a gate, a broker, or a supervisor,
+and it doubles as the seed of the eval corpus (`16 §6.1`).
 
 ---
 
@@ -246,11 +346,14 @@ This proves the product sentence (§6) end-to-end; scale is a separate concern (
 
 | # | Risk | Why it threatens the product | Mitigation (owning spec) |
 |---|---|---|---|
-| R1 | **Harness fragility** — coding-agent CLIs change output formats, break, hang | screen-scraping breaks fulfillment silently; buyer gets a bad job | normalized harness adapter contract with structured events; PTY is a *fallback codec*, not the path (`01 §8.6`); harness-switchable mid-step; loop-manager FSM detects stuck/escalate (`04`) |
+| R1 | **Harness fragility** — coding-agent CLIs change output formats, prompts, and session-artifact layouts; they break and they hang | a silent observation failure means a run that is stalled, mis-metered, or wrongly reported as fine | three channels with a trust ranking, semantics never from a screen (`14 §1`); the terminal read only as a replayable digested snapshot at a quiescence edge, never streamed (`14 §3`); an **observation capability matrix** per adapter with **nightly contract tests against upstream `@latest`**, and quarantine on failure — Studio drops the run's unattended horizon to zero, Market refuses to schedule (`14 §4`, `§5`); harness-switchable mid-step; stuck detection incl. `blocked_on_human` (`04 §4.3`, `16 §2`) |
 | R2 | **Untrusted-workload isolation** — seller capability runs on buyer data; both are untrusted to mitos | a leak or escape ends the business on transaction #1 | trust tier **T2** ⇒ remote µVM (E2B/Daytona), **deny-all egress except broker**, RO snapshot of buyer data, no secrets in env (`01 §6`, `05`) |
 | R3 | **Seller-key custody** — sellers bring provider keys; recipe must stay server-side | a key leak or recipe exfiltration is a breach and a trust collapse | secrets live **only at the broker**; broker attaches/withholds per `egress_policy` + destination and logs each crossing; recipe never enters the buyer-visible surface (`01 §8.5`, `05`, `08`) |
 | R4 | **Cost of LLM verification** — proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); at launch, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
 | R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (`09 §2`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`) — the parts a single-tenant framework structurally cannot retrofit |
+
+| R6 | **Sequencing cost** — reaching the Market gate later than a competitor because Studio ships first (`§3`) | the facilitator's revenue moves right, and `13 §1.5`'s one-product-decision gap (a framework bolting on monetization) has longer to close | the sequencing is only defensible because Studio's mechanisms *are* Market's prerequisites (`§2.1`) and nothing is rebuilt; the mitigation is **speed within the order**, not reordering — plus the moat surfaces stay first-class and unstarted-by-others: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`), and now the eval corpus (`16 §6.1`), which is the one asset that compounds with time rather than being copied in a quarter |
+| R7 | **Unattended action taken by silence** — a decision default fires on an irreversible act | one unrecoverable external effect (a force-push, a publish, a payment) authorized by nobody ends the operator's trust permanently, and would end a buyer's | the fail-safe/fail-secure split is **structural, not procedural**: `external` acts MUST carry no default and MUST park indefinitely; the card schema forbids `default` without `ttl` and vice versa; unclassifiable reversibility is treated as `external` — *unclassifiable is not permission* (`01 §8.9`, `15 §2.1`, `§4`) |
 
 Cross-cutting: the **event log is the source of truth** (`01 §8.2`) — it is
 simultaneously run state, audit record, the proof page's backing data, and the
@@ -264,7 +367,11 @@ unbuilt while the write side commoditizes.
 
 ## 9. Launch criteria
 
-mitos is launched when, with no human on the happy path:
+Two, in order. **Studio is proven** when §6.1's overnight gate holds on mitos's
+own development, with the autonomy ratio and unattended horizon recorded on the
+log (`16 §6`).
+
+**mitos is launched** when, with no human on the happy path:
 
 1. a stranger pays a public metered endpoint for design partner #1's capability;
 2. the capability runs in a T2 sandbox, egress only through the broker;

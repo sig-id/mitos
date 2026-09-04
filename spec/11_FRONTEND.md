@@ -68,6 +68,12 @@ importing one (`12 §10`); the frontend lists only what the tenant has added.
 | **Seller** | own tenant; cross-tenant reader of their sales | import/scaffold → author in own tools → test → publish → price → attribute | §6 → §7 |
 | **Buyer** | stranger; pays per job | order (entrypoint form / x402) → watch (commercial cut, read-only) → receive the deliverable | §4 (buyer cut), §5 |
 | **Operator / dev** | trusted, local (T1) | add app → run → watch (full) + steer → report; wire I/O (`10 §4`); fleet post-launch | §4, §5, §8 |
+| **Operator, away** (Studio, `02 §3`) | same principal, not at the console | brief → *leave* → be interrupted only by exception → resolve a card in <60s → read the morning report | §4a, §5 |
+
+The away-operator is the same person as the operator, and that is the point:
+**the phone is not a second product surface, it is the operator's surface when
+they are not looking at the first one.** It renders one thing only — a decision
+card (`01 §8.9`) — and everything else waits for the console.
 
 Load-bearing rule: **seller and buyer never share a live surface.** They meet
 only through cuts of the log (`08 §2`, invariant 3): the buyer never sees the
@@ -113,6 +119,31 @@ watch is read-only by construction — a viewer, not a session.
 **Feel.** A CI/build run whose rows are *agent decisions*, with a drill-down
 into the harness's own steps, and a Stop/Approve button that actually works.
 Never a chat transcript.
+
+---
+
+## 4a. Surface — the decision card (the away surface)
+
+The only surface that pushes. It renders a `HumanDecision` (`01 §8.9`) and
+nothing else; it is not a watch view, not a chat, and not a place to browse
+runs — those are the console, reached by a link on the card.
+
+| Element | Rule |
+|---|---|
+| Question | imperative, one line, readable on a lock screen |
+| Context | *what was attempted · what is blocked* — folded state (`04 §3.1`), never a transcript, never `rationale` |
+| Options | 2–3 buttons, each naming its **consequence**; at most one marked recommended |
+| Cost of being wrong | shown, because it tells the reader whether to think or to tap |
+| Default + countdown | shown when one exists; **absent by construction** for `external` acts, which say *waiting for you* and mean it (`15 §4`) |
+| Escape hatch | one link into the full watch surface (§4) for the rare card that needs it |
+
+**The 60-second rule is a design constraint, not an aspiration** (`15 §3.1`). A
+card that requires opening the console to answer has failed, and the escalation
+rule that produced it is a candidate for deletion — `decision_precision`
+(`16 §6`) measures exactly this.
+
+Digest deliveries (`15 §5.3`) use the same renderer at list density: things that
+happened and were reversible, to read, not to answer.
 
 ---
 
@@ -296,6 +327,17 @@ serve a step of:
 edit (own editor) → run → watch → diagnose → re-run → wire I/O → publish → read sales
 ```
 
+The Studio loop (`02 §3`) is the same loop with the middle removed:
+
+```
+brief (own editor) → run → LEAVE → [card, by exception] → morning report → merge
+```
+
+Watching is what the operator does while they still distrust the run. The
+product's job is to make watching optional, so the console MUST keep working
+when nobody is looking at it, and the report (§5) MUST stand alone as the
+morning read — no reconstruction from a live view they never saw.
+
 A screen that serves no step of this loop is scope creep (the Fleet, §8,
 stays demand-gated). The measure of the console is **time from "it failed" to
 "I know why", and from "I know why" to the next run.**
@@ -326,6 +368,7 @@ role before seeing their own runs is demo theater. Therefore:
 | **Application** `/web/apps/:id` | "what is installed and how is it wired?" | entrypoints (runnable), pipeline intent, capabilities, I/O bindings with their ingest URLs, requirements |
 | **Watch** (§4) | "is it working / why did it fail?" | failure reason surfaced at the top; the order (inputs/params/workspace) visible; two-zoom timeline; actions: run again · report · buyer preview |
 | **Report** (§5) | "what did I get and what did it cost?" | deliverable first; totals; run again |
+| **Decisions** `/web/decisions` | "what is waiting on me?" | open cards oldest-first, with countdowns; the console rendering of §4a — the same list the phone pushes from |
 | **Sales** | "what am I selling and what has it earned?" | published offers + settled revenue, one page |
 | **Storefront** `/web/capabilities` | the buyer's door | what's for sale, how to buy — human and agent instructions |
 
@@ -333,7 +376,8 @@ role before seeing their own runs is demo theater. Therefore:
 needed to restart it (`04 §7`), so the iterate step is one click and MUST stay
 one click. Steer (approve/interrupt, §4) requires a run-level control op the
 substrate doesn't expose yet; the console MUST NOT fake it — it arrives with
-that op.
+that op (`14 §3.3` fixes its contract: a verified transaction on a quiescence
+edge, with `steer_rejected` surfaced to the operator rather than retried).
 
 ### 13.4 Voice
 

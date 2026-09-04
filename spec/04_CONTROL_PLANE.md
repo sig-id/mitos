@@ -214,6 +214,15 @@ When one trips, the FSM enters ESCALATE-CHOICE.
 | `verify_fail` | deterministic verifier (§10) fails **K=2** times after a work phase | climb, then escalate |
 | `turn_exhaustion` | harness hit `max_turns` with no `final_result` | continue with carried context, bump turns once, else climb |
 | `oscillation` | result-state cycles (edit↔revert detected in diffs) | escalate (needs a different capability) |
+| `blocked_on_human` | `quiet(tree, T_block)` — no PTY bytes, no workspace writes, no *distinct* new exec — while the step is open (`14 §2`) | classify the modal state (`14 §3.2`) and raise a decision card (`15`); on `:unknown`, escalate as `judgment` |
+| `predicate_stall` | acceptance-predicate delta ≈ 0 across **K=3** consecutive segments, regardless of diff volume (`16 §3.2`) | rewind to last green (`16 §3.3`) and retry with a failure memo; on repeat, escalate |
+
+The first six signals are computed at **iteration boundaries**. The last two are
+not, and that is the point: an interactive harness parked at its own permission
+prompt never returns, so no boundary is ever reached and the first six can never
+fire. `blocked_on_human` runs off the quiescence clock (`14 §2`) independently of
+the loop; `predicate_stall` runs off the acceptance predicate, because
+`no_progress` is diff-based and an agent that keeps editing always looks busy.
 
 `repeated_error` generalizes chief-wiggum's deterministic **fast-fail** (the only
 non-model bail-out in `runtime-loop.sh`: K consecutive sub-threshold failures).
@@ -233,6 +242,14 @@ Decision (`params: {model, effort, harness}` per `01` §8.1); exhausting the
 ladder emits an `escalate` Decision whose `params` carry the tripped `signal`
 and the climb history. The orchestrator then owns the next move (§3.3).
 
+**The outer bound: restart intensity, not per-signal counters.** The N/M/K above
+are *first responses*; alone they let a run retry indefinitely by rotating which
+signal trips. The ladder is therefore bounded by OTP supervision semantics —
+`max_restarts` within `max_seconds`, enforced per step **and** per run, with a
+`strategy` of `retry_step | rewind_to_green | rewind_tail | escalate`
+(`16 §4`). Exhausting intensity at either level escalates to a human as
+`judgment` (`15 §2`); it never silently keeps climbing.
+
 This is the explicit divergence from chief-wiggum's "summarize-and-reloop": its
 supervisor can only vote CONTINUE / STOP / RESTART on the *same* model and
 harness; it cannot climb effort/model/harness, and it pays a model call every
@@ -247,10 +264,10 @@ DecisionEvent {
   run_id      : string
   seq         : u64                  # monotonic per run (single writer, §7)
   ts          : iso8601
-  actor       : "orchestrator" | "loop_manager"
+  actor       : "orchestrator" | "loop_manager" | "supervisor"
   type        : advance | insert | retry | switch | skip
-              | request_approval | escalate | finish | abort
-  target      : capability_ref | stage_id | null
+              | request_approval | escalate | finish | abort | rewind
+  target      : capability_ref | stage_id | checkpoint_id | null
   params      : object               # type-specific (below)
   inputs_hash : string               # hash of fold(log)+intent the decision saw (replay integrity)
   rationale   : string               # NL — AUDIT ONLY, never parsed for control
@@ -269,6 +286,16 @@ DecisionEvent {
 | `escalate` | loop (→orch) \| orch (→operator) | `stage_id` | `{ signal, climb_history, suggestion? }` |
 | `finish` | orch | null | `{ result_ref, success_criteria_met: bool }` |
 | `abort` | orch | null | `{ cause: budget\|policy\|unrecoverable, detail }` |
+| `rewind` | orch \| supervisor | `checkpoint_id` | `{ scope: step\|tail, memo, reason_signal, allow_non_green? }` — restore a checkpoint and re-open (`16 §3.3`); `memo` REQUIRED |
+
+**`actor="supervisor"`** is a fleet supervisor acting on *another* run
+(`16 §5`). It is restricted to `retry · switch · rewind · escalate · abort ·
+request_approval`, and MUST NOT emit `advance`, `insert`, `skip`, or `finish` —
+a supervisor that can declare another run finished can declare it finished
+wrongly. It reads that run's Decisions, Effects, diffs, and predicate verdicts;
+it MUST NOT read its `assistant_text`, inner trace, raw spool, or `rationale`
+(`16 §5.1`) — the same independence §3.1 already requires of the orchestrator
+over its own run, applied one level up.
 
 A `switch` from `actor="loop_manager"` is an intra-step climb (§4.4); from
 `"orchestrator"` it is a cross-step substitution. Same `type`, different scope —
@@ -288,6 +315,9 @@ EffectEvent {
             # control-plane extensions (the §8.2 open list):
             | iteration_started | iteration_finished | context_compacted
             | harness_switched | escalation_raised | verification_recorded
+            | quiescent | steer_applied | steer_rejected | harness_quarantined   # 14
+            | decision_delivered | decision_defaulted | decision_rejected        # 15
+            | checkpoint_taken | oracle_tampered                                 # 16
   caused_by : seq                    # the DecisionEvent that led here (causality)
   ref       : object                 # ids / paths (artifact ids, sandbox handle, commit sha)
   payload   : object                 # type-specific body
@@ -310,6 +340,11 @@ EffectEvent {
 | `approval_requested`/`approval_resolved` | `request_approval` | question, resolver, outcome |
 | `memory_written` | `finish`/post-hook | track, slice id (`07`) |
 | `budget_charged` | any Decision that spent | tokens, usd, wall_ms delta |
+| `quiescent` | opening Decision | `for_ms`, `pty_offset`, writes/execs since (`14 §2`) |
+| `steer_applied`/`steer_rejected` | the steering Decision | before/after grid digests, command (`14 §3.3`) |
+| `checkpoint_taken` | step-opening Decision | commit sha, snapshot ref, log seq, predicate verdict, `green` (`16 §3.1`) |
+| `oracle_tampered` | opening Decision | the diff paths intersecting `acceptance.oracle_paths` (`16 §3.2`) |
+| `decision_delivered`/`decision_defaulted`/`decision_rejected` | `request_approval` | sink/connector, resolver, `via` (`15 §5`) |
 
 **The log is five things at once** (`01` §8.2): run state (fold it), debug trace
 (read it), replay source (re-drive it, §7), audit record (`rationale` +
