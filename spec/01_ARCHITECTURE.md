@@ -6,11 +6,15 @@ directory MUST conform to. Where another doc and this one disagree, this one win
 
 RFC 2119 keywords (MUST / SHOULD / MAY) are normative.
 
+**Implementation update (2026-09-08):** Go + HTMX replaces BEAM.
+`00_IMPLEMENTATION_STATUS` records what is implemented and supersedes historical
+language-specific callback syntax in this target contract.
+
 ---
 
 ## 0. Scope & project boundary
 
-**mitos is the BEAM/Elixir control plane.** It owns the event log, the folds
+**mitos is the Go control plane.** It owns the event log, the folds
 over it, the orchestrator and loop-manager, the run lifecycle, the egress
 broker, metering, proof, settlement, the facilitator, the web surfaces, and the
 CLI. Everything outside that boundary is an **external product** that mitos
@@ -22,8 +26,8 @@ integrates with through a defined seam; mitos neither contains nor builds it:
 | **Nucleus** — a gVisor-class sandbox shipped as OCI containers | `SandboxProvider` (`§8.4`) | T2 isolation. mitos ships its own in-process `Provider.Local` for T0/T1; Nucleus (or E2B/Daytona) is the external T2 provider. |
 | **sigid** — the identity provider | identity/assertion intake | every human identity (operator/seller/buyer) is asserted by sigid; mitos consumes assertions and never runs its own IdP. |
 
-A seam is a `@behaviour` with normative callbacks. A second implementation of
-anything is a new behaviour impl, never an inline branch.
+A seam is a Go interface with normative contracts. A second implementation of
+anything is a new interface implementation, never an inline branch.
 
 > **Thesis.** mitos is a cloud-first, multi-tenant substrate that runs packaged
 > capabilities through agent-driven pipelines, where an agent decides policy and
@@ -102,7 +106,7 @@ TRIGGERS / SOURCES (det.)  cron · webhook · event · manual · connector(GitHu
                  └─► CAPABILITY in a sandbox (§05):
                       image[SKILL+TOOLS] + DATA[RO snapshot] + workspace[input]
                       ① inject (hermetic)   ② observe/steer (mitos-driven)   ③ egress→BROKER
-SUBSTRATE (det., BEAM): event log/trace · memory (§07) · egress broker + policy (§05) ·
+SUBSTRATE (det., Go): event log/trace · memory (§07) · egress broker + policy (§05) ·
                         work pool + scheduling (§06) · budgets/metering (§08) · multi-tenancy/keys (§08)
 ```
 
@@ -181,11 +185,11 @@ eligible provider set + network/mount posture.
 
 ## 7. Runtime ownership
 
-| mitos — BEAM/Elixir control plane (this project) | External products (integrated via seams) | Sandbox interior (per run) |
+| mitos — Go control plane (this project) | External products (integrated via seams) | Sandbox interior (per run) |
 |---|---|---|
 | orchestrator + loop-manager, event-log writer, policy compiler, **egress broker**, scheduling/services, memory, multi-tenancy/keys/metering, web + CLI | **the engine** (transport/terminal/local launch; `§8.6`), **Nucleus / E2B / Daytona** (sandbox providers; `§8.4`), **sigid** (identity) | harness process + capability image + RO data + workspace + (optional MCP tool relay) |
 
-mitos is Elixir/BEAM. The engine and sandbox providers are external products
+mitos is Go. The engine and sandbox providers are external products
 with their own implementation-language choices (the engine may be Zig); mitos
 constrains only the seam, not their language.
 
@@ -457,14 +461,13 @@ unclassifiable is not permission (`15 §2.1`).
 10. Verify cheaply and tiered; reuse verification as the self-improvement signal.
 11. UI, CLI, API, and automation call the same backend operations.
 12. **Thin kernel, seam-first.** The substrate owns the log and folds; every
-    pluggable concern is a `@behaviour` (`§8.4`, `§8.6`, orchestrator policy).
+    pluggable concern is a Go interface (`§8.4`, `§8.6`, orchestrator policy).
     No second implementation lives as an inline branch.
 13. **Cohesion over accumulation.** A module owns one concern and stays small
     enough to hold in the head. (A prior implementation's 2.7k-line session
     module was a defect, not a stage.)
-14. **Errors are values.** Control flow uses `{:ok,_}|{:error,_}` and `with`;
-    `raise` is reserved for genuinely unreachable states. (A prior
-    implementation's ~90 `raise`s were a defect.)
+14. **Errors are values.** Functions return explicit errors; callers add context
+    and handle failures. Panic is reserved for unreachable states.
 
 ---
 
@@ -480,7 +483,7 @@ unclassifiable is not permission (`15 §2.1`).
 | `06_WORK_POOL` | **Work pool plane**: Tasks, pools + disciplines, dependency graph, invoke/subtasks + service runtime (kept) + composition (targets/presets/conflicts) + triggers |
 | `07_MEMORY` | Two-track memory, retrieval/injection, contradiction-supersession forgetting |
 | `08_FACILITATOR` | Gentix: capability=monetizable unit, metering off the log, multi-tenancy, take-rate |
-| `09_IMPLEMENTATION_PLAN` | Phased build on BEAM+Zig, reuse map, sequencing |
+| `09_IMPLEMENTATION_PLAN` | Target component map, gates, and build sequencing |
 | `10_IO_PLANE` | **I/O plane**: connectors (ingress: chat/email/calendar/webhook/event/web), sinks (egress: notify/deliver/reply/web), application I/O bindings; distinct from the in-sandbox broker (`05`) |
 | `11_FRONTEND` | **Frontend**: surfaces as readers of the log (`08 §2`); personas seller/buyer/operator; Run & Watch (two-zoom + cuts); the Deliverable (report ⇄ proof, one renderer); Author & Test (thin, CLI-first, import); Publish & Attribute; Fleet (deferred); CLI/web/URL primacy |
 | `12_APPLICATION` | **Application packaging & manifest** (`§8.8`): the unit of sale; entrypoints as order forms (input→Task, validate-before-quote), ship-vs-bind I/O defaults, composition root, `app_id` identity vs facilitator-side offer, OCI bundling, Eve import (app cut) |

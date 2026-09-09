@@ -5,10 +5,10 @@ the wedge it must win, and the smallest build that wins it. Vocabulary and
 contracts are fixed by `01_ARCHITECTURE` and are not redefined here. Monetization
 mechanics live in `08_FACILITATOR`; this doc only frames *why* they exist.
 
-Almost everything below is **TARGET**. What is **IMPLEMENTED** today is a Zig
-engine (local pty/stdio transports, terminal codec, a harness/CLI detector) and a
-BEAM runtime skeleton — two half-built control planes that this redesign collapses
-(`09_IMPLEMENTATION_PLAN`). Treat IMPLEMENTED claims as the floor, not the plan.
+Almost everything below is **TARGET**. The current implementation is the Go +
+HTMX Studio slice described in `00_IMPLEMENTATION_STATUS`. The former BEAM
+implementation has been removed; neither product acceptance gate is claimed
+by the replacement yet.
 
 ---
 

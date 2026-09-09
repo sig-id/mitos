@@ -5,15 +5,19 @@ fixes the **launch gate** — the acceptance contract the whole system must
 satisfy. It owns no field names or signatures (those live in `01` §8 and
 `03`–`08`); it maps components to the specs that own their contracts.
 
-mitos is the BEAM/Elixir control plane (`01` §0). The engine, Nucleus (and other
+mitos is the Go control plane (`01` §0). The engine, Nucleus (and other
 sandbox providers), and the sigid identity provider are **external products**
 integrated through seams (`01` §0, §7); mitos constrains the seam, not their
 implementation.
 
+**Implementation status:** this is the target decomposition. The Go replacement
+implements only the subset listed in `00_IMPLEMENTATION_STATUS`; module names
+below identify conceptual responsibilities rather than current Go packages.
+
 ## 1. Component map
 
 Every component is a fold over the log, a behaviour seam, or a reader. The
-substrate is a thin kernel; pluggable concerns are `@behaviour`s, never inline
+substrate is a thin kernel; pluggable concerns use Go interfaces, never inline
 branches (`01` §10.12).
 
 | Component | Kind | Owns | Contract |
@@ -36,7 +40,7 @@ branches (`01` §10.12).
 | `Observation.Session` | reader | tails the harness's session artifacts → the normalized stream (interactive, no mode change) | `14` §1.1 |
 | `Observation.Terminal` | seam | continuous spool + on-demand digested `snapshot`; **never** a stream | `14` §3.1 |
 | `Observation.Vt` | parser | a VT state machine that is fed every byte and **emits nothing**; `feed` is pure over the byte prefix, which is what makes a screen read replayable | `14` §3.1 |
-| `Observation.Pty` | transport | the BEAM-side local pty byte source (the engine owns this seam, `01` §7); feeds the Terminal and provides the steer write half | `14` §3, `01` §7 |
+| `Observation.Pty` | transport | the control-plane local pty byte source (the engine owns this seam, `01` §7); feeds the Terminal and provides the steer write half | `14` §3, `01` §7 |
 | `Observation.Contract` | checker | static + live adapter contracts; quarantine on failure | `14` §5 |
 | `Observation.Classifier` (+ impls) | behaviour | per-harness modal-state classification; `:unknown` escalates | `14` §3.2 |
 | `Steer` | transaction | snapshot → write → snapshot → verify transition, else reject + escalate | `14` §3.3 |
@@ -59,7 +63,7 @@ branches (`01` §10.12).
 | `App.Manifest` | data | application bundle; content-addressed `app_id`; entrypoints | `01` §8.8, `12` |
 | `Connector` / `Sink` | behaviours | I/O-plane ingress / egress | `10` §3/§5 |
 | `Web.Router` / `Web.*` | reader | HTTP surface = the same backend ops the CLI calls | `01` §10.11, `08` §8, `11` |
-| `CLI` | reader | escript: run / log / status / proof / publish / serve | `11` §6 |
+| `CLI` | reader | CLI: run / log / status / proof / publish / serve | `11` §6 |
 | Identity | **external** | sigid asserts operator/seller/buyer identity; mitos consumes assertions | `01` §0 |
 
 ## 2. The launch gate

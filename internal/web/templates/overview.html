@@ -1,0 +1,138 @@
+{{define "overview"}}
+<div class="page-heading overview-heading">
+<div>
+<p class="eyebrow">YOUR STUDIO <span>/</span> {{.Date}}</p>
+<h1>Your work, moving forward<span class="olive">.</span>
+</h1>
+<p>Give it direction. Make the important calls. Come back to results.</p>
+</div>
+<a class="button primary" href="/new">{{icon "plus"}}New work</a>
+</div>
+<div class="metrics">
+<div class="metric">
+<span>In progress {{icon "work"}}</span>
+<strong>{{len .Active}}<small>runs</small>
+</strong>
+<p>{{if .Active}}Moving toward a result{{else}}Room for your next brief{{end}}</p>
+</div>
+<div class="metric">
+<span>Needs your decision {{icon "decision"}}</span>
+<strong>{{len .Attention}}<small>{{if eq (len .Attention) 1}}decision{{else}}decisions{{end}}</small>
+</strong>
+<p>{{if .Attention}}A small call to move things along{{else}}Nothing waiting on you{{end}}</p>
+</div>
+<div class="metric">
+<span>Completed {{icon "check"}}</span>
+<strong>{{len .Finished}}<small>results</small>
+</strong>
+<p>{{.Verified}} with acceptance evidence</p>
+</div>
+<div class="metric">
+<span>Execution time {{icon "clock"}}</span>
+<strong class="time-metric">{{if .Finished}}{{.Duration}}{{else}}—{{end}}</strong>
+<p>Across completed work</p>
+</div>
+</div>
+{{if .Demo}}<div class="demo-note">You’re exploring example history. Sample results are illustrative; new work executes locally.</div>{{end}}
+{{if .Attention}}<a class="attention-strip" href="/decisions">
+<span class="attention-icon">{{icon "decision"}}</span>
+<div>
+<strong>A moment of your judgment.</strong>
+<p>{{len .Attention}} {{if eq (len .Attention) 1}}piece of work is{{else}}pieces of work are{{end}} waiting for a decision. Everything else can keep moving.</p>
+</div>
+<span class="text-link">Review decisions {{icon "arrow"}}</span>
+</a>{{else}}<div class="clear-strip">
+<span>{{icon "check"}}</span>
+<strong>You’re all clear.</strong>
+<p>No decisions are waiting on you.</p>
+<span class="quiet-label">Space to focus</span>
+</div>{{end}}
+<div class="overview-grid">
+<section class="panel">
+<div class="section-heading">
+<div>
+<p class="eyebrow">THE WORKBENCH</p>
+<h2>Recent work <span class="count">{{.Total}}</span>
+</h2>
+</div>
+<a class="text-link subtle" href="/work">All work {{icon "arrow"}}</a>
+</div>{{if .Runs}}{{template "runlist" (recent .Runs)}}{{else}}<div class="first-work">
+<div class="work-illustration" aria-hidden="true">
+<div class="paper paper-back">
+</div>
+<div class="paper">
+<span class="paper-dot">
+</span>
+<span class="paper-line long">
+</span>
+<span class="paper-line">
+</span>
+<span class="paper-line short">
+</span>
+<span class="paper-check">{{icon "check"}}</span>
+</div>
+<span class="orbit one">
+</span>
+<span class="orbit two">
+</span>
+</div>
+<h3>Make space for your next idea.</h3>
+<p>Start with a workspace and a clear brief.<br>Your first result will find a home here.</p>
+<a class="button" href="/new">Create your first work {{icon "arrow"}}</a>
+</div>{{end}}</section>
+<aside class="overview-aside">
+<section class="intent-card">
+<div class="intent-top">
+<span class="eyebrow">THE STUDIO WAY</span>{{icon "leaf"}}</div>
+<h2>Good work.<br>Less watching.</h2>
+<p>You set the outcome.<br>Studio keeps the record.</p>
+<ol class="journey">
+<li>
+<span>01</span>
+<div>
+<strong>Give it a brief</strong>
+<p>A workspace, an outcome, a limit.</p>
+</div>
+</li>
+<li>
+<span>02</span>
+<div>
+<strong>Leave room to work</strong>
+<p>Step in when a decision needs you.</p>
+</div>
+</li>
+<li>
+<span>03</span>
+<div>
+<strong>Return to evidence</strong>
+<p>The result, the checks, the record.</p>
+</div>
+</li>
+</ol>
+<a href="/new" class="text-link">Set something in motion {{icon "arrow"}}</a>
+</section>
+{{if .Finished}}{{with index .Finished 0}}<a class="latest-result" href="/runs/{{.ID}}/report">
+<span class="eyebrow">LATEST RESULT</span>
+<div class="result-heading">{{icon "file"}}<h3>{{.Brief.Title}}</h3>
+</div>
+<p>{{.Summary}}</p>
+<span class="text-link">Open report {{icon "arrow"}}</span>
+</a>{{end}}{{end}}</aside>
+</div>
+<section class="applications-preview">
+<div class="section-heading">
+<div>
+<p class="eyebrow">READY WHEN YOU ARE</p>
+<h2>Your applications</h2>
+</div>
+<a class="text-link subtle" href="/apps">Manage applications {{icon "arrow"}}</a>
+</div>
+<div class="app-grid">{{range .Apps}}{{template "appcard" .}}{{end}}<a class="add-app" href="/apps">
+<span>{{icon "plus"}}</span>
+<div>
+<strong>Bring your own application</strong>
+<p>Connect a local command and its acceptance check.</p>
+</div>{{icon "arrow"}}</a>
+</div>
+</section>
+{{end}}

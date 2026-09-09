@@ -8,6 +8,12 @@ keywords are normative.
 
 ---
 
+**2026-09-08 redesign:** the current Studio navigation and interaction design
+are recorded in `docs/PRODUCT_DESIGN.md` (repository root) and
+`00_IMPLEMENTATION_STATUS`. Those decisions supersede §13's old navigation;
+reader boundaries and the Studio/Market contracts below remain targets.
+Go templates and HTMX are the implementation stack.
+
 ## 1. First principles
 
 The frontend derives from five
@@ -20,7 +26,7 @@ principles, each anchored in a contract that already exists:
 2. **Personas follow the money.** The product's people are `02 §3`'s: the
    **seller** (authors, publishes, prices, attributes), the **buyer** (pays for
    a completed job), and the **operator** (runs the stack for themself — the
-   secondary local mode, and the seller at work). a commerce layer has counterparties, not a framework audience.
+   first Studio customer, and the seller at work). a commerce layer has counterparties, not a framework audience.
 3. **Jobs, not sessions** (`02 §1`). Every surface points at a deliverable:
    watching is *progress toward completion*; the terminal screen is *artifacts
    + proof*; nothing is chat-shaped. Free-form intent enters only where an

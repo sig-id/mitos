@@ -1,0 +1,237 @@
+{{define "work"}}<div class="page-heading">
+<div>
+<p class="eyebrow">FROM INTENT TO OUTCOME</p>
+<h1>Work<span class="olive">.</span>
+</h1>
+<p>Everything you’ve set in motion, and what came of it.</p>
+</div>
+<a class="button primary" href="/new">{{icon "plus"}}New work</a>
+</div>
+<section class="panel">
+<form class="work-filters" action="/work" method="get" hx-get="/work" hx-target="#work-list" hx-select="#work-list" hx-push-url="true" hx-trigger="submit, change, input delay:350ms">
+<label class="search-field">{{icon "search"}}<span class="sr-only">Search work</span>
+<input type="search" name="q" placeholder="Find a brief, application, or workspace…" value="{{.Query}}">
+</label>
+<label class="filter-field">
+<span class="sr-only">Status</span>
+<select name="status">
+<option value="">All statuses</option>
+<option value="active" {{if eq .Filter "active"}}selected{{end}}>In progress</option>
+<option value="parked" {{if eq .Filter "parked"}}selected{{end}}>Needs you</option>
+<option value="done" {{if eq .Filter "done"}}selected{{end}}>Complete</option>
+<option value="failed" {{if eq .Filter "failed"}}selected{{end}}>Failed</option>
+<option value="cancelled" {{if eq .Filter "cancelled"}}selected{{end}}>Stopped</option>
+</select>
+</label>
+<button class="button small-button" type="submit">Filter</button>
+</form>
+<div id="work-list">
+<div class="list-label">
+<span>{{len .Runs}} {{if eq (len .Runs) 1}}RESULT{{else}}RESULTS{{end}}</span>
+<span>NEWEST FIRST</span>
+</div>{{if .Runs}}{{template "runlist" .Runs}}{{else}}<div class="empty">{{icon "search"}}<h3>{{if or .Query .Filter}}No work matches these filters{{else}}Your work starts here{{end}}</h3>
+<p>{{if or .Query .Filter}}Try a different search, or show all work.{{else}}Choose an application and tell it what you need.{{end}}</p>
+<a class="text-link" href="{{if or .Query .Filter}}/work{{else}}/new{{end}}">{{if or .Query .Filter}}Clear filters{{else}}Create new work{{end}} {{icon "arrow"}}</a>
+</div>{{end}}</div>
+</section>{{end}}
+
+{{define "decisions"}}<div class="page-heading">
+<div>
+<p class="eyebrow">YOUR JUDGMENT, WHERE IT COUNTS</p>
+<h1>Decisions<span class="olive">.</span>
+</h1>
+<p>The important calls. Enough context to make them and move on.</p>
+</div>
+<span class="pill">{{len .Attention}} waiting</span>
+</div>{{if .Attention}}<div class="decisions-layout">
+<div class="decision-stack">{{range .Attention}}{{template "decisioncard" .}}{{end}}</div>
+<aside class="explanation">
+<span class="eyebrow">A SMALL INTERRUPTION</span>
+<h2>You shouldn’t need<br>the whole story.</h2>
+<p>Each card explains what is blocked, what your choice changes, and the cost of getting it wrong.</p>
+<hr>
+<p>Work with an external consequence stays paused until you explicitly choose. There is no countdown.</p>
+<a class="text-link" href="/work">See all work {{icon "arrow"}}</a>
+</aside>
+</div>{{else}}<div class="empty decision-empty">
+<span class="large-check">{{icon "check"}}</span>
+<p class="eyebrow">NOTHING NEEDS YOUR ATTENTION</p>
+<h2>A little room to breathe.</h2>
+<p>When work needs your judgment, it will land here<br>with a clear question and a way forward.</p>
+<a class="button" href="/work">Back to work {{icon "arrow"}}</a>
+</div>{{end}}{{end}}
+
+{{define "new"}}<div class="page-heading">
+<div>
+<a class="back-link" href="/work">← All work</a>
+<h1>Start with an outcome<span class="olive">.</span>
+</h1>
+<p>A clear brief now. A useful result to come back to.</p>
+</div>
+</div>
+<div class="brief-layout">
+<form class="panel brief-form" method="post" action="/runs" hx-disabled-elt="find button">
+<div class="form-section">
+<span class="step-number">01</span>
+<div class="form-section-body">
+<h2>What should get done?</h2>{{if .Error}}<div class="notice error" role="alert">{{.Error}}</div>{{end}}<label for="title">Give this work a name</label>
+<input id="title" name="title" required minlength="3" maxlength="160" placeholder="e.g. Get a clear picture of the workspace" value="{{.Brief.Title}}">
+<label for="intent">The brief <span class="optional">Optional for an inventory</span>
+</label>
+<textarea id="intent" name="intent" rows="5" maxlength="10000" placeholder="Describe the outcome you want, constraints to respect, and what a good result looks like.">{{.Brief.Intent}}</textarea>
+</div>
+</div>
+<div class="form-section">
+<span class="step-number">02</span>
+<div class="form-section-body">
+<h2>Where and how?</h2>
+<label for="app_id">Application</label>
+<select id="app_id" name="app_id">{{range .Apps}}<option value="{{.ID}}" {{if eq $.Brief.AppID .ID}}selected{{end}}>{{.Name}} · {{.Entrypoint}}</option>{{end}}</select>
+<p class="field-help">Each application runs its installed entrypoint and acceptance check.</p>
+<label for="workspace">Workspace directory</label>
+<input id="workspace" name="workspace" required value="{{.Brief.Workspace}}" spellcheck="false">
+<p class="field-help">Choose a directory under <code>{{.Root}}</code>. Work runs in a fresh copy.</p>
+<label for="timeout_minutes">Stop after</label>
+<select id="timeout_minutes" name="timeout_minutes">
+<option value="1" {{if eq .Brief.TimeoutMinutes 1}}selected{{end}}>1 minute</option>
+<option value="5" {{if eq .Brief.TimeoutMinutes 5}}selected{{end}}>5 minutes</option>
+<option value="10" {{if eq .Brief.TimeoutMinutes 10}}selected{{end}}>10 minutes</option>
+<option value="30" {{if eq .Brief.TimeoutMinutes 30}}selected{{end}}>30 minutes</option>
+<option value="60" {{if eq .Brief.TimeoutMinutes 60}}selected{{end}}>1 hour</option>
+<option value="120" {{if eq .Brief.TimeoutMinutes 120}}selected{{end}}>2 hours</option>
+</select>
+</div>
+</div>
+<div class="form-footer">
+<a href="/work">Cancel</a>
+<button class="button primary" type="submit">Start work {{icon "arrow"}}</button>
+</div>
+</form>
+<aside class="brief-aside">
+<span class="eyebrow">A GOOD BRIEF GOES A LONG WAY</span>
+<h2>Direction.<br>Boundaries.<br>A finish line.</h2>
+<p>Describe the result, not every step. Give the application enough context to know when it’s done.</p>
+<div class="brief-promise">{{icon "folder"}}<div>
+<strong>Your original stays yours</strong>
+<p>Execution uses a separate workspace copy.</p>
+</div>
+</div>
+<div class="brief-promise">{{icon "clock"}}<div>
+<strong>A limit you choose</strong>
+<p>The process stops when its time is up.</p>
+</div>
+</div>
+<div class="brief-promise">{{icon "file"}}<div>
+<strong>A record to return to</strong>
+<p>Output and acceptance evidence stay with the run.</p>
+</div>
+</div>
+</aside>
+</div>{{end}}
+
+{{define "appcard"}}<article class="app-card">
+<div class="app-card-top">
+<span class="app-symbol">{{icon "apps"}}</span>
+<span class="pill">{{if .Builtin}}Built in{{else}}Installed{{end}}</span>
+</div>
+<h3>
+<a href="/apps/{{.ID}}">{{.Name}}</a>
+</h3>
+<p>{{.Description}}</p>
+<div class="app-card-footer">
+<span>1 entrypoint</span>
+<a class="text-link" href="/new?app={{.ID}}">Start work {{icon "arrow"}}</a>
+</div>
+</article>{{end}}
+
+{{define "apps"}}<div class="page-heading">
+<div>
+<p class="eyebrow">YOUR TOOLS FOR GETTING THINGS DONE</p>
+<h1>Applications<span class="olive">.</span>
+</h1>
+<p>A focused set of capabilities, with a clear way in and a result at the end.</p>
+</div>
+<span class="pill">{{len .Apps}} available</span>
+</div>
+<div class="app-grid full">{{range .Apps}}{{template "appcard" .}}{{end}}</div>
+<section class="install-panel">
+<span class="app-symbol">{{icon "terminal"}}</span>
+<div>
+<p class="eyebrow">BRING YOUR OWN</p>
+<h2>Keep authoring in your own tools.</h2>
+<p>Install a local application with a command and an independent acceptance check. Restart Studio to load its entrypoint.</p>
+<code>mitos serve --apps ./examples --workspace-root .</code>
+<p class="field-help">See <strong>examples/local-app/app.json</strong> for the manifest contract. Local applications execute as trusted processes.</p>
+</div>
+</section>{{end}}
+
+{{define "application"}}<div class="page-heading">
+<div>
+<a class="back-link" href="/apps">← Applications</a>
+<h1>{{.App.Name}}<span class="olive">.</span>
+</h1>
+<p>{{.App.Description}}</p>
+</div>
+<a class="button primary" href="/new?app={{.App.ID}}">{{icon "plus"}}Start work</a>
+</div>
+<div class="detail-grid">
+<section class="panel padded">
+<p class="eyebrow">ENTRYPOINT</p>
+<h2>{{.App.Entrypoint}}</h2>
+<p>Runs against a local workspace with your brief and time limit.</p>
+<ol class="pipeline">
+<li>
+<span>1</span>
+<div>
+<strong>Prepare</strong>
+<p>Copy the workspace. Preserve the original.</p>
+</div>
+</li>
+<li>
+<span>2</span>
+<div>
+<strong>{{if .App.Builtin}}Inventory{{else}}Execute{{end}}</strong>
+<p>{{if .App.Builtin}}Read files and calculate content fingerprints.{{else}}Run the installed application command.{{end}}</p>
+</div>
+</li>
+<li>
+<span>3</span>
+<div>
+<strong>Check & deliver</strong>
+<p>{{if .App.Builtin}}Verify the inventory checksum and deliver a report.{{else}}Run acceptance outside the workspace and save the evidence.{{end}}</p>
+</div>
+</li>
+</ol>
+</section>
+<aside class="panel padded">
+<p class="eyebrow">APPLICATION DETAILS</p>
+<dl class="facts">
+<div>
+<dt>Source</dt>
+<dd>{{if .App.Builtin}}Included with Studio{{else}}{{.App.Directory}}{{end}}</dd>
+</div>
+<div>
+<dt>Execution</dt>
+<dd>Local · trusted process</dd>
+</div>
+<div>
+<dt>Workspace</dt>
+<dd>Fresh copy · up to 64 MiB</dd>
+</div>
+<div>
+<dt>Delivery</dt>
+<dd>Run report + downloadable artifacts</dd>
+</div>{{if .App.Command}}<div>
+<dt>Command</dt>
+<dd>
+<code>{{range .App.Command}}{{.}} {{end}}</code>
+</dd>
+</div>
+<div>
+<dt>Acceptance</dt>
+<dd>
+<code>{{range .App.Acceptance}}{{.}} {{end}}</code>
+</dd>
+</div>{{end}}</dl>
+</aside>
+</div>{{end}}

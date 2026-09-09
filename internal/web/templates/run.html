@@ -1,0 +1,133 @@
+{{define "run"}}<div class="page-heading run-heading">
+<div>
+<a class="back-link" href="/work">← All work</a>
+<div class="title-badges">{{template "badge" .Run}}{{if .Run.Sample}}<span class="sample-label">Example run</span>{{end}}<span class="mono">{{short .Run.ID}}</span>
+</div>
+<h1>{{.Run.Brief.Title}}</h1>
+<p>{{.Run.AppName}} <span class="separator">/</span> Started {{when .Run.CreatedAt}}</p>
+</div>
+<div class="actions">{{if .Run.Terminal}}<form action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
+<button class="button" type="submit">{{icon "retry"}}Run again</button>
+</form>{{else}}<form action="/runs/{{.Run.ID}}/cancel" method="post" hx-disabled-elt="find button">
+<button class="button" type="submit">{{icon "stop"}}Stop work</button>
+</form>{{end}}<a class="button primary" href="/runs/{{.Run.ID}}/report">Open report {{icon "arrow"}}</a>
+</div>
+</div>
+{{if and .Run.Decision (eq .Run.Status "parked")}}<div class="run-decision">{{template "decisioncard" .Run}}</div>{{end}}
+<div class="outcome-strip {{.Run.Status}}">
+<span class="outcome-icon">{{if .Run.Verified}}{{icon "check"}}{{else if eq .Run.Status "failed"}}{{icon "decision"}}{{else}}{{icon "work"}}{{end}}</span>
+<div>
+<strong>{{.Run.Stage}}</strong>
+<p>{{.Run.Summary}}</p>
+</div>{{if .Run.Verified}}<span class="pill">Acceptance passed</span>{{end}}</div>
+<div class="detail-grid">
+<section class="panel">
+<div class="section-heading">
+<div>
+<p class="eyebrow">THE EXECUTION RECORD</p>
+<h2>What happened</h2>
+</div>
+<span class="pill">{{len .Run.Events}} events</span>
+</div>
+<ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
+<span class="timeline-dot">{{if eq .Type "decision"}}{{icon "arrow"}}{{else}}{{icon "check"}}{{end}}</span>
+<div>
+<div class="timeline-heading">
+<strong>{{eventTitle .Kind}}</strong>
+<time>{{when .At}}</time>
+</div>{{if eventSummary .}}<p>{{eventSummary .}}</p>{{end}}<span class="event-kind">{{.Type}} · {{.Seq}}</span>
+</div>
+</li>{{end}}</ol>
+</section>
+<aside class="run-aside">
+<section class="panel padded">
+<p class="eyebrow">THE BRIEF</p>
+<h3>{{.Run.Brief.Title}}</h3>
+<p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}Run the application’s default entrypoint against this workspace.{{end}}</p>
+<dl class="facts">
+<div>
+<dt>Workspace</dt>
+<dd class="mono">{{.Run.Brief.Workspace}}</dd>
+</div>
+<div>
+<dt>Time limit</dt>
+<dd>{{.Run.Brief.TimeoutMinutes}} minutes</dd>
+</div>
+<div>
+<dt>Elapsed</dt>
+<dd>{{duration .Run.Duration}}</dd>
+</div>
+<div>
+<dt>Task</dt>
+<dd class="mono">{{short .Run.TaskID}}</dd>
+</div>{{if .Run.ParentID}}<div>
+<dt>Previous attempt</dt>
+<dd>
+<a class="text-link" href="/runs/{{.Run.ParentID}}">View attempt {{icon "arrow"}}</a>
+</dd>
+</div>{{end}}</dl>
+</section>
+<section class="panel padded">
+<p class="eyebrow">DELIVERABLES</p>{{template "artifacts" .Run}}</section>
+</aside>
+</div>{{end}}
+
+{{define "artifacts"}}<div class="artifact-list">{{range .Artifacts}}<a href="/runs/{{$.ID}}/artifacts/{{.Name}}" hx-boost="false" class="artifact" download>{{icon "file"}}<div>
+<strong>{{.Name}}</strong>
+<span>{{bytes .Bytes}} · SHA-256 recorded</span>
+</div>{{icon "download"}}</a>{{else}}<div class="artifact-empty">{{icon "file"}}<p>{{if .Sample}}Illustrative history has no generated files. Start new work to create a real deliverable.{{else}}Output appears here as it is collected.{{end}}</p>
+</div>{{end}}</div>{{end}}
+
+{{define "report"}}<div class="report-top">
+<a class="back-link" href="/runs/{{.Run.ID}}">← Execution record</a>
+<span class="eyebrow">WORK REPORT <span>/</span> {{short .Run.ID}}</span>
+</div>
+<article class="report">
+<header class="report-header">
+<div class="report-brand">
+<span class="brandmark">
+<i>
+</i>
+<i>
+</i>
+<i>
+</i>
+</span>mitos</div>
+<div class="title-badges">{{template "badge" .Run}}{{if .Run.Sample}}<span class="sample-label">Illustrative example</span>{{end}}</div>
+<h1>{{.Run.Brief.Title}}</h1>
+<p>{{.Run.AppName}} · {{when .Run.CreatedAt}}</p>
+</header>
+<div class="report-summary">
+<p class="eyebrow">THE OUTCOME</p>
+<h2>{{if .Run.Verified}}A result, with evidence.{{else if .Run.Active}}The result is still taking shape.{{else}}A record worth keeping.{{end}}</h2>
+<p>{{.Run.Summary}}</p>
+</div>
+<div class="report-stats">
+<div>
+<span>Acceptance</span>
+<strong>{{if .Run.Verified}}Passed{{else}}Not verified{{end}}</strong>
+</div>
+<div>
+<span>Execution time</span>
+<strong>{{duration .Run.Duration}}</strong>
+</div>
+<div>
+<span>Deliverables</span>
+<strong>{{len .Run.Artifacts}}</strong>
+</div>
+</div>
+<section class="report-section">
+<p class="eyebrow">TAKE THE WORK WITH YOU</p>
+<h2>Deliverables</h2>{{template "artifacts" .Run}}</section>
+<section class="report-section">
+<p class="eyebrow">WHAT WAS ASKED</p>
+<p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}{{.Run.Brief.Title}}{{end}}</p>
+<p class="field-help">Workspace: <code>{{.Run.Brief.Workspace}}</code>
+</p>
+</section>
+<footer class="report-footer">
+<div>{{icon "check"}}<span>Saved with the execution record.</span>
+</div>
+<a class="text-link" href="/runs/{{.Run.ID}}">See what happened {{icon "arrow"}}</a>
+</footer>
+</article>{{end}}
