@@ -195,3 +195,19 @@ func TestNonLiveScreensNeverPollWhileWorkIsQueued(t *testing.T) {
 		t.Fatal("overview does not refresh queued work")
 	}
 }
+
+func TestInterruptAPIUsesCanonicalFold(t *testing.T) {
+	server, engine := testServer(t)
+	response := request(server, "GET", "/api/interrupts", "", false)
+	if response.Code != http.StatusOK {
+		t.Fatal(response.Code)
+	}
+	var got studio.InterruptReport
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := studio.ReportInterrupts(engine.Store.List())
+	if got.Runs != want.Runs || got.HumanTouches != want.HumanTouches || got.SufficientForCalibration || len(got.Distribution) != 5 {
+		t.Fatalf("incorrect interrupt report: %+v", got)
+	}
+}

@@ -69,7 +69,7 @@
 <main id="main" tabindex="-1">
 <div id="network-error" class="notice error" role="alert" hidden>Could not reach Studio. Check that the server is running, then try again.</div>
 <div id="live" {{if .Live}}hx-get="{{if eq .View "run"}}/runs/{{.Run.ID}}{{else if eq .View "work"}}/work?q={{.Query}}&amp;status={{.Filter}}{{else if eq .View "decisions"}}/decisions{{else}}/{{end}}" hx-trigger="every 3s" hx-select="#live" hx-target="this" hx-swap="outerHTML"{{end}}>
-{{if eq .View "overview"}}{{template "overview" .}}{{else if eq .View "work"}}{{template "work" .}}{{else if eq .View "decisions"}}{{template "decisions" .}}{{else if eq .View "apps"}}{{template "apps" .}}{{else if eq .View "application"}}{{template "application" .}}{{else if eq .View "new"}}{{template "new" .}}{{else if eq .View "run"}}{{template "run" .}}{{else if eq .View "report"}}{{template "report" .}}{{else}}<div class="page-heading">
+{{if eq .View "overview"}}{{template "overview" .}}{{else if eq .View "work"}}{{template "work" .}}{{else if eq .View "tasks"}}{{template "tasks" .}}{{else if eq .View "custom-event"}}{{template "custom-event" .}}{{else if eq .View "service-lifecycle"}}{{template "service-lifecycle" .}}{{else if eq .View "services"}}{{template "services" .}}{{else if eq .View "decisions"}}{{template "decisions" .}}{{else if eq .View "apps"}}{{template "apps" .}}{{else if eq .View "application"}}{{template "application" .}}{{else if eq .View "new"}}{{template "new" .}}{{else if eq .View "run"}}{{template "run" .}}{{else if eq .View "autonomy"}}{{template "autonomy" .}}{{else if eq .View "report"}}{{template "report" .}}{{else}}<div class="page-heading">
 <div>
 <p class="eyebrow">LET’S GET THIS SORTED</p>
 <h1>{{.Title}}</h1>
@@ -115,12 +115,14 @@
 </div>
 <a class="decision-work" href="/runs/{{.ID}}">{{.Brief.Title}} {{icon "arrow"}}</a>
 <h2>{{.Decision.Question}}</h2>
-<p>{{.Decision.Context}}</p>
+<p>{{.Decision.Context.Attempted}}</p>
+<p>{{.Decision.Context.BlockedBy}}</p>
+{{if .Decision.Context.EvidenceRefs}}<p class="field-help">Evidence: {{range .Decision.Context.EvidenceRefs}}<a href="/runs/{{$.ID}}/artifacts/{{.}}" hx-boost="false">{{.}}</a> {{end}}</p>{{end}}
 <div class="consequence">
 <span>{{icon "decision"}}</span>
 <div>
 <strong>What’s at stake</strong>
-<p>{{.Decision.CostOfWrong}}</p>
+<p>{{.Decision.CostOfWrong.Detail}}</p>
 </div>
 </div>
 <form method="post" action="/runs/{{.ID}}/decisions/{{.Decision.ID}}" hx-disabled-elt="find button">

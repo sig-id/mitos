@@ -7,6 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mitos/internal/acceptance"
+	"mitos/internal/autonomy"
+	"mitos/internal/decision"
+	"mitos/internal/fleet"
+	"mitos/internal/workpool"
 	"strings"
 	"time"
 )
@@ -15,14 +20,23 @@ var ErrConflict = errors.New("this work has already changed; refresh and try aga
 var ErrNotFound = errors.New("work not found")
 
 type Brief struct {
-	Title          string `json:"title"`
-	Intent         string `json:"intent"`
-	Workspace      string `json:"workspace"`
-	AppID          string `json:"app_id"`
-	TimeoutMinutes int    `json:"timeout_minutes"`
+	Scheduling     workpool.Request `json:"scheduling"`
+	Ownership      fleet.Ownership  `json:"ownership,omitempty"`
+	Title          string           `json:"title"`
+	Intent         string           `json:"intent"`
+	Workspace      string           `json:"workspace"`
+	AppID          string           `json:"app_id"`
+	TimeoutMinutes int              `json:"timeout_minutes"`
 }
 
 func (b *Brief) Validate() error {
+	b.Scheduling.Normalize()
+	if err := b.Scheduling.Validate(); err != nil {
+		return err
+	}
+	if err := b.Ownership.Validate(); err != nil {
+		return err
+	}
 	b.Title = strings.TrimSpace(b.Title)
 	b.Intent = strings.TrimSpace(b.Intent)
 	b.Workspace = strings.TrimSpace(b.Workspace)
@@ -42,25 +56,43 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
-	ID         string         `json:"id"`
-	TaskID     string         `json:"task_id"`
-	ParentID   string         `json:"parent_id,omitempty"`
-	Brief      Brief          `json:"brief"`
-	AppName    string         `json:"app_name"`
-	Status     string         `json:"status"`
-	Stage      string         `json:"stage"`
-	Summary    string         `json:"summary"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	FinishedAt time.Time      `json:"finished_at,omitempty"`
-	Verified   bool           `json:"verified"`
-	Sample     bool           `json:"sample"`
-	Artifacts  []Artifact     `json:"artifacts"`
-	Decision   *HumanDecision `json:"decision,omitempty"`
-	Events     []Event        `json:"events"`
+	Condition       *ServiceConditionState `json:"condition,omitempty"`
+	Health          *ServiceHealthState    `json:"health,omitempty"`
+	Claim           *fleet.Claim           `json:"claim,omitempty"`
+	ClaimConflicts  []fleet.Conflict       `json:"claim_conflicts,omitempty"`
+	UnattendedUntil *time.Time             `json:"unattended_until,omitempty"`
+	PendingDecision *HumanDecision         `json:"pending_decision,omitempty"`
+	Tenant          decision.Tenant        `json:"tenant"`
+	DecisionRewind  *autonomy.Rewind       `json:"decision_rewind,omitempty"`
+	Execution       *ExecutionPlan         `json:"execution,omitempty"`
+	Segments        []autonomy.Segment     `json:"segments,omitempty"`
+	Checkpoints     []autonomy.Checkpoint  `json:"checkpoints,omitempty"`
+	Rewinds         []autonomy.Rewind      `json:"rewinds,omitempty"`
+	PendingRewind   *autonomy.Rewind       `json:"pending_rewind,omitempty"`
+	ReadyRewind     *autonomy.Rewind       `json:"ready_rewind,omitempty"`
+	Workspace       *WorkspaceRecord       `json:"workspace_record,omitempty"`
+	Acceptance      *acceptance.Verdict    `json:"acceptance,omitempty"`
+	ID              string                 `json:"id"`
+	TaskID          string                 `json:"task_id"`
+	ParentID        string                 `json:"parent_id,omitempty"`
+	Brief           Brief                  `json:"brief"`
+	AppName         string                 `json:"app_name"`
+	Status          string                 `json:"status"`
+	Stage           string                 `json:"stage"`
+	Summary         string                 `json:"summary"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	FinishedAt      time.Time              `json:"finished_at,omitempty"`
+	Verified        bool                   `json:"verified"`
+	Sample          bool                   `json:"sample"`
+	Artifacts       []Artifact             `json:"artifacts"`
+	Decision        *HumanDecision         `json:"decision,omitempty"`
+	Events          []Event                `json:"events"`
 }
 
-func (r Run) Active() bool { return r.Status == "running" || r.Status == "queued" }
+func (r Run) Active() bool {
+	return r.Status == "running" || r.Status == "queued" || r.Status == "stopping"
+}
 func (r Run) Terminal() bool {
 	return r.Status == "done" || r.Status == "failed" || r.Status == "cancelled"
 }
@@ -78,27 +110,12 @@ type Artifact struct {
 	Bytes  int64  `json:"bytes"`
 }
 
-type Option struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	Consequence string `json:"consequence"`
-	Recommended bool   `json:"recommended,omitempty"`
-}
-
-type HumanDecision struct {
-	ID            string     `json:"decision_id"`
-	Question      string     `json:"question"`
-	Context       string     `json:"context"`
-	CostOfWrong   string     `json:"cost_of_wrong"`
-	Reversibility string     `json:"reversibility"`
-	Options       []Option   `json:"options"`
-	Choice        string     `json:"choice,omitempty"`
-	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
-}
+type Option = decision.Option
+type HumanDecision = decision.Card
 
 // External decisions deliberately have no automatic default or timeout.
 func recoveryDecision() *HumanDecision {
-	return &HumanDecision{ID: newID("decision"), Question: "Restart this interrupted work?", Context: "The server stopped before execution finished. The previous workspace is preserved; its result has not been verified.", CostOfWrong: "Restarting repeats the work in a fresh copy. Any external effects from the previous attempt may already have happened.", Reversibility: "external", Options: []Option{
+	return &HumanDecision{ID: newID("decision"), ReasonSignal: "execution_interrupted", InterruptClass: "rescue", Question: "Restart this interrupted work?", Kind: "choose", Context: decision.Context{BlockedBy: "The server stopped before execution finished. The previous workspace is preserved; its result has not been verified."}, CostOfWrong: decision.Cost{Detail: "Restarting repeats the work in a fresh copy. Any external effects from the previous attempt may already have happened."}, Reversibility: "external", Options: []Option{
 		{ID: "retry", Label: "Restart in a fresh workspace", Consequence: "Create another attempt with the same brief and time limit."},
 		{ID: "cancel", Label: "Close this work", Consequence: "Keep the record and do not execute another attempt.", Recommended: true},
 	}}
@@ -118,14 +135,48 @@ type Event struct {
 }
 
 type change struct {
-	Run      *Run           `json:"run,omitempty"`
-	Status   string         `json:"status,omitempty"`
-	Stage    string         `json:"stage,omitempty"`
-	Summary  string         `json:"summary,omitempty"`
-	Verified bool           `json:"verified,omitempty"`
-	Artifact *Artifact      `json:"artifact,omitempty"`
-	Decision *HumanDecision `json:"decision,omitempty"`
-	Choice   string         `json:"choice,omitempty"`
+	ServiceLifecycle  *ServiceLifecycleOperation `json:"service_lifecycle,omitempty"`
+	CustomEvent       *CustomEventRecord         `json:"custom_event,omitempty"`
+	ServiceCondition  *ServiceConditionState     `json:"service_condition,omitempty"`
+	ServiceHealth     *ServiceHealthState        `json:"service_health,omitempty"`
+	ServiceContinuous *ServiceContinuous         `json:"service_continuous,omitempty"`
+	ServiceEmission   *ServiceEmission           `json:"service_emission,omitempty"`
+	ServiceDelivery   *ServiceEventDelivery      `json:"service_delivery,omitempty"`
+	ServiceClocks     []ServiceClock             `json:"service_clocks,omitempty"`
+	ServiceRestart    *ServiceRestartBinding     `json:"service_restart,omitempty"`
+	ServiceRetry      *ServiceRetryPlan          `json:"service_retry,omitempty"`
+	ServiceBreaker    *ServiceBreakerEffect      `json:"service_breaker,omitempty"`
+	ServiceTick       *ServiceTick               `json:"service_tick,omitempty"`
+	Services          *ServiceCatalog            `json:"services,omitempty"`
+	ServiceCall       *ServiceCall               `json:"service_call,omitempty"`
+	Task              *Task                      `json:"task,omitempty"`
+	TaskEffect        string                     `json:"task_effect,omitempty"`
+	Pool              *workpool.Pool             `json:"pool,omitempty"`
+	Claim             *fleet.Claim               `json:"claim,omitempty"`
+	ClaimConflicts    []fleet.Conflict           `json:"claim_conflicts,omitempty"`
+	DecisionRequest   *HumanDecision             `json:"decision_request,omitempty"`
+	DecisionError     string                     `json:"decision_error,omitempty"`
+	Resolution        *decision.Resolution       `json:"resolution,omitempty"`
+	ResolutionRewind  *autonomy.Rewind           `json:"resolution_rewind,omitempty"`
+	DecisionApplied   bool                       `json:"decision_applied,omitempty"`
+	ResultRunID       string                     `json:"result_run_id,omitempty"`
+	Execution         *ExecutionPlan             `json:"execution,omitempty"`
+	Segment           *autonomy.Segment          `json:"segment,omitempty"`
+	SegmentFinished   bool                       `json:"segment_finished,omitempty"`
+	Checkpoint        *autonomy.Checkpoint       `json:"checkpoint,omitempty"`
+	Rewind            *autonomy.Rewind           `json:"rewind,omitempty"`
+	RewindApplied     bool                       `json:"rewind_applied,omitempty"`
+	Workspace         *WorkspaceRecord           `json:"workspace_record,omitempty"`
+	Acceptance        *acceptance.Verdict        `json:"acceptance,omitempty"`
+	Evidence          json.RawMessage            `json:"evidence,omitempty"`
+	Run               *Run                       `json:"run,omitempty"`
+	Status            string                     `json:"status,omitempty"`
+	Stage             string                     `json:"stage,omitempty"`
+	Summary           string                     `json:"summary,omitempty"`
+	Verified          bool                       `json:"verified,omitempty"`
+	Artifact          *Artifact                  `json:"artifact,omitempty"`
+	Decision          *HumanDecision             `json:"decision,omitempty"`
+	Choice            string                     `json:"choice,omitempty"`
 }
 
 func newID(prefix string) string {

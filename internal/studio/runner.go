@@ -1,34 +1,34 @@
 package studio
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
+	"mitos/internal/compute"
+	"mitos/internal/decision"
+	workspacefs "mitos/internal/workspace"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
 type Engine struct {
-	Store   *Store
-	Apps    []Application
-	Root    string
-	mu      sync.Mutex
-	cancel  map[string]context.CancelFunc
-	ctx     context.Context
-	stop    context.CancelFunc
-	wg      sync.WaitGroup
-	actions sync.Mutex
+	provider compute.Provider
+	Store    *Store
+	Apps     []Application
+	Root     string
+	mu       sync.Mutex
+	cancel   map[string]context.CancelFunc
+	ctx      context.Context
+	stop     context.CancelFunc
+	wg       sync.WaitGroup
+	actions  sync.Mutex
 }
 
 func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
@@ -41,14 +41,60 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	e := &Engine{provider: &compute.Local{}, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	if err = s.recoverDecisionRequests(); err != nil {
+		cancel()
+		return nil, err
+	}
 	for _, r := range s.List() {
-		if r.Status == "running" && !r.Sample {
-			if err = s.Park(r.ID, recoveryDecision()); err != nil {
+		if r.Status == "stopping" && !r.Sample {
+			if err = s.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "The server restarted after a stop request. Any already harvested evidence is preserved; no command was restarted."); err != nil {
+				cancel()
+				return nil, err
+			}
+		} else if !r.Sample && (r.Status == "running" || (r.Status == "queued" && r.Claim != nil && r.Claim.ReleasedAt == nil)) {
+			if err = s.Park(r.ID, checkpointOption(r, recoveryDecision())); err != nil {
 				cancel()
 				return nil, err
 			}
 		}
+	}
+	for _, run := range s.List() {
+		if err = s.interruptServiceCondition(run.ID); err != nil {
+			cancel()
+			return nil, err
+		}
+		if run.Health != nil && run.Health.Status == "watching" {
+			if err = s.closeHealth(run.ID, run.Health.MonitorID, "Server restart ended the old health monitor."); err != nil {
+				cancel()
+				return nil, err
+			}
+		}
+	}
+	startupCycle := time.Now().UTC()
+	if err = e.reconcileServiceLifecycle(); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err = e.reconcileServiceReplacements(); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err = e.reconcileContinuousServices(startupCycle); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err = e.reconcileServiceEvents(); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err = e.reconcileServiceRetries(time.Now().UTC()); err != nil {
+		cancel()
+		return nil, err
+	}
+	if err = e.scheduleServices(startupCycle, true); err != nil {
+		cancel()
+		return nil, err
 	}
 	e.wg.Add(1)
 	go e.dispatch()
@@ -86,19 +132,57 @@ func (e *Engine) Workspace(path string) (string, error) {
 	return path, nil
 }
 func (e *Engine) Launch(b Brief, parent string) (Run, error) {
-	app, ok := e.App(b.AppID)
-	if !ok {
-		return Run{}, errors.New("choose an installed application")
-	}
-	if err := b.Validate(); err != nil {
-		return Run{}, err
-	}
-	p, err := e.Workspace(b.Workspace)
+	b, name, err := e.prepareBrief(b)
 	if err != nil {
 		return Run{}, err
 	}
+	return e.Store.Create(b, name, parent, false)
+}
+func (e *Engine) prepareBrief(b Brief) (Brief, string, error) {
+	app, ok := e.App(b.AppID)
+	if !ok {
+		return Brief{}, "", errors.New("choose an installed application")
+	}
+	if !app.Builtin {
+		if _, err := compileApplication(app); err != nil {
+			return Brief{}, "", err
+		}
+		if err := app.Acceptance.Validate(); err != nil {
+			return Brief{}, "", err
+		}
+	}
+	if app.Supervision != nil {
+		if err := app.Supervision.Validate(); err != nil {
+			return Brief{}, "", err
+		}
+	}
+	if app.Observation != nil {
+		if err := app.Observation.Validate(); err != nil {
+			return Brief{}, "", err
+		}
+	}
+	if err := b.Validate(); err != nil {
+		return Brief{}, "", err
+	}
+	if app.Builtin {
+		for _, dep := range b.Scheduling.Deps {
+			if dep.Payload == "data" {
+				return Brief{}, "", errors.New("the inventory entrypoint does not consume dependency artifacts; choose a command application")
+			}
+		}
+	}
+	if deadline := b.Scheduling.Deadline; deadline != nil && !time.Now().Before(*deadline) {
+		return Brief{}, "", errors.New("the absolute task deadline has expired")
+	}
+	p, err := e.Workspace(b.Workspace)
+	if err != nil {
+		return Brief{}, "", err
+	}
 	b.Workspace = p
-	return e.Store.Create(b, app.Name, parent, false)
+	if !app.Builtin && len(b.Ownership.Paths) == 0 {
+		b.Ownership.Paths = []string{"."}
+	}
+	return b, app.Name, nil
 }
 func (e *Engine) Retry(id string) (Run, error) {
 	e.actions.Lock()
@@ -110,7 +194,7 @@ func (e *Engine) retry(id string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	if !r.Terminal() {
+	if !r.Terminal() && !(r.Status == "parked" && r.Decision != nil && r.Decision.Resolution != nil && r.Decision.Choice == "retry") {
 		return Run{}, ErrConflict
 	}
 	// A repeated submission returns the same child, never duplicate execution.
@@ -122,41 +206,44 @@ func (e *Engine) retry(id string) (Run, error) {
 	return e.Launch(r.Brief, id)
 }
 func (e *Engine) Resolve(id, decisionID, choice string) (string, error) {
-	e.actions.Lock()
-	defer e.actions.Unlock()
-	if err := e.Store.Resolve(id, decisionID, choice); err != nil {
-		return "", err
-	}
-	if choice == "retry" {
-		r, err := e.retry(id)
-		return r.ID, err
-	}
-	return id, nil
+	return e.ResolveAs(id, decisionID, choice, "", "console", decision.LocalOperator())
 }
 func (e *Engine) Cancel(id string) error {
 	e.actions.Lock()
 	defer e.actions.Unlock()
+	return e.cancelWork(id, "The operator stopped this work.")
+}
+
+// Caller holds actions. Service lifecycle stops use the same durable stop path.
+func (e *Engine) cancelWork(id, reason string) error {
 	r, err := e.Store.Get(id)
 	if err != nil {
 		return err
 	}
-	if r.Status == "cancelled" {
+	if r.Status == "cancelled" || r.Status == "stopping" {
 		return nil
 	}
 	if r.Terminal() {
+		if handled, err := e.Store.cancelServiceRetry(id, reason); handled || err != nil {
+			return err
+		}
 		return ErrConflict
 	}
-	if err = e.Store.RecordDecision(id, "abort", "The operator stopped this work."); err != nil {
+	if err = e.Store.RecordDecision(id, "abort", reason); err != nil {
 		return err
 	}
-	if err = e.Store.Transition(id, "run_cancelled", "cancelled", "Stopped", "Stopped by you. The execution record is preserved."); err != nil {
+	if err = e.Store.Transition(id, "cancellation_requested", "stopping", "Stopping", "Stopping the command and preserving its output and workspace change."); err != nil {
 		return err
 	}
 	e.mu.Lock()
-	if cancel := e.cancel[id]; cancel != nil {
+	cancel := e.cancel[id]
+	if cancel != nil {
 		cancel()
 	}
 	e.mu.Unlock()
+	if cancel == nil {
+		return e.Store.Transition(id, "run_cancelled", "cancelled", "Stopped", reason+" The execution record is preserved.")
+	}
 	return nil
 }
 
@@ -169,9 +256,38 @@ func (e *Engine) dispatch() {
 		case <-e.ctx.Done():
 			return
 		case <-tick.C:
-			runs := e.Store.List()
-			for i := len(runs) - 1; i >= 0; i-- {
-				r := runs[i]
+			cycleTime := time.Now().UTC()
+			if err := e.reconcileServiceLifecycle(); err != nil {
+				continue
+			}
+			if err := e.reconcileServiceReplacements(); err != nil {
+				continue
+			}
+			if err := e.reconcileContinuousServices(cycleTime); err != nil {
+				continue
+			}
+			if err := e.reconcileServiceEvents(); err != nil {
+				continue
+			}
+			if err := e.reconcileServiceRetries(time.Now().UTC()); err != nil {
+				continue
+			}
+			if err := e.scheduleServices(cycleTime, false); err != nil {
+				continue
+			}
+			e.reconcileDecisions()
+			e.mu.Lock()
+			active := make([]string, 0, len(e.cancel))
+			for id := range e.cancel {
+				active = append(active, id)
+			}
+			runs, readyErr := e.Store.ReadyRuns(active)
+			e.mu.Unlock()
+			if readyErr != nil {
+				continue
+			}
+			for _, candidate := range runs {
+				r := candidate.Run
 				if r.Status != "queued" || r.Sample {
 					continue
 				}
@@ -184,7 +300,28 @@ func (e *Engine) dispatch() {
 					e.mu.Unlock()
 					continue
 				}
-				ctx, cancel := context.WithTimeout(e.ctx, time.Duration(r.Brief.TimeoutMinutes)*time.Minute)
+				current, err := e.Store.Get(r.ID)
+				if err != nil || current.Status != "queued" {
+					e.mu.Unlock()
+					continue
+				}
+				active = active[:0]
+				for id := range e.cancel {
+					active = append(active, id)
+				}
+				acquired, claimErr := e.Store.ScheduleSelected(r.ID, active, candidate.Policy)
+				if claimErr != nil || !acquired {
+					e.mu.Unlock()
+					continue
+				}
+				deadline := time.Now().Add(time.Duration(r.Brief.TimeoutMinutes) * time.Minute)
+				if current.Execution != nil {
+					deadline = current.Execution.Deadline
+				}
+				if taskDeadline := current.Brief.Scheduling.Deadline; taskDeadline != nil && taskDeadline.Before(deadline) {
+					deadline = *taskDeadline
+				}
+				ctx, cancel := context.WithDeadline(e.ctx, deadline)
 				e.cancel[r.ID] = cancel
 				e.mu.Unlock()
 				e.wg.Add(1)
@@ -200,7 +337,23 @@ func (e *Engine) dispatch() {
 }
 
 func (e *Engine) execute(ctx context.Context, r Run) {
+	defer func() {
+		// A stop can race with any final transition or parking attempt. Close it
+		// after the worker has finished harvesting, even if that transition lost.
+		latest, err := e.Store.Get(r.ID)
+		if err == nil && latest.Status == "stopping" {
+			if e.Store.ReleaseClaims(r.ID, "execution_stopped_and_harvest_finished") != nil {
+				return
+			}
+			_ = e.Store.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "Stopped. Available execution evidence was preserved.")
+		}
+	}()
 	err := e.perform(ctx, r)
+	if err != nil {
+		if e.Store.ReleaseClaims(r.ID, "execution_stopped_and_harvest_finished") != nil {
+			return
+		}
+	}
 	if err == nil {
 		return
 	}
@@ -208,8 +361,40 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 	if getErr != nil || current.Terminal() {
 		return
 	}
+	if current.Status == "stopping" {
+		_ = e.Store.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "Stopped. Available output and workspace changes were preserved.")
+		return
+	}
+	if errors.Is(err, errServiceCondition) {
+		_ = e.Store.Transition(r.ID, "service_condition_skipped", "cancelled", "Condition not met", "The service condition withheld application execution. No acceptance or failure retry was requested.")
+		return
+	}
+	if errors.Is(err, errHealthRestart) || errors.Is(err, errHealthKill) {
+		kind := "service_health_killed"
+		if errors.Is(err, errHealthRestart) {
+			kind = "service_health_restart"
+		}
+		_ = e.Store.Transition(r.ID, kind, "failed", "Service unhealthy", "The health policy stopped this attempt after preserving available output and workspace changes.")
+		return
+	}
+	if errors.Is(err, errOwnershipViolation) {
+		_ = e.Store.Park(r.ID, checkpointOption(current, ownershipDecision()))
+		return
+	}
+	if errors.Is(err, errDependencyChanged) {
+		_ = e.Store.Park(r.ID, checkpointOption(current, dependencyInputDecision()))
+		return
+	}
+	if errors.Is(err, errOracleTampered) {
+		_ = e.Store.Park(r.ID, checkpointOption(current, oracleDecision()))
+		return
+	}
 	if e.ctx.Err() != nil {
-		_ = e.Store.Park(r.ID, recoveryDecision())
+		_ = e.Store.Park(r.ID, checkpointOption(current, recoveryDecision()))
+		return
+	}
+	if errors.Is(err, errBlockedOnHuman) || errors.Is(err, errObservationLost) {
+		_ = e.Store.Park(r.ID, checkpointOption(current, observationDecision(err)))
 		return
 	}
 	message := err.Error()
@@ -219,190 +404,34 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 	_ = e.Store.Transition(r.ID, "run_failed", "failed", "Needs a new attempt", message)
 }
 
-func (e *Engine) perform(ctx context.Context, r Run) error {
-	app, ok := e.App(r.Brief.AppID)
-	if !ok {
-		return errors.New("application is no longer installed")
-	}
-	if err := e.Store.RecordDecision(r.ID, "advance", "Prepare a fresh workspace for the brief."); err != nil {
-		return err
-	}
-	if err := e.Store.Transition(r.ID, "run_started", "running", "Preparing workspace", "Making a fresh copy. The original workspace stays untouched."); err != nil {
-		return err
-	}
-	source, err := e.Workspace(r.Brief.Workspace)
-	if err != nil {
-		return err
-	}
-	base := filepath.Join(e.Store.Dir(), "workspaces", r.ID)
-	workspace := filepath.Join(base, "workspace")
-	if err = os.MkdirAll(workspace, 0700); err != nil {
-		return err
-	}
-	if err = copyWorkspace(ctx, source, workspace, e.Store.Dir()); err != nil {
-		return err
-	}
-	if app.Builtin {
-		return e.inventory(ctx, r, workspace)
-	}
-	if err = e.Store.Transition(r.ID, "capability_started", "running", "Working on the brief", "The application is executing in its workspace copy."); err != nil {
-		return err
-	}
-	request := map[string]any{"run_id": r.ID, "brief": r.Brief, "workspace": workspace}
-	input, _ := json.Marshal(request)
-	output, runErr := executeCommand(ctx, app.Command, workspace, base, input)
-	if err = e.Store.SaveArtifact(r.ID, "output.txt", output); err != nil {
-		return err
-	}
-	if runErr != nil {
-		return fmt.Errorf("application failed: %w. Open output.txt for details", runErr)
-	}
-	if err = e.Store.RecordDecision(r.ID, "verify", "Run the application's acceptance command outside the workspace."); err != nil {
-		return err
-	}
-	if err = e.Store.Transition(r.ID, "verification_started", "running", "Checking the result", "Running the separately configured acceptance command."); err != nil {
-		return err
-	}
-	verifyCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	verdict, verifyErr := executeCommand(verifyCtx, app.Acceptance, app.Directory, base, input)
-	if err = e.Store.SaveArtifact(r.ID, "acceptance.txt", verdict); err != nil {
-		return err
-	}
-	if verifyErr != nil {
-		return fmt.Errorf("acceptance did not pass: %w. Review acceptance.txt before retrying", verifyErr)
-	}
-	if err = e.Store.Transition(r.ID, "verification_recorded", "running", "Acceptance passed", "The configured acceptance command exited successfully."); err != nil {
-		return err
-	}
-	return e.Store.Complete(r.ID, "The application finished and its acceptance command passed. Review the output and the saved workspace before using the result.", true)
-}
-
 // Local execution is a trusted-process provider, not a security sandbox. It
 // accepts installed argv only, clears inherited credentials, caps output, and
 // stops the process group on cancellation. Strong isolation is an external seam.
 func executeCommand(ctx context.Context, argv []string, dir, base string, input []byte) ([]byte, error) {
-	if len(argv) == 0 {
-		return nil, errors.New("missing command")
-	}
-	home := filepath.Join(base, "home")
-	tmp := filepath.Join(base, "tmp")
-	if err := os.MkdirAll(home, 0700); err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(tmp, 0700); err != nil {
-		return nil, err
-	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = dir
-	cmd.Stdin = bytes.NewReader(input)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + tmp, "LANG=C.UTF-8", "MITOS_WORKSPACE=" + filepath.Join(base, "workspace")}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	cmd.WaitDelay = 2 * time.Second
-	var output limitedBuffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	err := cmd.Run()
-	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	return output.Bytes(), err
+	return executeObservedCommand(ctx, argv, dir, base, input, nil)
 }
 
-type limitedBuffer struct {
-	mu        sync.Mutex
-	b         bytes.Buffer
-	truncated bool
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	n := len(p)
-	room := (2 << 20) - b.b.Len()
-	if room > 0 {
-		b.b.Write(p[:min(room, len(p))])
+func executeObservedCommand(ctx context.Context, argv []string, dir, base string, input []byte, monitor *commandObservation) ([]byte, error) {
+	provider := &compute.Local{}
+	launch, _ := compute.Compile(compute.Request{}, map[string]compute.Capabilities{"local": provider.Capabilities()}, true)
+	launch.RunID = "local-check"
+	launch.CapabilityRef = "installed-check"
+	launch.Base = base
+	launch.Workspace.Directory = filepath.Join(base, "workspace")
+	if _, err := os.Stat(launch.Workspace.Directory); err != nil {
+		launch.Workspace.Directory = dir
 	}
-	if n > room {
-		b.truncated = true
-	}
-	return n, nil
-}
-func (b *limitedBuffer) Bytes() []byte {
-	if b.truncated {
-		b.b.WriteString("\n[Output capped at 2 MiB]\n")
-	}
-	return b.b.Bytes()
+	launch.Posture.Deadline, _ = ctx.Deadline()
+	_, output, err := executeProviderCommand(ctx, provider, launch, argv, dir, input, monitor)
+	return output, err
 }
 
 func copyWorkspace(ctx context.Context, source, dest, dataDir string) error {
-	var total int64
-	count := 0
-	return filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		if path == source {
-			return nil
-		}
-		if d.IsDir() && (Within(dataDir, path) || excluded(d.Name())) {
-			return filepath.SkipDir
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dest, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0700)
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		total += info.Size()
-		count++
-		if total > 64<<20 || count > 10000 {
-			return errors.New("workspace exceeds 64 MiB or 10,000 files; choose a smaller directory")
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm()&0700)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(out, io.LimitReader(in, 64<<20))
-		closeErr := out.Close()
-		if err != nil {
-			return err
-		}
-		return closeErr
-	})
-}
-func excluded(name string) bool {
-	switch name {
-	case ".git", ".mitos", ".mitos-demo", ".runs", ".direnv", ".agent-worktrees", "node_modules", "vendor", "target", "bin", "_build", "deps", ".cache":
-		return true
+	snapshot, err := workspacefs.CaptureSource(ctx, source, dataDir, workspacefs.DefaultLimits)
+	if err != nil {
+		return err
 	}
-	return false
+	return snapshot.WriteTo(dest)
 }
 
 func (e *Engine) inventory(ctx context.Context, r Run, workspace string) error {
@@ -455,7 +484,7 @@ func (e *Engine) inventory(ctx context.Context, r Run, workspace string) error {
 		return err
 	}
 	summary := fmt.Sprintf("Inventoried %d files (%d bytes). Every included file has a SHA-256 fingerprint. Source files were not changed.", len(files), total)
-	text := fmt.Sprintf("# %s\n\n%s\n\nWorkspace fingerprint: %s\n\nSymlinks and generated directories are excluded. This is a file inventory, not a code-quality or security assessment.\n", r.Brief.Title, summary, report.Fingerprint)
+	text := fmt.Sprintf("# %s\n\n%s\n\nWorkspace fingerprint: %s\n\nSource ignore rules are honored; intake symlinks, Git metadata, and Studio data are excluded. This is a file inventory, not a code-quality or security assessment.\n", r.Brief.Title, summary, report.Fingerprint)
 	if err = e.Store.SaveArtifact(r.ID, "report.md", []byte(text)); err != nil {
 		return err
 	}

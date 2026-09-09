@@ -2,11 +2,13 @@ package web
 
 import (
 	"bytes"
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -15,7 +17,12 @@ import (
 	"strings"
 	"time"
 
+	"mitos/internal/autonomy"
+	"mitos/internal/decision"
+	"mitos/internal/fleet"
+	"mitos/internal/service"
 	"mitos/internal/studio"
+	"mitos/internal/workpool"
 )
 
 //go:embed templates/*.html static/*
@@ -28,6 +35,16 @@ type Server struct {
 	demo      bool
 }
 type page struct {
+	ServiceLifecycles                                      []studio.ServiceLifecycleView
+	ServiceLifecycle                                       *studio.ServiceLifecycleView
+	CustomEvents                                           []studio.CustomEventSummary
+	CustomEvent                                            *studio.CustomEventView
+	Services                                               *studio.ServiceView
+	ServicesJSON                                           string
+	Tasks                                                  []studio.Task
+	Task                                                   studio.Task
+	Pools                                                  []workpool.Pool
+	Metrics                                                *studio.AutonomyReport
 	Title, Section, View, Error, Query, Filter, Date, Root string
 	Runs, Active, Finished, Attention                      []studio.Run
 	Run                                                    studio.Run
@@ -41,6 +58,27 @@ type page struct {
 
 func New(engine *studio.Engine, demo bool) (*Server, error) {
 	funcs := template.FuncMap{
+		"requestKey": rand.Text,
+		"lines":      func(values []string) string { return strings.Join(values, "\n") },
+		"metric": func(value *float64) string {
+			if value == nil {
+				return "Not measured"
+			}
+			return fmt.Sprintf("%.2f", *value)
+		},
+		"metricSeconds": func(value *float64) string {
+			if value == nil {
+				return "Not measured"
+			}
+			return fmt.Sprintf("%.2f s", *value/1000)
+		},
+		"metricPercent": func(value *float64) string {
+			if value == nil {
+				return "Not measured"
+			}
+			return fmt.Sprintf("%.1f%%", *value*100)
+		},
+
 		"recent": func(r []studio.Run) []studio.Run { return r[:min(5, len(r))] }, "icon": icon, "status": status, "duration": duration, "when": func(t time.Time) string { return t.Local().Format("Jan 2 · 15:04") },
 		"short": func(s string) string {
 			if len(s) > 15 {
@@ -80,7 +118,44 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	})
 	mux.HandleFunc("GET /{$}", s.overview)
 	mux.HandleFunc("GET /web", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusSeeOther) })
+	mux.HandleFunc("GET /autonomy", func(w http.ResponseWriter, r *http.Request) {
+		report, err := studio.ReportAutonomy(s.engine.Store.List())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		page := s.base("autonomy", "Autonomy evidence", "overview")
+		page.Live = false
+		page.Metrics = &report
+		s.render(w, r, page, 200)
+	})
 	mux.HandleFunc("GET /work", s.work)
+	mux.HandleFunc("GET /tasks", s.tasks)
+	mux.HandleFunc("GET /services", s.services)
+	mux.HandleFunc("GET /api/service-events", s.apiCustomEvents)
+	mux.HandleFunc("POST /api/service-events", s.apiEmitEvent)
+	mux.HandleFunc("GET /api/service-events/{seq}", s.apiCustomEvent)
+	mux.HandleFunc("POST /services/events", s.emitEvent)
+	mux.HandleFunc("GET /services/events/{seq}", s.customEvent)
+	mux.HandleFunc("GET /api/service-lifecycle", s.apiServiceLifecycles)
+	mux.HandleFunc("GET /api/service-lifecycle/{seq}", s.apiServiceLifecycle)
+	mux.HandleFunc("POST /api/services/{id}/lifecycle", s.apiServiceLifecycleAction)
+	mux.HandleFunc("POST /services/{id}/lifecycle", s.serviceLifecycleAction)
+	mux.HandleFunc("GET /services/lifecycle/{seq}", s.serviceLifecycle)
+	mux.HandleFunc("GET /api/services", s.apiServices)
+	mux.HandleFunc("POST /api/services/preview", s.previewServices)
+	mux.HandleFunc("PUT /api/services", s.apiConfigureServices)
+	mux.HandleFunc("POST /services/catalog", s.configureServices)
+	mux.HandleFunc("POST /api/services/{id}/trigger", s.apiTriggerService)
+	mux.HandleFunc("POST /api/services/{id}/signals", s.apiServiceSignal)
+	mux.HandleFunc("POST /services/{id}/trigger", s.triggerService)
+	mux.HandleFunc("POST /api/runs/{id}/heartbeat", s.apiServiceHeartbeat)
+	mux.HandleFunc("GET /api/tasks", s.apiTasks)
+	mux.HandleFunc("POST /api/tasks", s.apiLaunch)
+	mux.HandleFunc("GET /api/tasks/{id}", s.apiTask)
+	mux.HandleFunc("GET /api/pools", s.apiPools)
+	mux.HandleFunc("PUT /api/pools/{id}", s.apiConfigurePool)
+	mux.HandleFunc("POST /pools/{id}", s.configurePool)
 	mux.HandleFunc("GET /decisions", s.decisions)
 	mux.HandleFunc("GET /apps", s.apps)
 	mux.HandleFunc("GET /apps/{id}", s.application)
@@ -92,11 +167,109 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	mux.HandleFunc("POST /runs/{id}/retry", s.retry)
 	mux.HandleFunc("POST /runs/{id}/decisions/{decision}", s.resolve)
 	mux.HandleFunc("GET /runs/{id}/artifacts/{name}", s.artifact)
+	mux.HandleFunc("GET /api/autonomy", func(w http.ResponseWriter, r *http.Request) {
+		report, err := studio.ReportAutonomy(s.engine.Store.List())
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, report)
+	})
+	mux.HandleFunc("GET /api/fleet", s.apiFleet)
+	mux.HandleFunc("GET /api/runs/{id}/evidence", s.apiEvidence)
+	mux.HandleFunc("POST /api/runs/{id}/claims/release", s.apiReleaseClaims)
+	mux.HandleFunc("POST /runs/{id}/claims/release", s.releaseClaims)
+	mux.HandleFunc("GET /api/interrupts", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(studio.ReportInterrupts(s.engine.Store.List()))
+	})
+	mux.HandleFunc("GET /api/decisions", func(w http.ResponseWriter, r *http.Request) {
+		cards := []decision.Card{}
+		for _, run := range s.engine.Store.List() {
+			if run.Status == "parked" && run.Decision != nil && run.Decision.Choice == "" {
+				cards = append(cards, *run.Decision)
+			}
+		}
+		writeJSON(w, 200, cards)
+	})
+	mux.HandleFunc("GET /api/runs/{id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		run, err := s.engine.Store.Get(r.PathValue("id"))
+		if err != nil || run.Decision == nil {
+			writeJSON(w, 404, map[string]string{"error": "decision not found"})
+			return
+		}
+		writeJSON(w, 200, run.Decision)
+	})
+	mux.HandleFunc("POST /api/runs/{id}/decisions/{decision}", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Choice string `json:"choice"`
+			Note   string `json:"note"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil || decoder.Decode(new(any)) != io.EOF {
+			writeJSON(w, 400, map[string]string{"error": "send one choice and optional note"})
+			return
+		}
+		via := "api"
+		if r.Header.Get("X-Mitos-Client") == "cli" {
+			via = "cli"
+		}
+		result, err := s.engine.ResolveAs(r.PathValue("id"), r.PathValue("decision"), body.Choice, body.Note, via, decision.LocalOperator())
+		if err != nil {
+			writeJSON(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"run_id": result, "decision_id": r.PathValue("decision")})
+	})
 	mux.HandleFunc("GET /api/runs", s.apiRuns)
 	mux.HandleFunc("POST /api/runs", s.apiLaunch)
 	mux.HandleFunc("GET /api/runs/{id}", s.apiRun)
 	mux.HandleFunc("GET /api/runs/{id}/events", s.apiEvents)
-	s.handler = s.headers(http.NewCrossOriginProtection().Handler(mux))
+	mux.HandleFunc("GET /api/runs/{id}/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+		run, err := s.engine.Store.Get(r.PathValue("id"))
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, run.Checkpoints)
+	})
+	mux.HandleFunc("POST /api/runs/{id}/rewind", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			CheckpointID  string `json:"checkpoint_id"`
+			Scope         string `json:"scope"`
+			Memo          string `json:"memo"`
+			ReasonSignal  string `json:"reason_signal"`
+			FromSegment   *int   `json:"from_segment"`
+			AllowNonGreen bool   `json:"allow_non_green"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil || body.FromSegment == nil || *body.FromSegment < 0 || decoder.Decode(new(any)) != io.EOF {
+			writeJSON(w, 400, map[string]string{"error": "send one valid rewind request with from_segment"})
+			return
+		}
+		request := autonomy.Rewind{CheckpointID: body.CheckpointID, Scope: body.Scope, Memo: body.Memo, ReasonSignal: body.ReasonSignal, FromSegment: *body.FromSegment, AllowNonGreen: body.AllowNonGreen}
+		via := "api"
+		if r.Header.Get("X-Mitos-Client") == "cli" {
+			via = "cli"
+		}
+		rewind, err := s.engine.RewindAs(r.PathValue("id"), request, via, decision.LocalOperator())
+		if err != nil {
+			writeJSON(w, 409, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 202, rewind)
+	})
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pattern := mux.Handler(r)
+		if r.Method == "POST" && pattern == "" && service.ValidWebhookPath(r.URL.Path) {
+			s.serviceWebhook(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+	s.handler = s.headers(http.NewCrossOriginProtection().Handler(dispatch))
 	return s, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
@@ -115,12 +288,17 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
-		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
+		limit := int64(32 << 10)
+		if r.Method == "POST" && (r.URL.Path == "/api/service-events" || service.ValidWebhookPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/api/services/") && strings.HasSuffix(r.URL.Path, "/signals")) {
+			limit = studio.MaxIngressBytes
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }
 func (s *Server) base(view, title, section string) page {
 	p := page{View: view, Title: title, Section: section, Apps: s.engine.Apps, Root: s.engine.Root, Date: time.Now().Format("Monday, 2 January"), Demo: s.demo}
+	p.Pools = s.engine.Store.Pools()
 	p.Runs = s.engine.Store.List()
 	p.Total = len(p.Runs)
 	var elapsed time.Duration
@@ -129,7 +307,7 @@ func (s *Server) base(view, title, section string) page {
 			p.Active = append(p.Active, r)
 			p.Live = view == "overview" || view == "decisions"
 		}
-		if r.Status == "parked" {
+		if r.Status == "parked" && r.Decision != nil && r.Decision.Choice == "" {
 			p.Attention = append(p.Attention, r)
 		}
 		if r.Status == "done" {
@@ -226,7 +404,13 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 	}
 	minutes, _ := strconv.Atoi(r.FormValue("timeout_minutes"))
 	b := studio.Brief{Title: r.FormValue("title"), Intent: r.FormValue("intent"), Workspace: r.FormValue("workspace"), AppID: r.FormValue("app_id"), TimeoutMinutes: minutes}
-	run, err := s.engine.Launch(b, "")
+	b.Ownership = fleet.Ownership{Paths: ownershipLines(r.FormValue("owned_paths")), Leases: ownershipLines(r.FormValue("leases"))}
+	scheduling, err := formScheduling(r)
+	b.Scheduling = scheduling
+	var run studio.Run
+	if err == nil {
+		run, err = s.engine.Launch(b, "")
+	}
 	if err != nil {
 		p := s.base("new", "New work", "work")
 		p.Live = false
@@ -245,6 +429,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	}
 	p := s.base("run", run.Brief.Title, "work")
 	p.Run = run
+	p.Task, _ = s.engine.Store.Task(run.TaskID)
 	p.Live = run.Active()
 	s.render(w, r, p, 200)
 }
@@ -322,7 +507,7 @@ func (s *Server) apiLaunch(w http.ResponseWriter, r *http.Request) {
 	var b studio.Brief
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&b); err != nil {
+	if err := dec.Decode(&b); err != nil || dec.Decode(new(any)) != io.EOF {
 		writeJSON(w, 400, map[string]string{"error": "send a valid JSON brief"})
 		return
 	}
@@ -332,12 +517,24 @@ func (s *Server) apiLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/runs/"+run.ID)
+	if r.URL.Path == "/api/tasks" {
+		task, err := s.engine.Store.Task(run.TaskID)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Location", "/api/tasks/"+task.ID)
+		writeJSON(w, 201, task)
+		return
+	}
 	writeJSON(w, 201, run)
 }
 func status(s string) string {
 	switch s {
 	case "running":
 		return "In progress"
+	case "stopping":
+		return "Stopping"
 	case "queued":
 		return "Queued"
 	case "parked":

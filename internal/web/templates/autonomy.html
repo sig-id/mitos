@@ -1,0 +1,19 @@
+{{define "autonomy"}}
+<div class="page-heading"><div><p class="eyebrow">MEASURED FROM THE RECORD</p><h1>Autonomy evidence</h1><p>{{.Metrics.Runs}} recorded runs · {{.Metrics.SampleRunsExcluded}} examples excluded</p></div><a class="button" href="/api/autonomy" hx-boost="false" download="autonomy.json">Download evidence report {{icon "download"}}</a></div>
+<section class="panel padded">
+<h2>Progress and decisions</h2>
+<dl class="facts">
+<div><dt>Verified progress per decision</dt><dd>{{metricSeconds .Metrics.AutonomyRatioMS}}</dd></div>
+<div><dt>Time to first required decision (p50)</dt><dd>{{metricSeconds .Metrics.HorizonUnattendedP50MS}}</dd></div>
+<div><dt>Decision precision</dt><dd>{{metricPercent .Metrics.DecisionPrecision}}</dd></div>
+<div><dt>Discarded segments per accepted change</dt><dd>{{metric .Metrics.RewindDepth}}</dd></div>
+<div><dt>Passing checkpoints</dt><dd>{{metricPercent .Metrics.GreenRate}}</dd></div>
+</dl>
+<p>{{.Metrics.AcceptedChanges}} accepted changes · {{.Metrics.HumanDecisionsRaised}} decisions raised · {{.Metrics.DecisionUnresolved}} unanswered · {{.Metrics.DecisionDefaulted}} defaulted</p>
+{{if .Metrics.DecisionUnresolved}}<p>Precision is not settled while cards remain unanswered. Its current bounds are {{metricPercent .Metrics.PrecisionLower}} to {{metricPercent .Metrics.PrecisionUpper}}.</p>{{end}}
+<p>The horizon measurement includes {{.Metrics.HorizonSamples}} runs with a required decision. {{.Metrics.HorizonCensored}} runs ended or reached the recorded observation limit without one; they are reported separately.</p>
+{{if .Metrics.HorizonLowerMS}}<p>The overall median is bounded below by {{metricSeconds .Metrics.HorizonLowerMS}}{{if .Metrics.HorizonUpperMS}} and above by {{metricSeconds .Metrics.HorizonUpperMS}}{{else}}; this corpus does not establish an upper bound{{end}}. A point median appears only when these bounds agree.</p>{{end}}
+</section>
+<section class="panel padded"><h2>Permission to run unattended</h2><p>{{.Metrics.RunsWithZeroGrant}} runs record a zero grant. {{.Metrics.RunsWithoutGrant}} have no recorded grant. Elapsed time and passing local checks do not grant permission.</p></section>
+<section class="panel padded"><h2>How to read this evidence</h2>{{range .Metrics.Limitations}}<p>{{.}}</p>{{end}}</section>
+{{end}}

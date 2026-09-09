@@ -5,7 +5,7 @@
 </h1>
 <p>Everything you’ve set in motion, and what came of it.</p>
 </div>
-<a class="button primary" href="/new">{{icon "plus"}}New work</a>
+<div class="actions"><a class="button" href="/services">Services</a><a class="button" href="/tasks">Tasks and scheduling</a><a class="button primary" href="/new">{{icon "plus"}}New work</a></div>
 </div>
 <section class="panel">
 <form class="work-filters" action="/work" method="get" hx-get="/work" hx-target="#work-list" hx-select="#work-list" hx-push-url="true" hx-trigger="submit, change, input delay:350ms">
@@ -91,6 +91,23 @@
 <label for="workspace">Workspace directory</label>
 <input id="workspace" name="workspace" required value="{{.Brief.Workspace}}" spellcheck="false">
 <p class="field-help">Choose a directory under <code>{{.Root}}</code>. Work runs in a fresh copy.</p>
+<details><summary>Schedule and coordinate shared work</summary>
+<label for="pool">Work pool</label><select id="pool" name="pool">{{range .Pools}}<option value="{{.ID}}" {{if or (eq $.Brief.Scheduling.Pool .ID) (and (eq $.Brief.Scheduling.Pool "") (eq .ID "interactive"))}}selected{{end}}>{{.ID}}</option>{{end}}</select>
+<label for="priority">Priority</label><input id="priority" name="priority" type="number" min="-1000" max="1000" value="{{.Brief.Scheduling.Priority}}">
+<label for="after_tasks">Wait for these tasks to succeed</label><textarea id="after_tasks" name="after_tasks" rows="3" placeholder="task_…">{{range .Brief.Scheduling.Deps}}{{.From}}
+{{end}}</textarea><p class="field-help">Use task IDs from Tasks and scheduling, one per line. Dependencies may belong to another pool.</p>
+<label for="dependency_inputs">Artifacts to consume</label><textarea id="dependency_inputs" name="dependency_inputs" rows="3" placeholder="task_…:inventory.json">{{range .Brief.Scheduling.Deps}}{{$task := .From}}{{range .Artifacts}}{{$task}}:{{.}}
+{{end}}{{end}}</textarea><p class="field-help">One TASK_ID:ARTIFACT_NAME per line. Each selected artifact comes from that task’s successful attempt and is copied into a separate input directory.</p>
+<label for="join">Dependency rule</label><select id="join" name="join"><option value="all" {{if eq .Brief.Scheduling.Join.Rule "all"}}selected{{end}}>All</option><option value="any" {{if eq .Brief.Scheduling.Join.Rule "any"}}selected{{end}}>Any one</option><option value="k_of_n" {{if eq .Brief.Scheduling.Join.Rule "k_of_n"}}selected{{end}}>Quorum</option></select>
+<label for="quorum">Quorum count (0 for All or Any)</label><input id="quorum" name="quorum" type="number" min="0" max="128" value="{{.Brief.Scheduling.Join.K}}">
+<label for="deadline">Absolute deadline (optional)</label><input id="deadline" name="deadline" placeholder="2026-09-10T18:00:00+02:00" value="{{if .Brief.Scheduling.Deadline}}{{.Brief.Scheduling.Deadline.Format "2006-01-02T15:04:05Z07:00"}}{{end}}"><p class="field-help">Includes waiting time and limits every attempt of this task. Include the timezone.</p>
+<label for="owned_paths">Paths this work may change</label>
+<textarea id="owned_paths" name="owned_paths" rows="3" placeholder="src/component&#10;tests/component">{{lines .Brief.Ownership.Paths}}</textarea>
+<p class="field-help">One relative file or directory per line. Leave empty for the whole workspace. Work with overlapping paths waits its turn.</p>
+<label for="leases">Exclusive resources</label>
+<textarea id="leases" name="leases" rows="2" placeholder="database:integration">{{lines .Brief.Ownership.Leases}}</textarea>
+<p class="field-help">One shared resource name per line. Use the same name on work that must not use a resource simultaneously.</p>
+</details>
 <label for="timeout_minutes">Stop after</label>
 <select id="timeout_minutes" name="timeout_minutes">
 <option value="1" {{if eq .Brief.TimeoutMinutes 1}}selected{{end}}>1 minute</option>
@@ -230,7 +247,7 @@
 <div>
 <dt>Acceptance</dt>
 <dd>
-<code>{{range .App.Acceptance}}{{.}} {{end}}</code>
+<code>{{range .App.Acceptance.Cmd}}{{.}} {{end}}</code>
 </dd>
 </div>{{end}}</dl>
 </aside>

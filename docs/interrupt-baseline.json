@@ -1,0 +1,44 @@
+{
+  "runs": 11,
+  "events": 133,
+  "sample_runs_excluded": 0,
+  "legacy_events": 133,
+  "requested": 0,
+  "human_touches": 0,
+  "unresolved": 0,
+  "observed_days": 0,
+  "distribution": [
+    {
+      "class": "approve_the_boring",
+      "requests": 0,
+      "touches": 0
+    },
+    {
+      "class": "missing_information",
+      "requests": 0,
+      "touches": 0
+    },
+    {
+      "class": "judgment",
+      "requests": 0,
+      "touches": 0
+    },
+    {
+      "class": "rescue",
+      "requests": 0,
+      "touches": 0
+    },
+    {
+      "class": "unclassified",
+      "requests": 0,
+      "touches": 0
+    }
+  ],
+  "sufficient_for_calibration": false,
+  "limitations": [
+    "Less than two weeks of recorded sessions; coverage is insufficient for the requested baseline.",
+    "No recorded human resolutions; an interruption distribution cannot be estimated.",
+    "Corpus representativeness and measured harness think times require separate review.",
+    "Historical records have no Go hash-chain verification or supported decision-card schema; their interruption coverage and timestamp semantics are unknown. Historical timestamps are excluded."
+  ]
+}

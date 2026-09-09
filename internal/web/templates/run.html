@@ -6,14 +6,24 @@
 <h1>{{.Run.Brief.Title}}</h1>
 <p>{{.Run.AppName}} <span class="separator">/</span> Started {{when .Run.CreatedAt}}</p>
 </div>
-<div class="actions">{{if .Run.Terminal}}<form action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
+<div class="actions">{{if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "retry"}}Run again</button>
 </form>{{else}}<form action="/runs/{{.Run.ID}}/cancel" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "stop"}}Stop work</button>
 </form>{{end}}<a class="button primary" href="/runs/{{.Run.ID}}/report">Open report {{icon "arrow"}}</a>
 </div>
 </div>
-{{if and .Run.Decision (eq .Run.Status "parked")}}<div class="run-decision">{{template "decisioncard" .Run}}</div>{{end}}
+{{with .Run.Condition}}<section class="panel padded"><h2>Service condition</h2><p>{{.Status}}{{if .Detail}} · {{.Detail}}{{end}}</p>{{range .Facts}}<p>{{.Kind}}{{if .Name}} · {{.Name}}{{end}} · {{if .Passed}}passed{{else}}not met{{end}}</p>{{end}}</section>{{end}}
+{{with .Run.Health}}<section class="panel padded"><h2>Service health</h2><p>{{.Config.Type}} · {{.Status}}{{if .Action}} · requested action: {{.Action}}{{end}}</p>{{with .Check}}<p>Check {{.Number}}: {{.Outcome}}{{if .Detail}} · {{.Detail}}{{end}}</p>{{end}}{{if .HeartbeatAt}}<p>Last heartbeat: {{.HeartbeatAt}} · sequence {{.HeartbeatSequence}}</p>{{end}}{{if .Detail}}<p>{{.Detail}}</p>{{end}}</section>{{end}}
+{{with .Task.ServiceLifecycle}}<section class="panel padded"><h2>Service restart source</h2><p><a href="/services/lifecycle/{{.Seq}}">{{.RootID}} · operation {{.Seq}}</a></p></section>{{end}}
+{{with .Task.ServiceEvent}}{{with .Custom}}<section class="panel padded"><h2>Custom event source</h2><p><a href="/services/events/{{$.Task.ServiceEvent.Seq}}">{{.Name}}</a> · {{.Bytes}} payload bytes</p><p>SHA-256 <span class="mono">{{.SHA256}}</span></p></section>{{end}}{{end}}
+{{with .Task.ServiceIngress}}<section class="panel padded"><h2>Service delivery</h2><p>{{.Kind}} · {{.Source}}</p><p>Delivery {{.DeliveryID}} · received {{.ReceivedAt}}</p><p>{{.Bytes}} payload bytes · SHA-256 <span class="mono">{{.SHA256}}</span></p></section>{{end}}
+{{with .Task.ServiceCycle}}<section class="panel padded"><h2>Service cycle</h2><p>{{.ID}} · catalog revision {{.Revision}}</p>{{if .DependsOn}}<p>Required services: {{range .DependsOn}}{{.}} {{end}}</p>{{end}}{{range $.Task.ServiceDependencyEvidence}}<p>{{.ServiceID}} succeeded: <a href="/runs/{{.RunID}}">prerequisite run</a> · event {{.Seq}}</p>{{end}}</section>{{end}}
+{{with .Task.ServiceReplacement}}<p class="notice">This task replaces <a href="/runs/{{.RunID}}">previous service work</a>. Execution waits for shutdown, harvest, and release of its claims.</p>{{end}}
+{{if .Task.ContinuousEpoch}}<p class="notice">This task belongs to a continuous service. While enabled, the service replaces stopped or finished tasks after its restart delay. <a href="/services">Disable the service</a> to stop its managed work.</p>{{end}}
+{{if and .Run.Decision (eq .Run.Status "parked") (eq .Run.Decision.Choice "")}}<div class="run-decision">{{template "decisioncard" .Run}}</div>{{end}}
+{{if and .Run.ClaimConflicts (eq .Run.Status "queued")}}<section class="panel padded"><h2>Waiting for shared work</h2><p>This work will start when the conflicting claims are released.</p><ul>{{range .Run.ClaimConflicts}}<li><a class="text-link" href="/runs/{{.RunID}}">{{.Kind}}: {{.Resource}}</a></li>{{end}}</ul></section>{{end}}
+{{if .Run.Claim}}{{if and (not .Run.Claim.ReleasedAt) (or (eq .Run.Status "parked") .Run.Terminal)}}<section class="panel padded"><h2>Previous execution needs inspection</h2><p>Its ownership and resource claims are still held. Inspect the previous processes and stop them before releasing these claims.</p><form action="/runs/{{.Run.ID}}/claims/release" method="post" hx-disabled-elt="find button"><input type="hidden" name="confirmed_stopped" value="true"><button class="button" type="submit">I inspected and stopped the previous processes</button></form></section>{{end}}{{end}}
 <div class="outcome-strip {{.Run.Status}}">
 <span class="outcome-icon">{{if .Run.Verified}}{{icon "check"}}{{else if eq .Run.Status "failed"}}{{icon "decision"}}{{else}}{{icon "work"}}{{end}}</span>
 <div>
@@ -42,6 +52,8 @@
 <aside class="run-aside">
 <section class="panel padded">
 <p class="eyebrow">THE BRIEF</p>
+{{if .Task.ID}}<p>Task {{.Task.Status}} · <a class="text-link" href="/tasks">{{.Task.Scheduling.Pool}} pool</a></p>{{end}}
+<a class="text-link" href="/api/runs/{{.Run.ID}}/evidence" hx-boost="false">Structured fleet evidence</a>
 <h3>{{.Run.Brief.Title}}</h3>
 <p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}Run the application’s default entrypoint against this workspace.{{end}}</p>
 <dl class="facts">
@@ -67,6 +79,10 @@
 </dd>
 </div>{{end}}</dl>
 </section>
+{{if .Run.Checkpoints}}<section class="panel padded">
+<p class="eyebrow">RECOVERY POINTS</p>
+{{range .Run.Checkpoints}}<div class="artifact"><div><strong>{{if eq .SegmentNumber 0}}Initial workspace{{else}}Segment {{.SegmentNumber}}{{end}}</strong><p>{{if .Invalidated}}Superseded by recovery{{else if .Green}}Predicate passed{{else}}Predicate {{.Predicate.Verdict}}{{end}}</p><span class="mono">{{short .WorkspaceCommit}}</span></div></div>{{end}}
+</section>{{end}}
 <section class="panel padded">
 <p class="eyebrow">DELIVERABLES</p>{{template "artifacts" .Run}}</section>
 </aside>

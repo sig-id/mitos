@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mitos/internal/acceptance"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,8 +176,8 @@ func TestDecisionResolutionIsIdempotentAndRejectsStaleChoices(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := s.Get(r.ID)
-	if len(after.Events) != len(before.Events) {
-		t.Fatal("duplicate resolution recorded")
+	if len(after.Events) != len(before.Events)+1 || after.Events[len(after.Events)-1].Kind != "decision_rejected" {
+		t.Fatal("duplicate resolution must be audited without reapplying it")
 	}
 	if err := s.Resolve(r.ID, d.ID, "retry"); !errors.Is(err, ErrConflict) {
 		t.Fatal("conflicting choice accepted")
@@ -258,7 +259,7 @@ func TestInventoryExecutesAndPreservesSource(t *testing.T) {
 }
 func TestAcceptanceFailureNeverMarksWorkVerified(t *testing.T) {
 	root := t.TempDir()
-	app := Application{ID: "test-app", Name: "Test", Entrypoint: "Run", Directory: t.TempDir(), Command: []string{"/bin/sh", "-c", "printf 'done'"}, Acceptance: []string{"/bin/sh", "-c", "printf 'rejected'; exit 1"}}
+	app := Application{ID: "test-app", Name: "Test", Entrypoint: "Run", Directory: t.TempDir(), Command: []string{"/bin/sh", "-c", "printf 'done'"}, Acceptance: acceptance.Spec{Cmd: []string{"/bin/sh", "-c", "printf 'rejected'; exit 1"}}}
 	e, s := testEngine(t, root, []Application{app})
 	b := testBrief(root)
 	b.AppID = app.ID
@@ -270,13 +271,15 @@ func TestAcceptanceFailureNeverMarksWorkVerified(t *testing.T) {
 	if r.Status != "failed" || r.Verified {
 		t.Fatalf("false verification: %+v", r)
 	}
-	if len(r.Artifacts) != 2 {
-		t.Fatalf("missing execution/acceptance output: %+v", r.Artifacts)
+	for _, name := range []string{"output.txt", "acceptance.txt", "changes.patch", "changes.json", "workspace.tar.gz"} {
+		if _, err := s.Artifact(r.ID, name); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
 	}
 }
 func TestCommandAcceptanceAndCancellation(t *testing.T) {
 	root := t.TempDir()
-	app := Application{ID: "test-app", Name: "Test", Entrypoint: "Run", Directory: t.TempDir(), Command: []string{"/bin/sh", "-c", "printf 'result' > result.txt; printf 'complete'"}, Acceptance: []string{"/bin/sh", "-c", "test \"$PWD\" != \"$MITOS_WORKSPACE\" && test -s \"$MITOS_WORKSPACE/result.txt\" && printf 'pass'"}}
+	app := Application{ID: "test-app", Name: "Test", Entrypoint: "Run", Directory: t.TempDir(), Command: []string{"/bin/sh", "-c", "printf 'result' > result.txt; printf 'complete'"}, Acceptance: acceptance.Spec{Cmd: []string{"/bin/sh", "-c", "test \"$PWD\" != \"$MITOS_WORKSPACE\" && test -s \"$MITOS_WORKSPACE/result.txt\" && printf 'pass'"}}}
 	e, s := testEngine(t, root, []Application{app})
 	b := testBrief(root)
 	b.AppID = app.ID
@@ -302,7 +305,7 @@ func TestCommandAcceptanceAndCancellation(t *testing.T) {
 	if err = e.Cancel(child.ID); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := s.Get(child.ID)
+	after := waitRun(t, s, child.ID, func(r Run) bool { return r.Terminal() })
 	if after.Status != "cancelled" {
 		t.Fatal("cancel did not stop work")
 	}

@@ -8,20 +8,28 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+
+	"mitos/internal/acceptance"
+	"mitos/internal/autonomy"
+	"mitos/internal/compute"
+	"mitos/internal/observation"
 )
 
 // Application is the small, local manifest dialect implemented by this build.
 // Published OCI manifests and agentic orchestration remain separate integrations.
 type Application struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Category    string   `json:"category"`
-	Entrypoint  string   `json:"entrypoint"`
-	Command     []string `json:"command,omitempty"`
-	Acceptance  []string `json:"acceptance,omitempty"`
-	Directory   string   `json:"-"`
-	Builtin     bool     `json:"-"`
+	Compute     *compute.Request      `json:"compute,omitempty"`
+	Supervision *autonomy.Supervision `json:"supervision,omitempty"`
+	ID          string                `json:"id"`
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	Category    string                `json:"category"`
+	Entrypoint  string                `json:"entrypoint"`
+	Command     []string              `json:"command,omitempty"`
+	Acceptance  acceptance.Spec       `json:"acceptance,omitempty"`
+	Directory   string                `json:"-"`
+	Builtin     bool                  `json:"-"`
+	Observation *observation.Config   `json:"observation,omitempty"`
 }
 
 func LoadApps(dir string) ([]Application, error) {
@@ -55,11 +63,24 @@ func LoadApps(dir string) ([]Application, error) {
 		if err = json.Unmarshal(b, &app); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		if !pattern.MatchString(app.ID) || seen[app.ID] || app.Name == "" || app.Entrypoint == "" || len(app.Command) == 0 || len(app.Acceptance) == 0 {
+		if !pattern.MatchString(app.ID) || seen[app.ID] || app.Name == "" || app.Entrypoint == "" || len(app.Command) == 0 || len(app.Acceptance.Cmd) == 0 {
 			return nil, fmt.Errorf("%s needs a unique id, name, entrypoint, command, and acceptance command", path)
 		}
-		if !filepath.IsAbs(app.Command[0]) || !filepath.IsAbs(app.Acceptance[0]) {
+		if !filepath.IsAbs(app.Command[0]) || !filepath.IsAbs(app.Acceptance.Cmd[0]) {
 			return nil, fmt.Errorf("%s: command and acceptance executables must use absolute paths", path)
+		}
+		if err := app.Acceptance.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		if app.Supervision != nil {
+			if err := app.Supervision.Validate(); err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+		}
+		if app.Observation != nil {
+			if err := app.Observation.Validate(); err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
 		}
 		app.Directory = filepath.Dir(path)
 		seen[app.ID] = true
