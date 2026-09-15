@@ -220,6 +220,13 @@ external authenticity anchor. An append/fsync error poisons the writer until
 restart. Artifact downloads verify their recorded SHA-256 digest. Keep backups
 of the complete data directory; workspace retention/GC is manual.
 
+Disk writes release the state read lock, so Work pages and status APIs can read
+the last durable state while a flush is pending. Execution and verification
+decisions share a flush with their adjacent progress markers. Artifacts from one
+harvest share directory and log flushes; already-persisted parent directories
+are not flushed again. Submissions and execution barriers still wait for durable
+storage, but slow flushes do not hold up status reads.
+
 The old ignored `.runs/` records are left in place and are not automatically
 imported. The new log format is different.
 

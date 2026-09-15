@@ -480,12 +480,9 @@ func (e *Engine) inventory(ctx context.Context, r Run, workspace string) error {
 	if err != nil {
 		return err
 	}
-	if err = e.Store.SaveArtifact(r.ID, "inventory.json", b); err != nil {
-		return err
-	}
 	summary := fmt.Sprintf("Inventoried %d files (%d bytes). Every included file has a SHA-256 fingerprint. Source files were not changed.", len(files), total)
 	text := fmt.Sprintf("# %s\n\n%s\n\nWorkspace fingerprint: %s\n\nSource ignore rules are honored; intake symlinks, Git metadata, and Studio data are excluded. This is a file inventory, not a code-quality or security assessment.\n", r.Brief.Title, summary, report.Fingerprint)
-	if err = e.Store.SaveArtifact(r.ID, "report.md", []byte(text)); err != nil {
+	if err = e.Store.SaveArtifacts(r.ID, ArtifactData{Name: "inventory.json", Data: b}, ArtifactData{Name: "report.md", Data: []byte(text)}); err != nil {
 		return err
 	}
 	// Validate the harvested artifact through the independent integrity reader.

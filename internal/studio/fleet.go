@@ -45,8 +45,8 @@ func fleetSummary(r *Run) fleet.Summary {
 }
 
 func (s *Store) FleetIndex() fleet.Index {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	runs := make([]*Run, 0, len(s.runs))
 	for _, r := range s.runs {
 		runs = append(runs, r)
@@ -67,8 +67,8 @@ func (s *Store) FleetIndex() fleet.Index {
 // FleetEvidence selects structured fields from one coherent replayed prefix.
 // It never decodes arbitrary event Data or reads artifact bodies.
 func (s *Store) FleetEvidence(id string) (fleet.Evidence, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	r := s.runs[id]
 	if r == nil {
 		return fleet.Evidence{}, ErrNotFound

@@ -2,7 +2,6 @@ package studio
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -41,13 +39,14 @@ type Store struct {
 	serviceStates          map[string]*ServiceState
 	tasks                  map[string]*Task
 	pools                  map[string]workpool.Pool
-	mu                     sync.RWMutex
-	file                   *os.File
+	mu                     storeMutex
+	file                   eventLog
 	dir                    string
 	runs                   map[string]*Run
 	seq                    int64
 	hash                   string
 	writeErr               error
+	artifactDirs           map[string]bool
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -333,12 +332,23 @@ func (s *Store) apply(e Event) error {
 
 // commit requires mu. Publish to readers only after the record is synced.
 func (s *Store) commit(id, typ, kind string, c change) error {
+	e, err := s.prepareEvent(id, typ, kind, c, s.seq+1, s.hash)
+	if err != nil {
+		return err
+	}
+	return s.persist(e)
+}
+
+// prepareEvent derives an event from the current durable state without changing
+// it. Callers batching events must not prepare a dependent state change before
+// its predecessor has been applied.
+func (s *Store) prepareEvent(id, typ, kind string, c change, seq int64, previous string) (Event, error) {
 	if s.writeErr != nil {
-		return fmt.Errorf("event log unavailable: %w", s.writeErr)
+		return Event{}, fmt.Errorf("event log unavailable: %w", s.writeErr)
 	}
 	at := time.Now().UTC()
 	if typ == "effect" && c.Task == nil && c.Pool == nil {
-		c.Task, c.TaskEffect = s.taskChange(id, kind, c, at, s.seq+1)
+		c.Task, c.TaskEffect = s.taskChange(id, kind, c, at, seq)
 	}
 	if typ == "effect" && c.ServiceHealth == nil {
 		c.ServiceHealth = s.serviceHealthAdmission(id, kind)
@@ -349,7 +359,7 @@ func (s *Store) commit(id, typ, kind string, c change) error {
 	if typ == "effect" && c.ServiceBreaker == nil {
 		update, err := s.serviceBreakerChange(id, kind, c, at)
 		if err != nil {
-			return err
+			return Event{}, err
 		}
 		c.ServiceBreaker = update
 	}
@@ -369,32 +379,51 @@ func (s *Store) commit(id, typ, kind string, c change) error {
 	}
 	data, err := json.Marshal(c)
 	if err != nil {
-		return err
+		return Event{}, err
 	}
-	e := Event{Seq: s.seq + 1, RunID: id, Type: typ, Kind: kind, At: at, Data: data, Previous: s.hash}
+	e := Event{Seq: seq, RunID: id, Type: typ, Kind: kind, At: at, Data: data, Previous: previous}
 	e.Hash = eventHash(e)
-	line, err := json.Marshal(e)
-	if err != nil {
+	return e, nil
+}
+
+// persist keeps the writer gate throughout IO, but lets readers access the last
+// durable state. Even queued writers cannot prevent those reads. A failed write
+// poisons the log; no later action may proceed on an uncertain durable head.
+func (s *Store) persist(events ...Event) error {
+	if s.writeErr != nil {
+		return fmt.Errorf("event log unavailable: %w", s.writeErr)
+	}
+	var data []byte
+	for _, e := range events {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		data = append(data, line...)
+		data = append(data, '\n')
+	}
+	err := s.mu.io(func() error {
+		n, err := s.file.Write(data)
+		if err == nil && n != len(data) {
+			err = io.ErrShortWrite
+		}
+		if err == nil {
+			err = s.file.Sync()
+		}
 		return err
-	}
-	line = append(line, '\n')
-	n, err := s.file.Write(line)
-	if err == nil && n != len(line) {
-		err = io.ErrShortWrite
-	}
-	if err == nil {
-		err = s.file.Sync()
-	}
+	})
 	if err != nil {
 		s.writeErr = err
 		return err
 	}
-	if err = s.apply(e); err != nil {
-		s.writeErr = err
-		return err
+	for _, e := range events {
+		if err = s.apply(e); err != nil {
+			s.writeErr = err
+			return err
+		}
+		s.seq = e.Seq
+		s.hash = e.Hash
 	}
-	s.seq = e.Seq
-	s.hash = e.Hash
 	return nil
 }
 
@@ -565,54 +594,6 @@ func (s *Store) Complete(id, summary string, verified bool) error {
 		claim = &copy
 	}
 	return s.commit(id, "effect", "run_finished", change{Claim: claim, Status: "done", Stage: "Complete", Summary: summary, Verified: verified})
-}
-func (s *Store) SaveArtifact(id, name string, data []byte) error {
-	if filepath.Base(name) != name || name == "." {
-		return errors.New("invalid artifact name")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r := s.runs[id]
-	if r == nil {
-		return ErrNotFound
-	}
-	if r.Terminal() {
-		return ErrConflict
-	}
-	for _, a := range r.Artifacts {
-		if a.Name == name {
-			return errors.New("artifact already exists")
-		}
-	}
-	dir := filepath.Join(s.dir, "artifacts", id)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	path := filepath.Join(dir, name)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(f, bytes.NewReader(data))
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	// Persist the file name and newly created parent directories before the
-	// event can promise that this artifact is durably available.
-	for _, path := range []string{dir, filepath.Dir(dir), s.dir} {
-		if err := syncDirectory(path); err != nil {
-			return err
-		}
-	}
-	sum := sha256.Sum256(data)
-	return s.commit(id, "effect", "artifact_harvested", change{Artifact: &Artifact{Name: name, SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(data))}})
 }
 func (s *Store) Artifact(id, name string) ([]byte, error) {
 	r, err := s.Get(id)

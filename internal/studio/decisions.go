@@ -91,10 +91,18 @@ func (s *Store) Park(id string, draft *HumanDecision) error {
 		return ErrConflict
 	}
 	policyEvidence, _ := json.Marshal(map[string]any{"act": decision.Act{Unknown: true}, "workspace_confined": false, "assessment": assessment})
-	if err = s.commit(id, "decision", "request_approval", change{Evidence: policyEvidence, DecisionRequest: &d, Status: "parked", Stage: "Preparing your decision", Summary: "Request an explicit choice for " + d.ReasonSignal + "."}); err != nil {
+	request, err := s.prepareEvent(id, "decision", "request_approval", change{Evidence: policyEvidence, DecisionRequest: &d, Status: "parked", Stage: "Preparing your decision", Summary: "Request an explicit choice for " + d.ReasonSignal + "."}, s.seq+1, s.hash)
+	if err != nil {
 		return err
 	}
-	return s.commit(id, "effect", "approval_requested", change{Status: "parked", Stage: "Waiting for you", Summary: d.Context.BlockedBy, Decision: &d})
+	// The effect explicitly supplies the final status and card. It can be
+	// derived from the pre-request state, then published with the request so
+	// readers never see a parked run before its decision is available.
+	requested, err := s.prepareEvent(id, "effect", "approval_requested", change{Status: "parked", Stage: "Waiting for you", Summary: d.Context.BlockedBy, Decision: &d}, request.Seq+1, request.Hash)
+	if err != nil {
+		return err
+	}
+	return s.persist(request, requested)
 }
 
 func (s *Store) Resolve(id, decisionID, choice string) error {

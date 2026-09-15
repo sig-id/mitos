@@ -42,10 +42,7 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	if !ok {
 		return errors.New("application is no longer installed")
 	}
-	if err := e.Store.RecordDecision(r.ID, "advance", "Prepare a fresh workspace for the brief."); err != nil {
-		return err
-	}
-	if err := e.Store.Transition(r.ID, "run_started", "running", "Preparing workspace", "Selecting tracked and untracked non-ignored files. The source stays untouched."); err != nil {
+	if err := e.Store.TransitionAfterDecision(r.ID, "advance", "Prepare a fresh workspace for the brief.", "run_started", "running", "Preparing workspace", "Selecting tracked and untracked non-ignored files. The source stays untouched."); err != nil {
 		return err
 	}
 	launch, err := compileApplication(app)
@@ -249,13 +246,12 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 	if err != nil {
 		return err
 	}
-	for _, artifact := range []struct {
-		name string
-		data []byte
-	}{{"changes.patch", harvested.Patch}, {"changes.json", manifest}, {"workspace.tar.gz", archive}} {
-		if err = e.Store.SaveArtifact(r.ID, prefix+artifact.name, artifact.data); err != nil {
-			return err
-		}
+	if err = e.Store.SaveArtifacts(r.ID,
+		ArtifactData{Name: prefix + "changes.patch", Data: harvested.Patch},
+		ArtifactData{Name: prefix + "changes.json", Data: manifest},
+		ArtifactData{Name: prefix + "workspace.tar.gz", Data: archive},
+	); err != nil {
+		return err
 	}
 	record.ResultCommit = harvested.ResultCommit
 	record.Fingerprint = harvested.Fingerprint
@@ -328,10 +324,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 }
 
 func (e *Engine) evaluate(ctx context.Context, r Run, app Application, history *workspacefs.History, before workspacefs.Snapshot, harvested workspacefs.Harvest, oracle workspacefs.Snapshot, oracleDir, prefix string, measureBefore workspacefs.Snapshot, inputSnapshot *workspacefs.Snapshot) error {
-	if err := e.Store.RecordDecision(r.ID, "verify", "Reconstruct the harvested change on a pristine baseline and execute the saved acceptance predicate."); err != nil {
-		return err
-	}
-	if err := e.Store.Transition(r.ID, "verification_started", "running", "Checking the result", "Checking a reconstructed result outside the worker workspace."); err != nil {
+	if err := e.Store.TransitionAfterDecision(r.ID, "verify", "Reconstruct the harvested change on a pristine baseline and execute the saved acceptance predicate.", "verification_started", "running", "Checking the result", "Checking a reconstructed result outside the worker workspace."); err != nil {
 		return err
 	}
 	verifyCtx, cancel := context.WithTimeout(ctx, app.Acceptance.Timeout())
