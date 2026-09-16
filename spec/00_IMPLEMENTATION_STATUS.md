@@ -1,5 +1,13 @@
 # Current implementation and technology decision
 
+**2026-09-16: interactive workspace increment.** The default UI now hosts real
+local PTY sessions in shared project directories, with a visible coordinator
+role, progressive topic discovery, managed Cargo jobs, Git/process views, and
+session scratch retention. This is a separate trusted-local execution path; it
+does not upgrade batch provider isolation, verification, or unattended grants.
+See [implemented behavior and limits](../docs/INTERACTIVE_WORKSPACE.md). The earlier
+batch screens remain available at `/overview`, `/work`, and their existing routes.
+
 **2026-09-08: replace the BEAM implementation with Go + HTMX and redesign the
 product from these specs.** This decision supersedes implementation-language
 requirements and old frontend navigation in the remaining specs. Product

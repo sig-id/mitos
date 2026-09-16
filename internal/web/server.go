@@ -116,7 +116,9 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("GET /{$}", s.overview)
+	mux.HandleFunc("GET /{$}", s.deskPage)
+	mux.HandleFunc("GET /overview", s.overview)
+	s.deskRoutes(mux)
 	mux.HandleFunc("GET /web", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusSeeOther) })
 	mux.HandleFunc("GET /autonomy", func(w http.ResponseWriter, r *http.Request) {
 		report, err := studio.ReportAutonomy(s.engine.Store.List())

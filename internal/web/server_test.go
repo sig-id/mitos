@@ -191,7 +191,7 @@ func TestNonLiveScreensNeverPollWhileWorkIsQueued(t *testing.T) {
 			t.Fatalf("%s would refresh away the current page or its form", path)
 		}
 	}
-	if w := request(s, "GET", "/", "", false); !strings.Contains(w.Body.String(), `hx-trigger="every 3s"`) {
+	if w := request(s, "GET", "/overview", "", false); !strings.Contains(w.Body.String(), `hx-trigger="every 3s"`) {
 		t.Fatal("overview does not refresh queued work")
 	}
 }

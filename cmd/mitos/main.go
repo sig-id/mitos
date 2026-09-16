@@ -37,6 +37,8 @@ func run(args []string) error {
 		args = []string{"serve"}
 	}
 	switch args[0] {
+	case "desk":
+		return deskClient(args[1:])
 	case "serve":
 		return serve(args[1:])
 	case "run", "status", "log", "interrupts", "checkpoints", "rewind", "decisions", "resolve", "autonomy", "fleet", "evidence", "release-claims", "tasks", "task", "pools", "configure-pool", "services", "services-preview", "services-configure", "service-run", "heartbeat", "service-signal", "emit-event", "service-events", "service-stop", "service-restart", "service-resume", "service-lifecycle":

@@ -1,5 +1,13 @@
 # Mitos Studio: product and interaction redesign
 
+> **Design review, 2026-09-16:** [Project workspaces and coordinated agents](ORCHESTRATION_REDESIGN.md)
+> proposes replacing this console-first interaction model with a project workspace,
+> familiar hosted CLI sessions, a visible coordinator, topic-based discovery,
+> shared-directory resource coordination, and scoped automatic decisions.
+> [The first local implementation](INTERACTIVE_WORKSPACE.md) now ships hosted PTYs,
+> topics, managed builds, and resource views. The document below preserves the
+> earlier batch UI rationale; the proposal also includes future provider work.
+
 ## Product decision
 
 The first product is a place to hand off bounded work and come back to

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"mitos/internal/compute"
 	"mitos/internal/decision"
+	"mitos/internal/desk"
 	workspacefs "mitos/internal/workspace"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 )
 
 type Engine struct {
+	Desk     *desk.Manager
 	provider compute.Provider
 	Store    *Store
 	Apps     []Application
@@ -96,11 +98,22 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		cancel()
 		return nil, err
 	}
+	e.Desk, err = desk.Open(filepath.Join(s.Dir(), "desk"), abs)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	e.wg.Add(1)
 	go e.dispatch()
 	return e, nil
 }
-func (e *Engine) Close() { e.stop(); e.wg.Wait() }
+func (e *Engine) Close() {
+	e.stop()
+	if e.Desk != nil {
+		e.Desk.Close()
+	}
+	e.wg.Wait()
+}
 func (e *Engine) App(id string) (Application, bool) {
 	for _, a := range e.Apps {
 		if a.ID == id {

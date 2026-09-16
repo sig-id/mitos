@@ -1,6 +1,7 @@
 # Mitos Studio
 
-Give work a brief. Make decisions by exception. Return to a result with evidence.
+Run coding CLIs in a shared project workspace. Keep their terminals visible,
+discover coordination topics, inspect changes, and share managed builds.
 
 Mitos is being rebuilt in **Go + HTMX**, starting with the Studio product in
 the specs. The previous `beam/` implementation has been removed. This is a new
@@ -8,8 +9,9 @@ implementation, not a feature-complete port of that runtime.
 
 ## Start
 
-Requires Go 1.26+ and Git on Linux (validated with Git 2.54). No Elixir, Node, frontend compilation, database
-service, or network dependency is needed to build or serve it.
+Requires Go 1.26+, Git, and Bash on Linux (validated with Git 2.54). The first
+build downloads the pinned Go PTY dependency. No Node, frontend compilation,
+database service, or CDN is required to serve it. Terminal assets are vendored.
 
 ```sh
 just serve                 # http://127.0.0.1:4646
@@ -25,7 +27,19 @@ go test -race ./...
 go build -o bin/mitos ./cmd/mitos
 ```
 
-The real studio starts empty. **New work** → choose **Workspace inventory** →
+The Studio opens on the **agent workspace**. **Open a project** → select a local
+directory → **New session** → enter your installed CLI command (or leave it empty
+for a shell). Sessions share the directory and use your local CLI configuration.
+Select **Project coordinator** for the session that manages the plan; only one
+active coordinator is allowed per project. The role provides coordination context,
+not extra permissions or an automatic approval policy.
+
+The terminal has real PTY input, resize, scrollback, interrupt, and stop controls.
+Navigation leaves execution running. Output survives server restart; processes
+are not automatically relaunched. Interrupted sessions require explicit process
+inspection before replacement. See [interactive workspace behavior and APIs](docs/INTERACTIVE_WORKSPACE.md).
+
+The existing batch workflow is available from **Task history** → **New work** → choose **Workspace inventory** →
 choose a local directory → start. It copies the workspace, inventories actual
 files, records their content hashes, checks the saved artifact, and delivers
 `inventory.json` and `report.md`. This built-in application performs no model
@@ -34,7 +48,11 @@ executes a real command and an independent acceptance command.
 
 ## The product
 
-- **Overview:** decisions needing attention, current work, recent outcomes, and
+- **Agent workspace:** projects, actual CLI sessions, a topic board, working-directory
+  diffs, observed processes, session scratch, and managed Cargo builds.
+- **Topic board:** compact discovery summaries, bounded thread reads, revision-checked
+  replies, and durable follow cursors. Agents use the same API through `mitos desk`.
+- **Execution overview:** decisions needing attention, current work, recent outcomes, and
   installed applications.
 - **Work:** searchable history; each attempt has a brief, execution record,
   output, acceptance evidence, and a standalone report.
@@ -43,8 +61,10 @@ executes a real command and an independent acceptance command.
 - **Applications:** installed entrypoints; author in your editor and launch
   from Studio.
 
-The design follows `02_PRODUCT`, `11_FRONTEND`, `15_DECISION_PLANE`, and
-`16_AUTONOMY`. See [the product/design decisions](docs/PRODUCT_DESIGN.md) and
+The workspace follows the [revised product design](docs/ORCHESTRATION_REDESIGN.md),
+with current boundaries in [interactive workspace behavior](docs/INTERACTIVE_WORKSPACE.md).
+Batch execution retains `15_DECISION_PLANE` and `16_AUTONOMY`'s decision and
+acceptance boundaries. See [the product/design decisions](docs/PRODUCT_DESIGN.md) and
 [the implementation boundary](spec/00_IMPLEMENTATION_STATUS.md).
 
 ## Local applications
@@ -324,6 +344,7 @@ internal/autonomy/    checkpoint records, restart intensity, predicate-stall pol
 internal/decision/    canonical human cards, resolution data, reversibility policy
 internal/compute/     provider lifecycle, local process execution, launch admission
 internal/fleet/       ownership conflicts and structured evidence schemas
+internal/desk/        local PTY sessions, topic board, managed builds, resource views
 internal/workpool/    dependency readiness, deterministic disciplines, pool capacity
 internal/web/         HTTP routes, embedded Go templates, CSS, HTMX
 examples/             runnable local application contract
@@ -331,8 +352,10 @@ docs/                 product and UX rationale
 spec/                 target contracts and current implementation status
 ```
 
-HTML forms and links work without JavaScript. HTMX enhances navigation, search,
+Batch HTML forms and links work without JavaScript. HTMX enhances navigation, search,
 and live run updates using server-rendered HTML ([HTMX documentation](https://htmx.org/docs/)).
+The interactive workspace uses vendored xterm.js 5.5.0 and fit addon 0.10.0,
+with their MIT licenses under `internal/web/static/`; it requires JavaScript.
 HTMX 2.0.10 is vendored with its BSD 2-Clause license under
 `internal/web/static/`. The remaining UI uses system fonts and local assets.
 
