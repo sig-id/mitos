@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"mitos/internal/agentcli"
 	"mitos/internal/desk"
 )
 
@@ -82,6 +83,34 @@ func deskResult(w http.ResponseWriter, v any, err error) {
 }
 func (s *Server) deskRoutes(mux *http.ServeMux) {
 	m := s.engine.Desk
+	workspace := func(r *http.Request) (string, error) {
+		if id := r.URL.Query().Get("project"); id != "" {
+			p, err := m.Project(id)
+			return p.Directory, err
+		}
+		return s.engine.Root, nil
+	}
+	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
+		root, err := workspace(r)
+		if err != nil {
+			deskResult(w, nil, err)
+			return
+		}
+		deskResult(w, m.Agents.List(root), nil)
+	})
+	mux.HandleFunc("GET /api/agents/{agent}", func(w http.ResponseWriter, r *http.Request) {
+		root, err := workspace(r)
+		if err != nil {
+			deskResult(w, nil, err)
+			return
+		}
+		v, err := m.Agents.Inspect(r.PathValue("agent"), r.URL.Query().Get("profile"), root)
+		deskResult(w, v, err)
+	})
+	mux.HandleFunc("POST /api/agents/refresh", func(w http.ResponseWriter, r *http.Request) {
+		m.Agents.Refresh(r.Context())
+		deskResult(w, m.Agents.List(s.engine.Root), nil)
+	})
 	mux.HandleFunc("GET /workspace", s.deskPage)
 	mux.HandleFunc("GET /api/projects", func(w http.ResponseWriter, r *http.Request) { deskResult(w, m.Projects(), nil) })
 	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
@@ -104,16 +133,12 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 		deskResult(w, m.Sessions(r.PathValue("project")), nil)
 	})
 	mux.HandleFunc("POST /api/projects/{project}/sessions", func(w http.ResponseWriter, r *http.Request) {
-		var b struct {
-			Name    string `json:"name"`
-			Role    string `json:"role"`
-			Command string `json:"command"`
-		}
+		var b agentcli.Request
 		if err := deskJSON(r, &b); err != nil {
 			deskResult(w, nil, err)
 			return
 		}
-		v, err := m.Start(r.PathValue("project"), b.Name, b.Role, b.Command, "http://"+r.Host)
+		v, err := m.StartAgent(r.PathValue("project"), b, "http://"+r.Host)
 		deskResult(w, v, err)
 	})
 	mux.HandleFunc("GET /api/sessions/{session}", func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +154,7 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 		v, err := m.ReadOutput(r.PathValue("session"), offset)
 		deskResult(w, v, err)
 	})
+	mux.HandleFunc("GET /api/sessions/{session}/stream", s.terminalStream)
 	mux.HandleFunc("POST /api/sessions/{session}/input", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
 			Key  string `json:"key"`
@@ -139,6 +165,19 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 			return
 		}
 		deskResult(w, map[string]bool{"accepted": true}, m.Input(r.PathValue("session"), b.Key, b.Data))
+	})
+	mux.HandleFunc("POST /api/sessions/{session}/prompt", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Key       string `json:"key"`
+			Text      string `json:"text"`
+			Bracketed bool   `json:"bracketed"`
+		}
+		if err := deskJSON(r, &b); err != nil {
+			deskResult(w, nil, err)
+			return
+		}
+		err := m.Prompt(r.PathValue("session"), b.Key, b.Text, b.Bracketed)
+		deskResult(w, map[string]bool{"accepted": err == nil}, err)
 	})
 	mux.HandleFunc("POST /api/sessions/{session}/resize", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {

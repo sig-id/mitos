@@ -3,10 +3,13 @@ package web
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"mitos/internal/agentcli"
 	"mitos/internal/desk"
 )
 
@@ -26,7 +29,28 @@ func TestWorkspaceRealSessionAndTopicAPI(t *testing.T) {
 	}
 	var p desk.Project
 	_ = json.Unmarshal(w.Body.Bytes(), &p)
-	w = deskRequest(s, "POST", "/api/projects/"+p.ID+"/sessions", map[string]string{"name": "Terminal", "role": "shell", "command": "read -r x; printf 'received:%s\\n' \"$x\""})
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Desk.Agents, err = agentcli.New(agentcli.Builtins(), agentcli.Config{Applications: []agentcli.Definition{{ID: "reader", Name: "Reader", Kind: "application", Executables: []string{shell}, Args: []string{"-c", "read -r x; printf 'received:%s\\n' \"$x\""}, Prompt: "none"}}}, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = deskRequest(s, "GET", "/api/agents?project="+p.ID, nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"id":"reader"`) {
+		t.Fatal("agent catalog unavailable", w.Body.String())
+	}
+	w = deskRequest(s, "GET", "/api/agents/reader?project="+p.ID, nil)
+	var installation agentcli.Installation
+	if err := json.Unmarshal(w.Body.Bytes(), &installation); err != nil || w.Code != 200 || !installation.Installed || installation.Capabilities.InitialPrompt {
+		t.Fatal("incorrect adapter capabilities", w.Body.String(), err)
+	}
+	w = deskRequest(s, "GET", "/api/agents/reader?project=missing", nil)
+	if w.Code != 404 {
+		t.Fatal("unknown workspace inspected", w.Code)
+	}
+	w = deskRequest(s, "POST", "/api/projects/"+p.ID+"/sessions", map[string]string{"agent_id": "reader", "role": "shell"})
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}

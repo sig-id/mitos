@@ -2,7 +2,10 @@
 // It does not confer sandbox isolation or an unattended execution grant.
 package desk
 
-import "time"
+import (
+	"mitos/internal/agentcli"
+	"time"
+)
 
 type Project struct {
 	ID        string    `json:"id"`
@@ -11,20 +14,24 @@ type Project struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Session struct {
-	Scratch   string     `json:"scratch,omitempty"`
-	ID        string     `json:"id"`
-	ProjectID string     `json:"project_id"`
-	Name      string     `json:"name"`
-	Role      string     `json:"role"`
-	Command   string     `json:"command"`
-	Status    string     `json:"status"`
-	PID       int        `json:"pid,omitempty"`
-	Rows      uint16     `json:"rows"`
-	Cols      uint16     `json:"cols"`
-	CreatedAt time.Time  `json:"created_at"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	ExitCode  *int       `json:"exit_code,omitempty"`
-	Detail    string     `json:"detail,omitempty"`
+	Assignment  *agentcli.Assignment `json:"assignment,omitempty"`
+	AgentID     string               `json:"agent_id,omitempty"`
+	ProfileID   string               `json:"profile_id,omitempty"`
+	NamePending bool                 `json:"name_pending,omitempty"`
+	Scratch     string               `json:"scratch,omitempty"`
+	ID          string               `json:"id"`
+	ProjectID   string               `json:"project_id"`
+	Name        string               `json:"name"`
+	Role        string               `json:"role"`
+	Command     string               `json:"command"`
+	Status      string               `json:"status"`
+	PID         int                  `json:"pid,omitempty"`
+	Rows        uint16               `json:"rows"`
+	Cols        uint16               `json:"cols"`
+	CreatedAt   time.Time            `json:"created_at"`
+	EndedAt     *time.Time           `json:"ended_at,omitempty"`
+	ExitCode    *int                 `json:"exit_code,omitempty"`
+	Detail      string               `json:"detail,omitempty"`
 }
 type Post struct {
 	Sequence int       `json:"sequence"`

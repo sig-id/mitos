@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/json"
@@ -29,10 +30,12 @@ import (
 var assets embed.FS
 
 type Server struct {
-	engine    *studio.Engine
-	templates *template.Template
-	handler   http.Handler
-	demo      bool
+	streamContext context.Context
+	stopStreams   context.CancelFunc
+	engine        *studio.Engine
+	templates     *template.Template
+	handler       http.Handler
+	demo          bool
 }
 type page struct {
 	ServiceLifecycles                                      []studio.ServiceLifecycleView
@@ -108,7 +111,8 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{engine: engine, templates: t, demo: demo}
+	streamContext, stopStreams := context.WithCancel(context.Background())
+	s := &Server{engine: engine, templates: t, demo: demo, streamContext: streamContext, stopStreams: stopStreams}
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))

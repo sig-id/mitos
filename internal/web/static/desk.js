@@ -27,18 +27,88 @@
   form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/workspace?project=${p.id}`; });
   form('session-form', async b => { const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
   form('topic-form', async (b,f) => { b.paths = b.paths.split('\n').map(x=>x.trim()).filter(Boolean); await api(projectAPI('topics'), b); f.reset(); $('topic-dialog').close(); await topics(); });
+  let agentCatalog = [], agentSelection = 0;
+  async function inspectAgent() {
+    const generation = ++agentSelection, id = $('session-agent').value;
+    $('session-form').querySelector('[type=submit]').disabled = true;
+    if (!id) return;
+    const query = new URLSearchParams({profile:$('agent-profile').value}); if (project) query.set('project',project);
+    const v = await api(`/api/agents/${id}?${query}`);
+    if (generation !== agentSelection) return;
+    $('agent-summary').textContent = v.installed ? `${v.name}${v.version ? ' '+v.version : ''} · ${v.executable}` : `${v.name} is not installed on the selected PATH.`;
+    $('session-form').querySelector('[type=submit]').disabled = !v.installed;
+    $('session-prompt').disabled = !v.capabilities.initial_prompt;
+    $('agent-prompt-help').textContent = v.capabilities.initial_prompt ? 'The session takes its name from your first prompt.' : 'Open this application and type directly in its terminal.';
+    const info = $('agent-setup-content'); info.replaceChildren();
+    info.append(el('p','Uses its own configuration, skills, and memory. Credential values are never shown.','muted'));
+    info.append(el('p',v.auth,'muted'));
+    for (const e of v.environment) info.append(el('p',`${e.name}: ${e.present?'set':'not set'}${e.source!==e.name?' (from '+e.source+')':''}`,'agent-setting'));
+    for (const r of v.resources) info.append(el('p',`${r.scope} ${r.kind} · ${r.status}\n${r.path}`,'agent-setting'));
+    if (!v.resources.length) info.append(el('p','No adapter-specific setup locations are defined. Native configuration still applies.','muted'));
+  }
+  function chooseAgent() {
+    const v = agentCatalog.find(a=>a.id===$('session-agent').value);
+    $('agent-profile').replaceChildren(new Option('Native environment',''));
+    for (const p of v?.profiles || []) $('agent-profile').append(new Option(p.name,p.id));
+    $('agent-profile-field').hidden = !v?.profiles.length;
+    if (v && !v.installed && v.profiles.length) $('agent-profile').value=v.profiles[0].id;
+    localStorage.setItem('mitos:agent',$('session-agent').value);
+    inspectAgent().catch(error);
+  }
+  async function discoverAgents(refresh=false) {
+    if (refresh) await api('/api/agents/refresh',{});
+    agentCatalog=await api('/api/agents'+(project?'?project='+encodeURIComponent(project):''));
+    const previous=$('session-agent').value || localStorage.getItem('mitos:agent');
+    $('session-agent').replaceChildren();
+    for (const a of agentCatalog) {
+      const option=new Option(`${a.name}${a.installed?'':a.profiles.length?' · configured profiles':' · not installed'}`,a.id);
+      option.disabled=!a.installed && !a.profiles.length; $('session-agent').append(option);
+    }
+    const available=agentCatalog.filter(a=>a.installed||a.profiles.length);
+    $('session-agent').value=available.some(a=>a.id===previous)?previous:available[0]?.id || '';
+    chooseAgent();
+  }
+  $('session-agent').addEventListener('change',chooseAgent);
+  $('agent-profile').addEventListener('change',()=>inspectAgent().catch(error));
+  $('refresh-agents').addEventListener('click',async()=>{const b=$('refresh-agents');b.disabled=true;try{await discoverAgents(true);}catch(err){error(err);}finally{b.disabled=false;}});
+  discoverAgents().catch(error);
+  // A page restored from the browser back/forward cache contains a disposed
+  // terminal and closed output connection. Reattach once instead of showing frozen UI.
+  window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
   if (!project) return;
 
-  let term, offset = 0, alive = true, ready = false, inputChain = Promise.resolve(), inputBroken = false;
+  let term, focusTerminal, offset = 0, alive = true, ready = false, inputChain = Promise.resolve(), inputBroken = false;
   if (session) {
     term = new Terminal({cols:Number($('terminal').dataset.cols),rows:Number($('terminal').dataset.rows),fontSize:13,fontFamily:'"Liberation Mono", Consolas, monospace',lineHeight:1.25,cursorBlink:!matchMedia('(prefers-reduced-motion: reduce)').matches,scrollback:10000,theme:{background:'#14171b',foreground:'#d8dee9',cursor:'#aac5ff',selectionBackground:'#334864'},allowProposedApi:false});
     const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open($('terminal'));
+    const keyButtons = [...document.querySelectorAll('[data-terminal-key]')];
+    const shortcuts = $('terminal-shortcuts');
+    function updateInputControls() {
+      const enabled = ready && !inputBroken;
+      term.options.disableStdin = !enabled;
+      [...keyButtons, $('interrupt')].forEach(b => b.disabled = !enabled);
+      $('terminal-input-hint').textContent = inputBroken ? 'Input disconnected · reload to reconnect' : !ready ? 'Terminal input unavailable' : 'Click terminal to type';
+    }
+    focusTerminal = () => { if (ready && !inputBroken) term.focus(); };
+    $('terminal').addEventListener('click', focusTerminal);
+    document.addEventListener('pointerdown', event => { if (!shortcuts.contains(event.target)) shortcuts.open = false; });
+    shortcuts.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); shortcuts.open = false; focusTerminal(); }
+    });
+    keyButtons.forEach(button => button.addEventListener('click', async () => {
+      const key = button.dataset.terminalKey;
+      const arrows = {up:'A',down:'B',right:'C',left:'D'};
+      const data = arrows[key] ? `\x1b${term.modes.applicationCursorKeysMode ? 'O' : '['}${arrows[key]}` : {enter:'\r',escape:'\x1b',tab:'\t','ctrl-c':'\x03','ctrl-d':'\x04','ctrl-z':'\x1a','ctrl-l':'\x0c'}[key];
+      shortcuts.open = false;
+      const sent = send(data); focusTerminal(); await sent;
+    }));
+    updateInputControls();
     function send(data) {
       // Preserve keystroke ordering; never retry an ambiguous write automatically.
       inputChain = inputChain.then(async () => {
         if (!ready || inputBroken) throw new Error('Terminal input is disconnected. Reopen the session before sending more input.');
         await api(`/api/sessions/${session}/input`, {key:crypto.randomUUID(),data});
-      }).catch(err => { inputBroken = true; error(err); });
+      }).catch(err => { inputBroken = true; updateInputControls(); error(err); });
       return inputChain;
     }
     term.onData(data => { if (ready && !inputBroken) send(data); });
@@ -50,39 +120,92 @@
       },150);
     }
     new ResizeObserver(resize).observe($('terminal'));
-    const promptKey = `mitos:prompt:${session}`;
-    $('session-input').value = sessionStorage.getItem(promptKey) || '';
-    $('session-input').addEventListener('input', () => sessionStorage.setItem(promptKey,$('session-input').value));
-    form('prompt-form', async () => {
-      const value = $('session-input').value; if (!value.trim()) return;
-      const bytes = new TextEncoder().encode(value+'\r'); if (bytes.length > 8192) throw new Error('Send at most 8192 bytes at a time.');
-      if (!ready || inputBroken) throw new Error('Wait for the session to connect before sending input.');
-      term.paste(value); await send('\r'); if (!inputBroken) { $('session-input').value=''; sessionStorage.removeItem(promptKey); }
-    });
     $('interrupt').addEventListener('click', () => send('\x03'));
-    $('stop-session').addEventListener('click', () => api(`/api/sessions/${session}/stop`,{}).catch(error));
-    $('settle-session').addEventListener('click',()=>api(`/api/sessions/${session}/settle`,{confirmed_stopped:true}).then(()=>location.reload()).catch(error));
-    async function output() {
-      if (!alive) return;
-      try {
-        const v = await api(`/api/sessions/${session}/output?offset=${offset}`);
-        const data = Uint8Array.from(atob(v.data || ''), c=>c.charCodeAt(0));
-        if (data.length) await new Promise(resolve => term.write(data, resolve));
-        offset = v.next; $('session-status').textContent = v.status;
-        const running = v.status === 'running';
-        if (!ready && data.length < 65536 && running) { ready=true; resize(); }
-        $('connection-status').textContent = running ? (ready?'Connected · real terminal':'Restoring scrollback…') : `Session ${v.status}`;
-        ['interrupt','stop-session'].forEach(id=>$(id).disabled=!running);
-        $('prompt-form').querySelector('button').disabled=!running || !ready;
-        if (!running) ready=false;
-        setTimeout(output, data.length === 65536 ? 0 : running ? 180 : 1500);
-      } catch(err) { $('connection-status').textContent='Disconnected · retrying output'; setTimeout(output,2000); }
+    let stopPending = false;
+    function updateSessionStatus(status) {
+      if (!['running','starting','stopping'].includes(status)) stopPending = false;
+      if (stopPending) status = 'stopping';
+      $('session-status').textContent = status;
+      $('session-status').dataset.status = status;
+      const button = $('stop-session');
+      button.disabled = !['running','starting','failed','exited'].includes(status);
+      button.textContent = status === 'stopping' ? 'Stopping…' : status === 'stopped' ? 'Stopped' : ['failed','exited'].includes(status) ? 'Close session' : 'Stop session';
+      button.title = status === 'interrupted' ? 'Inspect the previous processes, then confirm they stopped.' : ['failed','exited'].includes(status) ? 'The process has exited. Close this session and keep its output.' : '';
+      $('settle-session').hidden = status !== 'interrupted';
+      const notice = $('session-action-status');
+      notice.textContent = {failed:'The process failed and is no longer running. Close session keeps its output.',exited:'The process has exited. Close session keeps its output.',stopping:'Stopping the session’s processes…',stopped:'Session stopped. Its output is still available.',interrupted:'The server lost track of this session. Inspect its previous processes, then confirm they stopped.'}[status] || '';
+      notice.hidden = !notice.textContent;
+      if (status !== 'running') ready = false;
+      updateInputControls();
+      return status;
     }
-    output(); window.addEventListener('pagehide',()=>{alive=false;term.dispose();});
+    $('stop-session').addEventListener('click', async () => {
+      stopPending = true;
+      updateSessionStatus('stopping');
+      $('connection-status').textContent = 'Stopping session…';
+      try {
+        await api(`/api/sessions/${session}/stop`,{});
+        const stopped = await api(`/api/sessions/${session}`);
+        updateSessionStatus(stopped.status);
+        await sessions();
+      } catch (err) {
+        stopPending = false;
+        error(err);
+        try { updateSessionStatus((await api(`/api/sessions/${session}`)).status); } catch {}
+      }
+    });
+    $('settle-session').addEventListener('click',()=>api(`/api/sessions/${session}/settle`,{confirmed_stopped:true}).then(()=>location.reload()).catch(error));
+    let outputSocket, outputRetry, outputWatchdog;
+    function output() {
+      if (!alive) return;
+      const url=new URL(`/api/sessions/${session}/stream?offset=${offset}`,location.href);
+      url.protocol=location.protocol==='https:'?'wss:':'ws:';
+      const socket=new WebSocket(url); outputSocket=socket;
+      let processing=Promise.resolve(), finished=false;
+      const watch=()=>{clearTimeout(outputWatchdog);outputWatchdog=setTimeout(()=>socket.close(),25000);};
+      watch();
+      socket.onmessage=event=>{
+        watch();
+        processing=processing.then(async()=>{
+          if (!alive) return;
+          if (typeof event.data!=='string' || event.data.length>128*1024) throw new Error('Terminal frame exceeds limit');
+          const v=JSON.parse(event.data);
+          if (v.heartbeat) return;
+          const data=Uint8Array.from(atob(v.data || ''),c=>c.charCodeAt(0));
+          if (v.next!==offset+data.length) throw new Error('Terminal output offset mismatch');
+          if (data.length) await new Promise(resolve=>term.write(data,resolve));
+          if (!alive) return;
+          // Commit and acknowledge only rendered bytes. The server keeps one
+          // frame in flight, bounding memory even while a tab is backgrounded.
+          offset=v.next;
+          const status=updateSessionStatus(v.status), running=status==='running';
+          finished=!['running','starting','stopping'].includes(status) && data.length<65536;
+          if (!ready && data.length<65536 && running && socket.readyState===WebSocket.OPEN) {
+            ready=true; resize();
+            if (document.activeElement===document.body && !document.querySelector('dialog[open]')) focusTerminal();
+          }
+          $('connection-status').textContent=status==='stopping'?'Stopping session…':inputBroken?'Terminal input disconnected':running?(ready?'Connected · real terminal':'Restoring scrollback…'):`Session ${status}`;
+          updateInputControls();
+          if (socket.readyState===WebSocket.OPEN) socket.send(JSON.stringify({next:offset}));
+        }).catch(()=>socket.close());
+      };
+      socket.onclose=()=>{
+        clearTimeout(outputWatchdog);
+        if (alive) {ready=false;updateInputControls();}
+        // Finish an already queued render before choosing a reconnect cursor.
+        processing.finally(()=>{
+          if (!alive || finished) return;
+          $('connection-status').textContent='Disconnected · reconnecting output';
+          outputRetry=setTimeout(output,1000);
+        });
+      };
+      socket.onerror=()=>socket.close();
+    }
+    output(); window.addEventListener('pagehide',()=>{alive=false;clearTimeout(outputRetry);clearTimeout(outputWatchdog);clearTimeout(resizeTimer);outputSocket?.close();term.dispose();});
   }
   document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('[data-tab]').forEach(tab=>{ const active=tab===b;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));$(`view-${tab.dataset.tab}`).hidden=!active; });
-    if (b.dataset.tab!=='terminal') inspect().catch(error); else window.dispatchEvent(new Event('resize'));
+    if (b.dataset.tab!=='terminal') inspect().catch(error); else { window.dispatchEvent(new Event('resize')); if (focusTerminal) focusTerminal(); }
   }));
   let topicID='', topicRevision=0, topicCursor=0, topicsSignature='', jobsSignature='';
   async function topics() {
@@ -154,6 +277,7 @@
     $('session-list').replaceChildren();
     for(const s of values){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
     const selected=values.find(s=>s.id===session);if(selected?.detail)$('connection-status').textContent=selected.detail;
+    if (selected) $('session-name').textContent=selected.name;
   }
   async function refresh(){try{await Promise.all([topics(),jobs(),sessions()]);}catch(err){error(err);}if(alive)setTimeout(refresh,3000);}
   refresh();

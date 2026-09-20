@@ -12,21 +12,26 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"mitos/internal/agentcli"
 )
 
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("operation conflicts with current state")
 
 type Manager struct {
-	lock      *os.File
-	mu        sync.Mutex
-	dir, root string
-	state     state
-	live      map[string]*terminal
-	jobs      map[string]*runningJob
-	closed    bool
-	writeErr  error
-	wg        sync.WaitGroup
+	Agents        *agentcli.Registry
+	lock          *os.File
+	mu            sync.Mutex
+	dir, root     string
+	state         state
+	live          map[string]*terminal
+	jobs          map[string]*runningJob
+	closed        bool
+	writeErr      error
+	wg            sync.WaitGroup
+	outputMu      sync.Mutex
+	outputChanged chan struct{}
 }
 
 func Open(dir, root string) (*Manager, error) {
@@ -55,7 +60,11 @@ func Open(dir, root string) (*Manager, error) {
 			_ = lock.Close()
 		}
 	}()
-	m := &Manager{dir: dir, root: root, state: state{Version: 1}, live: map[string]*terminal{}, jobs: map[string]*runningJob{}}
+	m := &Manager{dir: dir, root: root, state: state{Version: 1}, live: map[string]*terminal{}, jobs: map[string]*runningJob{}, outputChanged: make(chan struct{})}
+	m.Agents, err = agentcli.Open(filepath.Join(filepath.Dir(dir), "agents.json"), os.Environ())
+	if err != nil {
+		return nil, err
+	}
 	m.lock = lock
 	b, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if err == nil {
@@ -90,6 +99,7 @@ func Open(dir, root string) (*Manager, error) {
 
 // Called under mu; an uncertain write poisons mutations until reopen.
 func (m *Manager) saveLocked() error {
+	defer m.notifyOutput()
 	if m.writeErr != nil {
 		return m.writeErr
 	}
@@ -192,6 +202,7 @@ func (m *Manager) CreateProject(name, directory string) (Project, error) {
 	m.state.Projects = append(m.state.Projects, p)
 	return p, m.saveLocked()
 }
+
 func (m *Manager) Sessions(project string) []Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -233,6 +244,9 @@ func (m *Manager) ReadOutput(id string, offset int64) (Output, error) {
 	}
 	f, err := os.Open(m.outputPath(id))
 	if errors.Is(err, os.ErrNotExist) {
+		if offset != 0 {
+			return Output{}, errors.New("output offset beyond recorded stream")
+		}
 		return Output{Next: 0, Status: status}, nil
 	}
 	if err != nil {

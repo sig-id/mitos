@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
+
+	"mitos/internal/agentcli"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,7 +40,7 @@ func await(t *testing.T, fn func() bool) {
 }
 func TestTerminalInputResizeReplayAndSharedDirectory(t *testing.T) {
 	m, p := testManager(t)
-	s, err := m.Start(p.ID, "Worker", "agent", "read -r line; printf '%s' \"$line\" > result.txt; printf '\\nDONE:%s\\n' \"$line\"; stty size", "http://localhost:4646")
+	s, err := startTestCommand(m, p.ID, "Worker", "agent", "read -r line; printf '%s' \"$line\" > result.txt; printf '\\nDONE:%s\\n' \"$line\"; stty size", "http://localhost:4646")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +75,11 @@ func TestTerminalInputResizeReplayAndSharedDirectory(t *testing.T) {
 }
 func TestCoordinatorUniquenessAndStop(t *testing.T) {
 	m, p := testManager(t)
-	s, err := m.Start(p.ID, "Coordinator", "coordinator", "sleep 60", "http://localhost")
+	s, err := startTestCommand(m, p.ID, "Coordinator", "coordinator", "sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = m.Start(p.ID, "Duplicate", "coordinator", "sleep 60", "http://localhost"); err == nil {
+	if _, err = startTestCommand(m, p.ID, "Duplicate", "coordinator", "sleep 60", "http://localhost"); err == nil {
 		t.Fatal("second coordinator admitted")
 	}
 	if err = m.Stop(s.ID); err != nil {
@@ -89,7 +92,7 @@ func TestCoordinatorUniquenessAndStop(t *testing.T) {
 }
 func TestInputRequestNotAppliedTwice(t *testing.T) {
 	m, p := testManager(t)
-	s, err := m.Start(p.ID, "Reader", "shell", "read -r a; read -r b; printf '\\nRESULT:%s:%s\\n' \"$a\" \"$b\"", "http://localhost")
+	s, err := startTestCommand(m, p.ID, "Reader", "shell", "read -r a; read -r b; printf '\\nRESULT:%s:%s\\n' \"$a\" \"$b\"", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func TestProjectRootAndCrossProjectAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := m.Start(other.ID, "Worker", "agent", "sleep 60", "http://localhost")
+	s, err := startTestCommand(m, other.ID, "Worker", "agent", "sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +200,7 @@ func TestManagedBuildSerializesAndConsumerRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	s, err := m.Start(p.ID, "Consumer", "agent", "sleep 60", "http://localhost")
+	s, err := startTestCommand(m, p.ID, "Consumer", "agent", "sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +240,7 @@ func TestManagedBuildSerializesAndConsumerRelease(t *testing.T) {
 
 func TestScratchAndGitAttribution(t *testing.T) {
 	m, p := testManager(t)
-	s, err := m.Start(p.ID, "Writer", "shell", "printf scratch > \"$TMPDIR/test.txt\"; git init --quiet; sleep 60", "http://localhost")
+	s, err := startTestCommand(m, p.ID, "Writer", "shell", "printf scratch > \"$TMPDIR/test.txt\"; git init --quiet; sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,4 +278,13 @@ func TestManagerExcludesSecondWriter(t *testing.T) {
 		other.Close()
 		t.Fatal("second writer admitted")
 	}
+}
+
+// Explicit process fixtures exercise the PTY lifecycle without a real model CLI.
+func startTestCommand(m *Manager, project, name, role, command, serverURL string) (Session, error) {
+	shell, err := exec.LookPath("bash")
+	if err != nil {
+		return Session{}, err
+	}
+	return m.start(project, name, role, command, serverURL, agentcli.Launch{Executable: shell, Args: []string{"--noprofile", "--norc", "-c", command}, Env: os.Environ()}, false, nil)
 }

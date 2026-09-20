@@ -14,14 +14,21 @@ and voice-draft configuration.
 ## Start
 
 Requires Go 1.26+, Git, and Bash on Linux (validated with Git 2.54). The first
-build downloads the pinned Go PTY dependency. No Node, frontend compilation,
+build downloads the pinned Go PTY and WebSocket dependencies. No Node, frontend compilation,
 database service, or CDN is required to serve it. Terminal assets are vendored.
 
 ```sh
 just serve                 # http://127.0.0.1:4646
+just stop                  # gracefully stop this project's Studio; safe to repeat
 just demo 4756             # labelled example history, separate .mitos-demo data
 just check                # vet + race-enabled tests
 ```
+
+`just serve` rebuilds, stops the previous Studio using the same data directory,
+and launches the new build in the foreground. `mitos serve` also replaces the
+previous process. Saved data survives the restart.
+`just stop .mitos-demo` stops the demo instance. The equivalent CLI command is
+`mitos stop --data .mitos`; it waits for graceful shutdown and leaves saved data intact.
 
 Without `just`:
 
@@ -32,13 +39,19 @@ go build -o bin/mitos ./cmd/mitos
 ```
 
 The Studio opens on the **agent workspace**. **Open a project** → select a local
-directory → **New session** → enter your installed CLI command (or leave it empty
-for a shell). Sessions share the directory and use your local CLI configuration.
+directory → **New session** → pick a detected agent or application and optionally
+enter a first prompt. Sessions get a stable name from that prompt; no session name
+is required. Sessions share the directory and use their native CLI configuration.
+Startup discovers installed agents; environment profiles select agent-specific
+setup without copying credentials into session metadata. See the
+[agent abstraction and orchestrator architecture](docs/AGENT_CLI_ABSTRACTION.md).
 Select **Project coordinator** for the session that manages the plan; only one
 active coordinator is allowed per project. The role provides coordination context,
 not extra permissions or an automatic approval policy.
 
 The terminal has real PTY input, resize, scrollback, interrupt, and stop controls.
+Output streams over WebSocket with acknowledged replay after reconnect.
+See the [streaming and Ghostty evaluation](docs/TERMINAL_RENDERER_EVALUATION.md).
 Navigation leaves execution running. Output survives server restart; processes
 are not automatically relaunched. Interrupted sessions require explicit process
 inspection before replacement. See [interactive workspace behavior and APIs](docs/INTERACTIVE_WORKSPACE.md).

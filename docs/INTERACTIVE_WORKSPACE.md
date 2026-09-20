@@ -6,12 +6,20 @@ existing routes. The two paths have different execution contracts.
 
 ## Sessions
 
-Open a project directory beneath `--workspace-root`, then create a session. An
-empty command starts interactive Bash; a supplied command runs through Bash's
-login shell in a PTY. It can launch any installed coding CLI. The browser uses
+Open a project directory beneath `--workspace-root`, then choose a detected agent
+or application and an optional environment profile. The adapter launches its executable directly
+in a PTY. Bash is an explicit shell choice. Names come from the first launch or
+API prompt and remain stable; raw terminal keystrokes are not interpreted as
+a naming prompt. See [agent adapters and fleet architecture](AGENT_CLI_ABSTRACTION.md). The browser uses
 vendored xterm.js, with real terminal input and resize rather than a reconstruction
 of a model conversation. Interrupt sends Ctrl+C to the terminal foreground group;
 Stop terminates observed processes in its OS session and closes the PTY.
+The terminal takes keyboard focus when it connects. Click it to return focus and
+type directly, including Ctrl+C and Ctrl+D. The compact **Keys** menu provides
+arrow, Tab, Esc, Enter, Ctrl+C, Ctrl+D, Ctrl+Z, and Ctrl+L shortcuts when needed.
+Type and paste directly into the terminal; there is no separate session text box.
+Stop session terminates a running session. After a process exits or fails,
+Close session marks it stopped while retaining its output and exit details.
 
 Sessions use the operator's environment, home/configuration, and credentials. They
 modify the selected directory directly, and multiple sessions can share it. This
@@ -26,11 +34,11 @@ model service or inject terminal keystrokes to imitate a model protocol. The use
 can direct that agent to read the supplied instructions and use the project tools.
 
 Input requests are serialized, with a bounded in-memory duplicate-key window.
-The browser does not automatically retry ambiguous input. Output is polled by byte
-offset and transported as base64 to preserve terminal bytes. It is saved separately
+The browser does not automatically retry ambiguous input. Output streams over a WebSocket using byte offsets and base64 to preserve terminal
+bytes. The browser acknowledges rendered frames and reconnects from its last
+rendered offset. See [transport and renderer evaluation](TERMINAL_RENDERER_EVALUATION.md). It is saved separately
 from metadata, capped at 16 MiB per session/job; excess output stops execution.
-Leaving the page does not stop the process. Draft prompts and replies remain in
-browser session storage. Terminal output can include sensitive CLI output and is
+Leaving the page does not stop the process. Draft board replies remain in browser session storage. Terminal output can include sensitive CLI output and is
 kept locally with private filesystem permissions.
 
 Metadata lives in `.mitos/desk/state.json`, written by atomic replacement and
@@ -62,6 +70,7 @@ Sessions receive:
 
 - `MITOS_BIN`: absolute path to the running Mitos binary.
 - `MITOS_URL`, `MITOS_PROJECT_ID`, `MITOS_SESSION_ID`: project tool context.
+- `MITOS_GOAL_ID`, `MITOS_TASK_ID`, `MITOS_REQUESTED_BY`, `MITOS_HANDOFF_TOPIC_ID`: optional fleet assignment references.
 - `MITOS_COORDINATION`: a local Markdown file describing the tools and role.
 - `TMPDIR`: a private session scratch directory.
 - `GIT_TRACE2_EVENT`: a trace file in scratch for observed Git command provenance.
@@ -125,9 +134,14 @@ accept JSON and bounded bodies. The deployment remains trusted and single-user.
 | Endpoint | Behavior |
 |---|---|
 | `GET/POST /api/projects` | List or open project `{name,directory}` |
-| `GET/POST /api/projects/{id}/sessions` | List or launch `{name,role,command}` |
+| `GET /api/agents` | Discover adapters and installation metadata; optional `project` |
+| `GET /api/agents/{id}` | Inspect selected `profile` and `project`, without credential values |
+| `POST /api/agents/refresh` | Refresh executable/version discovery |
+| `GET/POST /api/projects/{id}/sessions` | List or launch `{agent_id,profile_id,prompt,role,assignment}` |
 | `GET /api/sessions/{id}` | Session lifecycle and command |
+| `WS /api/sessions/{id}/stream?offset=N` | Push `{data,next,status}`; acknowledge rendered frames with `{next}` |
 | `GET /api/sessions/{id}/output?offset=N` | Up to 64 KiB of terminal bytes and next offset |
+| `POST /api/sessions/{id}/prompt` | `{key,text,bracketed}` submits a prompt and establishes the first stable name |
 | `POST /api/sessions/{id}/input` | `{key,data}` to the existing PTY |
 | `POST /api/sessions/{id}/resize` | `{rows,cols}` |
 | `POST /api/sessions/{id}/stop` | Stop live execution |
