@@ -23,7 +23,16 @@ External engine, Nucleus, and sigid boundaries remain external.
 
 - Go server/CLI and embedded HTMX UI; no frontend build or CDN dependency.
 - New Studio navigation: Overview, Work, Decisions, Applications.
-- Loopback-only operation with cross-origin mutation protection.
+- Loopback Studio operation with cross-origin mutation protection. An optional
+  separate TLS device listener exposes scoped snapshots, durable decision
+  receipts, and voice drafts; local CLI pairing, rotation, expiry, revocation,
+  tenant isolation, bounded pagination, and restart replay are covered by backend
+  tests. Codex app-server and Claude hook adapters ingest native questions and
+  one-shot approvals, validate text answers, journal native responses, and record
+  source acknowledgement/session invalidation. Real installed harness round-trip
+  tests pass with local deterministic inference. HTTP and executable STT providers
+  produce drafts only. See [device API setup and validation](../docs/DEVICE_API.md).
+  Physical esp-notify board acceptance remains external.
 - Durable task/run identity, JSONL Decision/Effect records, hash chaining,
   fsync-before-execute, locked writer, replay, and partial-tail recovery.
 - Brief validation, bounded workspace copying, concurrent local execution,

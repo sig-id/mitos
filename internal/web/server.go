@@ -119,6 +119,8 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	mux.HandleFunc("GET /{$}", s.deskPage)
 	mux.HandleFunc("GET /overview", s.overview)
 	s.deskRoutes(mux)
+	s.deviceRoutes(mux)
+	s.agentRoutes(mux)
 	mux.HandleFunc("GET /web", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusSeeOther) })
 	mux.HandleFunc("GET /autonomy", func(w http.ResponseWriter, r *http.Request) {
 		report, err := studio.ReportAutonomy(s.engine.Store.List())
@@ -204,8 +206,9 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	})
 	mux.HandleFunc("POST /api/runs/{id}/decisions/{decision}", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Choice string `json:"choice"`
-			Note   string `json:"note"`
+			Choice string          `json:"choice"`
+			Value  json.RawMessage `json:"value"`
+			Note   string          `json:"note"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
@@ -217,7 +220,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		if r.Header.Get("X-Mitos-Client") == "cli" {
 			via = "cli"
 		}
-		result, err := s.engine.ResolveAs(r.PathValue("id"), r.PathValue("decision"), body.Choice, body.Note, via, decision.LocalOperator())
+		result, err := s.engine.ResolveValueAs(r.PathValue("id"), r.PathValue("decision"), body.Choice, body.Value, body.Note, via, decision.LocalOperator())
 		if err != nil {
 			writeJSON(w, 409, map[string]string{"error": err.Error()})
 			return
@@ -463,7 +466,15 @@ func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
 	redirect(w, r, "/runs/"+run.ID)
 }
 func (s *Server) resolve(w http.ResponseWriter, r *http.Request) {
-	id, err := s.engine.Resolve(r.PathValue("id"), r.PathValue("decision"), r.FormValue("choice"))
+	var value json.RawMessage
+	if err := r.ParseForm(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if r.PostForm.Has("value") {
+		value, _ = json.Marshal(r.FormValue("value"))
+	}
+	id, err := s.engine.ResolveValueAs(r.PathValue("id"), r.PathValue("decision"), r.FormValue("choice"), value, "", "console", decision.LocalOperator())
 	if err != nil {
 		s.fail(w, r, err)
 		return

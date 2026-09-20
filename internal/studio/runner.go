@@ -207,6 +207,9 @@ func (e *Engine) retry(id string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	if r.Decision != nil && r.Decision.Source != nil {
+		return Run{}, ErrConflict
+	}
 	if !r.Terminal() && !(r.Status == "parked" && r.Decision != nil && r.Decision.Resolution != nil && r.Decision.Choice == "retry") {
 		return Run{}, ErrConflict
 	}
@@ -232,6 +235,9 @@ func (e *Engine) cancelWork(id, reason string) error {
 	r, err := e.Store.Get(id)
 	if err != nil {
 		return err
+	}
+	if r.Decision != nil && r.Decision.Source != nil {
+		return e.Store.cancelAgentRun(id)
 	}
 	if r.Status == "cancelled" || r.Status == "stopping" {
 		return nil
@@ -269,6 +275,9 @@ func (e *Engine) dispatch() {
 		case <-e.ctx.Done():
 			return
 		case <-tick.C:
+			if err := e.Store.expireAgentSessions(); err != nil {
+				continue
+			}
 			cycleTime := time.Now().UTC()
 			if err := e.reconcileServiceLifecycle(); err != nil {
 				continue

@@ -21,6 +21,13 @@ import (
 )
 
 type Store struct {
+	agentSessions          map[string]AgentSession
+	agentRequests          map[string]AgentRequest
+	agentAnswers           map[string]AgentAnswer
+	devices                map[string]Device
+	deviceTokens           map[string]string
+	deviceCommands         map[string]DeviceCommandRecord
+	deviceHistory          map[string]decision.Card
 	serviceLifecycle       map[int64]*serviceLifecycleState
 	serviceLifecycleKeys   map[string]int64
 	serviceHolds           map[string]map[int64]bool
@@ -142,6 +149,24 @@ func (s *Store) apply(e Event) error {
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
 	}
+	if c.AgentSession != nil || c.AgentRequest != nil || c.AgentAnswer != nil {
+		if err := s.applyAgentEvent(e, c); err != nil {
+			return err
+		}
+		if e.RunID == "" {
+			return nil
+		}
+	}
+	if c.Device != nil {
+		s.applyDevice(*c.Device)
+		return nil
+	}
+	if c.DeviceCommand != nil {
+		if s.deviceCommands == nil {
+			s.deviceCommands = map[string]DeviceCommandRecord{}
+		}
+		s.deviceCommands[c.DeviceCommand.DeviceID+"/"+c.DeviceCommand.Receipt.CommandID] = *c.DeviceCommand
+	}
 	if c.ServiceLifecycle != nil {
 		return s.applyServiceLifecycle(e, c)
 	}
@@ -247,6 +272,12 @@ func (s *Store) apply(e Event) error {
 		r.Decision.Choice = c.Choice
 		at := e.At
 		r.Decision.ResolvedAt = &at
+	}
+	if r.Decision != nil {
+		if s.deviceHistory == nil {
+			s.deviceHistory = map[string]decision.Card{}
+		}
+		s.deviceHistory[r.ID+"/"+r.Decision.ID] = *r.Decision
 	}
 	r.UpdatedAt = e.At
 	if r.Terminal() && r.FinishedAt.IsZero() {

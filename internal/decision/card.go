@@ -65,6 +65,8 @@ type Option struct {
 	Recommended bool   `json:"recommended,omitempty"`
 }
 type Resolution struct {
+	DeviceID   string          `json:"device_id,omitempty"`
+	CommandID  string          `json:"command_id,omitempty"`
 	DecisionID string          `json:"decision_id"`
 	Resolver   string          `json:"resolver"`
 	Choice     string          `json:"choice"`
@@ -73,7 +75,15 @@ type Resolution struct {
 	ResolvedAt time.Time       `json:"resolved_at"`
 	Via        string          `json:"via"`
 }
+type Source struct {
+	Adapter   string `json:"adapter"`
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id"`
+}
+
 type Card struct {
+	Source           *Source         `json:"source,omitempty"`
+	SupersededAt     *time.Time      `json:"superseded_at,omitempty"`
 	ApplicationError string          `json:"application_error,omitempty"`
 	ID               string          `json:"decision_id"`
 	RunID            string          `json:"run_id"`

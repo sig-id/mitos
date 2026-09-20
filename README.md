@@ -7,6 +7,10 @@ Mitos is being rebuilt in **Go + HTMX**, starting with the Studio product in
 the specs. The previous `beam/` implementation has been removed. This is a new
 implementation, not a feature-complete port of that runtime.
 
+See [the handheld device API](docs/DEVICE_API.md) for optional HTTPS snapshots,
+confirmed decision receipts, pairing, Codex/Claude question and approval adapters,
+and voice-draft configuration.
+
 ## Start
 
 Requires Go 1.26+, Git, and Bash on Linux (validated with Git 2.54). The first

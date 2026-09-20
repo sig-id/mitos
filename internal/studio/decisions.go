@@ -1,11 +1,11 @@
 package studio
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"mitos/internal/autonomy"
@@ -111,11 +111,20 @@ func (s *Store) Resolve(id, decisionID, choice string) error {
 func (s *Store) ResolveChoice(id string, resolution decision.Resolution, principal decision.Principal, rewind *autonomy.Rewind) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.resolveChoice(id, resolution, principal, rewind, nil)
+}
+func (s *Store) resolveChoice(id string, resolution decision.Resolution, principal decision.Principal, rewind *autonomy.Rewind, command *DeviceCommandRecord) error {
 	r := s.runs[id]
 	if r == nil {
 		return ErrNotFound
 	}
 	reject := func(reason string, result error) error {
+		if command != nil {
+			if result != nil {
+				return deviceError(409, "conflict")
+			}
+			return nil
+		}
 		b, _ := json.Marshal(map[string]string{"decision_id": resolution.DecisionID, "reason": reason, "via": resolution.Via})
 		if err := s.commit(id, "effect", "decision_rejected", change{Evidence: b}); err != nil {
 			return err
@@ -128,15 +137,27 @@ func (s *Store) ResolveChoice(id string, resolution decision.Resolution, princip
 	if r.Decision == nil || r.Decision.ID != resolution.DecisionID {
 		return reject("stale decision", ErrConflict)
 	}
-	if resolution.Via != "console" && resolution.Via != "cli" && resolution.Via != "api" {
+	if resolution.Via != "console" && resolution.Via != "cli" && resolution.Via != "api" && !(resolution.Via == "esp-notify" && command != nil) {
 		return reject("unsupported resolution transport", ErrConflict)
 	}
-	if len(resolution.Value) > 0 || len(resolution.Note) > 10000 {
+	if len(resolution.Note) > 10000 {
 		return reject("unsupported value or oversized note", ErrConflict)
 	}
 	d := r.Decision
+	if d.Source != nil && s.agentSessions[d.Source.SessionID].Operator != principal.ID {
+		return reject("answer not offered to this operator", ErrConflict)
+	}
+	if d.SupersededAt != nil || d.Due(time.Now()) || d.Source != nil && !s.agentSourceActive(d.Source) {
+		return reject("request expired or superseded", ErrConflict)
+	}
+	if err := d.ValidateValue(resolution.Value); err != nil {
+		return reject("value does not match schema", err)
+	}
+	if d.InputProfile() == "none" {
+		resolution.Value = nil
+	}
 	if d.Choice != "" {
-		if d.Choice == resolution.Choice {
+		if d.Choice == resolution.Choice && (d.Resolution == nil || bytes.Equal(d.Resolution.Value, resolution.Value)) {
 			return reject("duplicate resolution; first valid choice retained", nil)
 		}
 		return reject("conflicting resolution; first valid choice retained", ErrConflict)
@@ -144,7 +165,7 @@ func (s *Store) ResolveChoice(id string, resolution decision.Resolution, princip
 	if r.Status != "parked" || !d.HasOption(resolution.Choice) {
 		return reject("choice is unavailable", ErrConflict)
 	}
-	if resolution.Choice == "rewind" {
+	if resolution.Choice == "rewind" && d.Source == nil {
 		if rewind == nil {
 			return reject("rewind requires a validated recovery request", ErrConflict)
 		}
@@ -162,10 +183,14 @@ func (s *Store) ResolveChoice(id string, resolution decision.Resolution, princip
 	resolution.ResolvedAt = time.Now().UTC()
 	status := "cancelled"
 	stage := "Applying your choice"
-	if resolution.Choice == "rewind" || resolution.Choice == "retry" {
+	if d.Source != nil || resolution.Choice == "rewind" || resolution.Choice == "retry" {
 		status = "parked"
 	}
-	return s.commit(id, "effect", "approval_resolved", change{Resolution: &resolution, ResolutionRewind: rewind, Choice: resolution.Choice, Status: status, Stage: stage, Summary: "Decision recorded: " + resolution.Choice + ". The previous evidence is preserved."})
+	answer, err := s.agentOutbox(r, resolution)
+	if err != nil {
+		return reject("source response cannot be formed", err)
+	}
+	return s.commit(id, "effect", "approval_resolved", change{AgentAnswer: answer, DeviceCommand: command, Resolution: &resolution, ResolutionRewind: rewind, Choice: resolution.Choice, Status: status, Stage: stage, Summary: "Decision recorded: " + resolution.Choice + ". The previous evidence is preserved."})
 }
 func (s *Store) DecisionApplied(id, decisionID, resultID string) error {
 	s.mu.Lock()
@@ -181,7 +206,11 @@ func (s *Store) DecisionApplied(id, decisionID, resultID string) error {
 		return nil
 	}
 	change := change{DecisionApplied: true, ResultRunID: resultID}
-	if r.Status == "cancelled" || r.Decision.Choice == "retry" {
+	if r.Decision.Source != nil {
+		change.Status = "done"
+		change.Stage = "Answer delivered"
+		change.Summary = "The originating session received the recorded answer."
+	} else if r.Status == "cancelled" || r.Decision.Choice == "retry" {
 		change.Status = "cancelled"
 		change.Stage = "Closed"
 		change.Summary = "Your choice was applied. The previous attempt is preserved."
@@ -193,6 +222,24 @@ func (e *Engine) ResolveAs(id, decisionID, choice, note, via string, principal d
 	e.actions.Lock()
 	defer e.actions.Unlock()
 	return e.resolveAs(id, decisionID, choice, note, via, principal, nil)
+}
+func (e *Engine) ResolveValueAs(id, decisionID, choice string, value json.RawMessage, note, via string, p decision.Principal) (string, error) {
+	e.actions.Lock()
+	defer e.actions.Unlock()
+	r, err := e.Store.Get(id)
+	if err != nil {
+		return "", err
+	}
+	if r.Decision == nil || r.Decision.Source == nil {
+		if len(value) > 0 && string(value) != "null" {
+			return "", decision.ErrValue
+		}
+		return e.resolveAs(id, decisionID, choice, note, via, p, nil)
+	}
+	if err = e.Store.ResolveChoice(id, decision.Resolution{DecisionID: decisionID, Choice: choice, Value: value, Note: note, Via: via}, p, nil); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 func (e *Engine) resolveAs(id, decisionID, choice, note, via string, principal decision.Principal, request *autonomy.Rewind) (string, error) {
 	r, err := e.Store.Get(id)
@@ -208,18 +255,7 @@ func (e *Engine) resolveAs(id, decisionID, choice, note, via string, principal d
 		}
 	}
 	if choice == "rewind" && request == nil && r.Decision != nil && r.Decision.ID == decisionID && r.Decision.Choice == "" {
-		signal := r.Decision.ReasonSignal
-		memo := fmt.Sprintf("The operator requested checkpoint recovery after %s. Correct the recorded failure using the preceding segment's output and predicate evidence, while preserving the original brief.", signal)
-		request = &autonomy.Rewind{Scope: "step", FromSegment: len(r.Segments), Memo: memo, ReasonSignal: signal}
-		// A crash may interrupt an already recorded restoration. Resume that
-		// exact request after inspection, preserving its memo and restart count.
-		if r.PendingRewind != nil {
-			copy := *r.PendingRewind
-			request = &copy
-		} else if r.ReadyRewind != nil {
-			copy := *r.ReadyRewind
-			request = &copy
-		}
+		request = decisionRewind(r)
 	}
 	if err = e.Store.ResolveChoice(id, decision.Resolution{DecisionID: decisionID, Choice: choice, Note: note, Via: via}, principal, request); err != nil {
 		return "", err
@@ -253,6 +289,9 @@ func (e *Engine) applyResolution(r Run) (string, error) {
 		}
 		return r.ID, nil
 	}
+	if d.Source != nil {
+		return r.ID, nil
+	} // The durable outbox is consumed and acknowledged by its source adapter.
 	resultID := r.ID
 	if r.Status == "cancelled" && d.Resolution.Choice != "cancel" {
 		if err := e.Store.failDecisionApplication(r.ID, "The operator stopped this work before the accepted choice could run.", true); err != nil {

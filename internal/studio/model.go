@@ -135,6 +135,11 @@ type Event struct {
 }
 
 type change struct {
+	AgentSession      *AgentSession              `json:"agent_session,omitempty"`
+	AgentRequest      *AgentRequest              `json:"agent_request,omitempty"`
+	AgentAnswer       *AgentAnswer               `json:"agent_answer,omitempty"`
+	Device            *Device                    `json:"device,omitempty"`
+	DeviceCommand     *DeviceCommandRecord       `json:"device_command,omitempty"`
 	ServiceLifecycle  *ServiceLifecycleOperation `json:"service_lifecycle,omitempty"`
 	CustomEvent       *CustomEventRecord         `json:"custom_event,omitempty"`
 	ServiceCondition  *ServiceConditionState     `json:"service_condition,omitempty"`

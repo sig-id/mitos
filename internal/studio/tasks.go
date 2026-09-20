@@ -157,7 +157,7 @@ func (s *Store) taskChange(id, kind string, c change, at time.Time, seq int64) (
 	if c.Run != nil {
 		r = c.Run
 	}
-	if r == nil {
+	if r == nil || r.Decision != nil && r.Decision.Source != nil {
 		return nil, ""
 	}
 	prior := s.tasks[r.TaskID]

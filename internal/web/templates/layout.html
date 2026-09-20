@@ -127,6 +127,7 @@
 </div>
 </div>
 <form method="post" action="/runs/{{.ID}}/decisions/{{.Decision.ID}}" hx-disabled-elt="find button">
+{{if eq .Decision.InputProfile "text"}}<label>Answer<textarea name="value" maxlength="1024" rows="3"></textarea></label>{{end}}
 <div class="decision-options">{{range .Decision.Options}}<button class="decision-option {{if .Recommended}}recommended{{end}}" name="choice" value="{{.ID}}">
 <span>
 <strong>{{.Label}}</strong>{{if .Recommended}}<small>Recommended</small>{{end}}</span>

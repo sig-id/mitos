@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"mitos/internal/autonomy"
+	"mitos/internal/device"
 	"mitos/internal/fleet"
 	"mitos/internal/service"
 	"mitos/internal/studio"
@@ -29,6 +31,11 @@ import (
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		log.Print(err)
+		// Claude treats exit 1 as a nonblocking hook error. A failed connector
+		// must block the waiting tool instead of bypassing canonical approval.
+		if len(os.Args) > 2 && os.Args[1] == "agent" && os.Args[2] == "claude-hook" {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
@@ -37,6 +44,10 @@ func run(args []string) error {
 		args = []string{"serve"}
 	}
 	switch args[0] {
+	case "agent":
+		return agentClient(args[1:])
+	case "device":
+		return deviceClient(args[1:])
 	case "desk":
 		return deskClient(args[1:])
 	case "serve":
@@ -44,7 +55,7 @@ func run(args []string) error {
 	case "run", "status", "log", "interrupts", "checkpoints", "rewind", "decisions", "resolve", "autonomy", "fleet", "evidence", "release-claims", "tasks", "task", "pools", "configure-pool", "services", "services-preview", "services-configure", "service-run", "heartbeat", "service-signal", "emit-event", "service-events", "service-stop", "service-restart", "service-resume", "service-lifecycle":
 		return client(args[0], args[1:])
 	case "help", "--help", "-h":
-		fmt.Println("Mitos Studio\n\n  mitos serve   Start the local Go + HTMX studio\n  mitos run     Submit a brief to a running studio\n  mitos status  Read a run from a running studio\n  mitos log     Read a run's events\n  mitos interrupts  Report recorded human interruptions\n  mitos checkpoints List a run's saved recovery points\n  mitos autonomy Report autonomy evidence and coverage\n  mitos fleet   List structured fleet status\n  mitos tasks   List durable task state\n  mitos task    Read a task and its attempt lineage\n  mitos pools   List persisted scheduling policies\n  mitos services Read desired service activation and reasons\n  mitos services-preview Validate a service catalog without saving\n  mitos services-configure Save a catalog at an expected revision\n  mitos service-run Trigger a service task with an idempotency key\n  mitos service-signal Deliver a JSON message to an external-signal service\n  mitos service-stop Stop a service or target and its part_of members\n  mitos service-restart Stop a service group and publish fresh Tasks\n  mitos service-resume Release a settled service stop\n  mitos service-lifecycle Read service stop operations\n  mitos emit-event Emit a named JSON event to active subscribers\n  mitos service-events List custom events or read one by sequence\n  mitos heartbeat Record a current run monitor heartbeat\n  mitos configure-pool Save a scheduling policy\n  mitos evidence Read a run’s bounded structured evidence\n  mitos release-claims Release inspected previous execution claims\n  mitos decisions List pending human decisions\n  mitos resolve Record a choice for a decision\n  mitos rewind  Restore a checkpoint of parked work\n\nUse a command with --help for its options.")
+		fmt.Println("Mitos Studio\n\n  mitos agent  Connect Codex or Claude waiting requests\n  mitos device  Pair, list, rotate or revoke handheld credentials\n  mitos serve   Start the local Go + HTMX studio\n  mitos run     Submit a brief to a running studio\n  mitos status  Read a run from a running studio\n  mitos log     Read a run's events\n  mitos interrupts  Report recorded human interruptions\n  mitos checkpoints List a run's saved recovery points\n  mitos autonomy Report autonomy evidence and coverage\n  mitos fleet   List structured fleet status\n  mitos tasks   List durable task state\n  mitos task    Read a task and its attempt lineage\n  mitos pools   List persisted scheduling policies\n  mitos services Read desired service activation and reasons\n  mitos services-preview Validate a service catalog without saving\n  mitos services-configure Save a catalog at an expected revision\n  mitos service-run Trigger a service task with an idempotency key\n  mitos service-signal Deliver a JSON message to an external-signal service\n  mitos service-stop Stop a service or target and its part_of members\n  mitos service-restart Stop a service group and publish fresh Tasks\n  mitos service-resume Release a settled service stop\n  mitos service-lifecycle Read service stop operations\n  mitos emit-event Emit a named JSON event to active subscribers\n  mitos service-events List custom events or read one by sequence\n  mitos heartbeat Record a current run monitor heartbeat\n  mitos configure-pool Save a scheduling policy\n  mitos evidence Read a run’s bounded structured evidence\n  mitos release-claims Release inspected previous execution claims\n  mitos decisions List pending human decisions\n  mitos resolve Record a choice for a decision\n  mitos rewind  Restore a checkpoint of parked work\n\nUse a command with --help for its options.")
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q; use mitos help", args[0])
@@ -53,6 +64,12 @@ func run(args []string) error {
 func serve(args []string) error {
 	f := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := f.String("addr", "127.0.0.1:4646", "Loopback HTTP address")
+	deviceAddr := f.String("device-addr", "", "Separate device HTTPS listener (disabled by default)")
+	deviceCert := f.String("device-cert", "", "Device TLS certificate PEM with its chain")
+	deviceKey := f.String("device-key", "", "Device TLS private key PEM")
+	sttURL := f.String("device-stt-url", "", "Audio transcription endpoint (HTTPS or local HTTP)")
+	sttModel := f.String("device-stt-model", "whisper-1", "Audio transcription model")
+	sttCommand := f.String("device-stt-command", "", "STT executable: PCM16 stdin, transcript stdout")
 	data := f.String("data", ".mitos", "Durable data directory")
 	root := f.String("workspace-root", ".", "Allowed workspace parent directory")
 	appsDir := f.String("apps", "", "Directory containing local application folders")
@@ -62,6 +79,31 @@ func serve(args []string) error {
 			return nil
 		}
 		return err
+	}
+	if *deviceAddr == "" && (*deviceCert != "" || *deviceKey != "" || *sttCommand != "" || *sttURL != "") {
+		return errors.New("device TLS/STT flags require --device-addr")
+	}
+	var speech device.Transcriber
+	if *sttURL != "" && *sttCommand != "" {
+		return errors.New("choose either --device-stt-url or --device-stt-command")
+	}
+	if *sttURL != "" {
+		provider, err := device.NewHTTPTranscriber(*sttURL, *sttModel, os.Getenv("MITOS_STT_API_KEY"))
+		if err != nil {
+			return err
+		}
+		speech = provider
+	}
+	var deviceTLS *tls.Config
+	if *deviceAddr != "" {
+		if *deviceCert == "" || *deviceKey == "" {
+			return errors.New("--device-addr requires --device-cert and --device-key")
+		}
+		cert, err := tls.LoadX509KeyPair(*deviceCert, *deviceKey)
+		if err != nil {
+			return err
+		}
+		deviceTLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
 	}
 	host, _, err := net.SplitHostPort(*addr)
 	if err != nil {
@@ -101,7 +143,24 @@ func serve(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	serverErr := make(chan error, 1)
+	serverErr := make(chan error, 2)
+	var deviceServer *http.Server
+	if deviceTLS != nil {
+		stt := speech
+		if *sttCommand != "" {
+			stt = device.CommandTranscriber{Path: *sttCommand}
+		}
+		deviceServer = &http.Server{Addr: *deviceAddr, Handler: device.New(engine, stt), TLSConfig: deviceTLS, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 25 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 4096}
+		remote, err := net.Listen("tcp", *deviceAddr)
+		if err != nil {
+			listener.Close()
+			return err
+		}
+		defer deviceServer.Close()
+		go func() { serverErr <- deviceServer.Serve(tls.NewListener(remote, deviceTLS)) }()
+		log.Printf("Mitos device API → https://%s", remote.Addr())
+	}
+	defer server.Close()
 	go func() { serverErr <- server.Serve(listener) }()
 	log.Printf("Mitos Studio → http://%s  (data: %s)", listener.Addr(), store.Dir())
 	select {
@@ -114,6 +173,11 @@ func serve(args []string) error {
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if deviceServer != nil {
+		if err := deviceServer.Shutdown(shutdown); err != nil {
+			return err
+		}
+	}
 	return server.Shutdown(shutdown)
 }
 func client(command string, args []string) error {
@@ -148,6 +212,7 @@ func client(command string, args []string) error {
 	f.Func("own-path", "Owned relative path prefix; repeat for multiple paths (default: whole workspace for command applications)", func(value string) error { ownedPaths = append(ownedPaths, value); return nil })
 	f.Func("lease", "Exclusive resource name; repeat for multiple resources", func(value string) error { leases = append(leases, value); return nil })
 	confirmedStopped := f.Bool("confirmed-stopped", false, "Confirm that you inspected and stopped the previous execution before releasing its claims")
+	answerValue := f.String("value", "", "String answer for a value decision")
 	choice := f.String("choice", "", "Option ID from the saved decision card")
 	note := f.String("note", "", "Optional resolution note")
 	checkpoint := f.String("checkpoint", "", "Checkpoint ID; defaults to the last passing checkpoint")
@@ -372,7 +437,13 @@ func client(command string, args []string) error {
 				return errors.New("invalid run or decision ID")
 			}
 		}
-		body, _ := json.Marshal(map[string]string{"choice": *choice, "note": *note})
+		answer := map[string]any{"choice": *choice, "note": *note}
+		f.Visit(func(option *flag.Flag) {
+			if option.Name == "value" {
+				answer["value"] = *answerValue
+			}
+		})
+		body, _ := json.Marshal(answer)
 		req, err = http.NewRequest("POST", base+"/api/runs/"+f.Arg(0)+"/decisions/"+f.Arg(1), bytes.NewReader(body))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
