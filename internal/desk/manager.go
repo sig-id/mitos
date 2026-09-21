@@ -170,20 +170,9 @@ func (m *Manager) CreateProject(name, directory string) (Project, error) {
 	if name == "" || len(name) > 100 {
 		return Project{}, errors.New("project name must be 1–100 characters")
 	}
-	if !filepath.IsAbs(directory) {
-		directory = filepath.Join(m.root, directory)
-	}
-	directory, err := filepath.EvalSymlinks(directory)
+	directory, err := m.ResolveDirectory(directory)
 	if err != nil {
 		return Project{}, err
-	}
-	rel, err := filepath.Rel(m.root, directory)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return Project{}, errors.New("project must be under the workspace root")
-	}
-	info, err := os.Stat(directory)
-	if err != nil || !info.IsDir() {
-		return Project{}, errors.New("choose an existing directory")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -203,13 +192,33 @@ func (m *Manager) CreateProject(name, directory string) (Project, error) {
 	return p, m.saveLocked()
 }
 
+// ResolveDirectory resolves operator-selected local directories for interactive
+// sessions. The root supplies the base for relative paths; batch workspace
+// confinement is enforced separately by the Studio engine.
+func (m *Manager) ResolveDirectory(directory string) (string, error) {
+	if strings.TrimSpace(directory) == "" {
+		return "", errors.New("choose an existing directory")
+	}
+	if !filepath.IsAbs(directory) {
+		directory = filepath.Join(m.root, directory)
+	}
+	directory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(directory)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("choose an existing directory")
+	}
+	return directory, nil
+}
 func (m *Manager) Sessions(project string) []Session {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := []Session{}
 	for _, s := range m.state.Sessions {
 		if project == "" || s.ProjectID == project {
-			result = append(result, s)
+			result = append(result, cloneSession(s))
 		}
 	}
 	return result
@@ -221,7 +230,7 @@ func (m *Manager) Session(id string) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
-	return *s, nil
+	return cloneSession(*s), nil
 }
 func (m *Manager) outputPath(id string) string { return filepath.Join(m.dir, id+".output") }
 func (m *Manager) ReadOutput(id string, offset int64) (Output, error) {

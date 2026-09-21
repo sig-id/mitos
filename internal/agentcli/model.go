@@ -8,20 +8,22 @@ type Capabilities struct {
 	Transport        string `json:"transport"`
 	InitialPrompt    bool   `json:"initial_prompt"`
 	StructuredEvents bool   `json:"structured_events"`
+	Fork             bool   `json:"fork"`
 	Resume           bool   `json:"resume"`
 	Usage            bool   `json:"usage"`
 }
 
 type Definition struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Kind        string   `json:"kind"` // agent, application, or shell
-	Executables []string `json:"executables"`
-	Args        []string `json:"args,omitempty"`
-	VersionArgs []string `json:"version_args,omitempty"`
-	Prompt      string   `json:"prompt"` // positional, none, or a flag
-	EnvNames    []string `json:"environment_names,omitempty"`
-	Docs        string   `json:"docs,omitempty"`
+	SessionProtocol string   `json:"session_protocol,omitempty"` // codex, claude, opencode, or pi
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Kind            string   `json:"kind"` // agent, application, or shell
+	Executables     []string `json:"executables"`
+	Args            []string `json:"args,omitempty"`
+	VersionArgs     []string `json:"version_args,omitempty"`
+	Prompt          string   `json:"prompt"` // positional, none, or a flag
+	EnvNames        []string `json:"environment_names,omitempty"`
+	Docs            string   `json:"docs,omitempty"`
 }
 
 type Environment struct {
@@ -88,13 +90,14 @@ type Assignment struct {
 // Launch is internal process input. Environment values are deliberately excluded
 // from JSON and must never be persisted with the session or sent to the browser.
 type Launch struct {
-	AgentID    string
-	AgentName  string
-	ProfileID  string
-	Kind       string
-	Executable string
-	Args       []string
-	Env        []string `json:"-"`
+	NativeSessionID string
+	AgentID         string
+	AgentName       string
+	ProfileID       string
+	Kind            string
+	Executable      string
+	Args            []string
+	Env             []string `json:"-"`
 }
 
 // Adapter is the boundary for future native RPC/ACP implementations. PTY is the
@@ -104,4 +107,5 @@ type Adapter interface {
 	Capabilities() Capabilities
 	Resources(workspace string, environment map[string]string) []Resource
 	Arguments(prompt string) ([]string, error)
+	SessionArguments(mode, reference, prompt string) ([]string, error)
 }

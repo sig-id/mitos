@@ -16,7 +16,7 @@ import (
 
 func deskClient(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos desk <agents|inspect-agent|sessions|start-session|send-prompt|stop-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
+		fmt.Println("mitos desk <agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
 		return nil
 	}
 	action := args[0]
@@ -36,6 +36,11 @@ func deskClient(args []string) error {
 	goalID := f.String("goal", os.Getenv("MITOS_GOAL_ID"), "Fleet goal reference")
 	taskID := f.String("task", "", "Fleet task reference")
 	handoffTopic := f.String("handoff-topic", "", "Topic containing a handoff prompt")
+	mode := f.String("mode", "", "Continuation mode: native or context (default: native when an ID is recorded)")
+	nativeID := f.String("native-session", "", "Exact native CLI conversation ID")
+	notes := f.String("notes", "", "Handoff notes for context continuation")
+	notesFile := f.String("notes-file", "", "Read handoff notes from a UTF-8 file (at most 32 KiB)")
+	key := f.String("key", fmt.Sprintf("cli-%d", time.Now().UnixNano()), "Continuation request key; reuse it to retry the same request")
 	followed := f.Bool("following", false, "List only followed topics, with saved cursors")
 	topic := f.String("topic", "", "Topic ID")
 	after := f.Int("after", 0, "Read or acknowledgment cursor")
@@ -83,6 +88,36 @@ func deskClient(args []string) error {
 		}
 		path = proj + "/sessions"
 		payload = map[string]any{"agent_id": *agentID, "profile_id": *profileID, "prompt": *prompt, "role": *role, "assignment": map[string]string{"goal_id": *goalID, "task_id": *taskID, "requested_by": *author, "handoff_topic_id": *handoffTopic}}
+	case "resume-session", "fork-session", "handover-session", "link-session":
+		if f.NArg() != 1 {
+			return errors.New("provide a source session ID")
+		}
+		path = "/api/sessions/" + url.PathEscape(f.Arg(0))
+		if action == "link-session" {
+			path += "/native-session"
+			payload = map[string]string{"native_session_id": *nativeID}
+		} else {
+			if *notesFile != "" {
+				if *notes != "" {
+					return errors.New("use either --notes or --notes-file")
+				}
+				file, err := os.Open(*notesFile)
+				if err != nil {
+					return err
+				}
+				b, err := io.ReadAll(io.LimitReader(file, (32<<10)+1))
+				_ = file.Close()
+				if err != nil {
+					return err
+				}
+				if len(b) > 32<<10 {
+					return errors.New("handoff notes exceed 32 KiB")
+				}
+				*notes = string(b)
+			}
+			path += "/" + strings.TrimSuffix(action, "-session")
+			payload = map[string]string{"key": *key, "mode": *mode, "agent_id": *agentID, "profile_id": *profileID, "native_session_id": *nativeID, "prompt": *prompt, "notes": *notes, "handoff_topic_id": *handoffTopic}
+		}
 	case "send-prompt", "stop-session":
 		if f.NArg() != 1 {
 			return errors.New("provide a session ID")

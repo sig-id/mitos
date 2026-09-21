@@ -22,9 +22,12 @@ fully integrated. Codex, Claude, OpenCode, Pi, Gemini, Copilot, and Cursor have
 initial-prompt mappings. Other adapters open their interactive UI; they do not
 pretend a one-shot flag provides an interactive session.
 
-The implemented transport is PTY. Structured model events, native session resume,
-and normalized usage are explicitly reported unsupported. CLI-native features
-remain available inside their terminal. Native RPC adapters can later implement
+The implemented transport is PTY. Codex, Claude, OpenCode, and Pi support native
+resume and fork through exact conversation IDs. Portable context handover starts
+a new agent with recorded evidence and selected handoff notes. See
+[session continuation](SESSION_CONTINUATION.md). Structured model events and
+normalized usage remain unsupported. Other CLI-native features remain available
+inside their terminal. Native RPC adapters can later implement
 those capabilities without changing controller identity or fleet ownership.
 
 Discovery distinguishes these observations:
@@ -85,7 +88,10 @@ exported environment variables.
 
 `env` maps target variable names to source names in the server environment, never
 literal secret values. Missing sources fail the selected launch. A profile may
-also specify `executable`. `prompt` is `positional`, `none`, or a long flag such as
+also specify `executable`. Custom adapters can explicitly select
+`session_protocol` (`codex`, `claude`, `opencode`, or `pi`) when their executable
+implements that exact CLI contract; it is not inferred from the application name.
+`prompt` is `positional`, `none`, or a long flag such as
 `--prompt`; arguments are passed directly, without shell interpolation. Source
 variables remain inherited unless explicitly unset. Profiles are configuration
 choices, not credential isolation between mutually untrusted local processes.
@@ -201,8 +207,9 @@ Hosted agents can use the CLI without composing HTTP calls:
 "$MITOS_BIN" desk stop-session session_ID
 ```
 
-The existing topic commands support handoff writing and discovery. Launches are
-not durably deduplicated yet. Prompt/input requests have a bounded in-memory
+The existing topic commands support handoff writing and discovery. Continuation
+requests (resume, fork, handover) are durably deduplicated by source and request
+key. Ordinary new-session launches are not durably deduplicated yet. Prompt/input requests have a bounded in-memory
 idempotency window; neither guarantees exactly-once execution across a restart.
 These limits must be resolved before unattended controller recovery is enabled.
 

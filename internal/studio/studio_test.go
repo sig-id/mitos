@@ -257,6 +257,51 @@ func TestInventoryExecutesAndPreservesSource(t *testing.T) {
 		t.Fatal("symlink escaped workspace root")
 	}
 }
+
+func TestOpenedProjectWorkspaceRunsAndSurvivesRestart(t *testing.T) {
+	s := testStore(t)
+	root, projectDir, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	apps, err := LoadApps("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewEngine(s, apps, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { e.Close() }()
+	if _, err := e.Launch(testBrief(projectDir), ""); err == nil {
+		t.Fatal("unconfirmed directory accepted")
+	}
+	if _, err := e.Desk.CreateProject("Selected workspace", projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "project.txt"), []byte("project content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(projectDir, "outside")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Workspace(filepath.Join(projectDir, "outside")); err == nil {
+		t.Fatal("symlink escaped confirmed workspace")
+	}
+	e.Close()
+	e, err = NewEngine(s, apps, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.Launch(testBrief(projectDir), "")
+	if err != nil {
+		t.Fatal("confirmed workspace lost on restart", err)
+	}
+	r = waitRun(t, s, r.ID, func(r Run) bool { return r.Terminal() })
+	if r.Status != "done" || r.Brief.Workspace != projectDir {
+		t.Fatal("task did not run in selected workspace", r.Status, r.Brief.Workspace)
+	}
+	if _, err := e.Workspace(outside); err == nil {
+		t.Fatal("unconfirmed sibling became authorized")
+	}
+}
 func TestAcceptanceFailureNeverMarksWorkVerified(t *testing.T) {
 	root := t.TempDir()
 	app := Application{ID: "test-app", Name: "Test", Entrypoint: "Run", Directory: t.TempDir(), Command: []string{"/bin/sh", "-c", "printf 'done'"}, Acceptance: acceptance.Spec{Cmd: []string{"/bin/sh", "-c", "printf 'rejected'; exit 1"}}}

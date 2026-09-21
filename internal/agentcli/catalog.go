@@ -10,7 +10,7 @@ type CLI struct{ Spec Definition }
 
 func (c CLI) Definition() Definition { return c.Spec }
 func (c CLI) Capabilities() Capabilities {
-	return Capabilities{Transport: "pty", InitialPrompt: c.Spec.Prompt != "none"}
+	return Capabilities{Transport: "pty", InitialPrompt: c.Spec.Prompt != "none", Resume: c.Spec.SessionProtocol != "", Fork: c.Spec.SessionProtocol != ""}
 }
 func (c CLI) Resources(workspace string, env map[string]string) []Resource {
 	return resources(c.Spec.ID, workspace, env)
@@ -35,10 +35,10 @@ func (c CLI) Arguments(prompt string) ([]string, error) {
 
 func Builtins() []Adapter {
 	definitions := []Definition{
-		{ID: "codex", Name: "Codex", Kind: "agent", Executables: []string{"codex"}, Prompt: "positional", EnvNames: []string{"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL", "CODEX_HOME"}, Docs: "https://developers.openai.com/codex/cli/reference/"},
-		{ID: "claude", Name: "Claude Code", Kind: "agent", Executables: []string{"claude"}, Prompt: "positional", EnvNames: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS"}, Docs: "https://code.claude.com/docs/en/cli-reference"},
-		{ID: "opencode", Name: "OpenCode", Kind: "agent", Executables: []string{"opencode"}, Prompt: "--prompt", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"}, Docs: "https://opencode.ai/docs/cli/"},
-		{ID: "pi", Name: "Pi", Kind: "agent", Executables: []string{"pi"}, Prompt: "positional", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"}, Docs: "https://github.com/earendil-works/pi/tree/main/packages/coding-agent"},
+		{ID: "codex", SessionProtocol: "codex", Name: "Codex", Kind: "agent", Executables: []string{"codex"}, Prompt: "positional", EnvNames: []string{"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL", "CODEX_HOME"}, Docs: "https://developers.openai.com/codex/cli/reference/"},
+		{ID: "claude", SessionProtocol: "claude", Name: "Claude Code", Kind: "agent", Executables: []string{"claude"}, Prompt: "positional", EnvNames: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS"}, Docs: "https://code.claude.com/docs/en/cli-reference"},
+		{ID: "opencode", SessionProtocol: "opencode", Name: "OpenCode", Kind: "agent", Executables: []string{"opencode"}, Prompt: "--prompt", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"}, Docs: "https://opencode.ai/docs/cli/"},
+		{ID: "pi", SessionProtocol: "pi", Name: "Pi", Kind: "agent", Executables: []string{"pi"}, Prompt: "positional", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"}, Docs: "https://github.com/earendil-works/pi/tree/main/packages/coding-agent"},
 		{ID: "gemini", Name: "Gemini CLI", Kind: "agent", Executables: []string{"gemini"}, Prompt: "--prompt-interactive", EnvNames: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"}, Docs: "https://geminicli.com/docs/cli/cli-reference/"},
 		{ID: "copilot", Name: "GitHub Copilot", Kind: "agent", Executables: []string{"copilot"}, Prompt: "--interactive", EnvNames: []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}, Docs: "https://docs.github.com/en/copilot/reference/cli-command-reference"},
 		{ID: "aider", Name: "Aider", Kind: "agent", Executables: []string{"aider"}, Prompt: "none", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AIDER_MODEL", "AIDER_CONFIG"}, Docs: "https://aider.chat/docs/config/options.html"},

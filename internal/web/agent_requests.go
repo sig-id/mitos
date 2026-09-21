@@ -22,7 +22,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			writeJSON(w, 400, map[string]string{"error": "malformed"})
 			return
 		}
-		workspace, err := s.engine.Workspace(in.Workspace)
+		workspace, err := s.engine.Desk.ResolveDirectory(in.Workspace)
 		if err != nil {
 			writeJSON(w, 422, map[string]string{"error": "workspace_unavailable"})
 			return

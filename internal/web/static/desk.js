@@ -24,6 +24,17 @@
       finally { button.disabled = false; }
     });
   }
+  const projectDirectory = $('project-directory'), projectName = $('project-name');
+  let projectNameEdited = false;
+  function suggestProjectName() {
+    if (projectNameEdited) return;
+    const path = projectDirectory.value.replace(/\/+$/, '');
+    projectName.value = path.split('/').pop() || (projectDirectory.value.startsWith('/') ? '/' : '');
+  }
+  projectName.addEventListener('input', () => { projectNameEdited = projectName.value !== ''; });
+  projectDirectory.addEventListener('input', suggestProjectName);
+  projectDirectory.addEventListener('change', suggestProjectName);
+  suggestProjectName();
   form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/workspace?project=${p.id}`; });
   form('session-form', async b => { const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
   form('topic-form', async (b,f) => { b.paths = b.paths.split('\n').map(x=>x.trim()).filter(Boolean); await api(projectAPI('topics'), b); f.reset(); $('topic-dialog').close(); await topics(); });
@@ -72,6 +83,153 @@
   $('agent-profile').addEventListener('change',()=>inspectAgent().catch(error));
   $('refresh-agents').addEventListener('click',async()=>{const b=$('refresh-agents');b.disabled=true;try{await discoverAgents(true);}catch(err){error(err);}finally{b.disabled=false;}});
   discoverAgents().catch(error);
+  let continuationSource, continuationKind, continuationAgent, continuationGeneration = 0;
+  let continuationKey = '', continuationPayload = '';
+  function continuationFields() {
+    const native = $('continuation-mode').value === 'native';
+    $('continuation-native-field').hidden = !native;
+    $('continuation-native').disabled = !native;
+    $('continuation-native').required = native;
+    $('continuation-context-fields').hidden = native;
+    $('continuation-topic').disabled = native;
+    $('continuation-notes').disabled = native;
+    const available = continuationAgent?.installed && (native ? continuationAgent.capabilities[continuationKind] : continuationAgent.capabilities.initial_prompt);
+    $('continuation-form').querySelector('[type=submit]').disabled = !available;
+    $('continuation-availability').textContent = available ? (native ? 'Continues the saved native conversation in a new terminal.' : 'Starts a fresh conversation with a handoff document. The working directory is shared.') : 'This agent or profile cannot receive the selected context. Choose another target or context mode.';
+  }
+  async function inspectContinuation() {
+    const generation = ++continuationGeneration;
+    continuationAgent = null; continuationFields();
+    const q = new URLSearchParams({project:continuationSource.project_id, profile:$('continuation-profile').value});
+    const agent = await api(`/api/agents/${$('continuation-agent').value}?${q}`);
+    if (generation !== continuationGeneration) return;
+    continuationAgent = agent; continuationFields();
+  }
+  async function selectContinuationAgent() {
+    const a = agentCatalog.find(v=>v.id===$('continuation-agent').value);
+    $('continuation-profile').replaceChildren(new Option('Native environment',''));
+    for (const p of a?.profiles || []) $('continuation-profile').append(new Option(p.name,p.id));
+    if (continuationKind !== 'handover') $('continuation-profile').value=continuationSource.profile_id || '';
+    await inspectContinuation();
+  }
+  async function openContinuation(kind, sourceID = session) {
+    if ($('session-actions')) $('session-actions').open=false;
+    continuationSource=await api(`/api/sessions/${sourceID}`);
+    continuationKind=kind;
+    const f=$('continuation-form'); f.reset(); f.querySelector('.form-error').textContent='';
+    continuationKey=''; continuationPayload=''; continuationAgent=null;
+    if (!agentCatalog.length) agentCatalog=await api('/api/agents?project='+encodeURIComponent(project));
+    const sourceAgent=agentCatalog.find(a=>a.id===continuationSource.agent_id);
+    const nativeAvailable=kind!=='handover' && !!sourceAgent?.capabilities[kind];
+    $('continuation-mode').querySelector('[value=native]').disabled=!nativeAvailable;
+    $('continuation-mode').value=nativeAvailable && continuationSource.native_session_id?'native':'context';
+    $('continuation-native').value=continuationSource.native_session_id || '';
+    $('continuation-native').readOnly=!!continuationSource.native_session_id;
+    $('continuation-target').hidden=kind!=='handover';
+    $('continuation-agent').replaceChildren();
+    for(const a of agentCatalog){const o=new Option(a.name,a.id);o.disabled=kind==='handover' && (!a.capabilities.initial_prompt || (!a.installed&&!a.profiles.length));$('continuation-agent').append(o);}
+    $('continuation-agent').value=continuationSource.agent_id;
+    if(kind==='handover'){
+      const target=agentCatalog.find(a=>a.id!==continuationSource.agent_id && a.capabilities.initial_prompt && (a.installed||a.profiles.length));
+      if(target)$('continuation-agent').value=target.id;
+    }
+    const topics=await api(`/api/projects/${continuationSource.project_id}/topics`);
+    $('continuation-topic').replaceChildren(new Option('No topic selected',''));
+    for(const t of topics)$('continuation-topic').append(new Option(t.title,t.id));
+    $('continuation-topic').value=continuationSource.assignment?.handoff_topic_id || '';
+    const title={resume:'Resume session',fork:'Fork session',handover:'Hand over to another agent'}[kind];
+    $('continuation-title').textContent=title;f.querySelector('[type=submit]').textContent={resume:'Resume',fork:'Create fork',handover:'Hand over'}[kind];
+    $('continuation-description').textContent={resume:'Continue this stopped session. Its previous output stays available.',fork:'Branch the work into a new session. The source keeps running. Both use the same files.',handover:'Pass the context to the selected agent. The source stops after the replacement launches.'}[kind];
+    continuationFields();$('continuation-dialog').showModal();
+    await selectContinuationAgent();
+  }
+  document.querySelectorAll('[data-continuation]').forEach(b=>b.addEventListener('click',()=>openContinuation(b.dataset.continuation).catch(error)));
+  $('continuation-agent').addEventListener('change',()=>selectContinuationAgent().catch(error));
+  $('continuation-profile').addEventListener('change',()=>inspectContinuation().catch(error));
+  $('continuation-mode').addEventListener('change',continuationFields);
+  $('continuation-form').addEventListener('submit',async event=>{
+    event.preventDefault();const f=event.currentTarget,button=f.querySelector('[type=submit]'),notice=f.querySelector('.form-error');
+    button.disabled=true;notice.textContent='';
+    const body=Object.fromEntries(new FormData(f)),serialized=JSON.stringify(body);
+    if(serialized!==continuationPayload){continuationKey=crypto.randomUUID();continuationPayload=serialized;}
+    body.key=continuationKey;
+    try{
+      const s=await api(`/api/sessions/${continuationSource.id}/${continuationKind}`,body);
+      location.href=`/workspace?project=${s.project_id}&session=${s.id}`;
+    }catch(err){notice.textContent=err.message;continuationFields();}
+  });
+  document.addEventListener('pointerdown',e=>{const menu=$('session-actions');if(menu&&!menu.contains(e.target))menu.open=false;});
+  $('session-actions')?.addEventListener('keydown',e=>{if(e.key==='Escape'){$('session-actions').open=false;$('session-actions').querySelector('summary').focus();}});
+  const contextMenu = window.DeskContextMenu;
+  contextMenu.onError = error;
+  function wireContextLink(link) {
+    link.setAttribute('aria-haspopup','menu'); link.setAttribute('aria-controls','desk-context-menu');
+    link.setAttribute('aria-expanded','false'); link.setAttribute('aria-keyshortcuts','Shift+F10');
+  }
+  function contextActions(link) {
+    const href=link.href || `/workspace?project=${encodeURIComponent(link.dataset.projectId)}`;
+    const items=[{label:'Open',href},{label:'Open in new tab',href,newTab:true},{separator:true}];
+    if(link.dataset.projectId){
+      const id=link.dataset.projectId;
+      items.push({label:'New session…',run:()=>{if(id===project)$('session-dialog').showModal();else location.href=`/workspace?project=${encodeURIComponent(id)}&action=new-session`;}});
+      items.push({label:'New task…',href:`/new?project=${encodeURIComponent(id)}`},{separator:true});
+      items.push({label:'Copy project path',run:()=>navigator.clipboard.writeText(link.dataset.projectDirectory),notice:'Project path copied'});
+      return items;
+    }
+    const id=link.dataset.sessionId;
+    return api(`/api/sessions/${id}`).then(s=>{
+      const settled=['stopped','exited','failed'].includes(s.status), continuing=['running','stopped','exited','failed'].includes(s.status);
+      const change=async(action,body)=>{
+        await api(`/api/sessions/${id}/${action}`,body);
+        await sessions();
+        if(action==='stop' && id===session) {
+          // The output stream applies lifecycle updates to the selected terminal.
+          $('session-actions').open=false;
+        }
+      };
+      items.push({label:'Resume…',disabled:!settled,reason:'Stop this session before resuming it.',run:()=>openContinuation('resume',id)});
+      items.push({label:'Fork…',disabled:!continuing,reason:'Wait for shutdown or settle interrupted processes first.',run:()=>openContinuation('fork',id)});
+      items.push({label:'Hand over…',disabled:!continuing,reason:'Wait for shutdown or settle interrupted processes first.',run:()=>openContinuation('handover',id)},{separator:true});
+      items.push({label:'Interrupt (Ctrl+C)',disabled:s.status!=='running',reason:'The session must be running.',run:()=>change('input',{key:crypto.randomUUID(),data:'\x03'})});
+      items.push({label:['exited','failed'].includes(s.status)?'Close session':s.status==='stopped'?'Stopped':s.status==='stopping'?'Stopping…':'Stop session',disabled:!['running','starting','exited','failed'].includes(s.status),danger:true,reason:s.status==='interrupted'?'Inspect and settle the previous processes first.':'The session is not running.',run:()=>change('stop',{})},{separator:true});
+      items.push({label:'Copy session ID',run:()=>navigator.clipboard.writeText(id),notice:'Session ID copied'});
+      return items;
+    });
+  }
+  function showContext(event, keyboard=false) {
+    const link=event.target.closest('.project-context-target[data-project-id],.session-link');
+    if(!link)return;
+    event.preventDefault();
+    const rect=link.getBoundingClientRect();
+    const pointer=!keyboard && Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
+    const x=pointer?event.clientX:rect.left+16,y=pointer?event.clientY:rect.bottom;
+    const attribute=link.dataset.projectId?'data-project-id':'data-session-id',id=link.getAttribute(attribute);
+    if($('session-actions'))$('session-actions').open=false;
+    const restore=()=>link.isConnected?link:document.querySelector(`[${attribute}="${CSS.escape(id)}"]`);
+    contextMenu.open(link,x,y,link.dataset.projectName||link.dataset.sessionName,()=>contextActions(link),restore);
+  }
+  document.querySelector('.project-rail').addEventListener('contextmenu',event=>showContext(event));
+  const workspaceSwitcher=$('workspace-switcher');
+  document.addEventListener('pointerdown',event=>{
+    if(!workspaceSwitcher.contains(event.target) && !event.target.closest('#desk-context-menu'))workspaceSwitcher.open=false;
+  });
+  workspaceSwitcher.addEventListener('toggle',()=>{
+    if(!workspaceSwitcher.open)return;
+    const popover=workspaceSwitcher.querySelector('.workspace-switcher-popover'),rect=workspaceSwitcher.querySelector('summary').getBoundingClientRect();
+    popover.style.left=`${Math.max(8,Math.min(rect.left,innerWidth-popover.offsetWidth-8))}px`;
+    popover.style.top=`${rect.bottom+6}px`;
+    popover.style.maxHeight=`${Math.max(60,innerHeight-rect.bottom-14)}px`;
+  });
+  workspaceSwitcher.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();workspaceSwitcher.open=false;workspaceSwitcher.querySelector('summary').focus();}
+  });
+  workspaceSwitcher.querySelector('[data-dialog]').addEventListener('click',()=>{workspaceSwitcher.open=false;});
+  document.querySelector('.project-rail').addEventListener('keydown',event=>{
+    if(event.key==='ContextMenu'||(event.shiftKey&&event.key==='F10'))showContext(event,true);
+  });
+  if(new URLSearchParams(location.search).get('action')==='new-session' && project){
+    $('session-dialog').showModal();const url=new URL(location.href);url.searchParams.delete('action');history.replaceState(null,'',url);
+  }
   // A page restored from the browser back/forward cache contains a disposed
   // terminal and closed output connection. Reattach once instead of showing frozen UI.
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
@@ -89,7 +247,7 @@
       [...keyButtons, $('interrupt')].forEach(b => b.disabled = !enabled);
       $('terminal-input-hint').textContent = inputBroken ? 'Input disconnected · reload to reconnect' : !ready ? 'Terminal input unavailable' : 'Click terminal to type';
     }
-    focusTerminal = () => { if (ready && !inputBroken) term.focus(); };
+    focusTerminal = () => { if (ready && !inputBroken && !document.querySelector('dialog[open]') && !window.DeskContextMenu.isOpen()) term.focus(); };
     $('terminal').addEventListener('click', focusTerminal);
     document.addEventListener('pointerdown', event => { if (!shortcuts.contains(event.target)) shortcuts.open = false; });
     shortcuts.addEventListener('keydown', event => {
@@ -127,6 +285,9 @@
       if (stopPending) status = 'stopping';
       $('session-status').textContent = status;
       $('session-status').dataset.status = status;
+      document.querySelectorAll('[data-continuation]').forEach(b=>{
+        b.disabled=b.dataset.continuation==='resume' ? !['stopped','exited','failed'].includes(status) : ['starting','stopping','interrupted'].includes(status);
+      });
       const button = $('stop-session');
       button.disabled = !['running','starting','failed','exited'].includes(status);
       button.textContent = status === 'stopping' ? 'Stopping…' : status === 'stopped' ? 'Stopped' : ['failed','exited'].includes(status) ? 'Close session' : 'Stop session';
@@ -140,6 +301,7 @@
       return status;
     }
     $('stop-session').addEventListener('click', async () => {
+      $('session-actions').open=false;
       stopPending = true;
       updateSessionStatus('stopping');
       $('connection-status').textContent = 'Stopping session…';
@@ -274,8 +436,10 @@
   let sessionsSignature='';
   async function sessions(){
     const values=await api(projectAPI('sessions')),signature=JSON.stringify(values);if(signature===sessionsSignature)return;sessionsSignature=signature;
+    const focusedSession=document.activeElement?.closest('.session-link')?.dataset.sessionId;
     $('session-list').replaceChildren();
-    for(const s of values){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
+    for(const s of values){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;link.dataset.sessionId=s.id;link.dataset.sessionName=s.name;wireContextLink(link);const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.continuation ? s.continuation.kind+' · ' : ''}${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
+    if(focusedSession)document.querySelector(`[data-session-id="${CSS.escape(focusedSession)}"]`)?.focus({preventScroll:true});
     const selected=values.find(s=>s.id===session);if(selected?.detail)$('connection-status').textContent=selected.detail;
     if (selected) $('session-name').textContent=selected.name;
   }

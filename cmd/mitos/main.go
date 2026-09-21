@@ -73,7 +73,7 @@ func serve(args []string) error {
 	sttModel := f.String("device-stt-model", "whisper-1", "Audio transcription model")
 	sttCommand := f.String("device-stt-command", "", "STT executable: PCM16 stdin, transcript stdout")
 	data := f.String("data", ".mitos", "Durable data directory")
-	root := f.String("workspace-root", ".", "Allowed workspace parent directory")
+	root := f.String("workspace-root", ".", "Default workspace and base for relative project paths")
 	appsDir := f.String("apps", "", "Directory containing local application folders")
 	demo := f.Bool("demo", false, "Seed labelled example history in an empty data directory")
 	if err := f.Parse(args); err != nil {
@@ -236,7 +236,7 @@ func client(command string, args []string) error {
 	url := f.String("url", "http://127.0.0.1:4646", "Studio URL")
 	title := f.String("title", "", "Work title")
 	intent := f.String("brief", "", "Desired outcome and constraints")
-	workspace := f.String("workspace", ".", "Workspace under the server's workspace root")
+	workspace := f.String("workspace", ".", "Workspace directory (default workspace or an explicitly opened project)")
 	app := f.String("app", "workspace-inventory", "Installed application ID")
 	minutes := f.Int("minutes", 10, "Execution time limit")
 	if err := f.Parse(args); err != nil {

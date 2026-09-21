@@ -301,6 +301,10 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		if r.Method == "POST" && (r.URL.Path == "/api/service-events" || service.ValidWebhookPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/api/services/") && strings.HasSuffix(r.URL.Path, "/signals")) {
 			limit = studio.MaxIngressBytes
 		}
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/sessions/") && (strings.HasSuffix(r.URL.Path, "/resume") || strings.HasSuffix(r.URL.Path, "/fork") || strings.HasSuffix(r.URL.Path, "/handover")) {
+			// Two 32 KiB text fields can expand sixfold under JSON escaping.
+			limit = 512 << 10
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
@@ -401,6 +405,14 @@ func (s *Server) newBrief(w http.ResponseWriter, r *http.Request) {
 	p := s.base("new", "New work", "work")
 	p.Live = false
 	p.Brief = studio.Brief{AppID: r.URL.Query().Get("app"), Workspace: s.engine.Root, TimeoutMinutes: 10}
+	if id := r.URL.Query().Get("project"); id != "" {
+		project, err := s.engine.Desk.Project(id)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		p.Brief.Workspace = project.Directory
+	}
 	if p.Brief.AppID == "" {
 		p.Brief.AppID = "workspace-inventory"
 	}

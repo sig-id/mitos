@@ -50,6 +50,7 @@ active coordinator is allowed per project. The role provides coordination contex
 not extra permissions or an automatic approval policy.
 
 The terminal has real PTY input, resize, scrollback, interrupt, and stop controls.
+The **Session ▾** menu supports [resume, fork, and context handover](docs/SESSION_CONTINUATION.md) to another coding agent.
 Output streams over WebSocket with acknowledged replay after reconnect.
 See the [streaming and Ghostty evaluation](docs/TERMINAL_RENDERER_EVALUATION.md).
 Navigation leaves execution running. Output survives server restart; processes
@@ -231,7 +232,10 @@ pipeline recovery and enforced oracle isolation remain outstanding.
 
 ## Data and execution
 
-`--workspace-root` bounds which directories can be selected. Intake uses Git's
+Opening a project confirms any existing local directory as a workspace. Sessions,
+builds, and tasks can use that workspace. `--workspace-root` sets the default
+workspace and base for relative project paths; it does not restrict project selection.
+Batch intake uses Git's
 ignore rules: tracked files plus untracked, non-ignored files, including nested
 `.gitignore` rules. Plain directories use a temporary external Git index; their
 source is not initialized as a repository. Intake omits symlinks, Git internals,

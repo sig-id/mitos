@@ -46,13 +46,17 @@ func (m *Manager) StartAgent(project string, request agentcli.Request, serverURL
 	if pending {
 		name = launch.AgentName + " · " + strings.TrimPrefix(id("new"), "new_")[:6]
 	}
-	return m.start(project, name, role, launch.AgentName, serverURL, launch, pending, request.Assignment)
+	return m.start(project, name, role, launch.AgentName, serverURL, launch, startOptions{NamePending: pending, Assignment: request.Assignment, Prompt: request.Prompt})
 }
 
 func promptTitle(prompt string) string {
 	name := []rune(strings.Join(strings.Fields(prompt), " "))
-	truncated := len(name) > 79 || len(string(name)) > 96
-	for len(name) > 79 || len(string(name)) > 96 {
+	truncated := len(name) > 79
+	if truncated {
+		name = name[:79]
+	}
+	for len(string(name)) > 96 {
+		truncated = true
 		name = name[:len(name)-1]
 	}
 	if truncated {
@@ -61,15 +65,28 @@ func promptTitle(prompt string) string {
 	return string(name)
 }
 
-func (m *Manager) start(project, name, role, command, serverURL string, launch agentcli.Launch, pending bool, assignment *agentcli.Assignment) (Session, error) {
+type startOptions struct {
+	ID           string
+	NamePending  bool
+	Assignment   *agentcli.Assignment
+	Prompt       string
+	Continuation *Continuation
+}
+
+func (m *Manager) start(project, name, role, command, serverURL string, launch agentcli.Launch, options startOptions) (Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.startLocked(project, name, role, command, serverURL, launch, options)
+}
+
+func (m *Manager) startLocked(project, name, role, command, serverURL string, launch agentcli.Launch, options startOptions) (Session, error) {
+	assignment := options.Assignment
 	if !validText(name, 100) || len(command) > 4096 || strings.ContainsRune(command, 0) {
 		return Session{}, errors.New("provide a session name and a command of at most 4096 bytes")
 	}
 	if role != "agent" && role != "coordinator" && role != "shell" {
 		return Session{}, errors.New("unknown session role")
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if err := m.writable(); err != nil {
 		return Session{}, err
 	}
@@ -108,7 +125,10 @@ func (m *Manager) start(project, name, role, command, serverURL string, launch a
 	}
 	if role == "coordinator" {
 		for _, s := range m.state.Sessions {
-			if s.ProjectID == project && s.Role == role && (s.Status == "running" || s.Status == "starting") {
+			if s.ProjectID == project && s.Role == role && activeSession(s) {
+				if options.Continuation != nil && options.Continuation.Kind == "handover" && options.Continuation.SourceID == s.ID {
+					continue
+				}
 				return Session{}, errors.New("this project already has an active coordinator")
 			}
 		}
@@ -118,7 +138,10 @@ func (m *Manager) start(project, name, role, command, serverURL string, launch a
 			return Session{}, errors.New("inspect and settle interrupted sessions before starting another session in this shared directory")
 		}
 	}
-	s := Session{ID: id("session"), ProjectID: project, AgentID: launch.AgentID, ProfileID: launch.ProfileID, NamePending: pending, Name: strings.TrimSpace(name), Role: role, Command: command, Status: "starting", Rows: 28, Cols: 100, CreatedAt: time.Now().UTC()}
+	if options.ID == "" {
+		options.ID = id("session")
+	}
+	s := Session{ID: options.ID, NativeSessionID: launch.NativeSessionID, InitialPrompt: options.Prompt, Continuation: options.Continuation, ProjectID: project, AgentID: launch.AgentID, ProfileID: launch.ProfileID, NamePending: options.NamePending, Name: strings.TrimSpace(name), Role: role, Command: command, Status: "starting", Rows: 28, Cols: 100, CreatedAt: time.Now().UTC()}
 	s.Assignment = assignment
 	m.state.Sessions = append(m.state.Sessions, s)
 	if err = m.saveLocked(); err != nil {
@@ -135,12 +158,15 @@ func (m *Manager) start(project, name, role, command, serverURL string, launch a
 	// These are trusted operator terminals: use the operator's normal CLI config.
 	// Unlike batch providers, this path makes no confinement or oracle claims.
 	cmd.Env = append(launch.Env, "TERM=xterm-256color", "COLORTERM=truecolor", "TMPDIR="+scratch, "GIT_TRACE2_EVENT="+filepath.Join(scratch, "git.jsonl"), "GIT_TRACE2_EVENT_BRIEF=1", "MITOS_PROJECT_ID="+project, "MITOS_SESSION_ID="+s.ID, "MITOS_URL="+serverURL)
+	if options.Continuation != nil {
+		cmd.Env = append(cmd.Env, "MITOS_PARENT_SESSION_ID="+options.Continuation.SourceID, "MITOS_HANDOVER="+options.Continuation.ContextPath)
+	}
 	if assignment != nil {
 		cmd.Env = append(cmd.Env, "MITOS_GOAL_ID="+assignment.GoalID, "MITOS_TASK_ID="+assignment.TaskID, "MITOS_REQUESTED_BY="+assignment.RequestedBy, "MITOS_HANDOFF_TOPIC_ID="+assignment.HandoffTopicID)
 	}
 	instructions := filepath.Join(m.dir, s.ID+".md")
 	text := fmt.Sprintf("# Mitos project %s\n\nRole: %s. Shared directory: %s.\nUse mitos desk topics to discover relevant topics; read details with mitos desk topic ID.\nUse mitos desk post --topic ID --revision N --body TEXT, follow --topic ID, and jobs.\nUse mitos desk build -- ARGS for a coordinated Cargo build. Builds serialize; joining is explicit with mitos desk join JOB_ID. A joined result does not automatically validate your later edits.\nUse mitos desk resources to inspect the shared directory and current process activity.\nCoordinate shared-file and Git changes through topics. CLI commands outside managed jobs are cooperative and are not intercepted.\nThe coordinator maintains the plan, publishes topic summaries, and asks the operator for choices outside the brief. It has no additional runtime permissions.\n", p.Name, role, p.Directory)
-	text += "\nFleet tools: mitos desk agents, inspect-agent --agent ID, sessions, start-session --agent ID --prompt TEXT, send-prompt --prompt TEXT SESSION_ID, and stop-session SESSION_ID. Use --goal ID --task ID --handoff-topic TOPIC_ID on start-session to retain assignment lineage. Native CLI sub-agents are separate from Mitos sessions.\nUse the topic board to report completion with evidence, blockers, or requests for more agents. Before handing off, write your own continuation prompt in a topic: objective, current state, evidence, remaining work, and relevant files. Pass that topic to the next session; a topic reference does not inject its content automatically.\nMitos currently supplies fleet tools, not an autonomous scheduler. Terminal prompts are input bytes and are not proof that an agent accepted a direction.\n"
+	text += "\nFleet tools: mitos desk agents, inspect-agent --agent ID, sessions, start-session --agent ID --prompt TEXT, send-prompt --prompt TEXT SESSION_ID, and stop-session SESSION_ID. Use --goal ID --task ID --handoff-topic TOPIC_ID on start-session to retain assignment lineage. Native CLI sub-agents are separate from Mitos sessions.\nUse the topic board to report completion with evidence, blockers, or requests for more agents. Before handing off, write your own continuation prompt in a topic: objective, current state, evidence, remaining work, and relevant files. Pass that topic to the next session; a topic reference does not inject its content automatically.\nUse mitos desk resume-session, fork-session, and handover-session with --mode native or context. Use --handoff-topic ID to snapshot your handoff notes. A handover starts the replacement then stops the source; a fork leaves the source running. Read MITOS_HANDOVER when present. Record your exact native conversation ID with mitos desk link-session --native-session ID SESSION_ID when it is not already recorded.\nMitos currently supplies fleet tools, not an autonomous scheduler. Terminal prompts are input bytes and are not proof that an agent accepted a direction.\n"
 	if err = os.WriteFile(instructions, []byte(text), 0600); err != nil {
 		return m.startFailedLocked(s.ID, err)
 	}
@@ -167,7 +193,7 @@ func (m *Manager) start(project, name, role, command, serverURL string, launch a
 		delete(m.live, s.ID)
 		return Session{}, err
 	}
-	s = *stored
+	s = cloneSession(*stored)
 	m.wg.Add(1)
 	go m.waitTerminal(s.ID, cmd, t)
 	return s, nil
@@ -298,6 +324,9 @@ func (m *Manager) Prompt(id, key, text string, bracketed bool) error {
 		if name := promptTitle(text); name != "" {
 			s.Name = name
 			s.NamePending = false
+			if s.InitialPrompt == "" {
+				s.InitialPrompt = text
+			}
 			err = m.saveLocked()
 		}
 	}

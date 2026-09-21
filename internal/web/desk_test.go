@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -11,7 +12,40 @@ import (
 
 	"mitos/internal/agentcli"
 	"mitos/internal/desk"
+	"mitos/internal/harness"
 )
+
+func TestLocalProjectAndAgentOutsideDefaultWorkspace(t *testing.T) {
+	s, e := testServer(t)
+	directory := t.TempDir()
+	w := deskRequest(s, "POST", "/api/projects", map[string]string{"name": "Sibling project", "directory": directory})
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var project desk.Project
+	if err := json.Unmarshal(w.Body.Bytes(), &project); err != nil {
+		t.Fatal(err)
+	}
+	form := deskRequest(s, "GET", "/new?project="+project.ID, nil)
+	if form.Code != 200 || !strings.Contains(form.Body.String(), directory) {
+		t.Fatal("new task did not select project workspace", form.Code)
+	}
+	server := httptest.NewServer(s)
+	defer server.Close()
+	bridge, err := harness.NewClient(server.URL, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bridge.Start(context.Background(), "codex", "Project agent", directory); err != nil {
+		t.Fatal("opened project's agent cannot connect", err)
+	}
+	if path, err := e.Workspace(directory); err != nil || path != directory {
+		t.Fatal("confirmed workspace rejected by task runner", path, err)
+	}
+	if _, err := e.Workspace(t.TempDir()); err == nil {
+		t.Fatal("unconfirmed workspace accepted")
+	}
+}
 
 func deskRequest(s *Server, method, path string, body any) *httptest.ResponseRecorder {
 	b, _ := json.Marshal(body)

@@ -82,6 +82,9 @@ func New(adapters []Adapter, config Config, environ []string) (*Registry, error)
 		if !identifier.MatchString(d.ID) || ids[d.ID] || strings.TrimSpace(d.Name) == "" || len(d.Executables) == 0 || (d.Prompt != "none" && d.Prompt != "positional" && !strings.HasPrefix(d.Prompt, "--")) {
 			return nil, fmt.Errorf("invalid or duplicate agent definition %q", d.ID)
 		}
+		if d.SessionProtocol != "" && d.SessionProtocol != "codex" && d.SessionProtocol != "claude" && d.SessionProtocol != "opencode" && d.SessionProtocol != "pi" {
+			return nil, fmt.Errorf("unknown session protocol %q", d.SessionProtocol)
+		}
 		ids[d.ID] = true
 	}
 	profileIDs := make(map[string]bool)
@@ -179,6 +182,17 @@ func envSlice(env map[string]string) []string {
 }
 
 func (r *Registry) Prepare(request Request) (Launch, error) {
+	return r.prepare(request, "new", "")
+}
+
+func (r *Registry) PrepareContinuation(request Request, mode, reference string) (Launch, error) {
+	if mode != "resume" && mode != "fork" {
+		return Launch{}, errors.New("unknown native session operation")
+	}
+	return r.prepare(request, mode, reference)
+}
+
+func (r *Registry) prepare(request Request, mode, reference string) (Launch, error) {
 	adapter, err := r.adapter(request.AgentID)
 	if err != nil {
 		return Launch{}, err
@@ -196,11 +210,18 @@ func (r *Registry) Prepare(request Request) (Launch, error) {
 	if path == "" {
 		return Launch{}, fmt.Errorf("%s is not installed on the selected PATH", d.Name)
 	}
-	args, err := adapter.Arguments(request.Prompt)
+	nativeID := ""
+	if mode == "new" && (d.SessionProtocol == "claude" || d.SessionProtocol == "pi") {
+		nativeID = newSessionID()
+		reference = nativeID
+	} else if mode == "resume" {
+		nativeID = reference
+	}
+	args, err := adapter.SessionArguments(mode, reference, request.Prompt)
 	if err != nil {
 		return Launch{}, err
 	}
-	return Launch{AgentID: d.ID, AgentName: d.Name, ProfileID: request.ProfileID, Kind: d.Kind, Executable: path, Args: args, Env: envSlice(env)}, nil
+	return Launch{NativeSessionID: nativeID, AgentID: d.ID, AgentName: d.Name, ProfileID: request.ProfileID, Kind: d.Kind, Executable: path, Args: args, Env: envSlice(env)}, nil
 }
 
 func (r *Registry) List(workspace string) []Installation {

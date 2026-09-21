@@ -44,6 +44,18 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{provider: &compute.Local{}, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	// Load confirmed project workspaces before recovering or scheduling tasks.
+	e.Desk, err = desk.Open(filepath.Join(s.Dir(), "desk"), abs)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			e.Desk.Close()
+		}
+	}()
 	if err = s.recoverDecisionRequests(); err != nil {
 		cancel()
 		return nil, err
@@ -98,11 +110,7 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		cancel()
 		return nil, err
 	}
-	e.Desk, err = desk.Open(filepath.Join(s.Dir(), "desk"), abs)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
+	initialized = true
 	e.wg.Add(1)
 	go e.dispatch()
 	return e, nil
@@ -133,10 +141,19 @@ func (e *Engine) Workspace(path string) (string, error) {
 	}
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", errors.New("workspace does not exist; choose a directory under " + e.Root)
+		return "", errors.New("workspace does not exist; choose an existing project directory")
 	}
-	if !Within(e.Root, path) {
-		return "", errors.New("choose a workspace under " + e.Root)
+	allowed := Within(e.Root, path)
+	if !allowed && e.Desk != nil {
+		for _, project := range e.Desk.Projects() {
+			if Within(project.Directory, path) {
+				allowed = true
+				break
+			}
+		}
+	}
+	if !allowed {
+		return "", errors.New("open this directory as a project to confirm it as a workspace")
 	}
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {

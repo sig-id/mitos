@@ -144,10 +144,11 @@ func TestTopicsProgressiveDiscoveryAndRestart(t *testing.T) {
 		t.Fatal("cursor regressed")
 	}
 }
-func TestProjectRootAndCrossProjectAuthor(t *testing.T) {
+func TestProjectDirectoryAndCrossProjectAuthor(t *testing.T) {
 	m, p := testManager(t)
-	if _, err := m.CreateProject("Escape", t.TempDir()); err == nil {
-		t.Fatal("outside root accepted")
+	outside := t.TempDir()
+	if opened, err := m.CreateProject("Outside root", outside); err != nil || opened.Directory != outside {
+		t.Fatal("local directory outside batch root rejected", opened, err)
 	}
 	dir := filepath.Join(p.Directory, "another")
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -163,6 +164,34 @@ func TestProjectRootAndCrossProjectAuthor(t *testing.T) {
 	}
 	if _, err = m.CreateTopic(p.ID, s.ID, "Wrong project", "Body", nil); err == nil {
 		t.Fatal("cross-project author accepted")
+	}
+}
+
+func TestProjectDirectoryResolution(t *testing.T) {
+	m, _ := testManager(t)
+	directory := t.TempDir()
+	link := filepath.Join(m.root, "linked-project")
+	if err := os.Symlink(directory, link); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := m.CreateProject("Project", directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{link, "linked-project", directory + "/"} {
+		alias, err := m.CreateProject("Same project", path)
+		if err != nil || alias.ID != opened.ID || alias.Directory != directory {
+			t.Fatal("directory alias not deduplicated", alias, err)
+		}
+	}
+	file := filepath.Join(directory, "file")
+	if err := os.WriteFile(file, []byte("unchanged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"", " ", file, filepath.Join(directory, "missing")} {
+		if _, err := m.CreateProject("Invalid", path); err == nil {
+			t.Fatal("invalid directory accepted", path)
+		}
 	}
 }
 func TestRestartDoesNotReplayActiveSessionOrBuild(t *testing.T) {
@@ -286,5 +315,5 @@ func startTestCommand(m *Manager, project, name, role, command, serverURL string
 	if err != nil {
 		return Session{}, err
 	}
-	return m.start(project, name, role, command, serverURL, agentcli.Launch{Executable: shell, Args: []string{"--noprofile", "--norc", "-c", command}, Env: os.Environ()}, false, nil)
+	return m.start(project, name, role, command, serverURL, agentcli.Launch{Executable: shell, Args: []string{"--noprofile", "--norc", "-c", command}, Env: os.Environ()}, startOptions{})
 }

@@ -145,6 +145,28 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 		v, err := m.Session(r.PathValue("session"))
 		deskResult(w, v, err)
 	})
+	for _, kind := range []string{"resume", "fork", "handover"} {
+		mux.HandleFunc("POST /api/sessions/{session}/"+kind, func(w http.ResponseWriter, r *http.Request) {
+			var b desk.ContinuationRequest
+			if err := deskJSON(r, &b); err != nil {
+				deskResult(w, nil, err)
+				return
+			}
+			v, err := m.Continue(r.PathValue("session"), kind, b, "http://"+r.Host)
+			deskResult(w, v, err)
+		})
+	}
+	mux.HandleFunc("POST /api/sessions/{session}/native-session", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			NativeSessionID string `json:"native_session_id"`
+		}
+		if err := deskJSON(r, &b); err != nil {
+			deskResult(w, nil, err)
+			return
+		}
+		v, err := m.LinkNativeSession(r.PathValue("session"), b.NativeSessionID)
+		deskResult(w, v, err)
+	})
 	mux.HandleFunc("GET /api/sessions/{session}/output", func(w http.ResponseWriter, r *http.Request) {
 		offset, err := strconv.ParseInt(r.URL.Query().Get("offset"), 10, 64)
 		if err != nil {

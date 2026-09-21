@@ -4,10 +4,34 @@ The default page (`/` or `/workspace`) hosts actual local CLI sessions. The
 earlier batch execution interface remains at `/overview`, `/work`, and its
 existing routes. The two paths have different execution contracts.
 
+## Workspace navigation
+
+The sidebar's workspace selector switches projects. The session list belongs to
+that selected workspace; projects and sessions are not parallel navigation lists.
+Open the selector to choose another project or open an existing directory.
+
+Right-click the selected workspace or a project in the selector for Open, Open in
+new tab, New session, New task, and Copy project path. Right-click any session for
+Open, Resume, Fork, Hand over, Interrupt, Stop/Close, and Copy session ID. Actions
+apply to the clicked session, even when a different terminal is selected. Unavailable
+actions are disabled according to current session state.
+
+Focus a workspace or session and press Shift+F10 (or the Context Menu key) to open
+the same menu. Arrow keys, Home/End, and typing a label's first letter move through
+actions; Enter activates them. Escape closes the menu and restores focus.
+
 ## Sessions
 
-Open a project directory beneath `--workspace-root`, then choose a detected agent
-or application and an optional environment profile. The adapter launches its executable directly
+Open any existing local project directory, then create a session. Absolute paths
+can be outside `--workspace-root`; relative paths are resolved against it.
+Symlinks resolve to their target so the same directory opens as one project.
+The name is suggested from the directory and remains editable. Selecting
+**Open project** confirms the directory; entering a path alone opens nothing.
+Opening a project also makes it available to the task runner. **New task** in
+the project sidebar uses that project's directory. Tasks accept the default
+workspace or an explicitly opened project and its subdirectories; another
+directory must first be opened as a project. Choose a detected agent or application
+and an optional environment profile. The adapter launches its executable directly
 in a PTY. Bash is an explicit shell choice. Names come from the first launch or
 API prompt and remain stable; raw terminal keystrokes are not interpreted as
 a naming prompt. See [agent adapters and fleet architecture](AGENT_CLI_ABSTRACTION.md). The browser uses
@@ -20,6 +44,11 @@ arrow, Tab, Esc, Enter, Ctrl+C, Ctrl+D, Ctrl+Z, and Ctrl+L shortcuts when needed
 Type and paste directly into the terminal; there is no separate session text box.
 Stop session terminates a running session. After a process exits or fails,
 Close session marks it stopped while retaining its output and exit details.
+
+The **Session ▾** menu also provides resume, fork, and handover. Each creates a
+new execution linked to its source. Native conversation IDs restore the same CLI;
+portable handoff documents transfer available context to another agent. See
+[session continuation](SESSION_CONTINUATION.md) for behavior, limits, and APIs.
 
 Sessions use the operator's environment, home/configuration, and credentials. They
 modify the selected directory directly, and multiple sessions can share it. This
@@ -145,6 +174,8 @@ accept JSON and bounded bodies. The deployment remains trusted and single-user.
 | `POST /api/sessions/{id}/input` | `{key,data}` to the existing PTY |
 | `POST /api/sessions/{id}/resize` | `{rows,cols}` |
 | `POST /api/sessions/{id}/stop` | Stop live execution |
+| `POST /api/sessions/{id}/{resume,fork,handover}` | Continue with native conversation or portable context; required request `key` |
+| `POST /api/sessions/{id}/native-session` | Link an exact `native_session_id` |
 | `POST /api/sessions/{id}/settle` | Confirm interrupted processes stopped with `{confirmed_stopped:true}` |
 | `POST /api/sessions/{id}/scratch/clean` | Explicit cleanup after holds settle |
 | `GET/POST /api/projects/{id}/topics` | Search summaries (`q`, `follower`) or create `{title,summary,paths,author}` |
