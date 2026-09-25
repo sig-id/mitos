@@ -5,6 +5,7 @@ package agentcli
 import "time"
 
 type Capabilities struct {
+	ProjectContext   bool   `json:"project_context"`
 	Transport        string `json:"transport"`
 	InitialPrompt    bool   `json:"initial_prompt"`
 	StructuredEvents bool   `json:"structured_events"`
@@ -14,6 +15,7 @@ type Capabilities struct {
 }
 
 type Definition struct {
+	ContextArgs     []string `json:"context_args,omitempty"`     // explicit noninteractive custom adapter; JSON profile on stdout
 	SessionProtocol string   `json:"session_protocol,omitempty"` // codex, claude, opencode, or pi
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`

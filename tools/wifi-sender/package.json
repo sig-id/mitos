@@ -1,0 +1,7 @@
+{
+  "name": "mitos-wifi-sender-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node test.mjs", "test:portal": "node portal-test.mjs"},
+  "devDependencies": {"playwright": "1.58.2"}
+}

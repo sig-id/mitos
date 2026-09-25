@@ -6,8 +6,8 @@ existing routes. The two paths have different execution contracts.
 
 ## Workspace navigation
 
-The sidebar's workspace selector switches projects. The session list belongs to
-that selected workspace; projects and sessions are not parallel navigation lists.
+The sidebar's workspace selector switches projects. Its supervisor is pinned separately from the agent list. The graph is the default
+project view; projects and sessions are not parallel navigation lists.
 Open the selector to choose another project or open an existing directory.
 
 Right-click the selected workspace or a project in the selector for Open, Open in
@@ -31,14 +31,16 @@ Opening a project also makes it available to the task runner. **New task** in
 the project sidebar uses that project's directory. Tasks accept the default
 workspace or an explicitly opened project and its subdirectories; another
 directory must first be opened as a project. Choose a detected agent or application
-and an optional environment profile. The adapter launches its executable directly
+and an optional environment profile. A working coding agent requires an explicit first
+goal. Supervisor setup first generates an editable project-context draft in a separate
+background conversation; work starts only after review and a goal. The adapter launches its executable directly
 in a PTY. Bash is an explicit shell choice. Names come from the first launch or
 API prompt and remain stable; raw terminal keystrokes are not interpreted as
 a naming prompt. See [agent adapters and fleet architecture](AGENT_CLI_ABSTRACTION.md). The browser uses
 vendored xterm.js, with real terminal input and resize rather than a reconstruction
 of a model conversation. Interrupt sends Ctrl+C to the terminal foreground group;
 Stop terminates observed processes in its OS session and closes the PTY.
-The terminal takes keyboard focus when it connects. Click it to return focus and
+The terminal takes keyboard focus when its visible view connects. Click it to return focus and
 type directly, including Ctrl+C and Ctrl+D. The compact **Keys** menu provides
 arrow, Tab, Esc, Enter, Ctrl+C, Ctrl+D, Ctrl+Z, and Ctrl+L shortcuts when needed.
 Type and paste directly into the terminal; there is no separate session text box.
@@ -57,10 +59,12 @@ operations can bypass coordination; escaped descendants cannot be guaranteed to
 stop through process sampling. No unattended grant or automatic decision approval
 is implied. The existing batch provider continues to use private workspace copies.
 
-One active coordinator is allowed per project. It is a user-selected CLI session
-with a visible role and coordination instructions; Mitos does not start a separate
-model service or inject terminal keystrokes to imitate a model protocol. The user
-can direct that agent to read the supplied instructions and use the project tools.
+One active supervisor (API role `coordinator`) is allowed per project. Its initial
+prompt includes the saved project profile and explicit Mitos delegation commands.
+Workers record their supervisor ID and assignments; the overview shows clickable
+connections separately from terminal navigation. Profiles select a shared checkout
+or separate Git worktrees for new workers. See [project supervision](PROJECT_SUPERVISION.md)
+for attention delivery, breakpoint semantics, project setup and APIs.
 
 Input requests are serialized, with a bounded in-memory duplicate-key window.
 The browser does not automatically retry ambiguous input. Output streams over a WebSocket using byte offsets and base64 to preserve terminal
@@ -101,7 +105,9 @@ Sessions receive:
 - `MITOS_URL`, `MITOS_PROJECT_ID`, `MITOS_SESSION_ID`: project tool context.
 - `MITOS_GOAL_ID`, `MITOS_TASK_ID`, `MITOS_REQUESTED_BY`, `MITOS_HANDOFF_TOPIC_ID`: optional fleet assignment references.
 - `MITOS_COORDINATION`: a local Markdown file describing the tools and role.
-- `TMPDIR`: a private session scratch directory.
+- `MITOS_SUPERVISOR_ID`: recorded supervisor at launch.
+- `MITOS_WORKSPACE`: actual checkout, including an agent worktree when configured.
+- `TMPDIR`, `MITOS_SCRATCH`: a private session scratch directory.
 - `GIT_TRACE2_EVENT`: a trace file in scratch for observed Git command provenance.
 
 For example, inside a hosted session:

@@ -3,8 +3,11 @@
 ## Implemented foundation
 
 Mitos discovers native agent executables at startup and presents an agent picker.
-An optional first prompt establishes a stable session title. Without one, the
-session uses an agent label and short ID until its first nonempty prompt submitted through the API.
+Coding agents require a concrete first work goal, which establishes a stable session
+title. Supervisor setup first runs a separate background analysis and presents an
+editable project profile; only reviewed context and an explicit goal start the
+working supervisor. Ordinary applications and shells can open without a goal and
+use an agent label and short ID until a nonempty API prompt names them.
 Raw terminal input is deliberately opaque: typing directly into a CLI does not
 rename the session. Session identity always remains its durable ID.
 
@@ -19,8 +22,9 @@ Built-in discovery covers Codex, Claude Code, OpenCode, Pi, Gemini CLI, GitHub
 Copilot CLI, Aider, Goose, Amp, Cursor Agent, Qwen Code, Cline, and Kilo, plus Bash.
 This is an extensible catalog, not a claim that every installed executable is
 fully integrated. Codex, Claude, OpenCode, Pi, Gemini, Copilot, and Cursor have
-initial-prompt mappings. Other adapters open their interactive UI; they do not
-pretend a one-shot flag provides an interactive session.
+initial-prompt mappings. Other coding adapters remain discoverable but cannot start
+a working agent until a goal-capable launch adapter is available. Background project
+analysis currently supports Codex, Claude and Pi, plus explicit custom context adapters.
 
 The implemented transport is PTY. Codex, Claude, OpenCode, and Pi support native
 resume and fork through exact conversation IDs. Portable context handover starts
@@ -91,6 +95,9 @@ literal secret values. Missing sources fail the selected launch. A profile may
 also specify `executable`. Custom adapters can explicitly select
 `session_protocol` (`codex`, `claude`, `opencode`, or `pi`) when their executable
 implements that exact CLI contract; it is not inferred from the application name.
+`context_args` optionally defines a separate noninteractive analysis invocation,
+followed by `-- PROMPT`; it must return profile JSON on stdout and configure its own
+read-only tools. It is never used for the working supervisor conversation.
 `prompt` is `positional`, `none`, or a long flag such as
 `--prompt`; arguments are passed directly, without shell interpolation. Source
 variables remain inherited unless explicitly unset. Profiles are configuration
@@ -116,7 +123,6 @@ flowchart TD
   C --> G[Durable goals and task assignments]
   C --> L[Agent registry and launch API]
   L --> W[Mitos worker sessions]
-  W --> N[Optional native CLI sub-agents]
   C <--> B[Project message board]
   W <--> B
   B --> H[Agent-written handoffs and evidence references]
@@ -125,8 +131,10 @@ flowchart TD
 
 The controller should normally create sessions from goals, selecting an available
 adapter and profile according to task needs. Manual session creation remains an
-operator tool. A coordinator role today supplies instructions and tools; **an
-autonomous controller is not implemented by this change**. The existing batch
+operator tool. The [project supervisor](PROJECT_SUPERVISION.md) receives saved
+policy and delegates through Mitos sessions with explicit parent relationships,
+a graph, and durable attention receipts. It is an instructed native coding agent,
+not a separate deterministic scheduling service. The existing batch
 Task/run scheduler is a separate execution contract; a desk assignment's goal or
 task reference does not admit a batch Task or prove its completion.
 
@@ -136,8 +144,8 @@ The next controller should use this cycle:
    Select a worker and persist an assignment plus a launch operation ID before
    dispatch. Reconcile that operation after a crash instead of blindly relaunching.
 2. Give the worker its task prompt, relevant board topics, and instructions for
-   reporting results and requesting help. Native sub-agent use remains a worker
-   choice within its permissions and budget.
+   reporting results and requesting help. The default project rules direct delegation through Mitos sessions and prohibit
+   native CLI sub-agent spawning.
 3. Workers publish progress, evidence, blockers, completion proposals, and requests
    to split work or recruit agents. The controller decides fleet allocation under
    the goal's policy, preserving requester and parent-task lineage.

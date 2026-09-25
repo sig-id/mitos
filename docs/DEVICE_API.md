@@ -46,7 +46,11 @@ The remote listener exposes only:
 | POST | `/api/device/v1/resolutions` | resolve |
 | POST | `/api/device/v1/voice-drafts` | voice |
 
-Every request requires `Authorization: Bearer TOKEN`. Responses use JSON and
+The device listener additionally serves the static Wi-Fi sender assets under
+`/wifi-setup/`. Those public GET/HEAD resources have no credential-submission API
+and no Studio access. See [deployment instructions](../deploy/wifi-setup/README.md).
+
+Every device API request requires `Authorization: Bearer TOKEN`. Responses use JSON and
 `Cache-Control: no-store`. There are no redirects or local-identity fallbacks.
 The implementation requires TLS at the connector itself; an HTTP proxy hop is
 not supported. The remote listener cannot create runs, execute arbitrary
@@ -237,3 +241,9 @@ MITOS_LIVE_CODEX=1 go test ./internal/web -run TestLiveCodexNative -v
 MITOS_LIVE_CLAUDE=1 MITOS_TEST_BIN=/tmp/mitos-spec17 \
   go test ./internal/web -run TestLiveClaudeNative -v
 ```
+
+
+The handheld's default **From phone** flow now uses its own temporary WPA2 access
+point and local portal. Its `/api/status` and `/api/join` exist only on that watch
+hotspot, not on this connector. Mitos maintains the embedded phone assets but
+never receives Wi-Fi credentials. See [Wi-Fi setup](../spec/19_HANDHELD_WIFI_SETUP.md).

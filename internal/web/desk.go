@@ -14,11 +14,12 @@ import (
 )
 
 type deskPage struct {
-	Projects []desk.Project
-	Project  desk.Project
-	Sessions []desk.Session
-	Session  desk.Session
-	Root     string
+	Projects    []desk.Project
+	Project     desk.Project
+	Sessions    []desk.Session
+	Session     desk.Session
+	Supervising bool
+	Root        string
 }
 
 func (s *Server) deskPage(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +48,15 @@ func (s *Server) deskPage(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if len(p.Sessions) > 0 {
 		p.Session = p.Sessions[len(p.Sessions)-1]
+		for _, candidate := range p.Sessions {
+			if candidate.Role == "coordinator" {
+				p.Session = candidate
+			}
+		}
+	}
+	p.Supervising = r.URL.Query().Get("session") == "" || p.Session.Role == "coordinator"
+	if r.URL.Query().Get("view") == "terminal" {
+		p.Supervising = false
 	}
 	var b bytes.Buffer
 	if err := s.templates.ExecuteTemplate(&b, "desk", p); err != nil {

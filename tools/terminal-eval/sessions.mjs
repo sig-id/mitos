@@ -19,6 +19,9 @@ const server=spawn(path.join(root,'bin/mitos'),['serve','--addr',`127.0.0.1:${po
 let log='',startError;server.stderr.on('data',b=>log=(log+b).slice(-8000));server.on('error',e=>startError=e);
 const exited=new Promise(resolve=>{server.once('exit',resolve);server.once('error',resolve)});
 const api=async(p,body)=>{const r=await fetch(base+p,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const text=await r.text();assert.equal(r.status,200,text);return JSON.parse(text)};
+// Profile and handoff context can exceed the terminal viewport. Check durable
+// bytes for payload assertions; connection/rendering behavior is checked below.
+const outputContains=async(id,text)=>{let offset=0,output='';for(let i=0;i<100;i++){const v=await api(`/api/sessions/${id}/output?offset=${offset}`);output+=Buffer.from(v.data||'', 'base64').toString();offset=v.next;if(output.includes(text))return;await new Promise(r=>setTimeout(r,50));}assert.fail(`Missing session output: ${text}`);};
 let browser;
 try{
  let ready=false;
@@ -68,7 +71,7 @@ try{
  await page.locator('#continuation-mode').selectOption('context');await page.locator('#continuation-notes').fill('Check cart.go and preserve the public API');
  await page.locator('#continuation-prompt').fill('Add checkout tests');
  const forkID=await submit();
- await page.waitForFunction(()=>document.querySelector('#terminal').innerText.includes('Check cart.go'));
+ await outputContains(forkID,'Check cart.go');
  assert.equal((await api(`/api/sessions/${source.id}`)).status,'running');
  assert.ok((await page.locator('.session-lineage a').getAttribute('href')).includes(source.id));
  await page.locator(`.session-link[data-session-id="${source.id}"]`).click({button:'right'});
@@ -88,13 +91,13 @@ try{
  await menu();await page.locator('#stop-session').click();await page.waitForFunction(()=>document.querySelector('#session-status').textContent==='stopped');
  await open('resume');const native=await page.locator('#continuation-native').inputValue();assert.ok(native);
  const resumedID=await submit();assert.notEqual(resumedID,forkID);
- await page.waitForFunction(()=>document.querySelector('#terminal').innerText.includes('ARG:--resume'));
+ await outputContains(resumedID,'ARG:--resume');
  assert.equal((await api(`/api/sessions/${resumedID}`)).native_session_id,native);
  await open('handover');await page.locator('#continuation-agent').selectOption('target-test');
  await page.waitForFunction(()=>!document.querySelector('#continuation-form [type=submit]').disabled);
  await page.locator('#continuation-notes').fill('Handoff to target: tests are next');
  const targetID=await submit();
- await page.waitForFunction(()=>document.querySelector('#terminal').innerText.includes('Handoff to target: tests are next'));
+ await outputContains(targetID,'Handoff to target: tests are next');
  assert.equal((await api(`/api/sessions/${targetID}`)).agent_id,'target-test');
  for(let i=0;i<50&&(await api(`/api/sessions/${resumedID}`)).status!=='stopped';i++)await page.waitForTimeout(50);
  assert.equal((await api(`/api/sessions/${resumedID}`)).status,'stopped');

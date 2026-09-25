@@ -35,21 +35,30 @@
   projectDirectory.addEventListener('input', suggestProjectName);
   projectDirectory.addEventListener('change', suggestProjectName);
   suggestProjectName();
-  form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/workspace?project=${p.id}`; });
-  form('session-form', async b => { const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
+  form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/workspace?project=${p.id}&setup=true`; });
+  form('session-form', async b => { if(b.role==='coordinator'){await window.MitosSupervision.startSetup(b);return;} const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
   form('topic-form', async (b,f) => { b.paths = b.paths.split('\n').map(x=>x.trim()).filter(Boolean); await api(projectAPI('topics'), b); f.reset(); $('topic-dialog').close(); await topics(); });
-  let agentCatalog = [], agentSelection = 0;
+  let agentCatalog = [], agentSelection = 0, selectedInstallation;
+  function sessionMode(){
+    const supervisor=$('session-role').value==='coordinator', v=selectedInstallation;
+    $('session-dialog-title').textContent=supervisor?'Set up the supervisor':'Start an agent';
+    $('session-prompt-label').textContent=supervisor?'Work goal (optional during analysis)':'Work goal';
+    $('session-form').querySelector('[type=submit]').textContent=supervisor?'Analyze project':'Start agent';
+    $('session-form').querySelector('[type=submit]').disabled=!v?.installed||(supervisor?!v?.capabilities.project_context:(v?.kind==='agent'&&!v?.capabilities.initial_prompt));
+    $('session-prompt').required=!supervisor&&v?.kind==='agent';
+    $('agent-prompt-help').textContent=supervisor?(v?.capabilities.project_context?'First, this agent analyzes the project in a separate background conversation. Review and edit its proposed context before starting work.':'This agent has no background project-analysis adapter. Choose Codex, Claude or Pi.'):(v?.kind==='agent'?(v?.capabilities.initial_prompt?'A concrete first goal is required. Starting a session begins work on that goal.':'This adapter cannot accept a work goal. Choose an agent with initial prompt support.'):'Open this application in its terminal.');
+  }
+  $('session-role').addEventListener('change',sessionMode);
   async function inspectAgent() {
     const generation = ++agentSelection, id = $('session-agent').value;
-    $('session-form').querySelector('[type=submit]').disabled = true;
+    selectedInstallation=null;sessionMode();
     if (!id) return;
     const query = new URLSearchParams({profile:$('agent-profile').value}); if (project) query.set('project',project);
     const v = await api(`/api/agents/${id}?${query}`);
     if (generation !== agentSelection) return;
     $('agent-summary').textContent = v.installed ? `${v.name}${v.version ? ' '+v.version : ''} · ${v.executable}` : `${v.name} is not installed on the selected PATH.`;
-    $('session-form').querySelector('[type=submit]').disabled = !v.installed;
+    selectedInstallation=v;sessionMode();
     $('session-prompt').disabled = !v.capabilities.initial_prompt;
-    $('agent-prompt-help').textContent = v.capabilities.initial_prompt ? 'The session takes its name from your first prompt.' : 'Open this application and type directly in its terminal.';
     const info = $('agent-setup-content'); info.replaceChildren();
     info.append(el('p','Uses its own configuration, skills, and memory. Credential values are never shown.','muted'));
     info.append(el('p',v.auth,'muted'));
@@ -197,7 +206,7 @@
     });
   }
   function showContext(event, keyboard=false) {
-    const link=event.target.closest('.project-context-target[data-project-id],.session-link');
+    const link=event.target.closest('.project-context-target[data-project-id],.session-link[data-session-id]');
     if(!link)return;
     event.preventDefault();
     const rect=link.getBoundingClientRect();
@@ -247,7 +256,7 @@
       [...keyButtons, $('interrupt')].forEach(b => b.disabled = !enabled);
       $('terminal-input-hint').textContent = inputBroken ? 'Input disconnected · reload to reconnect' : !ready ? 'Terminal input unavailable' : 'Click terminal to type';
     }
-    focusTerminal = () => { if (ready && !inputBroken && !document.querySelector('dialog[open]') && !window.DeskContextMenu.isOpen()) term.focus(); };
+    focusTerminal = () => { if (!$('view-terminal').hidden && ready && !inputBroken && !document.querySelector('dialog[open]') && !window.DeskContextMenu.isOpen()) term.focus(); };
     $('terminal').addEventListener('click', focusTerminal);
     document.addEventListener('pointerdown', event => { if (!shortcuts.contains(event.target)) shortcuts.open = false; });
     shortcuts.addEventListener('keydown', event => {
@@ -367,7 +376,8 @@
   }
   document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('[data-tab]').forEach(tab=>{ const active=tab===b;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));$(`view-${tab.dataset.tab}`).hidden=!active; });
-    if (b.dataset.tab!=='terminal') inspect().catch(error); else { window.dispatchEvent(new Event('resize')); if (focusTerminal) focusTerminal(); }
+    document.body.dataset.view=b.dataset.tab;
+    if (['changes','resources'].includes(b.dataset.tab)) inspect().catch(error); else if(b.dataset.tab==='terminal') { window.dispatchEvent(new Event('resize')); if (focusTerminal) focusTerminal(); }
   }));
   let topicID='', topicRevision=0, topicCursor=0, topicsSignature='', jobsSignature='';
   async function topics() {
@@ -438,7 +448,7 @@
     const values=await api(projectAPI('sessions')),signature=JSON.stringify(values);if(signature===sessionsSignature)return;sessionsSignature=signature;
     const focusedSession=document.activeElement?.closest('.session-link')?.dataset.sessionId;
     $('session-list').replaceChildren();
-    for(const s of values){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;link.dataset.sessionId=s.id;link.dataset.sessionName=s.name;wireContextLink(link);const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.continuation ? s.continuation.kind+' · ' : ''}${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
+    for(const s of values.filter(s=>s.role!=='coordinator')){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;link.dataset.sessionId=s.id;link.dataset.sessionName=s.name;wireContextLink(link);const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.continuation ? s.continuation.kind+' · ' : ''}${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
     if(focusedSession)document.querySelector(`[data-session-id="${CSS.escape(focusedSession)}"]`)?.focus({preventScroll:true});
     const selected=values.find(s=>s.id===session);if(selected?.detail)$('connection-status').textContent=selected.detail;
     if (selected) $('session-name').textContent=selected.name;

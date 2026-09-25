@@ -1,0 +1,4 @@
+const CACHE='mitos-wifi-v2';const ASSETS=['./','index.html','style.css','app.mjs','modem.mjs','manifest.webmanifest','icon.svg'];
+self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
+self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('mitos-wifi-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+self.addEventListener('fetch',e=>{const url=new URL(e.request.url);if(e.request.method!=='GET'||url.origin!==location.origin||url.search)return;const base=new URL('./',location.href);if(!url.pathname.startsWith(base.pathname))return;const name=url.pathname.slice(base.pathname.length);if(!ASSETS.includes(name||'./'))return;e.respondWith(caches.match(e.request).then(hit=>hit||fetch(e.request)));});

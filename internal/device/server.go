@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"mitos/internal/studio"
+	"mitos/internal/wifisetup"
 )
 
 type Server struct {
@@ -100,6 +101,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.TLS == nil {
 		fail(w, problem(403, "tls_required"))
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/wifi-setup/") {
+		wifisetup.ServeHTTP(w, r)
 		return
 	}
 	permission := "read"

@@ -15,8 +15,11 @@ import (
 )
 
 func deskClient(args []string) error {
+	if len(args) > 0 && args[0] == "attention-hook" {
+		return attentionHook()
+	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos desk <agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
+		fmt.Println("mitos desk <profile|supervision|broadcast|inbox|acknowledge|release-notice|agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
 		return nil
 	}
 	action := args[0]
@@ -47,6 +50,8 @@ func deskClient(args []string) error {
 	revision := f.Int("revision", -1, "Expected topic revision when posting")
 	title := f.String("title", "", "Topic title")
 	body := f.String("body", "", "Topic summary or reply body")
+	waitInbox := f.Bool("wait", false, "Wait up to 20 seconds for inbox attention")
+	pause := f.Bool("pause", false, "Request an acknowledged breakpoint until explicitly released")
 	if err := f.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -69,6 +74,31 @@ func deskClient(args []string) error {
 		return ""
 	}
 	switch action {
+	case "profile", "supervision":
+		path = proj + "/" + action
+	case "broadcast":
+		path = proj + "/attention"
+		payload = map[string]any{"author": *author, "body": *body, "pause": *pause}
+	case "inbox":
+		if *author == "operator" {
+			return errors.New("--session or MITOS_SESSION_ID is required for the agent inbox")
+		}
+		path = "/api/sessions/" + url.PathEscape(*author) + "/inbox"
+		if *waitInbox {
+			path += "?wait=true"
+		}
+	case "acknowledge":
+		if f.NArg() != 1 || *author == "operator" {
+			return errors.New("provide a notice ID and the acknowledging session")
+		}
+		path = "/api/sessions/" + url.PathEscape(*author) + "/inbox/" + url.PathEscape(f.Arg(0)) + "/acknowledge"
+		payload = map[string]any{}
+	case "release-notice":
+		if f.NArg() != 1 {
+			return errors.New("provide a notice ID")
+		}
+		path = "/api/attention/" + url.PathEscape(f.Arg(0)) + "/release"
+		payload = map[string]string{"author": *author}
 	case "agents":
 		path = "/api/agents"
 		if *project != "" {
@@ -192,7 +222,11 @@ func deskClient(args []string) error {
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	timeout := 15 * time.Second
+	if action == "inbox" && *waitInbox {
+		timeout = 25 * time.Second
+	}
+	response, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package desk
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ type Manager struct {
 	dir, root     string
 	state         state
 	live          map[string]*terminal
+	drafts        map[string]context.CancelFunc
 	jobs          map[string]*runningJob
 	closed        bool
 	writeErr      error
@@ -35,7 +37,12 @@ type Manager struct {
 }
 
 func Open(dir, root string) (*Manager, error) {
-	root, err := filepath.EvalSymlinks(root)
+	var err error
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +67,7 @@ func Open(dir, root string) (*Manager, error) {
 			_ = lock.Close()
 		}
 	}()
-	m := &Manager{dir: dir, root: root, state: state{Version: 1}, live: map[string]*terminal{}, jobs: map[string]*runningJob{}, outputChanged: make(chan struct{})}
+	m := &Manager{dir: dir, root: root, state: state{Version: 1}, live: map[string]*terminal{}, jobs: map[string]*runningJob{}, drafts: map[string]context.CancelFunc{}, outputChanged: make(chan struct{})}
 	m.Agents, err = agentcli.Open(filepath.Join(filepath.Dir(dir), "agents.json"), os.Environ())
 	if err != nil {
 		return nil, err
@@ -77,11 +84,32 @@ func Open(dir, root string) (*Manager, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	for i := range m.state.ProfileDrafts {
+		d := &m.state.ProfileDrafts[i]
+		if d.Status == "running" {
+			d.Status = "interrupted"
+			d.Detail = "Server restarted during project analysis. Retry to generate a new draft."
+		}
+	}
 	// Never replay commands or signal a stale PID after a server restart.
 	for i := range m.state.Sessions {
 		s := &m.state.Sessions[i]
 		if s.Status == "running" || s.Status == "starting" || s.Status == "stopping" {
 			s.Status, s.PID, s.Detail = "interrupted", 0, "Server restarted. Inspect any surviving processes before starting a replacement."
+		}
+	}
+	// Reconcile a launch persisted before its final setup receipt. Never replay it.
+	for i := range m.state.ProfileDrafts {
+		d := &m.state.ProfileDrafts[i]
+		if d.Status != "reviewed" {
+			continue
+		}
+		for _, session := range m.state.Sessions {
+			if session.SetupDraftID == d.ID && session.Status != "failed" {
+				d.Status = "started"
+				d.SessionID = session.ID
+				break
+			}
 		}
 	}
 	for i := range m.state.Jobs {
@@ -142,6 +170,7 @@ func id(prefix string) string { return prefix + "_" + strings.ToLower(rand.Text(
 func (m *Manager) projectLocked(id string) (Project, error) {
 	for _, p := range m.state.Projects {
 		if p.ID == id {
+			p.Profile = effectiveProfile(p)
 			return p, nil
 		}
 	}
@@ -158,7 +187,11 @@ func (m *Manager) sessionLocked(id string) (*Session, error) {
 func (m *Manager) Projects() []Project {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]Project{}, m.state.Projects...)
+	out := append([]Project{}, m.state.Projects...)
+	for i := range out {
+		out[i].Profile = effectiveProfile(out[i])
+	}
+	return out
 }
 func (m *Manager) Project(id string) (Project, error) {
 	m.mu.Lock()
@@ -285,6 +318,9 @@ func (m *Manager) Close() {
 	m.closed = true
 	for _, t := range m.live {
 		t.stop()
+	}
+	for _, cancel := range m.drafts {
+		cancel()
 	}
 	for _, j := range m.jobs {
 		j.cancel()

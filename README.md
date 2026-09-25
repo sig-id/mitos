@@ -38,16 +38,23 @@ go test -race ./...
 go build -o bin/mitos ./cmd/mitos
 ```
 
-The Studio opens on the **agent workspace**. **Open a project** → select a local
-directory → **New session** → pick a detected agent or application and optionally
-enter a first prompt. Sessions get a stable name from that prompt; no session name
-is required. Sessions share the directory and use their native CLI configuration.
-Startup discovers installed agents; environment profiles select agent-specific
-setup without copying credentials into session metadata. See the
-[agent abstraction and orchestrator architecture](docs/AGENT_CLI_ABSTRACTION.md).
-Select **Project coordinator** for the session that manages the plan; only one
-active coordinator is allowed per project. The role provides coordination context,
-not extra permissions or an automatic approval policy.
+The Studio opens on the **project workspace**. **Open a project** → select any
+existing local directory → **Start supervisor** → choose its agent → **Analyze project**.
+The selected agent drafts project context in a separate background conversation.
+Review and edit that draft, supply a concrete work goal, then **Save and start supervisor**.
+Analysis alone starts no working sessions and does not change the saved profile.
+The profile supplies the goal, Git/push/merge/review rules, temporary paths, disk
+reserve, agent limit, and shared-checkout or separate-worktree layout.
+The supervisor receives these instructions and delegates using `mitos desk start-session`,
+creating actual Mitos agents with recorded supervisor relationships. Only one
+supervisor can be active per project. The default overview shows its graph,
+clickable assignments, topic board, and attention acknowledgments; its terminal
+remains available separately. See [project supervision](docs/PROJECT_SUPERVISION.md).
+
+You can also **Add agent** directly. Sessions get a stable name from their first
+required work goal and use their native CLI configuration. Startup discovers installed agents;
+environment profiles select agent-specific setup without copying credentials into
+session metadata. See the [agent abstraction](docs/AGENT_CLI_ABSTRACTION.md).
 
 The terminal has real PTY input, resize, scrollback, interrupt, and stop controls.
 The **Session ▾** menu supports [resume, fork, and context handover](docs/SESSION_CONTINUATION.md) to another coding agent.

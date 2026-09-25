@@ -33,7 +33,7 @@ func main() {
 		log.Print(err)
 		// Claude treats exit 1 as a nonblocking hook error. A failed connector
 		// must block the waiting tool instead of bypassing canonical approval.
-		if len(os.Args) > 2 && os.Args[1] == "agent" && os.Args[2] == "claude-hook" {
+		if len(os.Args) > 2 && ((os.Args[1] == "agent" && os.Args[2] == "claude-hook") || (os.Args[1] == "desk" && os.Args[2] == "attention-hook")) {
 			os.Exit(2)
 		}
 		os.Exit(1)

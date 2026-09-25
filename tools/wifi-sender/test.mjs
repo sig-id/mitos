@@ -1,0 +1,16 @@
+import {chromium} from 'playwright';
+import assert from 'node:assert/strict';
+const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||undefined,headless:true,args:['--no-sandbox','--disable-gpu','--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required']});
+const context=await browser.newContext({viewport:{width:390,height:844}});const page=await context.newPage();
+const requests=[];const errors=[];page.on('request',r=>requests.push(r.url()));page.on('pageerror',e=>errors.push(e.message));
+const origin=process.env.WIFI_SENDER_URL||'http://127.0.0.1:8747/wifi-setup/';
+const fragment='#v=1&s=0102030405060708&k=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f&n=Test%20network';
+await page.goto(origin+fragment);
+await page.locator('#offline').filter({hasText:'Available offline'}).waitFor();
+assert.equal(new URL(page.url()).hash,'');assert.equal(await page.locator('#ssid').inputValue(),'Test network');
+await page.locator('#password').fill('Symbols !Aa12345');await page.locator('#play').evaluate(e=>e.click());await page.locator('#status').filter({hasText:'Sound sent'}).waitFor();
+assert.equal(await page.evaluate(()=>localStorage.length),0);assert(!requests.some(x=>x.includes('Symbols')||x.includes('01020304')));
+await page.screenshot({path:'wifi-phone.png',fullPage:true});
+await context.setOffline(true);await page.reload();await page.locator('#code').fill(origin+fragment);await page.locator('#import').click();await page.locator('#password').fill('Symbols !Aa12345');await page.locator('#play').evaluate(e=>e.click());await page.locator('#status').filter({hasText:'Sound sent'}).waitFor();
+await page.locator('#clear').click();assert.equal(await page.locator('#password').inputValue(),'');assert(await page.locator('#play').isDisabled());assert.deepEqual(errors,[]);
+await browser.close();console.log('Phone browser passed: session import, fragment cleanup, Web Crypto, OFDM playback, offline reload, no secret requests/storage, clear.');
