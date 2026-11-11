@@ -42,3 +42,10 @@ assets, scroll containment, cross-page script loading, application launch, repor
 and artifact access, service controls, and decision resolution. It makes no model
 calls and does not mutate the running demo. Set `MITOS_SCREENSHOT_DIR` to retain
 the page screenshots.
+
+`npm run test:graphs --prefix tools/terminal-eval` exercises free-text goal creation,
+planner-generated steps, dependency edges, output formatting, stable zoom and
+selection, scope collapse, list view, final acceptance, mobile scrolling,
+reconnection, exact-key recovery after a lost creation response, manual steps,
+and navigation between a graph and its execution attempts. It launches isolated
+Python planner/worker fixtures; no model calls or running demo changes are made.

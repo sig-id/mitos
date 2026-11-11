@@ -1,4 +1,4 @@
-# Adaptive work-graph backend
+# Adaptive work graphs
 
 The backend composes existing Tasks and Run attempts into durable, mutable work
 graphs. An operator, registered controller application, or deterministic client can
@@ -7,7 +7,48 @@ supervisor issuing individual launch commands. No worker reply tags are required
 
 This is a local application adapter for the `work-graph/v1` design. Discover its
 actual coverage at `GET /api/graphs/capabilities`; `complete_profile` is **false**.
-It is backend functionality: existing New work forms do not create these graphs.
+The project **Work** page creates these graphs from a free-text goal and displays
+their evolution. Existing native sessions remain under **Sessions & earlier work**;
+service activations do not yet create graph templates.
+
+## Work page
+
+1. Describe a goal. Choose a planner, or **I’ll add the steps** for manual control.
+   Optional success criteria and executor grants are set before creation.
+2. Watch goal, planner, decision, and application nodes evolve. Solid edges show
+   dependencies; dashed edges show containment. Select a node for its assignment,
+   saved output, artifacts, and attempts. Collapse scopes, zoom, or use list view.
+3. Add steps, inspect failures, retry eligible attempts, replace the planner, or
+   stop work. Changes use the backend's revision checks and idempotency keys.
+4. Review a settled result against its criteria and supply evidence. Closing
+   planning and accepting the root is explicit; an empty queue is not completion.
+
+The page polls one selected graph's lightweight status projection each second and
+summary lists every five seconds. Polling pauses in hidden tabs and backs off on
+connection errors. Output is fetched only for the selected step and artifact;
+saved output is available after the executor finishes. This is not live PTY output.
+A lost mutation response is retained in session storage for exact-key reconciliation,
+including after reload. A stale review must be reopened against the latest state.
+
+The initial UI creation limits are 64 tasks, 96 attempts, 24 planning calls, and a
+two-hour deadline. They bound this activation; advanced limits and graph operations
+remain available through the API. The graph editor supports adding application
+steps and dependencies, not every operation in the runtime wire schema.
+
+## Planner setup
+
+Register a controller application using the protocol described below and set
+`"graph_controller": true` in its `app.json`. Restart the server to discover the
+manifest. This flag advertises a compatible planner in the Work page; it is not an
+additional authority grant. Existing API clients may continue explicitly binding
+registered controllers without the flag. Ordinary worker applications are never
+automatically presented as planners.
+
+The controller receives `graph.context` on stdin and writes `graph-proposal.json`
+with proposed operations and an explanation. It may wrap an agent CLI, use a model,
+or run deterministic code. An installed interactive Codex terminal alone is not a
+registered graph controller. Without a compatible planner, the page offers manual
+steps and links to **Applications → Set up graph planning**.
 
 ## Implemented behavior
 
@@ -45,6 +86,9 @@ this implementation does not introduce a sandbox or multi-tenant authorization.
 | Method and route | Operation |
 |---|---|
 | `GET /api/graphs/capabilities` | Implemented adapters and limitations |
+| `GET /api/graphs/applications` | Registered executor choices and planner discoverability |
+| `GET /api/graphs/{id}/snapshot?node=…` | Status projection; assignment details only for root/selected node; no executor history |
+| `GET /api/graphs/{id}/nodes/{task}/runs/{run}` | Bound attempt details without events or frozen execution configuration |
 | `POST /api/graphs` | Idempotently create a concrete graph/activation |
 | `GET /api/graphs?project_id=…&limit=50&after=…` | Bounded summaries; explicit continuation/truncation |
 | `GET /api/graphs/{id}` | One consistent bounded graph snapshot, receipts, decisions and history |

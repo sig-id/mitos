@@ -48,7 +48,7 @@ func TestGraphAPITransactionsAndDiscovery(t *testing.T) {
 	if got := request(s, "POST", "/api/graphs/"+g.ID+"/amendments", string(body), false); got.Code != 409 {
 		t.Fatal("stale amendment not reported as conflict")
 	}
-	for _, path := range []string{"/api/graphs", "/api/graphs/" + g.ID, "/api/graphs/" + g.ID + "/blockers", "/api/graphs/capabilities"} {
+	for _, path := range []string{"/api/graphs", "/api/graphs/" + g.ID, "/api/graphs/" + g.ID + "/blockers", "/api/graphs/capabilities", "/api/graphs/applications", "/api/graphs/" + g.ID + "/snapshot?node=" + g.RootTask} {
 		if got := request(s, "GET", path, "", false); got.Code != 200 {
 			t.Fatalf("%s: %s", path, got.Body.String())
 		}

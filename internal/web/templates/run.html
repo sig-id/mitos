@@ -1,12 +1,12 @@
 {{define "run"}}<div class="page-heading run-heading">
 <div>
-<a class="back-link" href="/work">← All work</a>
+{{if .Task.GraphID}}<a class="back-link" href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}">← Work graph</a>{{else}}<a class="back-link" href="/work">← All work</a>{{end}}
 <div class="title-badges">{{template "badge" .Run}}{{if .Run.Sample}}<span class="sample-label">Example run</span>{{end}}<span class="mono">{{short .Run.ID}}</span>
 </div>
 <h1>{{.Run.Brief.Title}}</h1>
 <p>{{.Run.AppName}} <span class="separator">/</span> Started {{when .Run.CreatedAt}}</p>
 </div>
-<div class="actions">{{if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form hx-boost="true" action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
+<div class="actions">{{if .Task.GraphID}}<a class="button" href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}">Manage step</a>{{else if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form hx-boost="true" action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "retry"}}Run again</button>
 </form>{{else}}<form hx-boost="true" action="/runs/{{.Run.ID}}/cancel" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "stop"}}Stop work</button>

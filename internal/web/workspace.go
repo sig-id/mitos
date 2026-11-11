@@ -52,6 +52,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 		}
 		type item struct {
 			RunID     string `json:"run_id"`
+			GraphID   string `json:"graph_id,omitempty"`
 			ProjectID string `json:"project_id"`
 			Title     string `json:"title"`
 			Question  string `json:"question"`
@@ -78,6 +79,25 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 			for _, session := range v.Sessions {
 				if session.TaskID == "" {
 					row.Unbound++
+				}
+			}
+			graphRows, _ := s.engine.Store.GraphSummaries(p.ID, "", 256)
+			for _, g := range graphRows {
+				status := "queued"
+				if g.Status == "accepted" {
+					status = "accepted"
+				} else if g.Status == "cancelled" {
+					status = "cancelled"
+				} else if g.Counts["running"] > 0 {
+					status = "running"
+				} else if g.Counts["failed"]+g.Counts["needs_attention"] > 0 {
+					status = "needs_inspection"
+				} else if g.Counts["accepted"] > 0 && g.Counts["queued"]+g.Counts["blocked"]+g.Counts["stopping"] == 0 {
+					status = "reported_complete"
+				}
+				row.Counts[status]++
+				if status == "reported_complete" || status == "needs_inspection" {
+					inbox = append(inbox, item{ProjectID: p.ID, GraphID: g.ID, Title: g.Title, Question: "Review the graph’s results and outstanding work."})
 				}
 			}
 			projects = append(projects, row)
@@ -129,6 +149,13 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 				t.Result = &copy
 			}
 		}
+		batch := []studio.Task{}
+		for _, task := range v.BatchTasks {
+			if task.GraphID == "" {
+				batch = append(batch, task)
+			}
+		}
+		v.BatchTasks = batch
 		v.Work.Tasks = tasks
 		visibleTasks, visibleGoals, currentSessions := map[string]bool{}, map[string]bool{}, map[string]bool{}
 		for _, task := range tasks {

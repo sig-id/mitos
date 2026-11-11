@@ -45,15 +45,24 @@ between client access, server ownership, and execution placement.
 
 ## Use the workspace
 
-Open a project directory from **Projects**, then choose **New work**. Define the
-outcome, assignment, completion criteria, and execution: one worker or a supervisor
-with delegated work. Review the assignment before starting its executor.
+Open a project directory from **Projects**, then describe your goal in **Work**.
+Choose a configured planner to create steps as evidence arrives, or choose **I’ll
+add the steps** to organize work yourself. Success criteria and executor choices
+are available before starting.
 
-**Work** shows goals, tasks, and a persistent supervision inbox. Select a task to
-inspect its assignment, reports, and attempts, or open its native session. Stopping
-an executor leaves its task open; **Replace executor** keeps the task and creates
-a new attempt. Submitted reports require an explicit human review. That acceptance
-covers the saved report, not unverified repository changes.
+The graph shows the goal, planning calls, worker steps, dependencies, and their
+current states. Select a node to inspect its assignment, formatted output,
+artifacts, or attempts. Expand and collapse goals, pan and zoom, or switch to a
+list. Progress updates preserve your selection and view. **Review result** becomes
+available when required steps are accepted and execution is settled; the goal is
+complete only after your explicit review.
+
+Automatic graph planning requires a registered application marked
+`graph_controller: true`; see [planner setup](docs/adaptive-runtime.md#planner-setup).
+Installed interactive agent terminals are separate executors. **Sessions & earlier
+work → New native session** retains their assignment, supervision inbox, reports,
+and replacement workflow. Submitted session reports require explicit human review;
+that acceptance covers the saved report, not unverified repository changes.
 
 **Services** activates project applications on request or on an interval. **Resources**
 shows workspace and execution information. **Inbox** collects pending report reviews,
@@ -102,12 +111,13 @@ a separately reconstructed result. See [applications](spec/system/05_INTERFACES_
 
 ## Adaptive work graphs
 
-The [adaptive runtime backend](docs/adaptive-runtime.md) supports dynamically added
+The [adaptive runtime](docs/adaptive-runtime.md) supports dynamically added
 work, atomic graph amendments, automatic application dispatch, registered controller
 applications, and optional typed decisions. Native worker output stays intact.
-Use `/api/graphs` to create and inspect graphs; `/api/graphs/capabilities` reports the
-implemented adapter and remaining integrations. Existing workspace forms and PTY
-sessions retain their current lifecycle.
+The project **Work** page creates and displays these graphs. `/api/graphs` provides
+the programmatic interface; `/api/graphs/capabilities` reports the implemented
+adapter and remaining integrations. Native PTY sessions and services retain their
+separate lifecycle.
 
 ## Optional decision models
 

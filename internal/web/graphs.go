@@ -31,6 +31,24 @@ func graphBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 func (s *Server) graphRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/graphs/applications", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.GraphApplications()) })
+	mux.HandleFunc("GET /api/graphs/{id}/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Store.GraphView(r.PathValue("id"), r.URL.Query().Get("node"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Store.GraphRun(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+
 	mux.HandleFunc("GET /api/graphs/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "controller_proposals": true, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "capacity": 2})
 	})
@@ -44,19 +62,7 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 			}
 			limit = n
 		}
-		after := r.URL.Query().Get("after")
-		rows := []map[string]any{}
-		next := ""
-		for _, g := range s.engine.Store.Graphs() {
-			if g.ID <= after || r.URL.Query().Get("project_id") != "" && g.ProjectID != r.URL.Query().Get("project_id") {
-				continue
-			}
-			if len(rows) == limit {
-				next = rows[len(rows)-1]["id"].(string)
-				break
-			}
-			rows = append(rows, map[string]any{"id": g.ID, "project_id": g.ProjectID, "root_task": g.RootTask, "revision": g.Revision, "status": g.Status, "members": len(g.Members), "updated_at": g.UpdatedAt})
-		}
+		rows, next := s.engine.Store.GraphSummaries(r.URL.Query().Get("project_id"), r.URL.Query().Get("after"), limit)
 		writeJSON(w, 200, map[string]any{"graphs": rows, "next": next, "truncated": next != ""})
 	})
 	mux.HandleFunc("POST /api/graphs", func(w http.ResponseWriter, r *http.Request) {

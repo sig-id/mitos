@@ -2,6 +2,6 @@
   "name": "mitos-terminal-eval",
   "private": true,
   "type": "module",
-  "scripts": {"test": "node evaluate.mjs", "test:stream": "node stream.mjs", "test:sessions": "node sessions.mjs", "test:supervision": "node supervision.mjs", "test:diff": "node diff.mjs", "test:operating": "node operating.mjs", "test:pages": "node pages.mjs"},
+  "scripts": {"test": "node evaluate.mjs", "test:stream": "node stream.mjs", "test:sessions": "node sessions.mjs", "test:supervision": "node supervision.mjs", "test:diff": "node diff.mjs", "test:operating": "node operating.mjs", "test:pages": "node pages.mjs", "test:graphs": "node graphs.mjs"},
   "devDependencies": {"ghostty-web": "0.4.0", "playwright": "1.58.2"}
 }

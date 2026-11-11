@@ -1,0 +1,33 @@
+{{define "graph-work"}}
+<section id="graph-work" aria-label="Work graphs">
+ <div id="graph-browser" class="graph-browser" hidden><label for="graph-picker">Work</label><select id="graph-picker" aria-label="Choose work"></select><button id="graph-load-more" hidden>Load more</button><span id="graph-sync" class="graph-sync" role="status">Connecting…</span></div>
+ <section id="graph-compose" class="graph-compose">
+  <div class="graph-compose-heading"><div><span class="graph-eyebrow">FROM GOAL TO RESULT</span><h2>What would you like to accomplish?</h2><p>Start with an idea. Watch the work take shape.</p></div><button id="graph-compose-close" aria-label="Close new work" hidden>×</button></div>
+  <form id="graph-create-form">
+   <label class="sr-only" for="graph-prompt">Your goal</label><textarea id="graph-prompt" name="goal" rows="3" required minlength="3" maxlength="10000" placeholder="Investigate why checkout is slow, fix the bottleneck, and show the improvement…"></textarea>
+   <div class="graph-create-controls"><label>Planning<select id="graph-planner" name="planner"><option value="">I’ll add the steps</option></select></label><button id="graph-create" class="primary" type="submit" disabled>Create work →</button></div>
+   <p id="graph-planner-note" class="muted">Loading available planners…</p>
+   <details class="graph-options"><summary>Success criteria &amp; executors</summary><label>What would a good result look like?<textarea name="criteria" rows="2" maxlength="10000" placeholder="Optional — otherwise the goal is used for review."></textarea></label><fieldset id="graph-executors"><legend>Available executors</legend></fieldset><label class="graph-check"><input type="checkbox" name="arguments">Let the planner choose additional tool arguments</label></details>
+   <p class="form-error" role="alert"></p>
+  </form>
+  <div class="graph-explainer" aria-hidden="true"><span><b>1</b> Describe the goal</span><i>→</i><span><b>2</b> Work takes shape</span><i>→</i><span><b>3</b> Review the result</span></div>
+ </section>
+ <section id="graph-current" hidden>
+  <header class="graph-heading"><div><div class="graph-title-row"><h2 id="graph-title"></h2><span id="graph-status" class="graph-badge"></span></div><p id="graph-progress" class="muted"></p></div><div class="actions"><button id="graph-add-step">+ Add step</button><button id="graph-review" class="primary">Review result</button><details class="graph-menu"><summary aria-label="Work actions">•••</summary><div><button id="graph-replan">Replace planner</button><button id="graph-stop">Stop work</button></div></details></div></header>
+  <div id="graph-message" class="graph-message" role="status" hidden></div>
+  <div class="graph-body">
+   <section class="graph-map" aria-label="Execution graph">
+    <div class="graph-map-tools"><div class="graph-toggle" role="group" aria-label="Work layout"><button id="graph-mode-map" aria-pressed="true">Graph</button><button id="graph-mode-list" aria-pressed="false">List</button></div><div class="graph-map-controls"><button id="graph-zoom-out" aria-label="Zoom out">−</button><span id="graph-zoom" aria-live="polite">100%</span><button id="graph-zoom-in" aria-label="Zoom in">+</button><button id="graph-fit">Fit</button></div></div>
+    <div id="graph-viewport" class="graph-viewport" tabindex="0" aria-label="Work graph. Scroll to pan; select a node for details."><div id="graph-scale"><div id="graph-stage"></div></div></div>
+    <div id="graph-list-view" hidden></div>
+    <footer class="graph-legend"><span><i class="legend-edge"></i>Dependency</span><span><i class="legend-edge scope"></i>Part of goal</span><span id="graph-node-count"></span></footer>
+   </section>
+   <aside id="graph-inspector" class="graph-inspector" aria-label="Step details" hidden><div class="graph-inspector-heading"><span id="graph-node-kind" class="graph-eyebrow"></span><button id="graph-inspector-close" aria-label="Close step details">×</button></div><div id="graph-node-detail"></div></aside>
+  </div>
+  <details class="graph-activity"><summary>Recent activity <span id="graph-activity-count"></span></summary><ol id="graph-activity-list"></ol></details>
+ </section>
+ <p id="graph-announcement" class="sr-only" role="status" aria-live="polite"></p>
+</section>
+<dialog id="graph-step-dialog"><form id="graph-step-form"><div class="dialog-heading"><h2>Add a step</h2><button type="button" data-close aria-label="Close">×</button></div><label>What needs to happen?<textarea name="intent" rows="3" required maxlength="10000"></textarea></label><label>Executor<select name="app" required></select></label><label>Success criteria<textarea name="criteria" rows="2" maxlength="10000" placeholder="Optional — use the step’s assignment"></textarea></label><label>Group<select name="parent" required></select></label><details><summary>Run after other steps</summary><div id="graph-step-dependencies" class="graph-choice-list"></div></details><p class="form-error" role="alert"></p><button class="primary" type="submit">Add and run step</button></form></dialog>
+<dialog id="graph-action-dialog"><form id="graph-action-form"><div class="dialog-heading"><h2 id="graph-action-title"></h2><button type="button" data-close aria-label="Close">×</button></div><div id="graph-action-context"></div><label id="graph-evidence-label">Evidence or result reference<textarea name="evidence" rows="2" maxlength="4000"></textarea></label><label>Review notes<textarea name="rationale" rows="3" required maxlength="4000"></textarea></label><p class="form-error" role="alert"></p><button class="primary" type="submit" id="graph-action-submit">Confirm</button></form></dialog>
+{{end}}

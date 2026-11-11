@@ -412,6 +412,7 @@ func (s *Server) decisions(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) apps(w http.ResponseWriter, r *http.Request) {
 	p := s.base("apps", "Applications", "apps")
+	p.Query = r.URL.Query().Get("setup")
 	s.render(w, r, p, 200)
 }
 func (s *Server) application(w http.ResponseWriter, r *http.Request) {

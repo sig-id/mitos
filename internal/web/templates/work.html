@@ -130,7 +130,7 @@
 </h3>
 <p>{{.Description}}</p>
 <div class="app-card-footer">
-<span>1 entrypoint</span>
+<span>{{if .GraphController}}Graph planner{{else}}1 entrypoint{{end}}</span>
 <a class="text-link" href="/new?app={{.ID}}">Start work {{icon "arrow"}}</a>
 </div>
 </article>{{end}}
@@ -144,6 +144,7 @@
 </div>
 <span class="pill">{{len .Apps}} available</span>
 </div>
+<details class="panel padded" id="graph-planner-setup" {{if eq .Query "graph-planner"}}open{{end}}><summary>Set up a graph planner</summary><p>A graph planner is an installed application that reads the goal and current work, then proposes new steps.</p><ol><li>Configure a planner command and its acceptance check in an application manifest.</li><li>Add <code>"graph_controller": true</code> to its <code>app.json</code>.</li><li>Have the command read <code>graph.context</code> from stdin and write <code>graph-proposal.json</code> in its workspace, containing <code>operations</code> and <code>explanation</code>.</li><li>Restart the server with the application directory. The planner will appear in the project’s Planning selector.</li></ol><p>Native worker responses stay unchanged. See <code>docs/adaptive-runtime.md</code> for the controller contract. A native terminal agent alone is not a registered graph planner.</p></details>
 <div class="app-grid full">{{range .Apps}}{{template "appcard" .}}{{end}}</div>
 <section class="install-panel">
 <span class="app-symbol">{{icon "terminal"}}</span>
