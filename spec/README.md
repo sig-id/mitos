@@ -1,96 +1,53 @@
 # Mitos specification
 
-Mitos is an operating system for agents and deterministic programs. Services
-preserve responsibilities, Tasks preserve work, and replaceable Processes execute
-attempts under runtime-owned authority, resource limits, and durable records.
+Start with [the product](product/01_PRODUCT.md): why Mitos exists, who it serves,
+its market, and the experience it promises. Then read [architecture](system/01_ARCHITECTURE.md)
+for the system model and [delivery](system/15_DELIVERY_AND_CONFORMANCE.md) for the
+current baseline and remaining work.
 
-## Authority and conformance
+## Authority
 
-Product and system specifications are **normative requirements**, including
-requirements not yet implemented. MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY have
-their RFC 2119 meanings. Unqualified behavioral statements in a contract are
-requirements; examples, rationale, source reviews, and implementation evidence
-are explanatory. A requirement is not a claim that the current build satisfies it.
+Product and system specifications are normative, including requirements not yet
+implemented. MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY express requirement levels.
+Unqualified contract behavior is required unless explicitly marked as an example,
+rationale, market assessment, or current-baseline observation. A requirement is
+not a claim that the current build satisfies it.
 
-- `product/` defines user-visible outcomes, interactions, and acceptance criteria.
-- `system/` defines identities, protocols, invariants, execution, and recovery.
-- `ADRs/` records decisions, alternatives, consequences, and supporting evidence.
-  Superseded decisions and third-party observations impose no current requirements.
+Product defines outcomes and scope. System defines the contracts that deliver them.
+ADRs explain decisions and alternatives; they do not create a competing contract.
+Implementation gaps MUST remain explicit. Conflicts MUST be resolved in the owning
+specification rather than hidden by a precedence rule between overlapping documents.
 
-The [OS architecture](system/AGENT_OPERATING_SYSTEM.md) owns the system model.
-The [durable runtime contract](system/DURABLE_RUNTIME.md) owns identity, authority
-generations, delivery, recovery, and client/host separation. They take precedence
-over earlier numbered specifications on those subjects. The numbered documents
-retain their detailed subsystem contracts. Numeric references such as `01` resolve
-through the catalog below. Historical BEAM/Elixir examples specify semantics only;
-the implementation language is Go.
+Each directory is numbered independently. Product has one document; system has
+15. Add material to its owning document before proposing another specification.
+UI details, historical test logs, sample evidence files, and obsolete designs do
+not belong in this catalog. Tool/deployment instructions may remain with their code.
 
-The [implementation ledger](system/IMPLEMENTATION_STATUS.md) and JSON files under
-`system/evidence/` are descriptive evidence, not normative specifications. Dated
-test results are historical observations. Local execution contracts define the
-baseline migration MUST preserve. Target contracts add requirements; clients MUST
-NOT advertise them as available before implementation and acceptance evidence
-exist. New wire fields/endpoints require versioned schemas and compatibility tests.
+## Product
 
-## Product contracts
+- [01 Product](product/01_PRODUCT.md) – purpose, users, market, offering, server/client experience, and product commitments.
+
+## System
 
 | Specification | Owns |
 |---|---|
-| [02 Product](product/02_PRODUCT.md) | Purpose, users, product boundaries and acceptance |
-| [Workspace](product/WORKSPACE.md) | Projects, hosted agents, coordination, evidence journeys |
-| [11 Frontend](product/11_FRONTEND.md) | Shared client semantics and commercial reader cuts |
-| [18 Handheld A2UI](product/18_HANDHELD_A2UI.md) | Device interaction and rendering |
-| [21 Handheld sound](product/21_HANDHELD_SOUND_FEEDBACK.md) | Audible feedback |
-
-## System contracts
-
-| Specification | Owns |
-|---|---|
-| [OS architecture](system/AGENT_OPERATING_SYSTEM.md) | Primitives, layers, responsibility and executor separation |
-| [Durable runtime](system/DURABLE_RUNTIME.md) | Admission, fencing, receipts, waiting, federation, recovery |
-| [01 Architecture](system/01_ARCHITECTURE.md) | Execution schemas, packaging, security boundaries |
-| [03 Capability](system/03_CAPABILITY.md) | Packaged data, skills, tools, hooks and results |
-| [04 Control plane](system/04_CONTROL_PLANE.md) | Pipeline policy and execution mechanisms |
-| [05 Compute plane](system/05_COMPUTE_PLANE.md) | Provider isolation and launch policy |
-| [06 Work pool](system/06_WORK_POOL.md) | Scheduling, dependencies, invocation and services |
-| [07 Memory](system/07_MEMORY.md) | Authoritative statistics and proposed knowledge |
-| [08 Facilitator](system/08_FACILITATOR.md) | Optional commerce, proof and settlement |
-| [09 Implementation plan](system/09_IMPLEMENTATION_PLAN.md) | Migration and conformance gates |
-| [10 I/O plane](system/10_IO_PLANE.md) | Connectors, sinks, ingress and delivery |
-| [12 Application](system/12_APPLICATION.md) | Application packaging and entrypoints |
-| [14 Observation](system/14_OBSERVATION.md) | Observation coverage and verified steering |
-| [15 Decision plane](system/15_DECISION_PLANE.md) | Resolution policy and authority |
-| [16 Autonomy](system/16_AUTONOMY.md) | Acceptance, checkpoints and supervision |
-| [17 Device connector](system/17_HANDHELD_DECISION_CONNECTOR.md) | Versioned handheld protocol |
-| [19 Wi-Fi setup](system/19_HANDHELD_WIFI_SETUP.md) | Device provisioning |
-
-Local execution and API contracts:
-
-- [Interactive workspace](system/INTERACTIVE_WORKSPACE.md),
-  [project supervision](system/PROJECT_SUPERVISION.md),
-  [agent adapters](system/AGENT_CLI_ABSTRACTION.md),
-  [continuation](system/SESSION_CONTINUATION.md), and
-  [terminal streaming](system/TERMINAL_STREAMING.md).
-- [Compute](system/COMPUTE.md), [workspaces and acceptance](system/WORKSPACES.md),
-  [observation](system/OBSERVATION.md), [recovery](system/RECOVERY.md),
-  [decisions](system/DECISIONS.md), and [device API](system/DEVICE_API.md).
-- [Fleet](system/FLEET.md), [work pools](system/WORK_POOLS.md),
-  [artifact dependencies](system/DATA_DEPENDENCIES.md),
-  [shared workspace coordination](system/SHARED_WORKSPACE_COORDINATION.md), and
-  [autonomy metrics](system/AUTONOMY_METRICS.md).
-- [Services](system/SERVICES.md) and its linked trigger, lifecycle, health,
-  dependency, priority, replacement, retry, and circuit-breaker contracts.
+| [01 Architecture](system/01_ARCHITECTURE.md) | Primitives, compositions, layers, and invariants |
+| [02 Server and clients](system/02_SERVER_AND_CLIENTS.md) | Deployment, connection, execution hosts, and failure boundaries |
+| [03 Work and execution](system/03_WORK_AND_EXECUTION.md) | Identity, admission, lifecycle, cancellation, and replacement |
+| [04 Durability and recovery](system/04_DURABILITY_AND_RECOVERY.md) | Journal, transactions, receipts, replay, and uncertain effects |
+| [05 Authority and resources](system/05_AUTHORITY_AND_RESOURCES.md) | Grants, claims, budgets, and provider enforcement |
+| [06 Agents and supervision](system/06_AGENTS_AND_SUPERVISION.md) | Coordination, delegation, adapters, and continuation |
+| [07 Scheduling and dependencies](system/07_SCHEDULING_AND_DEPENDENCIES.md) | Pools, readiness, artifact inputs, and durable waiting |
+| [08 Services and events](system/08_SERVICES_AND_EVENTS.md) | Activation, schedules, ingress, retries, health, and lifecycle |
+| [09 Workspaces and artifacts](system/09_WORKSPACES_AND_ARTIFACTS.md) | Layout, snapshots, harvest, integrity, and retention |
+| [10 Verification and checkpoints](system/10_VERIFICATION_AND_CHECKPOINTS.md) | Acceptance, criteria, restoration, and assurance |
+| [11 Communication and decisions](system/11_COMMUNICATION_AND_DECISIONS.md) | Mailboxes, human resolution, silence, and notifications |
+| [12 Observation and knowledge](system/12_OBSERVATION_AND_KNOWLEDGE.md) | Coverage, stalls, provenance, context, and metrics |
+| [13 Applications and integrations](system/13_APPLICATIONS_AND_INTEGRATIONS.md) | Packaging, execution contracts, connectors, and sinks |
+| [14 API and compatibility](system/14_API_AND_COMPATIBILITY.md) | Shared operations, streaming, device scope, and migration |
+| [15 Delivery and conformance](system/15_DELIVERY_AND_CONFORMANCE.md) | Current baseline, implementation order, and acceptance gates |
 
 ## Decisions
 
-| ADR | Status |
-|---|---|
-| [0001 Terminal renderer](ADRs/0001_TERMINAL_RENDERER.md) | Accepted: retain xterm.js; dated evaluation evidence |
-| [0002 Batch console](ADRs/0002_BATCH_CONSOLE.md) | Superseded as primary navigation; retained rationale |
-| [0003 Competitive context](ADRs/0003_COMPETITIVE_CONTEXT.md) | Historical source review; informational |
-| [0004 Durable agent OS](ADRs/0004_DURABLE_AGENT_OS.md) | Accepted: common runtime and replaceable executors |
-
-Specification changes MUST update affected contracts and acceptance criteria.
-Architecture changes MUST record the decision and consequences in an ADR. New
-implementations MUST report satisfied requirements and remaining gaps; moving a
-document or renaming a concept does not establish conformance.
+- [0001 Durable agent operating system](ADRs/0001_DURABLE_AGENT_OS.md) – accepted; common runtime, replaceable executors, and lessons from Orca.
+- [0002 Specification structure and scope](ADRs/0002_SPECIFICATION_STRUCTURE.md) – accepted; one product spec and 15 consolidated system contracts.
