@@ -138,6 +138,9 @@ func (e *Engine) runSegments(ctx context.Context, r Run, app Application, histor
 				}
 			}
 		}
+		if proceed, err := e.modelBoundary(ctx, r.ID, "before_segment", number, inputCommit, "", "continue"); err != nil || !proceed {
+			return err
+		}
 		segment, err := e.Store.StartSegment(r.ID, inputCommit)
 		if err != nil {
 			return err
@@ -210,6 +213,9 @@ func (e *Engine) runSegments(ctx context.Context, r Run, app Application, histor
 		}
 		if target == "" {
 			return e.parkSupervision(r.ID, "no_green_checkpoint")
+		}
+		if proceed, err := e.modelBoundary(ctx, r.ID, "before_recovery", number, target, signal, "rewind"); err != nil || !proceed {
+			return err
 		}
 		scope := "step"
 		if app.Supervision.Strategy == "rewind_tail" {

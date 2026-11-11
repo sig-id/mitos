@@ -100,6 +100,21 @@ failure, cancellation, or timeout. Acceptance uses saved verification material a
 a separately reconstructed result. See [applications](spec/system/05_INTERFACES_AND_INTEGRATIONS.md) and
 [workspaces and verification](spec/system/04_STATE_AND_VERIFICATION.md).
 
+## Optional decision models
+
+Command applications can add `decision_model` to choose whether to start a segment
+or take an already eligible recovery. Mitos supports the Jev/Laya System One HTTP
+format and OpenAI Decisions through separate adapters. Configure the full endpoint,
+model, credential environment-variable name if needed, hooks, question, timeout,
+call limit, and probability/confidence thresholds in `app.json`.
+
+See the [configuration example and provider contract](spec/system/05_INTERFACES_AND_INTEGRATIONS.md#decision-model-provider-profile)
+and the [runner runtime](spec/system/02_RUNTIME.md#runner-runtime-and-optional-decision-inference).
+No model is required. A model selects from runtime-supplied choices; Mitos retains
+control of commands, verification, recovery limits, and human approvals. Uncertain
+or unavailable inference parks work for review. Requests and validated answers are
+saved on the Run; restart does not silently repeat a possibly charged call.
+
 ## Operate and inspect
 
 The CLI connects to the running server:

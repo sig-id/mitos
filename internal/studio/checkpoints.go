@@ -12,7 +12,10 @@ import (
 	"mitos/internal/compute"
 )
 
+const BatchRuntimeVersion = "batch-segments/v1"
+
 type ExecutionPlan struct {
+	Runtime            string                 `json:"runtime,omitempty"`
 	Horizon            *autonomy.HorizonGrant `json:"horizon,omitempty"`
 	Launch             *compute.LaunchSpec    `json:"launch,omitempty"`
 	Application        Application            `json:"application"`
@@ -24,7 +27,21 @@ type ExecutionPlan struct {
 }
 
 func (s *Store) applyRecovery(e Event, r *Run, c change) error {
+	if c.ModelDecision != nil {
+		d := *c.ModelDecision
+		if d.Outcome == "pending" {
+			r.ModelDecisions = append(r.ModelDecisions, d)
+		} else {
+			if len(r.ModelDecisions) == 0 || r.ModelDecisions[len(r.ModelDecisions)-1].Request.ID != d.Request.ID {
+				return errors.New("unknown model decision")
+			}
+			r.ModelDecisions[len(r.ModelDecisions)-1] = d
+		}
+	}
 	if c.Execution != nil {
+		if c.Execution.Runtime != "" && c.Execution.Runtime != BatchRuntimeVersion {
+			return errors.New("unsupported execution runtime")
+		}
 		if r.Execution != nil {
 			return errors.New("execution plan changed")
 		}
@@ -112,6 +129,13 @@ func (s *Store) ConfigureExecution(id string, plan ExecutionPlan) error {
 	if r.Workspace == nil || r.Workspace.BaselineCommit != plan.InitialCommit || r.Workspace.Fingerprint != plan.InitialFingerprint || plan.Deadline.IsZero() {
 		return errors.New("execution plan does not match the saved baseline")
 	}
+	if plan.Runtime != "" && plan.Runtime != BatchRuntimeVersion {
+		return errors.New("unsupported execution runtime")
+	}
+	plan.Runtime = BatchRuntimeVersion
+	if err := validateDecisionModel(plan.Application); err != nil {
+		return err
+	}
 	// Current local observation is sampled and its verifier shares the operator's
 	// UID. Neither an app declaration nor a historical metric can grant a horizon.
 	structured := plan.Application.Observation != nil && plan.Application.Observation.Session != nil
@@ -127,7 +151,7 @@ func (s *Store) StartSegment(id, inputCommit string) (autonomy.Segment, error) {
 	if r == nil {
 		return autonomy.Segment{}, ErrNotFound
 	}
-	if r.Terminal() || r.Status == "stopping" || r.PendingRewind != nil {
+	if !r.Active() || r.Status == "stopping" || r.PendingRewind != nil {
 		return autonomy.Segment{}, ErrConflict
 	}
 	if len(r.Segments) > 0 && r.Segments[len(r.Segments)-1].FinishedAt == nil {
@@ -149,6 +173,15 @@ func (s *Store) StartSegment(id, inputCommit string) (autonomy.Segment, error) {
 	}
 	if expected != inputCommit {
 		return autonomy.Segment{}, errors.New("segment input does not match its recovery decision")
+	}
+	if !time.Now().Before(r.Execution.Deadline) {
+		return autonomy.Segment{}, errors.New("execution deadline expired")
+	}
+	if cfg := r.Execution.Application.DecisionModel; cfg != nil && cfg.HasHook("before_segment") {
+		d := findModelDecision(r, "before_segment", len(r.Segments)+1, inputCommit)
+		if d == nil || d.Outcome != "accepted" || d.Answer == nil || d.Answer.Choice != "continue" {
+			return autonomy.Segment{}, errors.New("segment requires an accepted model decision")
+		}
 	}
 	segment := autonomy.Segment{ID: newID("segment"), StepID: "main", Number: len(r.Segments) + 1, InputCommit: inputCommit, StartedAt: time.Now().UTC()}
 	if err := s.commit(id, "effect", "segment_started", change{Segment: &segment, Status: "running", Stage: "Working on the brief", Summary: fmt.Sprintf("Starting segment %d.", segment.Number)}); err != nil {

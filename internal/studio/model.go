@@ -57,6 +57,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	ModelDecisions     []ModelDecision        `json:"model_decisions,omitempty"`
 	RecordRefs         []RecordRef            `json:"record_refs,omitempty"`
 	VerificationMethod string                 `json:"verification_method,omitempty"`
 	ExecutionKind      string                 `json:"execution_kind,omitempty"`
@@ -151,6 +152,7 @@ type Event struct {
 }
 
 type change struct {
+	ModelDecision     *ModelDecision             `json:"model_decision,omitempty"`
 	Message           *messageChange             `json:"message,omitempty"`
 	DeskState         json.RawMessage            `json:"desk_state,omitempty"`
 	Home              *HomeServer                `json:"home_server,omitempty"`

@@ -24,6 +24,91 @@ outcome, process exit, and resource release MUST remain separate facts. A failed
 attempt awaiting retry MUST NOT terminate its task. A queued attempt receipt MUST
 be distinguishable from admitted execution. Retries preserve history and charges.
 
+## Runner runtime and optional decision inference
+
+The runner is a server-owned state machine. An executor performs work; a decision
+model supplies a typed observation at selected boundaries; a deterministic reducer
+validates and commits transitions. These roles MUST remain separate. A model answer
+MUST NOT itself grant authority, invoke a command, resolve a human approval, or
+establish acceptance. Models are optional; their absence preserves deterministic
+execution and configured recovery.
+
+The implemented batch runtime is `batch-segments/v1`, recorded in `ExecutionPlan.runtime`.
+Historical plans without this field use the same segment semantics. Unknown runtime
+versions MUST be rejected. The frozen execution plan contains the installed application,
+provider posture, initial workspace and oracle fingerprints, absolute deadline,
+supervision, and optional decision-model policy. The current implementation freezes
+this plan during workspace preparation; catalog freezing at task admission remains
+part of the broader admission target. Native interactive execution retains its own
+adapter and MUST NOT claim this batch runtime or these model hooks.
+
+One batch Run executes one declared `main` step, with sequential segments representing
+its attempts. This is a bounded segment machine, not a general workflow graph interpreter.
+Services and Task dependencies compose Runs above it. The phase contract is:
+
+| Phase | Work and permitted successor |
+|---|---|
+| Prepare | Copy source, preserve baseline and verifier, freeze execution plan; optionally evaluate the initial recovery predicate and checkpoint. |
+| Select segment | If configured, evaluate `before_segment`; choose `continue` or `escalate`. |
+| Execute | Record segment, invoke installed argv through the provider under the original deadline. |
+| Settle | Stop execution, save output, harvest changes, check ownership and oracle integrity. |
+| Verify and checkpoint | Independently evaluate eligible results, pin the exact result, record checkpoint; a passing result completes the Run. |
+| Select recovery | For an eligible failure only, enforce deterministic restart/stall/deadline policy and choose a passing checkpoint; optionally evaluate `before_recovery` with `rewind` or `escalate`. |
+| Restore | Commit recovery intent, restore a new segment workspace, retain abandoned evidence and accounting, return to segment selection. |
+| Park or terminate | Preserve evidence and release claims only after settlement; require explicit review when parked. |
+
+Hooks MUST execute with no worker process running. Inference retains the execution
+slot and claims until the boundary settles or parks. Only the runtime constructs
+allowed choices and binds their operands (segment/input commit or recovery checkpoint).
+The model cannot choose commands, checkpoint IDs, budgets, new providers, or arbitrary
+successor nodes. Recovery inference MUST run only after deterministic checks; missing
+passing checkpoints, exhausted intensity, repeated stalls, human blockers, oracle or
+ownership failures MUST NOT be overridden. `before_recovery` requires supervision.
+Verification MUST still run after an allowed segment. A successful inference is not
+successful work.
+
+### Model decision lifecycle
+
+Each enabled boundary MUST persist a request before sending it. A receipt binds its
+protocol version, Run/Task, hook, segment, target, exact projected state, allowed
+choices, request ID, journal sequence, deadline, and frozen provider/question policy.
+The execution plan supplies the provider configuration without storing credentials.
+The journal exposes these as `model_decisions`, distinct from human `decision` cards.
+
+The request is `pending` until a committed result is `accepted`, `escalated`, or
+`rejected`. A response MUST match the requested question and choice domain, include
+finite bounded confidence and a complete normalized probability distribution, and
+select a maximum-probability option. The configured confidence and selected-probability
+thresholds are separate checks. Thresholds are application policy, not a guarantee
+of calibration or an authority grant. Invalid responses, refusals, low certainty,
+missing credentials, provider errors, and inference timeouts MUST stop for review;
+there is no implicit provider fallback or permission to continue.
+
+The reducer MUST fence answers against changed run state and expired deadlines.
+Committed results precede segment start or recovery intent; those mutations recheck
+execution eligibility. Cancellation wins over an in-flight response. Valid late
+answers MAY remain evidence but MUST NOT cause effects. Raw response bodies and
+transport diagnostics MUST NOT be journaled as errors because they can contain secrets.
+
+Each attempt permits at most its configured `max_calls` (1–64), counting pending and
+failed requests, and bounds each call by `timeout_ms` (1–120000) and the original
+execution deadline. Rewinds MUST NOT reset this allowance. Reported token usage is
+retained when available; unknown remote consumption stays unknown. This is a call
+and wall-clock bound, not a token reservation or monetary spending guarantee. An
+explicit new Run gets a fresh allowance, as with existing local retry budgets.
+
+Restart replays receipts without invoking models. A pending receipt MUST NOT be
+blindly resent: inference may have happened and been charged. The same boundary
+returns its recorded result; an unresolved receipt parks for review. Existing server
+restart reconciliation still parks interrupted execution before replacement. No
+claim of exactly-once provider execution follows from local request identity.
+The current model review card offers a fresh attempt or cancellation; rewind cannot
+clear the boundary or reset its allowance. Restoring files cannot rewind model history.
+
+[Interfaces](05_INTERFACES_AND_INTEGRATIONS.md#decision-model-provider-profile) defines
+the wire adapters and configuration. [ADR 0003](../ADRs/0003_DECISION_MODELS_AND_RUNNER.md)
+records the research and rationale.
+
 ## Grants, resources, and providers
 
 A Grant MUST identify issuer, subject, permitted operations, resource scope,

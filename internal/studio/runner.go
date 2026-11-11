@@ -195,6 +195,9 @@ func (e *Engine) prepareBrief(b Brief) (Brief, string, error) {
 	if !ok {
 		return Brief{}, "", errors.New("choose an installed application")
 	}
+	if err := validateDecisionModel(app); err != nil {
+		return Brief{}, "", err
+	}
 	if !app.Builtin {
 		if _, err := compileApplication(app); err != nil {
 			return Brief{}, "", err

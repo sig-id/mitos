@@ -12,24 +12,26 @@ import (
 	"mitos/internal/acceptance"
 	"mitos/internal/autonomy"
 	"mitos/internal/compute"
+	"mitos/internal/decisionmodel"
 	"mitos/internal/observation"
 )
 
 // Application is the small, local manifest dialect implemented by this build.
 // Published OCI manifests and agentic orchestration remain separate integrations.
 type Application struct {
-	Compute     *compute.Request      `json:"compute,omitempty"`
-	Supervision *autonomy.Supervision `json:"supervision,omitempty"`
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Description string                `json:"description"`
-	Category    string                `json:"category"`
-	Entrypoint  string                `json:"entrypoint"`
-	Command     []string              `json:"command,omitempty"`
-	Acceptance  acceptance.Spec       `json:"acceptance,omitempty"`
-	Directory   string                `json:"-"`
-	Builtin     bool                  `json:"-"`
-	Observation *observation.Config   `json:"observation,omitempty"`
+	DecisionModel *decisionmodel.Config `json:"decision_model,omitempty"`
+	Compute       *compute.Request      `json:"compute,omitempty"`
+	Supervision   *autonomy.Supervision `json:"supervision,omitempty"`
+	ID            string                `json:"id"`
+	Name          string                `json:"name"`
+	Description   string                `json:"description"`
+	Category      string                `json:"category"`
+	Entrypoint    string                `json:"entrypoint"`
+	Command       []string              `json:"command,omitempty"`
+	Acceptance    acceptance.Spec       `json:"acceptance,omitempty"`
+	Directory     string                `json:"-"`
+	Builtin       bool                  `json:"-"`
+	Observation   *observation.Config   `json:"observation,omitempty"`
 }
 
 func LoadApps(dir string) ([]Application, error) {
@@ -82,10 +84,29 @@ func LoadApps(dir string) ([]Application, error) {
 				return nil, fmt.Errorf("%s: %w", path, err)
 			}
 		}
+		if err := validateDecisionModel(app); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
 		app.Directory = filepath.Dir(path)
 		seen[app.ID] = true
 		apps = append(apps, app)
 	}
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
 	return apps, nil
+}
+
+func validateDecisionModel(app Application) error {
+	if app.DecisionModel == nil {
+		return nil
+	}
+	if app.Builtin {
+		return errors.New("decision_model is only supported for command applications")
+	}
+	if err := app.DecisionModel.Validate(); err != nil {
+		return err
+	}
+	if app.DecisionModel.HasHook("before_recovery") && app.Supervision == nil {
+		return errors.New("decision_model before_recovery requires supervision")
+	}
+	return nil
 }

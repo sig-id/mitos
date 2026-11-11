@@ -143,13 +143,86 @@ active task's verifier, workspace policy, or authority. Installation contents ar
 executable input subject to the provider's trust boundary.
 
 The current local format is `app.json`; [runnable examples](../../examples/local-app/app.json)
-show command argv and optional acceptance, compute, observation, and supervision.
+show command argv and optional acceptance, compute, observation, supervision, and decision-model policy.
 Runners receive run identity, brief, and workspace via JSON stdin. Batch commands use
 isolated HOME/TMPDIR, controlled Git configuration, no inherited provider credentials,
 and 2 MiB combined output per command. This is environment hygiene, not confinement.
 Absent strict compute requirements means recorded trusted-local posture, not an
 unattended grant. [State and verification](04_STATE_AND_VERIFICATION.md) owns harvest
 and saved-verifier behavior.
+
+### Decision-model provider profile
+
+The optional `decision_model` object in a local application declares inference at
+selected batch boundaries. Omission makes no model requests. Every field below
+except `api_key_env` is required in the profile; zero thresholds explicitly disable
+that particular threshold check. Implementations MUST reject unknown protocols and
+hooks, duplicate hooks, invalid URLs, and values outside the runtime bounds.
+
+```json
+{
+  "decision_model": {
+    "protocol": "systemone",
+    "endpoint": "http://127.0.0.1:8000/v1/systemone",
+    "model": "english",
+    "hooks": ["before_segment"],
+    "instructions": "Continue only when the supplied task is sufficiently specified for the declared segment. Otherwise escalate for review.",
+    "timeout_ms": 15000,
+    "max_calls": 8,
+    "min_confidence": 0.7,
+    "min_probability": 0.85
+  }
+}
+```
+
+This is a manifest fragment for a separately operated local Laya-compatible server;
+Mitos does not install or launch inference servers. For Jev, select the desired
+model and full endpoint `https://api.typesafe.ai/v1/systemone`, and set
+`api_key_env` to `TYPESAFE_API_KEY`. For OpenAI use `protocol: "openai_decisions"`,
+`endpoint: "https://api.openai.com/v1/decisions"`, the desired supported model
+(for example `gpt-6-luna`), and `api_key_env: "OPENAI_API_KEY"`. Configure the named
+environment variable on the Mitos server, not in the manifest or worker command.
+Equivalent services may use an explicitly configured compatible endpoint.
+
+| Adapter | Outbound shape | Inbound shape |
+|---|---|---|
+| `systemone` | `model`, JSON `state`, `questions.action` with `type: "choice"`, `instructions`, and string-valued `criteria` map | `answers.action` with `type`, `choice`, `confidence`, and `probabilities` map |
+| `openai_decisions` | `model`, `input` containing serialized state, one `questions` array item named `action`, `type: "choice"`, `instructions`, and `choices` array of value/description objects | One named `answers` array item, with a choice and confidence; probabilities are an array of value/probability pairs |
+
+The normalized answer retains the returned model identity, choice, confidence,
+probabilities, and optional input/output token usage. A configured alias is allowed;
+pin a provider model revision when reproducibility matters. A changed provider alias
+cannot make stochastic inference reproducible, so replay uses saved answers.
+Only string-valued Choice is implemented for runtime control. Predicate/Noul, Score,
+images, batch inference, streaming, tool calling, and generated explanations are not
+part of this profile. Future types require explicit mappings and validation.
+
+The runtime supplies the question ID and options. Projected state contains Task/Run
+IDs, hook, segment, bound target, application ID/entrypoint/description, title, intent,
+failure signal, latest acceptance
+metadata, up to eight recent artifact descriptors, remaining call allowance, and
+execution deadline. It excludes workspace contents, raw output, transcripts, event
+payloads, environment, and server credentials. User-supplied title and intent are
+sent verbatim; this projection is not an automatic secret scrubber. Enabling a remote endpoint sends that projection
+and the configured question to that provider. Input and instructions are data;
+neither can change runtime authority. The HTTP request and response are each limited
+to 64 KiB; instructions are limited to 4000 bytes. Oversized input is refused rather
+than silently truncated.
+
+Endpoints MUST use HTTPS, except HTTP to a literal loopback IP for local inference.
+Userinfo, query strings, and fragments are refused. Credentials are resolved only
+at call time and sent as Bearer authorization; only their environment variable name
+is persisted. Redirects and automatic retries are disabled. `X-Client-Request-Id`
+carries the durable local request ID for correlation; it does not assert that a
+provider deduplicates requests. Configuring an endpoint is a trusted local application
+operation, not a worker-selected destination. This profile is not a credential broker
+or a guarantee of remote data retention.
+
+Inspect the frozen policy and `model_decisions` through the existing Run JSON API
+(`GET /api/runs/{id}`) or `mitos status RUN_ID`. The journal records
+`model_decision_requested` and `model_decision_completed`. Human review continues to
+use the existing decision inbox and resolution API. There is no model-settings UI
+or automatic model resolution of human cards.
 
 ## Connectors and sinks
 
