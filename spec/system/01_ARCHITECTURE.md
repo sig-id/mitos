@@ -123,6 +123,13 @@ commercial settlement, and automatic failover require separate decisions. Detail
 of admission and recovery belong to [runtime](02_RUNTIME.md); connection security,
 client protocols, and adapters belong to [interfaces](05_INTERFACES_AND_INTEGRATIONS.md).
 
+Asynchronous messaging across process/server boundaries MUST use MQTT 5 with a
+versioned Mitos payload schema. Brokers transport messages; each project's home
+server retains authority and canonical state. This does not require one global
+broker or merge independent servers. [ADR 0002](../ADRs/0002_MQTT5_MESSAGING.md)
+records the protocol decision. The initial adapter uses Paho with an external
+broker and signed, explicitly authorized peer messages.
+
 The local migration uses the canonical Store writer for both batch events and
 versioned workspace metadata. A legacy desk snapshot is imported once and retained
 as backup; journal replay becomes authoritative. Common Task/Run projections expose

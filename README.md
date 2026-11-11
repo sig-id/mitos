@@ -131,6 +131,62 @@ mutations. The optional HTTPS device API has restricted snapshot and decision sc
 it is not the full remote-client contract. See
 [API and compatibility](spec/system/05_INTERFACES_AND_INTEGRATIONS.md).
 
+## MQTT 5 messaging
+
+Enable messaging with `mitos serve --mqtt-config /path/to/mqtt.json`. The broker
+runs separately; Mitos uses Eclipse Paho and keeps durable inbox/outbox records in
+its journal. For a local broker, the minimal configuration is:
+
+```json
+{"broker":"mqtt://127.0.0.1:1883","peers":[]}
+```
+
+Use `mitos message status` to read this server's identity, public signing key, and
+connection state. Remote broker URLs require `mqtts://`; configuration accepts
+`ca_file`, `cert_file`/`key_file`, `username`, and `password_env` (the environment
+variable's name, never the password value). Plaintext requires a loopback IP.
+
+To authorize another server, add its verified identity/key and exact inbound grants:
+
+```json
+{
+  "id":"SERVER_ID_FROM_PEER_STATUS",
+  "public_key":"BASE64_PUBLIC_KEY_FROM_PEER_STATUS",
+  "grants":[{"project":"studio","mailbox":"operator","kind":"note","type":"text"}]
+}
+```
+
+Put that object in `peers`. Configure both ends, even when one only receives receipts;
+empty grants allow no incoming work. Restart to apply changes or revoke a peer.
+Broker credentials and ACLs must restrict subscriptions to
+`mitos/v1/SERVER_ID/+/+/+` and publication to authorized destination namespaces.
+Signing authenticates messages but does not conceal payloads from the broker.
+Different brokers require an explicit, scoped bridge. Back up `mqtt-ed25519.key`
+with the data directory; keep it private. Automatic key rotation is not provided.
+
+`mitos message send --file request.json` accepts a stable `id`, destination `to`,
+`project`, `mailbox`, `kind`, `type`, future RFC3339 `deadline` (within seven days),
+and JSON `payload`. Reuse the same file to retry an ambiguous response. For a note,
+use `kind: "note"`, `type: "text"`, and `payload: {"body":"Review the result"}`.
+The operator inbox is `studio/operator`; a responsibility mailbox uses its project,
+ID, and current `generation`. To trigger configured services, authorize
+`studio/events` with `kind: "command"`, `type: "service.event"`, and payload
+`{"name":"inventory.ready","payload":{}}`. This uses saved service policy.
+
+```sh
+mitos message outbox --id MESSAGE_ID
+mitos message inbox --project studio --mailbox operator --after 0
+mitos message ack --sender SERVER_ID --id MESSAGE_ID --generation 0
+```
+
+`accepted` means a note is durably stored; `applied` means a service event was
+committed, not that its tasks finished. Broker acknowledgment alone changes neither.
+Pending messages survive restart and broker-session loss. Retry exhaustion after a
+possible send is `unknown`; investigate rather than invent a new ID. Receipts are
+retained with a 10,000-record admission limit per direction. See the
+[messaging contract](spec/system/05_INTERFACES_AND_INTEGRATIONS.md#mqtt-5-messaging)
+for bounds and remaining capabilities.
+
 ## Repository
 
 | Path | Contents |

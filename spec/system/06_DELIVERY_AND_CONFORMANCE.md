@@ -16,6 +16,7 @@ journal; their execution adapters still have different admission and scheduling 
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
+| Messaging | MQTT 5 via external broker, signed peers and exact grants, journal outbox/inbox receipts, durable notes and atomic service events, local HTTP/CLI | Broker/key configuration is explicit; general control leases and automatic bridges remain outside this adapter. |
 | Recovery | Journal replay, retained artifacts and output, interruption holds, explicit inspection before replacement | Server restart interrupts active local execution; general surviving-process reattachment and unified receipts remain target work. |
 
 The first startup imports legacy desk metadata into a versioned journal record,
@@ -68,6 +69,15 @@ holds when inspection cannot establish an outcome. Client exit MUST leave work r
 Persist coordinator generations, bounded mailboxes, application receipts, wake
 conditions, and child-cancellation scope. Build replacement context from runtime
 facts and selected supporting records.
+
+Implement the MQTT 5 profile with a conforming broker/client and journal-backed
+outbox/inbox receipts. The initial MQTT adapter implements notes and service-event
+admission; this alone does not complete the supervision milestone. Acceptance
+MUST cover duplicate delivery, lost PUBACK/application receipts, automatic client
+acknowledgment before application commit, broker restart, session expiry, deadline
+expiry, revoked topic access, and stale coordinator generations. These cases MUST
+preserve pending work and prevent duplicate task transitions. Cross-server checks
+in M5 MUST preserve these guarantees across independent broker connections.
 
 Acceptance MUST reject stale coordinator proposals and acknowledgments, recover a
 crash between message consumption and dispatch, and deliver a result arriving
