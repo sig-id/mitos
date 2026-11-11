@@ -1,4 +1,4 @@
-# 15 – Delivery and conformance
+# 06 – Delivery and conformance
 
 The specifications define required behavior, including work not yet implemented.
 This document owns the delivery order and acceptance gates. Its current-baseline
@@ -72,14 +72,21 @@ Restoration MUST preserve charges and external-effect records.
 
 ### M5 – Paired clients and remote placement
 
-Add revocable scoped client bindings and protocol negotiation, then explicit remote
-worker placement with one home authority and host-local enforcement. Native clients,
+Add revocable scoped client bindings, protocol negotiation, and a combined view
+across independent servers. Each project retains one home authority. Then add
+explicit remote worker placement with host-local enforcement. Native clients,
 relays, and push delivery are optional transports.
 
 Acceptance MUST reconnect multiple clients without duplicate mutations, revoke a
 client, reject unsupported commands, and partition a worker host while retaining
 unsafe claims. Already-admitted work MAY continue within locally enforced limits;
 no new authority may be invented. Automatic failover and live migration are excluded.
+
+The multi-server check MUST connect one client to a desktop server owning Project A
+and a laptop server owning Project B. With overlapping local names or IDs, actions
+MUST reach only the intended server. Disconnecting B MUST leave A usable and mark
+B's cached state stale. Reconnection MUST reconcile B's pending receipts without
+duplicate work; revoking access to one server MUST NOT revoke or expand the other.
 
 ## Product acceptance
 

@@ -7,8 +7,8 @@ changes of client, with explicit authority and verified results.
 
 Start with the [product specification](spec/product/01_PRODUCT.md) for the purpose,
 market, and intended experience. The [specification index](spec/README.md) links to
-15 system contracts and the architecture decisions. These are normative targets;
-[delivery and conformance](spec/system/15_DELIVERY_AND_CONFORMANCE.md) distinguishes
+six system contracts and the architecture decisions. These are normative targets;
+[delivery and conformance](spec/system/06_DELIVERY_AND_CONFORMANCE.md) distinguishes
 current behavior from remaining work.
 
 Today Mitos provides a local Go server, browser workspace, and CLI. Interactive
@@ -40,7 +40,7 @@ go test -race ./...
 The server runs in the foreground. Closing its browser leaves execution running;
 stopping the server interrupts active local execution and retains saved state.
 Restart requires reconciliation before replacement, not automatic process relaunch.
-See [server and clients](spec/system/02_SERVER_AND_CLIENTS.md) for the distinction
+See [server and clients](spec/system/01_ARCHITECTURE.md) for the distinction
 between client access, server ownership, and execution placement.
 
 ## Use the workspace
@@ -61,7 +61,7 @@ checks the result, and produces artifacts. It makes no model calls. The optional
 Workspace note example runs a real command and a separate acceptance command.
 
 Services activate tasks through schedules, events, and other declared policies.
-[Services and events](spec/system/08_SERVICES_AND_EVENTS.md) covers their composition,
+[Services and events](spec/system/03_ORCHESTRATION.md) covers their composition,
 retries, health, overlap, and lifecycle in one contract.
 
 ## Local applications
@@ -87,9 +87,8 @@ an entrypoint, command, and optional acceptance and execution requirements:
 The runner receives its run identity, brief, and copied workspace through JSON on
 stdin. Mitos preserves output and attempts to harvest changes after success,
 failure, cancellation, or timeout. Acceptance uses saved verification material and
-a separately reconstructed result. See [applications](spec/system/13_APPLICATIONS_AND_INTEGRATIONS.md),
-[workspaces](spec/system/09_WORKSPACES_AND_ARTIFACTS.md), and
-[verification](spec/system/10_VERIFICATION_AND_CHECKPOINTS.md).
+a separately reconstructed result. See [applications](spec/system/05_INTERFACES_AND_INTEGRATIONS.md) and
+[workspaces and verification](spec/system/04_STATE_AND_VERIFICATION.md).
 
 ## Operate and inspect
 
@@ -118,7 +117,7 @@ credentials and configuration; free-text project rules are instructions.
 The main server binds to loopback and rejects foreign Host headers and cross-origin
 mutations. The optional HTTPS device API has restricted snapshot and decision scope;
 it is not the full remote-client contract. See
-[API and compatibility](spec/system/14_API_AND_COMPATIBILITY.md).
+[API and compatibility](spec/system/05_INTERFACES_AND_INTEGRATIONS.md).
 
 ## Repository
 
@@ -132,7 +131,7 @@ it is not the full remote-client contract. See
 | `internal/observation/`, `internal/autonomy/`, `internal/decision/` | Observation, recovery, and human decisions |
 | `internal/web/` | Server-rendered browser interface and vendored assets |
 | `examples/` | Runnable applications |
-| `spec/` | Product, 15 system specifications, and ADRs |
+| `spec/` | Product, six system specifications, and ADRs |
 
 Use `just check` for source changes. Documentation changes should preserve local
 links, consecutive numbering, and the distinction between requirements and shipped

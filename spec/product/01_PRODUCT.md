@@ -111,15 +111,19 @@ A **Mitos server** owns projects, task state, schedules, decisions, and managed
 execution. It runs on a computer the user chooses. A **client** is a browser, CLI,
 or other supported interface that connects to that server to inspect or direct
 work. The server and a client may run on the same computer or different computers.
+Each project has one **home server**. A server can manage several projects, and a
+client can connect to several servers. There is no requirement for one central
+server to own all of a user's work.
 
 ```mermaid
 flowchart LR
-    D[Desktop browser or CLI] <-->|Connect| S[Mitos server]
-    M[Mobile client] <-->|Authenticated connection| S
-    S --> W[Projects, tasks, services and workers]
+    C[Desktop, laptop, or mobile client] <-->|Authenticated connection| D[Desktop server]
+    C <-->|Authenticated connection| L[Laptop server]
+    D --> A[Project A and its workers]
+    L --> B[Project B and its workers]
 ```
 
-Three examples define the intended experience:
+Four examples define the intended experience:
 
 - **Everything on a desktop:** the desktop runs the Mitos server and its browser
   opens the local workspace. Closing that browser leaves the server working.
@@ -131,12 +135,19 @@ Three examples define the intended experience:
 - **Always-on server, laptop and phone clients:** a home server or remote machine
   runs Mitos. The laptop and phone connect to that machine. The laptop can sleep
   while work continues because the execution host remains running.
+- **Projects on different machines:** Project A belongs to the desktop server;
+  Project B belongs to the laptop server. The same client connects to both and
+  presents their projects, work, and decisions together, with the home server
+  visible. Each server runs independently. If the laptop sleeps, Project B becomes
+  unavailable and its local execution pauses or stops; Project A continues on the
+  desktop. Cached information for B is marked stale until its server reconnects.
 
 Remote access requires authenticated pairing and a network route. It does not
 imply an automatically supplied cloud computer. A server may later place workers
 on other execution hosts; that is a separate capability from connecting a phone
-to a desktop server. Multiple servers may appear in a client, but each project's
-authority and execution location must remain clear.
+to a desktop server. Connecting to both servers does not make them share a scheduler
+or transfer projects between them. Moving a project's home server requires an
+explicit migration; an unavailable server is not automatically replaced by another.
 
 Stopping a **client**, stopping the **Mitos server**, and losing the **host machine**
 are different events. Client disconnect must not cancel work. Server restart must
@@ -148,7 +159,8 @@ through every failure.
 Today, the browser and CLI connect to a local server. The optional HTTPS device
 API offers restricted snapshots and decision responses. Full paired remote clients,
 native mobile applications, and remote worker placement are not implied by that
-existing device interface.
+existing device interface. The combined view across several paired servers is a
+required product capability, not a claim about the current local browser build.
 
 ## 6. Everyday use
 
@@ -186,7 +198,7 @@ accepted outcomes, failed recovery, correction effort, intervention time, and
 resource use; fewer questions alone is not success.
 
 Mitos currently has useful local batch and interactive foundations, but they do
-not yet share all these guarantees. [Delivery and conformance](../system/15_DELIVERY_AND_CONFORMANCE.md)
+not yet share all these guarantees. [Delivery and conformance](../system/06_DELIVERY_AND_CONFORMANCE.md)
 separates the existing baseline from the remaining work. Mitos must earn the full
 product promise through that implementation and validation.
 

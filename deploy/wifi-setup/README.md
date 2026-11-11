@@ -5,7 +5,7 @@ It needs no public deployment. Canonical portal files are in
 `internal/wifisetup/portal`; the build script emits them separately as
 `dist/wifi-setup-site-portal` for firmware embedding. Keep the portal APIs on the
 watch. This deployment tool is separate from the
-[Mitos client API](../../spec/system/14_API_AND_COMPATIBILITY.md#restricted-device-api).
+[Mitos client API](../../spec/system/05_INTERFACES_AND_INTEGRATIONS.md#client-operations-and-security).
 
 The remaining instructions describe the retained optional acoustic sender.
 

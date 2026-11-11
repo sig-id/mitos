@@ -2,7 +2,7 @@
 
 Status: accepted, 2026-11-11.
 Contracts: [OS architecture](../system/01_ARCHITECTURE.md),
-[durable runtime](../system/04_DURABILITY_AND_RECOVERY.md), [product](../product/01_PRODUCT.md).
+[durable runtime](../system/02_RUNTIME.md), [product](../product/01_PRODUCT.md).
 
 ## Context
 
@@ -49,6 +49,11 @@ clients, home authority, and execution hosts; support local deployment first and
 explicit remote placement subsequently. Keep Go, existing public identifiers,
 and current journal semantics. Add request receipts, authority generations,
 control mailboxes, and durable wait registration before general federation.
+
+Each project has one home server, each server may own multiple projects, and clients
+can aggregate several independently paired servers. This does not require a global
+primary or server-to-server coordination. Remote placement and transferring a
+project's home remain separate capabilities with explicit authority boundaries.
 
 Extend continuity to grants, budgets, resource ownership, verified results,
 knowledge provenance, and unresolved external effects. Generations fence control

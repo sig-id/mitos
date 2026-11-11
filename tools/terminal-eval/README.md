@@ -2,7 +2,7 @@
 
 This directory contains development-only dependencies; no Ghostty code is included
 in the browser bundle. Mitos retains its vendored xterm.js renderer. The
-[streaming contract](../../spec/system/14_API_AND_COMPATIBILITY.md#terminal-streaming)
+[streaming contract](../../spec/system/05_INTERFACES_AND_INTEGRATIONS.md#terminal-streaming)
 defines output replay and input behavior.
 
 The test compares the vendored xterm.js renderer against pinned ghostty-web 0.4.0.

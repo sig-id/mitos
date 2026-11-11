@@ -13,10 +13,14 @@ shared between product and system made both directories difficult to navigate.
 
 ## Decision
 
-Use one product document and 15 system documents, numbered consecutively within
-each directory. Product owns purpose, audience, market, offering, deployment
-experience, and commitments. System owns behavior, boundaries, invariants, and
-acceptance. Each contract has one document owner.
+Use one product document and a compact system set, numbered consecutively within
+each directory. Group by architectural responsibility, without a fixed file-count
+requirement. The current six groups are architecture, runtime, orchestration, state
+and verification, interfaces and integrations, and delivery. Product owns purpose,
+audience, market, offering, deployment experience, and commitments. System owns
+behavior, boundaries, invariants, and
+acceptance. Each contract has one document owner; related lifecycle and failure
+behavior belongs together rather than in separate feature documents.
 
 Rewrite and consolidate rather than retain the old layout under new paths. Remove
 standalone frontend, handheld rendering/sound, historical evidence, obsolete
@@ -38,6 +42,8 @@ belong with a change or release, not in a continuously growing specification log
 Simple renaming preserves duplication and conflicting authority. Archiving all old
 material inside the specification preserves the same navigation burden. A single
 large system document makes independent contracts harder to find and maintain.
+A fixed quota also encourages artificial divisions. Consolidation should remove
+repetition and keep useful boundaries, not merely concatenate old documents.
 
 The chosen structure requires updating local links and keeping summaries precise.
 Detailed wire-schema changes still require versioning and implementation checks;
