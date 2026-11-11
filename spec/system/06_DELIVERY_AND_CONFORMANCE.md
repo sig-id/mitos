@@ -15,6 +15,7 @@ journal; their execution adapters still have different admission and scheduling 
 | Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general coordinator fencing remain incomplete. |
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
+| Adaptive graphs | Task/attempt identities, dependency witnesses, canonical journal, and separate execution adapters | No `work-graph/v1` admission, graph amendment/closure protocol, common agent/application scheduler, or adaptive controller lifecycle. |
 | Decision inference | Optional System One (Jev/Laya-compatible) and OpenAI Decisions Choice adapters; journaled segment/recovery gates, probability thresholds, bounded calls, cancellation fencing | Batch `main` step only; no generic graph interpreter, predicate/score hooks, model spend enforcement, or automatic replay of unknown inference. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
 | Messaging | MQTT 5 via external broker, signed peers and exact grants, journal outbox/inbox receipts, durable notes and atomic service events, local HTTP/CLI | Broker/key configuration is explicit; general control leases and automatic bridges remain outside this adapter. |
@@ -37,7 +38,10 @@ The journal currently stores bounded workspace metadata snapshots. Session/histo
 limits and the metadata byte limit refuse further writes while preserving existing
 records; archival and large-fleet performance remain work. These changes establish
 parts of M1 and foundations for M2/M3, not completion of those gates or a fully unified
-runtime. The local provider's unattended grant remains zero. Broad remote placement,
+runtime. In particular, the batch drainer excludes interactive attempts; a shared
+Task reader does not establish shared scheduling. The new graph specification does
+not change this baseline. The local provider's unattended grant remains zero.
+Broad remote placement,
 hard confinement, general coordinator fencing, and unknown-effect reconciliation
 MUST NOT be advertised as complete without the gates below.
 
@@ -115,9 +119,94 @@ MUST reach only the intended server. Disconnecting B MUST leave A usable and mar
 B's cached state stale. Reconnection MUST reconcile B's pending receipts without
 duplicate work; revoking access to one server MUST NOT revoke or expand the other.
 
+## Adaptive runtime delivery gates
+
+`work-graph/v1` is a target profile. These gates refine M1–M4; they do not bypass
+receipts, custody, or enforcement requirements. Local trusted execution MAY implement
+the graph contracts while explicitly declining strict isolation/spend capabilities.
+A graph UI or successful model call alone establishes none of these gates. Implement
+G1 and G2 before adaptive mutation, then G3 before general controller activation.
+
+### G1 – Common admission and automatic dispatch
+
+Route agent, command, planner, decision, and verifier execution through common
+Task/Attempt admission, capacity, receipts, and resource custody. Preserve existing
+Run IDs, batch segment semantics, and native session access. Acceptance MUST admit a
+mixed agent/program dependency chain without a supervisor issuing launches, exhaust
+shared capacity without oversubscription, replace an executor while retaining lineage,
+and refuse unsupported adapter postures. Inject a crash after admission and before
+launch acknowledgment; original receipt reconciliation must prevent duplicate work.
+
+### G2 – Atomic graph amendments and immutable attempts
+
+Implement the profile schema, canonical digests, read sets, structural compare-and-swap,
+obligation records, finite limits, and atomic wake/outbox publication. Acceptance MUST
+cover valid multi-task fanout, duplicate identical requests, changed payloads under
+the same request key,
+concurrent proposals against one revision, malformed local references, whole-graph
+cycles, oversized growth, and storage failure at the commit boundary. No rejected
+proposal may publish nodes or consume execution slots. Admitted task inputs and
+criteria MUST remain unchanged after subsequent amendments. Unrelated log writes
+MUST NOT invalidate a proposal; changed consumed evidence MUST fence it.
+
+### G3 – Evidence, joins, iteration, and closure
+
+Implement exact artifact inputs, frozen joins, expansion obligations, seal/reopen,
+root acceptance, cancellation, and supersession with settlement. Acceptance MUST
+race fanout against sealing, root completion against a new trigger, and any/k-of-n
+admission against late producers. Reject empty-queue completion with an unresolved
+planner or unconsumed relevant event; reject dropping a failed required check as a
+completion shortcut. Crash after event admission but before controller delivery must
+leave the closure blocker visible. A repair
+must produce a new candidate and cannot reuse a verdict over different content.
+Verify a candidate before producer acceptance without a dependency deadlock, and
+record its declared verdict without recursively spawning verification of verification.
+Superseded running work MUST retain custody until settled. Test bounded correction
+loops and prove that attempts/replacement do not reset responsibility allowances.
+
+### G4 – Adaptive controllers and native-agent observations
+
+Implement deterministic and agent planners, optional typed decisions, template
+specialization, event cursors, generation fencing, and native-output adapters.
+Acceptance MUST generate previously unspecified tasks from new evidence and run them
+through G1–G3. Use an agent fixture with ordinary prose and native events, with no
+PASS/FAIL/FIX tags or graph API syntax; preserve the source and show the interpreted
+claim/proposal separately from its admitted effect. Ambiguous or forged command-like
+text MUST NOT mutate work. Freeze template specialization and generated invocation
+content per attempt; changes to a template MUST NOT alter an admitted worker.
+
+Inject crashes before model dispatch, after a response, after answer commit, and
+before proposal commit. Replay MUST perform no inference; unresolved inference remains
+visible; a committed answer may apply only its original candidate after revalidation.
+Cover low confidence, refusal, invalid operands, revoked authority, model timeout,
+duplicate trigger delivery, controller replacement, and cancellation during inference.
+A retired controller cannot mutate the graph. A waiting root must not exhaust worker
+capacity solely by existing. Existing eligible work MUST progress
+while the controller is offline. Meaningful event coalescing MUST not lose triggers
+or repeatedly infer on unchanged state. Protocol fixtures prove runtime handling;
+labeled scenario evaluations separately establish decision/planner quality.
+
+### G5 – Adaptive service instances and operator journey
+
+Apply manual, schedule, and event activation to the same graph template and controller
+policies. Duplicate occurrences MUST return the same root; subsequent occurrences
+MUST get distinct graphs and cannot consume unrelated previous-cycle results.
+Graph-wide skip/queue/replace policy MUST be tested independently of per-task limits.
+Stop/restart must settle the whole declared scope before admitting its replacement.
+
+The end-to-end journey MUST start with a goal without a prewritten task pipeline,
+discover parallel work, adapt an agent template, choose domain/Git operations from
+evidence, insert a previously unspecified recovery task, replace a controller,
+restart the server, and accept an exact result. Repeat a defined-plan case without
+model calls and a hybrid case whose mandatory check the planner cannot remove.
+Expose current graph, causal amendments, waiting reasons, evidence, and concrete
+human decisions through the same read model. Test bounded reads and backpressure
+with declared fleet/graph sizes; synthetic large graphs do not establish equivalent
+concurrent-process capacity.
+
 ## Product acceptance
 
-The local operating-system milestone requires M1–M4 and one complete engineering
+The local operating-system milestone requires M1–M4, G1–G5, and one complete engineering
 journey: create a bounded responsibility, delegate real work, wait for its result,
 replace an exhausted worker, restart the server, verify the exact result, and
 resolve a concrete human decision outside the original grant.

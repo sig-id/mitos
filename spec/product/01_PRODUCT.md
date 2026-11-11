@@ -105,6 +105,21 @@ users can leave work with Mitos, change how it is executed, and return without
 reconstructing the project from terminal histories. Reliable completion and reduced
 coordination effort matter more than the number of agents running at once.
 
+The default experience begins with a goal and bounded authority to discover the
+work needed. Users MAY instead supply a complete plan or reusable recipe. Mitos MUST
+support fixed steps, agent-discovered steps, and adaptive
+work constrained by mandatory checks through the same work model. The user chooses
+when work is activated independently of who plans it and which executors perform it.
+Scheduled work may therefore use a supervisor, and a multi-worker task may follow a
+fully deterministic plan.
+
+Users MUST be able to inspect the current plan, changes to it and their causes,
+required results, active attempts, and specific reasons for waiting. Automatic
+scheduling must not require the user or supervisor to manually start each eligible
+worker. An empty queue or a silent supervisor must not make unfinished work look
+complete. These are target behaviors; the adaptive runtime delivery gates remain
+unfulfilled until demonstrated.
+
 ## 5. The server runs the work; clients connect to it
 
 A **Mitos server** owns projects, task state, schedules, decisions, and managed
@@ -172,7 +187,9 @@ without losing the relationship between task, worker, and result.
 For maintenance, the user establishes a service such as assessing new security
 advisories. It starts a new assessment when relevant input arrives, uses programs
 for deterministic checks and agents for investigation, and asks for authority
-before publishing or changing external systems when required.
+before publishing or changing external systems when required. An unfamiliar finding
+may introduce new investigations, tools, or review steps within the existing grant;
+it does not require the application author to enumerate every exception path first.
 
 When a worker fails or runs out of allowance, Mitos preserves its changes and
 outstanding work. An authorized replacement continues from the assignment and

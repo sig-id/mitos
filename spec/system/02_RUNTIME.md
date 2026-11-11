@@ -24,6 +24,170 @@ outcome, process exit, and resource release MUST remain separate facts. A failed
 attempt awaiting retry MUST NOT terminate its task. A queued attempt receipt MUST
 be distinguishable from admitted execution. Retries preserve history and charges.
 
+## Adaptive work graphs
+
+The target composition profile is `work-graph/v1`. It is a versioned composition
+of Tasks and Records, not a new execution-attempt namespace. It MUST preserve Run
+as an Attempt and MUST NOT replace `ExecutionPlan.runtime` or pretend that existing
+batch and interactive adapters have converged. This profile is not implemented;
+[delivery](06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) owns its gates.
+
+A WorkGraph MUST bind one home server, project, root Task, goal/assignment revision,
+structural revision, policy revision, activation origin, and bounded membership.
+A Task belongs to at most one graph. A single Task is a valid graph; an agent or
+supervisor is not required. Reusable definitions and service templates are separate
+from concrete graph instances. External dependencies MUST use explicit references
+and accepted input witnesses; importing evidence does not transfer task ownership.
+The first profile admits graph members on one home server only.
+
+Each member MUST have a durable ID, specification revision, parent/scope, required
+or optional obligation, input bindings, acceptance contract, execution specification,
+and policy references. The execution specification identifies an executor selector over registered adapter
+revisions, typed invocation inputs or assignment, required provider capabilities,
+resources, and limits. Admission resolves the selector and freezes the exact executor.
+An agent assignment is executable input, not a substitute for these fields. Free-text roles MUST NOT create permissions or executor restrictions.
+
+Executable work, including planning, decision inference, and verification, MUST have
+Task/Attempt accounting. Deterministic reducer operations and durable wait registrations
+do not require dummy processes. Executor internals, individual model tokens, and every
+tool call need not be graph nodes; independently scheduled, recoverable, or accepted
+work SHOULD be. Node kinds MUST NOT require a particular LLM or engineering pipeline.
+
+### Graph amendment transactions
+
+A controller, operator, or deterministic policy MAY propose a bounded amendment.
+All proposers MUST use the same validation and receipt contract. A proposal MUST bind
+request identity and payload digest, graph ID and expected structural revision,
+authority/controller generation, deadline, policy revision, a read set of relevant
+fact/specification revisions, and an ordered list of typed operations. Its explanation
+and model confidence are evidence, not authorization. Proposal data MUST NOT contain
+credentials or choose an unregistered execution destination.
+
+| Operation | Required effect and restrictions |
+|---|---|
+| Add task | Add a complete specification using proposal-local references resolved to stable IDs in the commit. |
+| Amend pending task | Compare specification revision; allow only before admission and before any input/result witness has consumed that revision. Preserve prior specification records. |
+| Add/remove dependency | Target pending work only; validate referenced revisions, guards, joins, artifact bindings, and acyclicity against the entire candidate graph. |
+| Supersede task | Add replacement work and an explicit lineage/obligation mapping; retain the original task, attempts, evidence, and cancellation/settlement obligations. |
+| Set scheduling preference | Change declared priority or eligible executor preference within policy; never bypass hard admission constraints or mutate a running attempt. |
+| Open/close expansion | Create or settle a bounded obligation to discover additional work in a named scope. Closing binds the resulting amendment or an explicit no-change outcome. |
+| Seal/reopen scope | Freeze/unfreeze membership and required obligations under the closure rules below. |
+| Request cancellation | Persist intent and descendant policy; completion of the amendment does not mean processes have stopped. |
+
+Removing a task from a display or cancelling it MUST NOT remove its required
+obligation. Removing or weakening an obligation or acceptance criterion requires a
+separate, authorized scope/policy amendment with rationale and affected consumers;
+ordinary decomposition authority MUST NOT imply permission to lower the goal.
+An admitted task MUST NOT be amended in place. Supersession MUST identify whether
+old results are excluded, explicitly reused, or require revalidation. Dependents
+already admitted retain their old witnesses; changing them requires settlement and
+new admission. Supersession alone MUST NOT release claims or stop a process.
+
+Validation MUST resolve temporary references, validate all operation schemas and
+registrations, check authority and read-set freshness, reject dependency/containment
+cycles, enforce graph/depth/fanout/budget limits, and check affected closure states.
+The resulting graph, obligation changes, revision increment, receipt, and wake/outbox
+records MUST commit atomically. Invalid proposals publish no partial graph. Structural
+edits serialize per graph using compare-and-swap; automatic last-writer-wins merges
+are forbidden. A losing proposer MUST reread and submit a new request identity if
+content changes. Retrying an identical request returns the original receipt and IDs.
+
+Structural revision changes with topology, specifications, obligations, or closure,
+not every log line or task observation. Relevant outcomes, policies, and authority
+have separate revisions in the proposal read set. Changes to unrelated logs MUST NOT
+invalidate a proposal; changes to consumed evidence MUST. Receipt commit is graph
+admission, not process launch. Each subsequent Attempt admission MUST independently
+recheck current grants, resources, input witnesses, and task eligibility.
+
+### Attempts, dependencies, and iteration
+
+The common scheduler MUST admit eligible graph Tasks regardless of agent, command,
+planner, or verifier executor type. An eligible worker MUST NOT depend on a live
+supervisor issuing a launch command. Deterministic selection, capacity reservation,
+and the committed dispatch outbox apply equally to interactive and batch adapters.
+Unsupported adapter capabilities MUST block with an explicit reason; compatibility
+paths MUST NOT advertise graph conformance before their admission contract matches.
+
+An admitted Attempt MUST freeze task/specification and criteria revisions, graph
+admission revision, executor and application revision, input witnesses, workspace
+baseline, grant generation, provider posture, verification policy, and limits.
+A later graph amendment MUST NOT mutate that envelope. Messages MAY guide execution
+within it; changing the assignment requires explicit settlement and replacement.
+Normal task failure, resource wait, human decision, controller absence, and uncertain
+external effect MUST remain distinct observable blocking reasons.
+
+Dependencies use the [scheduling contract](#scheduling-and-dependencies). An edge
+MUST distinguish accepted-result availability, declared terminal outcome, and data
+materialization; process exit or an agent message cannot satisfy accepted-result
+requirements. The graph profile additionally permits a `candidate_available` edge
+for a declared verifier: it binds an immutable captured candidate after producing
+execution settles, while the producer remains unaccepted. This is not an ordinary
+accepted-result dependency. Verifier tasks return verdicts whose admissibility is
+checked by the declared acceptance policy; they do not recursively require another
+verifier task merely to authenticate and record a verdict. Membership of an
+all/any/k-of-n join freezes when its consumer is
+admitted, together with exact contributing witnesses. Adding a producer afterward
+cannot retrospectively alter the join. Losing branches continue or are cancelled
+only according to the recorded cancellation policy, with full settlement accounting.
+
+The admitted dependency graph MUST be acyclic. Iteration is represented by new
+Attempts for retries of the same frozen specification, or new Tasks for changed or
+additional work, with explicit causal lineage. A correction loop MUST NOT reopen an
+accepted historical result or reset counters. A segment/checkpoint recovery within
+one Run remains part of that Attempt; it is not a new Task or a hidden budget reset.
+
+Every graph MUST declare finite admitted-work, expansion, controller-call, retry,
+depth/fanout, and elapsed-time limits. Reservations MUST account for parallel proposals
+and children atomically. Remaining responsibility allowance is shared across tasks,
+controller replacement, and attempts; per-attempt limits may narrow it but never
+replenish it. Time or allowance exhaustion MUST prevent new work and invoke the
+recorded stop/settlement policy. Graph growth without accepted progress MUST have a
+bounded stall policy. Token/cost estimates MUST NOT be called enforced spend limits
+unless the selected provider supports reservation and metering.
+
+### Expansion, sealing, and completion
+
+A newly adaptive scope is open for expansion. A complete defined scope MAY be
+sealed in its creation transaction if the same closure checks pass. Every asynchronous planner/decision
+that can introduce work MUST acquire a durable expansion obligation before dispatch;
+it records owner generation, triggering facts, deadline, allowance, and expected
+outcome. Committing or admitting a graph-relevant event MUST atomically register its
+pending trigger before that scope can be considered closed; broker delivery alone
+is insufficient. Consuming the trigger MUST atomically create its obligation or
+record why no expansion is required. Sealing MUST bind a closure cursor covered by
+the controller's processed relevant events, including durably classified no-change
+events. Controller silence MUST NOT imply that no more work is needed.
+
+Sealing a scope MUST freeze its membership, required obligations, policy revision,
+and acceptance target. It MUST refuse pending expansion obligations, unapplied
+accepted proposals, or pending trigger work that can add required members. Sealing
+and dispatch of an expansion MUST serialize against the same scope revision. Already
+admitted workers MAY continue while a scope is sealed. A new authorized trigger can
+reopen a nonterminal scope in a revisioned transaction before admitting expansion;
+completion and reopening MUST serialize. A terminal accepted scope is immutable;
+new requirements create a new goal revision and graph linked to its predecessor.
+A late event for a terminal graph MUST receive an explicit policy outcome: retained
+observation, request for review, or authorized new graph. It cannot silently reopen
+accepted history. Events not yet received by the home server cannot be treated as
+known facts; their later treatment follows this same rule.
+
+Root completion requires all of the following in one validated terminal transition:
+
+- Required scopes are sealed, with no unresolved expansion or relevant decision.
+- Required descendant obligations are accepted or discharged by an explicitly authorized scope
+  amendment; cancellation, skip, and supersession alone do not count as acceptance.
+- The root result passes the declared acceptance policy for exact task, artifact,
+  graph, and criteria revisions, as specified in [verification](04_STATE_AND_VERIFICATION.md).
+- Child execution, outstanding effects, and claims are settled, or explicitly detached
+  under a recorded policy that names their new owner and excludes them from the result.
+
+An empty queue, controller-declared completion, or all currently visible leaves
+passing MUST NOT establish goal completion. Sealing is not acceptance. A failed or
+cancelled graph retains evidence and settlement status; terminal work outcome and
+resource release remain separate. Root acceptance MUST NOT consume an ancestor's
+own completion as a dependency: containment/aggregation is distinct from execution
+edges, so a parent may await children without creating a dependency cycle.
+
 ## Runner runtime and optional decision inference
 
 The runner is a server-owned state machine. An executor performs work; a decision
@@ -43,7 +207,8 @@ part of the broader admission target. Native interactive execution retains its o
 adapter and MUST NOT claim this batch runtime or these model hooks.
 
 One batch Run executes one declared `main` step, with sequential segments representing
-its attempts. This is a bounded segment machine, not a general workflow graph interpreter.
+execution/recovery phases within the same Attempt. This is a bounded segment machine,
+not a general workflow graph interpreter.
 Services and Task dependencies compose Runs above it. The phase contract is:
 
 | Phase | Work and permitted successor |
@@ -94,8 +259,10 @@ Each attempt permits at most its configured `max_calls` (1–64), counting pendi
 failed requests, and bounds each call by `timeout_ms` (1–120000) and the original
 execution deadline. Rewinds MUST NOT reset this allowance. Reported token usage is
 retained when available; unknown remote consumption stays unknown. This is a call
-and wall-clock bound, not a token reservation or monetary spending guarantee. An
-explicit new Run gets a fresh allowance, as with existing local retry budgets.
+and wall-clock bound, not a token reservation or monetary spending guarantee. The current batch adapter gives an
+explicit new Run a fresh allowance, as with existing local retry budgets. Graph
+conformance additionally requires the shared responsibility allowance above; this
+per-Run limit alone does not satisfy it.
 
 Restart replays receipts without invoking models. A pending receipt MUST NOT be
 blindly resent: inference may have happened and been charged. The same boundary

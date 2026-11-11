@@ -114,3 +114,11 @@ and UI policy editing. Those are explicit scope limits, not implied capabilities
 The owning contracts are [runtime](../system/02_RUNTIME.md#runner-runtime-and-optional-decision-inference)
 and [interfaces](../system/05_INTERFACES_AND_INTEGRATIONS.md#decision-model-provider-profile).
 Delivery limits remain in [conformance](../system/06_DELIVERY_AND_CONFORMANCE.md).
+
+## Follow-on graph composition
+
+[ADR 0004](0004_ADAPTIVE_WORK_GRAPHS.md) defines the target adaptive composition above
+this initial batch runtime and supersedes only the deferral of specifying graph
+semantics. It does not widen the implemented hooks, change provider wire formats,
+or make a model answer authoritative. Its graph/controller lifecycle requires the
+separate delivery gates and retains this adapter's compatibility limits.

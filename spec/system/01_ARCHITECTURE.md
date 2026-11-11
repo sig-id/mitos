@@ -41,6 +41,45 @@ Applications MUST use the same runtime contracts as built-in services. Prompts a
 UI restrictions are not enforcement boundaries. The host/provider MUST enforce any
 confinement or revocation being claimed.
 
+## Adaptive execution composition
+
+A WorkGraph is a revisioned composition of Tasks, dependencies, obligations, and
+Records for one root assignment. It does not add another kernel primitive or change
+Run's meaning. The whole graph need not be known before execution; each admitted
+Attempt MUST nevertheless have a complete, frozen execution contract.
+
+Planning, decision evaluation, admission, and scheduling are separate responsibilities.
+A planner produces concrete candidate work; a decision provider evaluates supplied
+alternatives or evidence; the kernel validates and commits mutations; the scheduler
+admits eligible tasks. Rules, people, and agent controllers use the same contracts.
+Runtime mutation semantics and executor adapter contracts are defined in advance;
+future tasks, their topology, agent specializations, and domain operations need not
+be. Adaptive composition is the default product path. Fixed recipes remain an
+explicit policy option, not a prerequisite for admitting work. A supervisor is one replaceable controller, not a
+mandatory process through which every launch must pass.
+
+```mermaid
+flowchart LR
+    F[Committed facts] --> C[Rules or planning controller]
+    C --> P[Concrete proposals and optional decision evaluation]
+    P --> K[Validate and commit graph amendment]
+    K --> S[Deterministic scheduler]
+    S --> E[Agent or program attempt]
+    E --> V[Settlement and verification]
+    V --> F
+```
+
+Git branching, rebasing, review, and merging are domain capabilities. They MUST NOT
+be mandatory kernel phases or a universal task lifecycle. The same applies to named
+engineering roles, PR creation, and remediation sequences. Agents MAY retain native
+conversations and output formats; adapters own translation into runtime observations.
+
+A fixed workflow, a supervisor-discovered plan, and a hybrid with mandatory checks
+are policies over this composition. Scheduling/event activation is independent of
+planning policy and executor type. [Runtime](02_RUNTIME.md#adaptive-work-graphs) owns
+graph transactions and closure; [orchestration](03_ORCHESTRATION.md#adaptive-controllers)
+owns controller policy; [ADR 0004](../ADRs/0004_ADAPTIVE_WORK_GRAPHS.md) records the design.
+
 ## Servers, clients, and execution hosts
 
 Every project MUST have one **home server** owning task state, services, decisions,

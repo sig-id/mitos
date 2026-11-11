@@ -28,6 +28,138 @@ Topics support discovery and discussion through bounded reads, revision-checked
 replies, and durable follow cursors. Posts and acknowledgments MUST NOT confer
 claims, approve actions, or complete tasks.
 
+## Adaptive controllers
+
+A controller owns a declared planning scope within a supervisory responsibility.
+Its policy MUST bind eligible event types, deterministic relevance filters, permitted
+proposal operations, mandatory obligations, executor/capability allowlists, limits,
+and conditions requiring human judgment. Policy and controller generation are
+revisioned independently of agent conversation history. Authority to decompose work
+MUST NOT imply authority to remove a mandatory check, publish externally, or enlarge
+allowances. Multiple planners MAY produce candidates; only the current authorized
+controller generation may submit a controller mutation for its scope. Operator
+mutations still serialize through the same runtime transactions.
+
+| Planning policy | Source of concrete work | Runtime invariant |
+|---|---|---|
+| Defined | Operator or installed deterministic definition supplies tasks and transitions. | Scheduler advances eligible work without a supervisor launch loop. |
+| Adaptive | A planner derives tasks and amendments from the goal and committed evidence. | Every accepted amendment passes the same admission checks. |
+| Hybrid | Fixed obligations constrain adaptive decomposition and repair. | Adaptive work cannot bypass mandatory obligations or acceptance policy. |
+
+These policies MUST compose with manual, scheduled, and event activation and with
+agent or program executors. They MUST NOT be separate task stores or incompatible
+work types. A decision provider is optional in every policy. Deterministic facts
+such as dependency readiness, queue capacity, deadlines, and authenticated authority
+MUST be evaluated by code rather than repeatedly delegated to a model.
+
+### Planning and typed decisions
+
+Planning generates fully specified candidate amendments. It MAY use an agent,
+installed templates, deterministic expansion, or an operator. A planner's output
+is a proposal, not executable authority. Installing or generating new executable
+capabilities requires its own authorized application operation; a graph amendment
+references registered adapters and capability revisions. Registration MUST NOT require
+pre-enumerating each task, generated script, tool argument, Git command sequence, or
+repair path. An authorized command/tool adapter MAY execute dynamically produced
+instructions bound to their exact content and existing scope. Generated content
+cannot install an adapter, expand host access, or grant itself new authority.
+
+Decision evaluation judges a bounded supplied set of alternatives or evidence.
+Choice may select a concrete candidate; Predicate/Noul or Score may inform a declared
+policy when their provider mappings are implemented. These answer types MUST NOT
+be treated as arbitrary task/argument generation. To discover unknown work, the
+controller may select an authorized planning task, then evaluate its proposals.
+Candidate generation and decision evaluation MUST have separately recorded attempts,
+inputs, limits, and outcomes. No pipeline of models is required for a deterministic
+or operator-supplied amendment.
+
+Before inference, the runtime MUST validate candidate schemas and exclude ineligible
+operations using current facts, grants, and remaining limits. The request MUST bind
+the exact candidate set/digest, concrete operands, projected facts/read set, graph
+revision, controller generation, policy, provider/model configuration, deadline,
+and allowance reservation. An answer selects only a supplied candidate; it cannot
+substitute task IDs, commands, criteria, budgets, or other operands. Commit MUST
+revalidate all affected facts after inference because prevalidation is not a lock.
+
+Persist request intent before sending and validated response before graph commit.
+Decision evaluation and proposal application are separate receipts: an accepted
+model answer is not an applied amendment. A crash between them MUST recover the
+same candidate and recheck eligibility without reinvoking the model. A changed fact,
+revoked grant, cancellation, expired deadline, or obsolete generation fences the
+mutation. Late answers MAY remain evidence. Replay MUST NOT issue inference or
+external effects. Unknown inference MUST retain its reservation/usage uncertainty
+and require reconciliation or an explicitly authorized fresh evaluation; blindly
+resending the original request is forbidden.
+
+Policy MUST define acceptable response types, thresholds, refusals, uncertainty,
+timeouts, candidate rejection, and bounded replanning. It MUST include a visible
+wait/escalation outcome when no candidate is eligible or justified. A malformed or
+missing answer MUST NOT mean continue. Numerical confidence MUST NOT count as a
+correctness guarantee, permission, or result acceptance. Provider fallback requires
+explicit policy, a new receipt, and accounting; it cannot silently change data scope.
+The existing batch hook profile remains narrower and retains its own contract in
+[runtime](02_RUNTIME.md#model-decision-lifecycle).
+
+### Agent templates, context, and domain adaptation
+
+An agent template MAY supply base instructions, a harness/model selector, skills,
+context sources, tool capabilities, and defaults. The planner MAY specialize it for
+a particular assignment: role, task instructions, selected knowledge and artifacts,
+allowed tools within the grant, and limits within the remaining allowance. A fixed
+catalog of roles or one template per workflow step MUST NOT be required. A template
+revision plus its specialization and resolved configuration MUST be recorded in the
+Attempt. Changes affecting an admitted contract require replacement; additional
+context or guidance within that contract follows ordinary observation/steering rules.
+Template changes cannot silently alter existing attempts or mandatory acceptance.
+
+Agents SHOULD work with their task context, knowledge, data, and native tools. They
+MUST NOT be required to emit framework-specific PASS/FAIL/FIX tags, transition labels,
+JSON envelopes, or graph-edit syntax in ordinary replies. Adapter observations and
+controller interpretation provide the runtime boundary defined in
+[interfaces](05_INTERFACES_AND_INTEGRATIONS.md#native-agent-observation-contract).
+An agent MAY opt into structured tools, but ordinary text remains a supported source
+of reports and planning evidence. An agent's explanation of success remains a claim,
+regardless of its formatting.
+
+Domain workflows MUST be constructed from authorized capabilities and current evidence.
+For example, a controller may choose a worktree, request a commit, compare changes,
+introduce integration/review tasks, or revise a merge strategy only when needed.
+No fixed Git lifecycle or mandatory software-engineering role sequence is implied.
+Workspace ownership, conflicting writes, acceptance, and uncertain external effects
+still obey kernel contracts. Domain exceptions can prompt newly generated work;
+process failures, stale authority, unknown effects, and invalid graph edits retain
+explicit deterministic handling even when a model proposes their recovery.
+
+### Event-driven coordination and replacement
+
+The runtime MUST persist a controller cursor, trigger identity, pending expansion
+obligations, candidate/decision receipts, durable waits, and remaining allowance.
+Relevant task outcomes, accepted artifacts, failures, decisions, and service inputs
+can wake it. Event consumption and expansion/wait registration MUST follow the
+no-loss receipt contract. Duplicate delivery cannot create duplicate tasks or calls.
+Coalescing MUST retain contributing event identities and a bounded durable window;
+it MUST NOT discard unresolved work or cause starvation under continuous updates.
+
+Controllers SHOULD receive bounded projections and artifact references selected for
+their scope. Reads MUST disclose truncation and unavailable evidence; planners cannot
+act as though omitted facts were observed. Model calls SHOULD occur on meaningful
+state changes, not scheduler polling ticks or terminal byte updates. Independent
+eligible work continues during inference. Controller compute, model calls, workers,
+and retained claims MUST be accounted separately, including waits and cancellations.
+A logical root or persisted wait MUST NOT occupy a worker slot merely by existing.
+A live waiting process still consumes its actual resources; checkpointing/yielding
+releases compute only when provider custody permits it. Controller capacity and
+worker capacity MUST have explicit admission policy so passive coordination cannot
+silently consume all capacity required by its children.
+
+If a controller disappears, admitted work continues within its frozen limits and the
+scheduler may admit existing eligible tasks under valid standing policy. New planning
+waits or activates a replacement under declared policy. Replacement advances generation,
+fences old proposals, and reconstructs the graph, obligations, pending decisions,
+evidence, effects, and remaining allowance. It MUST NOT regenerate already committed
+children from a narrative summary. Controller exhaustion produces a visible planning
+block; it MUST NOT silently accept the goal or require cancelling unrelated workers.
+
 ## Control messages
 
 Control messages use the [MQTT 5 profile](05_INTERFACES_AND_INTEGRATIONS.md#mqtt-5-messaging).
@@ -52,6 +184,16 @@ A Service preserves responsibility between executions. Its revisioned definition
 MUST contain activation, task template, execution specification, and policies for
 duplicates, missed occurrences, overlap, backpressure, retries, and shutdown.
 Catalog changes MUST use expected revisions; admitted definitions and inputs freeze.
+
+Under the adaptive graph profile, a service occurrence MUST create one root Task and
+one graph instance bound to the occurrence receipt and frozen template/policy revision.
+Duplicate delivery returns that instance; a later occurrence creates new identities.
+One occurrence's outputs MUST NOT satisfy another's dependencies without an explicit
+cross-instance evidence binding. Manual and scheduled creation use the same admission
+path. Graph-wide overlap/replace policy applies to the entire occurrence, separately
+from concurrency of individual member tasks. Stop/restart MUST cross the settlement
+barrier for the declared descendant scope before creating a replacement occurrence.
+A service remains active between completed graphs; it is not itself a completed Task.
 
 Explicit selection, targets, presets, `requires`, and `wants` MUST retain activation
 reasons. Conflicts are resolved before admission. `requires` enforces its declared

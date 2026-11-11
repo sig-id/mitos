@@ -52,6 +52,41 @@ execution, inaccessible oracle material, deterministic checks, and human review
 provide different assurance. A same-user verifier is not an inaccessible oracle;
 worker explanations and supervisor confidence are not independent verification.
 
+## Graph results and acceptance
+
+A verifier MAY consume an immutable, not-yet-accepted candidate through the runtime's
+`candidate_available` binding. Its verdict is evaluated against declared authority,
+schema, evidence, and acceptance policy; recording that verdict MUST NOT imply an
+infinite chain of verifier tasks. This does not relax substantive checks or turn an
+unauthenticated model claim into acceptance.
+
+A graph root result MUST identify its graph structural revision, root specification
+and criteria revisions, sealed obligation set, and exact contributing task/attempt
+results. The acceptance receipt MUST preserve the evidence manifest, verifier/policy
+revision, findings, and any authorized scope discharges. Closure eligibility belongs
+to [runtime](02_RUNTIME.md#expansion-sealing-and-completion); a passing verifier alone
+cannot bypass an open planning scope or unresolved required work.
+
+Acceptance policy MAY combine deterministic checks, independent agent assessment,
+and human review. Each contribution MUST identify its method and trust boundary.
+A decision-model routing answer is not a verifier verdict. If a model-backed verifier
+is allowed, its task, fixed rubric, input artifact digests, and acceptance authority
+MUST be declared before judgment; self-assessment MUST remain labeled as such.
+
+Changes to a source artifact, selected input, criteria, or required membership MUST
+invalidate pending acceptance for the old target. Previously accepted records remain
+historical facts about their exact target; they MUST NOT be rewritten to endorse the
+new state. Reuse requires an explicit provenance binding and policy check. A repair
+creates a new candidate result, and checks consuming that candidate must run or be
+revalidated against it. A supervisor cannot avoid a failing check by dropping its
+node, marking it optional, or selecting an older passing result for newer changes.
+
+Artifact references MUST describe what was actually produced. A shared directory,
+conversation summary, or "latest output" pointer is not an immutable input binding.
+Materialization into worker/verifier workspaces follows the existing bounded copy
+and integrity contract. Published results MUST remain retained while live graph
+witnesses, recovery operations, or unresolved effects reference them.
+
 ## Checkpoints and restoration
 
 Checkpoints MUST bind assignment/criteria revisions, workspace/artifact digests,

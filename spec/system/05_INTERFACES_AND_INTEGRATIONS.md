@@ -26,6 +26,86 @@ drafts, with pairing, rotation, revocation, and revision checks. It MUST NOT imp
 arbitrary launch, terminal access, or unrestricted artifacts. Voice and notification
 interaction require separate authorized confirmation before resolution.
 
+## Adaptive graph and controller interface
+
+The target `work-graph/v1` profile defines semantic operations below, not currently
+available HTTP routes or MQTT handlers. Servers MUST advertise implemented profile
+versions, executor adapters, supported operations, and finite admission/read limits.
+Unknown versions, operations, enum values, and fields MUST be rejected, not ignored.
+HTTP, CLI, in-process, and MQTT adapters MUST resolve to the same typed handlers,
+authority checks, canonical request identity, and receipts.
+
+| Operation | Required input | Required observable result |
+|---|---|---|
+| Create graph | Root assignment, goal/policy revision, activation receipt, limits, initial expansion scope or defined members | Graph/root IDs and receipt; no implied worker launch |
+| Read graph | Graph ID, snapshot revision or cursor, bounded membership/record selection | Revision-consistent page, continuation cursor, explicit truncation, obligations, blockers, and fact references |
+| Preview amendment | Complete amendment envelope and proposed operations | Validation findings at an identified snapshot; no reservation, inference, or mutation |
+| Apply amendment | The envelope below | Atomic commit/rejection receipt with resolved IDs and resulting structural revision |
+| Request decision | Boundary/trigger identity, frozen candidates, projected evidence, model/policy revision, deadline and allowance | Durable request receipt and eventual validated answer/refusal/unknown outcome |
+| Apply selected proposal | Decision receipt, selected candidate digest, amendment identity and preconditions | Original amendment receipt or visible conflict; never an implicit second inference |
+| Inspect operation | Original request identity | Pending, committed, rejected, or unresolved outcome and associated effects |
+| Observe graph | Graph/cursor and bounded subscription | Ordered committed changes with gap detection and snapshot reconciliation |
+
+The amendment envelope MUST contain `version`, home/project/graph identity,
+`request_key`, expected graph structural revision, policy revision, proposer identity
+bound to authentication, controller generation when applicable, deadline, relevant
+fact/specification read set, and a bounded ordered operation list. The handler computes
+a canonical payload digest. Each referenced artifact binds identity, hash, and size;
+proposal-local task references are valid only within their containing transaction.
+Evidence and rationale MUST be bounded inline values or authorized immutable references.
+The initial wire implementation MUST publish a schema and canonical digest test vectors,
+including Unicode, duplicate-key rejection, numeric normalization, and reordered fields,
+before advertising this profile. Existing receipt digests MUST NOT be reinterpreted.
+
+Execution inputs MUST reference a registered adapter/schema revision, an exact executor
+or bounded selector, assignment or typed arguments, context/input bindings, acceptance
+policy, workspace/resource requirements, and limits. Agent-template specialization
+references its immutable base revision and changes. Generated scripts and tool sequences
+MUST bind content digests as execution input. An adapter's schema permits invocation
+arguments; it does not imply permission for all representable operations.
+
+Read APIs MUST expose why a task is blocked and which decision, dependency, resource,
+controller obligation, or reconciliation would unblock it. Clients MUST be able to
+trace added/superseded tasks to their proposal, trigger, and decision evidence without
+reading an entire transcript. Cached previews MUST be revalidated on commit. Cursors
+and notifications MUST NOT confer authority; a transport receipt is not graph commit,
+process launch, or acceptance. Model probability and an authored rationale MUST be
+labeled separately from the authoritative reason an amendment was permitted.
+
+## Native-agent observation contract
+
+Managed execution MUST support ordinary native agent output without a mandatory
+Mitos response grammar. Adapters MAY consume native structured events/tool calls,
+terminal text, explicit report submission, and produced artifacts. They MUST preserve
+source evidence and emit runtime-owned observations binding task, attempt, process
+incarnation, sequence/cursor, time, source kind, and content/artifact references.
+Presentation formatting or extraction MUST NOT discard the retained source.
+
+Deterministic extraction MAY identify known native events. Model interpretation MAY
+extract claims, candidate work, or likely requests from unstructured output, but its
+record MUST identify the interpreter/model revision, source span/digest, target schema,
+uncertainty, and interpretation policy. Interpretation is a separately accounted
+operation with a receipt. Raw text, extracted JSON, role labels, and apparent tool-call
+text MUST NOT impersonate authenticated commands or change graph state directly.
+Malformed/ambiguous interpretation produces an observation or visible question, not
+an implicit launch, continuation, approval, or successful completion.
+
+Explicit structured tools MAY request graph operations under their caller's grant.
+Ordinary replies MUST NOT need to call them. A controller may propose an amendment
+based on observed text through the same validation path. An adapter reporting process
+exit proves only the observed lifecycle event; interpreting "done" yields a completion
+claim. Neither proves that required artifacts exist or that acceptance passed.
+
+Context assembly MUST provide the assignment, relevant knowledge and artifact
+provenance, current accepted facts, permitted capabilities, and outstanding questions.
+It SHOULD hide transport envelopes, revision bookkeeping, and graph command syntax
+from an executor unless that executor explicitly performs a controller/tool role.
+Templates and context policies MUST declare source permissions and truncation behavior.
+Model interpretation and planning MAY use authorized source content under their own
+bounded data-disclosure policy; they MUST NOT silently expand the existing batch
+choice-hook projection to include transcripts, credentials, or whole workspaces.
+The batch decision provider profile below remains independently versioned and limited.
+
 ## MQTT 5 messaging
 
 Use [MQTT 5.0](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)

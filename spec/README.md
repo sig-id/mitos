@@ -5,6 +5,16 @@ its market, and the experience it promises. Then read [architecture](system/01_A
 for the system model and [delivery](system/06_DELIVERY_AND_CONFORMANCE.md) for the
 current baseline and remaining work.
 
+## Adaptive runtime reading path
+
+[ADR 0004](ADRs/0004_ADAPTIVE_WORK_GRAPHS.md) explains the decision to generate work
+graphs as evidence arrives, including lessons from Chief Wiggum. Start with
+[graph transactions and completion](system/02_RUNTIME.md#adaptive-work-graphs), then
+[controllers and agent templates](system/03_ORCHESTRATION.md#adaptive-controllers)
+and [native observations](system/05_INTERFACES_AND_INTEGRATIONS.md#native-agent-observation-contract).
+[G1–G5](system/06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) define
+implementation order and acceptance; this design is not a shipped graph runtime.
+
 ## Authority
 
 Product and system specifications are normative, including requirements not yet
