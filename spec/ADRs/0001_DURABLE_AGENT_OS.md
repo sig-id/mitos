@@ -87,3 +87,11 @@ No native mobile application, relay service, SQLite migration, or automatic host
 failover is committed by this decision. Clients can be added against the shared
 contract as needed. The first acceptance milestone is local task continuity with
 verified replacement, followed by paired clients and remote execution.
+
+The initial local cutover imports desk metadata through the existing Store writer
+and folds new interactive assignments into Task/Run readers. It retains the legacy
+snapshot as backup and preserves unbound history. Workspace snapshots and distinct
+execution adapters are a migration stage, not a second authoritative store or a
+claim of complete common scheduling. Interactive reports retain exact text digests
+and criteria revisions; human report review is labeled separately from application
+artifact verification. The delivery baseline records outstanding guarantees.

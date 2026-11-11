@@ -1,14 +1,14 @@
 {{define "work"}}<div class="page-heading">
 <div>
-<p class="eyebrow">FROM INTENT TO OUTCOME</p>
-<h1>Work<span class="olive">.</span>
+
+<h1>Execution history<span class="olive">.</span>
 </h1>
-<p>Everything you’ve set in motion, and what came of it.</p>
+<p>Application runs and interactive attempts.</p>
 </div>
 <div class="actions"><a class="button" href="/services">Services</a><a class="button" href="/tasks">Tasks and scheduling</a><a class="button primary" href="/new">{{icon "plus"}}New work</a></div>
 </div>
 <section class="panel">
-<form class="work-filters" action="/work" method="get" hx-get="/work" hx-target="#work-list" hx-select="#work-list" hx-push-url="true" hx-trigger="submit, change, input delay:350ms">
+<form hx-boost="true" class="work-filters" action="/work" method="get" hx-get="/work" hx-target="#work-list" hx-select="#work-list" hx-push-url="true" hx-trigger="submit, change, input delay:350ms">
 <label class="search-field">{{icon "search"}}<span class="sr-only">Search work</span>
 <input type="search" name="q" placeholder="Find a brief, application, or workspace…" value="{{.Query}}">
 </label>
@@ -37,40 +37,33 @@
 
 {{define "decisions"}}<div class="page-heading">
 <div>
-<p class="eyebrow">YOUR JUDGMENT, WHERE IT COUNTS</p>
+
 <h1>Decisions<span class="olive">.</span>
 </h1>
-<p>The important calls. Enough context to make them and move on.</p>
+<p>Application decisions awaiting your response.</p>
 </div>
 <span class="pill">{{len .Attention}} waiting</span>
 </div>{{if .Attention}}<div class="decisions-layout">
 <div class="decision-stack">{{range .Attention}}{{template "decisioncard" .}}{{end}}</div>
-<aside class="explanation">
-<span class="eyebrow">A SMALL INTERRUPTION</span>
-<h2>You shouldn’t need<br>the whole story.</h2>
-<p>Each card explains what is blocked, what your choice changes, and the cost of getting it wrong.</p>
-<hr>
-<p>Work with an external consequence stays paused until you explicitly choose. There is no countdown.</p>
-<a class="text-link" href="/work">See all work {{icon "arrow"}}</a>
-</aside>
+
 </div>{{else}}<div class="empty decision-empty">
 <span class="large-check">{{icon "check"}}</span>
 <p class="eyebrow">NOTHING NEEDS YOUR ATTENTION</p>
-<h2>A little room to breathe.</h2>
-<p>When work needs your judgment, it will land here<br>with a clear question and a way forward.</p>
+<h2>No pending application decisions</h2>
+<p>All pending project reviews and decisions are available in the Inbox.</p>
 <a class="button" href="/work">Back to work {{icon "arrow"}}</a>
 </div>{{end}}{{end}}
 
 {{define "new"}}<div class="page-heading">
 <div>
 <a class="back-link" href="/work">← All work</a>
-<h1>Start with an outcome<span class="olive">.</span>
+<h1>Run an application<span class="olive">.</span>
 </h1>
-<p>A clear brief now. A useful result to come back to.</p>
+<p>Choose an assignment, application, and workspace.</p>
 </div>
 </div>
-<div class="brief-layout">
-<form class="panel brief-form" method="post" action="/runs" hx-disabled-elt="find button">
+<div class="brief-layout single-form">
+<form hx-boost="true" class="panel brief-form" method="post" action="/runs" hx-disabled-elt="find button">
 <div class="form-section">
 <span class="step-number">01</span>
 <div class="form-section-body">
@@ -124,26 +117,7 @@
 <button class="button primary" type="submit">Start work {{icon "arrow"}}</button>
 </div>
 </form>
-<aside class="brief-aside">
-<span class="eyebrow">A GOOD BRIEF GOES A LONG WAY</span>
-<h2>Direction.<br>Boundaries.<br>A finish line.</h2>
-<p>Describe the result, not every step. Give the application enough context to know when it’s done.</p>
-<div class="brief-promise">{{icon "folder"}}<div>
-<strong>Your original stays yours</strong>
-<p>Execution uses a separate workspace copy.</p>
-</div>
-</div>
-<div class="brief-promise">{{icon "clock"}}<div>
-<strong>A limit you choose</strong>
-<p>The process stops when its time is up.</p>
-</div>
-</div>
-<div class="brief-promise">{{icon "file"}}<div>
-<strong>A record to return to</strong>
-<p>Output and acceptance evidence stay with the run.</p>
-</div>
-</div>
-</aside>
+
 </div>{{end}}
 
 {{define "appcard"}}<article class="app-card">
@@ -163,10 +137,10 @@
 
 {{define "apps"}}<div class="page-heading">
 <div>
-<p class="eyebrow">YOUR TOOLS FOR GETTING THINGS DONE</p>
+
 <h1>Applications<span class="olive">.</span>
 </h1>
-<p>A focused set of capabilities, with a clear way in and a result at the end.</p>
+<p>Installed applications and their entrypoints.</p>
 </div>
 <span class="pill">{{len .Apps}} available</span>
 </div>
@@ -174,9 +148,9 @@
 <section class="install-panel">
 <span class="app-symbol">{{icon "terminal"}}</span>
 <div>
-<p class="eyebrow">BRING YOUR OWN</p>
-<h2>Keep authoring in your own tools.</h2>
-<p>Install a local application with a command and an independent acceptance check. Restart Studio to load its entrypoint.</p>
+
+<h2>Install an application</h2>
+<p>Install a local application with a command and an independent acceptance check. Restart the server to load its entrypoint.</p>
 <code>mitos serve --apps ./examples --workspace-root .</code>
 <p class="field-help">See <strong>examples/local-app/app.json</strong> for the manifest contract. Local applications execute as trusted processes.</p>
 </div>
@@ -225,7 +199,7 @@
 <dl class="facts">
 <div>
 <dt>Source</dt>
-<dd>{{if .App.Builtin}}Included with Studio{{else}}{{.App.Directory}}{{end}}</dd>
+<dd>{{if .App.Builtin}}Included with Mitos{{else}}{{.App.Directory}}{{end}}</dd>
 </div>
 <div>
 <dt>Execution</dt>

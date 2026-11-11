@@ -169,6 +169,36 @@ func (m *Manager) Continue(sourceID, kind string, request ContinuationRequest, s
 			}
 		}
 	}
+	// Bound replacements settle custody before creating a new attempt. The
+	// unbound legacy path retains its original continuation behavior.
+	if kind == "handover" && source.TaskID != "" && m.live[sourceID] != nil {
+		source.Status = "stopping"
+		if err := m.saveLocked(); err != nil {
+			return Session{}, err
+		}
+		m.live[sourceID].stop()
+		deadline := time.Now().Add(5 * time.Second)
+		for m.live[sourceID] != nil && time.Now().Before(deadline) {
+			m.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			m.mu.Lock()
+		}
+		source, err = m.sessionLocked(sourceID)
+		if err != nil {
+			return Session{}, err
+		}
+		if activeSession(*source) {
+			return Session{}, fmt.Errorf("%w: source shutdown is pending", ErrConflict)
+		}
+		for _, existing := range m.state.Sessions {
+			if c := existing.Continuation; c != nil && c.SourceID == sourceID && c.Key == request.Key {
+				if c.RequestHash != hash || c.Kind != kind {
+					return Session{}, ErrConflict
+				}
+				return cloneSession(existing), nil
+			}
+		}
+	}
 	assignment := &agentcli.Assignment{RequestedBy: sourceID}
 	if source.Assignment != nil {
 		*assignment = *source.Assignment

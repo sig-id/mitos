@@ -20,6 +20,7 @@ var ErrConflict = errors.New("this work has already changed; refresh and try aga
 var ErrNotFound = errors.New("work not found")
 
 type Brief struct {
+	ProjectID      string           `json:"project_id,omitempty"`
 	Scheduling     workpool.Request `json:"scheduling"`
 	Ownership      fleet.Ownership  `json:"ownership,omitempty"`
 	Title          string           `json:"title"`
@@ -56,38 +57,53 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
-	Condition       *ServiceConditionState `json:"condition,omitempty"`
-	Health          *ServiceHealthState    `json:"health,omitempty"`
-	Claim           *fleet.Claim           `json:"claim,omitempty"`
-	ClaimConflicts  []fleet.Conflict       `json:"claim_conflicts,omitempty"`
-	UnattendedUntil *time.Time             `json:"unattended_until,omitempty"`
-	PendingDecision *HumanDecision         `json:"pending_decision,omitempty"`
-	Tenant          decision.Tenant        `json:"tenant"`
-	DecisionRewind  *autonomy.Rewind       `json:"decision_rewind,omitempty"`
-	Execution       *ExecutionPlan         `json:"execution,omitempty"`
-	Segments        []autonomy.Segment     `json:"segments,omitempty"`
-	Checkpoints     []autonomy.Checkpoint  `json:"checkpoints,omitempty"`
-	Rewinds         []autonomy.Rewind      `json:"rewinds,omitempty"`
-	PendingRewind   *autonomy.Rewind       `json:"pending_rewind,omitempty"`
-	ReadyRewind     *autonomy.Rewind       `json:"ready_rewind,omitempty"`
-	Workspace       *WorkspaceRecord       `json:"workspace_record,omitempty"`
-	Acceptance      *acceptance.Verdict    `json:"acceptance,omitempty"`
-	ID              string                 `json:"id"`
-	TaskID          string                 `json:"task_id"`
-	ParentID        string                 `json:"parent_id,omitempty"`
-	Brief           Brief                  `json:"brief"`
-	AppName         string                 `json:"app_name"`
-	Status          string                 `json:"status"`
-	Stage           string                 `json:"stage"`
-	Summary         string                 `json:"summary"`
-	CreatedAt       time.Time              `json:"created_at"`
-	UpdatedAt       time.Time              `json:"updated_at"`
-	FinishedAt      time.Time              `json:"finished_at,omitempty"`
-	Verified        bool                   `json:"verified"`
-	Sample          bool                   `json:"sample"`
-	Artifacts       []Artifact             `json:"artifacts"`
-	Decision        *HumanDecision         `json:"decision,omitempty"`
-	Events          []Event                `json:"events"`
+	RecordRefs         []RecordRef            `json:"record_refs,omitempty"`
+	VerificationMethod string                 `json:"verification_method,omitempty"`
+	ExecutionKind      string                 `json:"execution_kind,omitempty"`
+	SessionID          string                 `json:"session_id,omitempty"`
+	ProcessID          string                 `json:"process_id,omitempty"`
+	ProjectID          string                 `json:"project_id,omitempty"`
+	Condition          *ServiceConditionState `json:"condition,omitempty"`
+	Health             *ServiceHealthState    `json:"health,omitempty"`
+	Claim              *fleet.Claim           `json:"claim,omitempty"`
+	ClaimConflicts     []fleet.Conflict       `json:"claim_conflicts,omitempty"`
+	UnattendedUntil    *time.Time             `json:"unattended_until,omitempty"`
+	PendingDecision    *HumanDecision         `json:"pending_decision,omitempty"`
+	Tenant             decision.Tenant        `json:"tenant"`
+	DecisionRewind     *autonomy.Rewind       `json:"decision_rewind,omitempty"`
+	Execution          *ExecutionPlan         `json:"execution,omitempty"`
+	Segments           []autonomy.Segment     `json:"segments,omitempty"`
+	Checkpoints        []autonomy.Checkpoint  `json:"checkpoints,omitempty"`
+	Rewinds            []autonomy.Rewind      `json:"rewinds,omitempty"`
+	PendingRewind      *autonomy.Rewind       `json:"pending_rewind,omitempty"`
+	ReadyRewind        *autonomy.Rewind       `json:"ready_rewind,omitempty"`
+	Workspace          *WorkspaceRecord       `json:"workspace_record,omitempty"`
+	Acceptance         *acceptance.Verdict    `json:"acceptance,omitempty"`
+	ID                 string                 `json:"id"`
+	TaskID             string                 `json:"task_id"`
+	ParentID           string                 `json:"parent_id,omitempty"`
+	Brief              Brief                  `json:"brief"`
+	AppName            string                 `json:"app_name"`
+	Status             string                 `json:"status"`
+	Stage              string                 `json:"stage"`
+	Summary            string                 `json:"summary"`
+	CreatedAt          time.Time              `json:"created_at"`
+	UpdatedAt          time.Time              `json:"updated_at"`
+	FinishedAt         time.Time              `json:"finished_at,omitempty"`
+	Verified           bool                   `json:"verified"`
+	Sample             bool                   `json:"sample"`
+	Artifacts          []Artifact             `json:"artifacts"`
+	Decision           *HumanDecision         `json:"decision,omitempty"`
+	Events             []Event                `json:"events"`
+}
+
+// RecordRef identifies a canonical shared journal event without copying its
+// project-wide payload into each interactive attempt's read model.
+type RecordRef struct {
+	Seq  int64     `json:"seq"`
+	Hash string    `json:"hash"`
+	At   time.Time `json:"at"`
+	Kind string    `json:"kind"`
 }
 
 func (r Run) Active() bool {
@@ -135,6 +151,8 @@ type Event struct {
 }
 
 type change struct {
+	DeskState         json.RawMessage            `json:"desk_state,omitempty"`
+	Home              *HomeServer                `json:"home_server,omitempty"`
 	AgentSession      *AgentSession              `json:"agent_session,omitempty"`
 	AgentRequest      *AgentRequest              `json:"agent_request,omitempty"`
 	AgentAnswer       *AgentAnswer               `json:"agent_answer,omitempty"`

@@ -28,6 +28,13 @@ func fleetSummary(r *Run) fleet.Summary {
 		e := r.Events[len(r.Events)-1]
 		s.Head = fleet.Head{Seq: e.Seq, Hash: e.Hash}
 	}
+	if len(r.RecordRefs) > 0 {
+		e := r.RecordRefs[len(r.RecordRefs)-1]
+		s.Head = fleet.Head{Seq: e.Seq, Hash: e.Hash}
+		// The fleet's verification badge describes application artifacts. A human
+		// review of an interactive report has a separate, narrower scope.
+		s.Verified = false
+	}
 	if r.Claim != nil {
 		s.ClaimID = r.Claim.ID
 		s.ClaimHeld = r.Claim.ReleasedAt == nil

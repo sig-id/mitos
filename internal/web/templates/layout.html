@@ -1,93 +1,19 @@
 {{define "layout"}}<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{.Title}} · Mitos</title>
-<meta name="theme-color" content="#f7f8f4">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>{{.Title}} · Mitos</title>
 <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>
-<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/static/studio.css">
-<script src="/static/htmx.min.js" defer>
-</script>
-<script src="/static/studio.js" defer>
-</script>
-</head>
-<body hx-boost="true" hx-target="#shell" hx-select="#shell" hx-swap="outerHTML">
-<a class="skip" href="#main">Skip to content</a>
-<div id="shell" class="shell">
-<aside class="sidebar">
-<a class="brand" href="/" aria-label="Mitos overview">
-<span class="brandmark">
-<i>
-</i>
-<i>
-</i>
-<i>
-</i>
-</span>mitos<span class="studio-tag">STUDIO</span>
-</a>
-<div class="workspace-label">
-<span class="workspace-avatar">P</span>
-<div>Personal workspace<small>Local studio</small>
-</div>
-<span class="tiny-dot">
-</span>
-</div>
-<div class="nav-label">WORKSPACE</div>
-<nav aria-label="Main navigation">
-<a href="/workspace">{{icon "work"}}Agent workspace</a>
-<a href="/overview" class="{{if eq .Section "overview"}}selected{{end}}" {{if eq .Section "overview"}}aria-current="page"{{end}}>{{icon "overview"}}Overview</a>
-<a href="/work" class="{{if eq .Section "work"}}selected{{end}}" {{if eq .Section "work"}}aria-current="page"{{end}}>{{icon "work"}}Work{{if .Active}}<span class="nav-count">{{len .Active}}</span>{{end}}</a>
-<a href="/decisions" class="{{if eq .Section "decisions"}}selected{{end}}" {{if eq .Section "decisions"}}aria-current="page"{{end}}>{{icon "decision"}}Decisions{{if .Attention}}<span class="nav-count attention-count">{{len .Attention}}</span>{{end}}</a>
-<a href="/apps" class="{{if eq .Section "apps"}}selected{{end}}" {{if eq .Section "apps"}}aria-current="page"{{end}}>{{icon "apps"}}Applications</a>
-</nav>
-<div class="sidebar-bottom">
-<div class="quiet-note">{{icon "leaf"}}<p>A little less supervision.<br>A lot more room to think.</p>
-</div>
-<a class="server-link" href="/apps">
-<span class="tiny-dot">
-</span>Local execution<span>↗</span>
-</a>
-<div class="profile">
-<span class="avatar">Y</span>
-<div>Your studio<small>On your machine</small>
-</div>
-</div>
-</div>
-</aside>
-<div class="workspace-main">
-<header class="topbar">
-<div class="breadcrumb">Studio<span>/</span>
-<strong>{{.Title}}</strong>
-</div>
-<div class="topbar-right">{{if .Demo}}<span class="sample-label">Example history</span>{{end}}<span class="connection">
-<span class="tiny-dot">
-</span>Local</span>
-<span class="avatar small">Y</span>
-</div>
-</header>
-<main id="main" tabindex="-1">
-<div id="network-error" class="notice error" role="alert" hidden>Could not reach Studio. Check that the server is running, then try again.</div>
-<div id="live" {{if .Live}}hx-get="{{if eq .View "run"}}/runs/{{.Run.ID}}{{else if eq .View "work"}}/work?q={{.Query}}&amp;status={{.Filter}}{{else if eq .View "decisions"}}/decisions{{else}}/overview{{end}}" hx-trigger="every 3s" hx-select="#live" hx-target="this" hx-swap="outerHTML"{{end}}>
+<link rel="icon" href="/static/favicon.svg"><link rel="stylesheet" href="/static/operating.css"><link rel="stylesheet" href="/static/documents.css"><script src="/static/htmx.min.js" defer></script><script src="/static/studio.js" defer></script></head>
+<body class="os-document"><a class="skip" href="#main">Skip to content</a><div id="shell" class="os-shell">{{template "navigation" .Navigation}}
+<main id="main" tabindex="-1"><header class="document-header"><nav aria-label="Breadcrumb"><a href="/">Workspace</a><span>/</span>{{if .Navigation.ProjectID}}<a href="/projects/{{.Navigation.ProjectID}}">Project work</a>{{else if eq .Navigation.Section "system"}}<span>System</span>{{else if eq .Navigation.Section "apps"}}<a href="/apps">Applications</a>{{else if eq .Navigation.Section "inbox"}}<a href="/inbox">Inbox</a>{{else}}<a href="/work">Execution history</a>{{end}}</nav><span class="home-server">Home: {{.Navigation.Home.Name}} <span class="dot"></span></span></header>
+<div id="network-error" class="notice error" role="alert" hidden>Connection lost. Displayed state may be stale; reconnect before acting.</div>
+<div class="content document-content"><div id="live" {{if .Live}}hx-get="{{if eq .View "run"}}/runs/{{.Run.ID}}{{else if eq .View "work"}}/work?q={{.Query}}&amp;status={{.Filter}}{{else if eq .View "decisions"}}/decisions{{else}}/overview{{end}}" hx-trigger="every 3s" hx-select="#live" hx-target="this" hx-swap="outerHTML"{{end}}>
 {{if eq .View "overview"}}{{template "overview" .}}{{else if eq .View "work"}}{{template "work" .}}{{else if eq .View "tasks"}}{{template "tasks" .}}{{else if eq .View "custom-event"}}{{template "custom-event" .}}{{else if eq .View "service-lifecycle"}}{{template "service-lifecycle" .}}{{else if eq .View "services"}}{{template "services" .}}{{else if eq .View "decisions"}}{{template "decisions" .}}{{else if eq .View "apps"}}{{template "apps" .}}{{else if eq .View "application"}}{{template "application" .}}{{else if eq .View "new"}}{{template "new" .}}{{else if eq .View "run"}}{{template "run" .}}{{else if eq .View "autonomy"}}{{template "autonomy" .}}{{else if eq .View "report"}}{{template "report" .}}{{else}}<div class="page-heading">
 <div>
-<p class="eyebrow">LET’S GET THIS SORTED</p>
+
 <h1>{{.Title}}</h1>
 <p>{{.Error}}</p>
 </div>
 <a class="button" href="/work">Back to work {{icon "arrow"}}</a>
-</div>{{end}}
-</div>
-<footer class="page-footer">
-<span>Mitos Studio</span>
-<span>Intent in. Evidence out.</span>
-</footer>
-</main>
-</div>
-</div>
-</body>
-</html>{{end}}
+</div>{{end}}</div></div></main></div></body></html>{{end}}
 
 {{define "badge"}}<span class="badge {{.Status}}">
 <span class="status-dot">
@@ -126,7 +52,7 @@
 <p>{{.Decision.CostOfWrong.Detail}}</p>
 </div>
 </div>
-<form method="post" action="/runs/{{.ID}}/decisions/{{.Decision.ID}}" hx-disabled-elt="find button">
+<form hx-boost="true" method="post" action="/runs/{{.ID}}/decisions/{{.Decision.ID}}" hx-disabled-elt="find button">
 {{if eq .Decision.InputProfile "text"}}<label>Answer<textarea name="value" maxlength="1024" rows="3"></textarea></label>{{end}}
 <div class="decision-options">{{range .Decision.Options}}<button class="decision-option {{if .Recommended}}recommended{{end}}" name="choice" value="{{.ID}}">
 <span>

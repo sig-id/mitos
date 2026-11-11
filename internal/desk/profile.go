@@ -102,6 +102,7 @@ func sessionContext(p Project, role string) string {
 	} else {
 		text += "You are a Mitos worker. Complete your assigned task, report progress and evidence on the topic board, then use `desk broadcast --body MESSAGE` to notify the supervisor of completion or a blocker (include the topic ID). Raise blockers to your supervisor. Ask the supervisor for additional agents instead of spawning native CLI sub-agents. Never push or merge without satisfying the project rules.\n"
 	}
+	text += "Read `desk work --task \"$MITOS_TASK_ID\"` for the durable assignment, completion criteria, supervision inbox and current revision. Report findings with `desk report-work --task \"$MITOS_TASK_ID\" --revision N --body REPORT`. Reports do not establish accepted completion. When delegating, pass --criteria with the required evidence. Replacement must preserve the same task; do not invent new task identities to resume failed work.\n"
 	text += "For Codex, if CODEX_THREAD_ID is available in your tool environment, register it once with `desk link-session --native-session \"$CODEX_THREAD_ID\" \"$MITOS_SESSION_ID\"` so urgent context can reach this exact conversation.\n"
 	return text
 }

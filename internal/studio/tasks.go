@@ -18,6 +18,12 @@ type TaskHead struct {
 	Hash string `json:"hash"`
 }
 type Task struct {
+	ProjectID                 string                     `json:"project_id,omitempty"`
+	GoalID                    string                     `json:"goal_id,omitempty"`
+	ParentTaskID              string                     `json:"parent_task_id,omitempty"`
+	Criteria                  string                     `json:"criteria,omitempty"`
+	Revision                  int                        `json:"revision,omitempty"`
+	ResponsibilityID          string                     `json:"responsibility_id,omitempty"`
 	ServiceLifecycle          *ServiceLifecycleCause     `json:"service_lifecycle,omitempty"`
 	ServiceIngress            *ServiceIngress            `json:"service_ingress,omitempty"`
 	ServiceCycle              *ServiceCycleBinding       `json:"service_cycle,omitempty"`
@@ -170,7 +176,7 @@ func (s *Store) taskChange(id, kind string, c change, at time.Time, seq int64) (
 	} else {
 		request := r.Brief.Scheduling
 		request.Normalize()
-		task = Task{ID: r.TaskID, Tenant: runTenant(r), Source: "human", Brief: r.Brief, Scheduling: request, CreatedAt: r.CreatedAt, ReadyAt: r.CreatedAt, Sample: r.Sample, Runs: []string{}}
+		task = Task{ID: r.TaskID, ProjectID: r.Brief.ProjectID, Tenant: runTenant(r), Source: "human", Brief: r.Brief, Scheduling: request, CreatedAt: r.CreatedAt, ReadyAt: r.CreatedAt, Sample: r.Sample, Runs: []string{}}
 		if c.ServiceCall != nil {
 			task.ServiceLifecycle = c.ServiceCall.Lifecycle
 			task.ServiceIngress = c.ServiceCall.Ingress
@@ -302,7 +308,7 @@ func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 		t := s.tasks[id]
 		turns[t.Scheduling.Pool] = max(turns[t.Scheduling.Pool], t.LastScheduledSeq)
 		r := s.runs[t.CurrentRunID]
-		if r == nil || r.Status != "queued" || r.Sample || activeRuns[r.ID] {
+		if r == nil || r.ExecutionKind == "interactive" || r.Status != "queued" || r.Sample || activeRuns[r.ID] {
 			continue
 		}
 		if deadline := t.Scheduling.Deadline; deadline != nil && !time.Now().Before(*deadline) {

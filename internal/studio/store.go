@@ -21,6 +21,8 @@ import (
 )
 
 type Store struct {
+	deskState              json.RawMessage
+	home                   HomeServer
 	agentSessions          map[string]AgentSession
 	agentRequests          map[string]AgentRequest
 	agentAnswers           map[string]AgentAnswer
@@ -148,6 +150,13 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.Home != nil {
+		s.home = *c.Home
+		return nil
+	}
+	if c.DeskState != nil {
+		return s.applyDesk(e, c.DeskState)
 	}
 	if c.AgentSession != nil || c.AgentRequest != nil || c.AgentAnswer != nil {
 		if err := s.applyAgentEvent(e, c); err != nil {

@@ -19,7 +19,7 @@ func deskClient(args []string) error {
 		return attentionHook()
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos desk <profile|supervision|broadcast|inbox|acknowledge|release-notice|agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
+		fmt.Println("mitos desk <work|report-work|profile|supervision|broadcast|inbox|acknowledge|release-notice|agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
 		return nil
 	}
 	action := args[0]
@@ -36,6 +36,8 @@ func deskClient(args []string) error {
 	profileID := f.String("profile", "", "Named agent environment profile")
 	role := f.String("role", "agent", "Agent or coordinator role")
 	prompt := f.String("prompt", "", "Initial or follow-up prompt")
+	criteria := f.String("criteria", "", "Completion criteria for newly delegated work")
+	expectedRevision := f.Int("expected-revision", 0, "Expected task revision when assigning an executor")
 	goalID := f.String("goal", os.Getenv("MITOS_GOAL_ID"), "Fleet goal reference")
 	taskID := f.String("task", "", "Fleet task reference")
 	handoffTopic := f.String("handoff-topic", "", "Topic containing a handoff prompt")
@@ -110,6 +112,17 @@ func deskClient(args []string) error {
 		}
 		q := url.Values{"profile": {*profileID}, "project": {*project}}
 		path = "/api/agents/" + url.PathEscape(*agentID) + "?" + q.Encode()
+	case "work":
+		path = proj + "/work"
+		if *taskID != "" {
+			path += "?task=" + url.QueryEscape(*taskID)
+		}
+	case "report-work":
+		if *taskID == "" || *revision < 0 {
+			return errors.New("--task and --revision required; read desk work first")
+		}
+		path = proj + "/work/" + url.PathEscape(*taskID) + "/report"
+		payload = map[string]any{"revision": *revision, "session_id": *author, "body": *body}
 	case "sessions":
 		path = proj + "/sessions"
 	case "start-session":
@@ -117,7 +130,7 @@ func deskClient(args []string) error {
 			return errors.New("--agent required")
 		}
 		path = proj + "/sessions"
-		payload = map[string]any{"agent_id": *agentID, "profile_id": *profileID, "prompt": *prompt, "role": *role, "assignment": map[string]string{"goal_id": *goalID, "task_id": *taskID, "requested_by": *author, "handoff_topic_id": *handoffTopic}}
+		payload = map[string]any{"agent_id": *agentID, "profile_id": *profileID, "key": *key, "prompt": *prompt, "role": *role, "criteria": *criteria, "expected_revision": *expectedRevision, "assignment": map[string]string{"goal_id": *goalID, "task_id": *taskID, "requested_by": *author, "handoff_topic_id": *handoffTopic}}
 	case "resume-session", "fork-session", "handover-session", "link-session":
 		if f.NArg() != 1 {
 			return errors.New("provide a source session ID")

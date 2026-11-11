@@ -20,7 +20,16 @@ import (
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("operation conflicts with current state")
 
+// StateStore supplies the canonical journal in server deployments. Standalone
+// desk callers retain the legacy snapshot adapter for compatibility.
+type StateStore interface {
+	LoadDesk() ([]byte, error)
+	SaveDesk([]byte) error
+}
+
 type Manager struct {
+	storage       StateStore
+	committed     []byte
 	Agents        *agentcli.Registry
 	lock          *os.File
 	mu            sync.Mutex
@@ -37,7 +46,9 @@ type Manager struct {
 	outputChanged chan struct{}
 }
 
-func Open(dir, root string) (*Manager, error) {
+func Open(dir, root string) (*Manager, error) { return OpenStored(dir, root, nil) }
+
+func OpenStored(dir, root string, storage StateStore) (*Manager, error) {
 	var err error
 	dir, err = filepath.Abs(dir)
 	if err != nil {
@@ -68,13 +79,22 @@ func Open(dir, root string) (*Manager, error) {
 			_ = lock.Close()
 		}
 	}()
-	m := &Manager{dir: dir, root: root, state: state{Version: 1}, live: map[string]*terminal{}, jobs: map[string]*runningJob{}, drafts: map[string]context.CancelFunc{}, outputChanged: make(chan struct{})}
+	m := &Manager{storage: storage, dir: dir, root: root, state: state{Version: 1}, live: map[string]*terminal{}, jobs: map[string]*runningJob{}, drafts: map[string]context.CancelFunc{}, outputChanged: make(chan struct{})}
 	m.Agents, err = agentcli.Open(filepath.Join(filepath.Dir(dir), "agents.json"), os.Environ())
 	if err != nil {
 		return nil, err
 	}
 	m.lock = lock
-	b, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	var b []byte
+	if storage != nil {
+		b, err = storage.LoadDesk()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(b) == 0 {
+		b, err = os.ReadFile(filepath.Join(dir, "state.json"))
+	}
 	if err == nil {
 		if err = json.Unmarshal(b, &m.state); err != nil {
 			return nil, err
@@ -85,6 +105,7 @@ func Open(dir, root string) (*Manager, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	m.committed, _ = json.Marshal(m.state)
 	for i := range m.state.ProfileDrafts {
 		d := &m.state.ProfileDrafts[i]
 		if d.Status == "running" {
@@ -132,7 +153,22 @@ func (m *Manager) saveLocked() error {
 	if m.writeErr != nil {
 		return m.writeErr
 	}
+	m.refreshWorkLocked()
 	b, err := json.MarshalIndent(m.state, "", "  ")
+	if m.storage != nil {
+		if err == nil {
+			err = m.storage.SaveDesk(b)
+		}
+		if err != nil {
+			var restored state
+			_ = json.Unmarshal(m.committed, &restored)
+			m.state = restored
+		} else {
+			m.committed = append([]byte(nil), b...)
+		}
+		m.writeErr = err
+		return err
+	}
 	if err == nil {
 		var f *os.File
 		f, err = os.OpenFile(filepath.Join(m.dir, "state.next"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)

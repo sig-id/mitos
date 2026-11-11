@@ -7,7 +7,7 @@
   const status = document.createElement('span');
   status.className = 'sr-only'; status.setAttribute('role', 'status');
   document.body.append(status);
-  let anchor, restoreFocus, generation = 0;
+  let anchor, anchorBounds, restoreFocus, generation = 0;
   function close(restore = false) {
     generation++;
     menu.hidden = true;
@@ -46,7 +46,7 @@
     close,
     isOpen: () => !menu.hidden,
     async open(target, x, y, label, loadItems, restore) {
-      close(); anchor = target; restoreFocus = restore; const current = generation;
+      close(); anchor = target; anchorBounds = target.getBoundingClientRect(); restoreFocus = restore; const current = generation;
       if (anchor.matches('a')) anchor.setAttribute('aria-expanded','true'); menu.hidden = false;
       render([{label:'Loading actions…',disabled:true}],label,x,y);
       try {
@@ -76,7 +76,12 @@
   document.addEventListener('pointerdown', event => { if (!menu.hidden && !menu.contains(event.target)) close(); });
   document.addEventListener('contextmenu', event => { if (!event.target.closest('.project-context-target[data-project-id],.session-link') && !menu.contains(event.target)) close(); });
   document.addEventListener('scroll', event => {
-    if (!menu.hidden && (event.target === document || event.target.contains?.(anchor))) close();
+    if (!menu.hidden && (event.target === document || event.target.contains?.(anchor))) {
+      const current=anchor?.getBoundingClientRect();
+      // Focus can queue a scroll event before the keyboard menu opens. Only
+      // dismiss if its anchor actually moved after opening.
+      if (!anchor?.isConnected || !current || Math.abs(current.top-anchorBounds.top)>1 || Math.abs(current.left-anchorBounds.left)>1) close();
+    }
   }, true);
   window.addEventListener('resize', () => close(true));
   window.addEventListener('blur', () => close());

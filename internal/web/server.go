@@ -38,6 +38,8 @@ type Server struct {
 	demo          bool
 }
 type page struct {
+	Navigation                                             navigation
+	Attempts                                               []studio.Run
 	ServiceLifecycles                                      []studio.ServiceLifecycleView
 	ServiceLifecycle                                       *studio.ServiceLifecycleView
 	CustomEvents                                           []studio.CustomEventSummary
@@ -120,7 +122,8 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("GET /{$}", s.deskPage)
+	mux.HandleFunc("GET /{$}", s.operatingPage)
+	s.workspaceRoutes(mux)
 	mux.HandleFunc("GET /overview", s.overview)
 	s.deskRoutes(mux)
 	s.supervisionRoutes(mux)
@@ -272,6 +275,10 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		writeJSON(w, 202, rewind)
 	})
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if identity := r.Header.Get("X-Mitos-Server"); identity != "" && identity != s.engine.Store.Home().ID {
+			writeJSON(w, 409, map[string]string{"error": "This request belongs to a different home server. Reconnect to the original server."})
+			return
+		}
 		_, pattern := mux.Handler(r)
 		if r.Method == "POST" && pattern == "" && service.ValidWebhookPath(r.URL.Path) {
 			s.serviceWebhook(w, r)
@@ -311,7 +318,14 @@ func (s *Server) headers(next http.Handler) http.Handler {
 	})
 }
 func (s *Server) base(view, title, section string) page {
-	p := page{View: view, Title: title, Section: section, Apps: s.engine.Apps, Root: s.engine.Root, Date: time.Now().Format("Monday, 2 January"), Demo: s.demo}
+	p := page{Navigation: s.navigation(section, ""), View: view, Title: title, Section: section, Apps: s.engine.Apps, Root: s.engine.Root, Date: time.Now().Format("Monday, 2 January"), Demo: s.demo}
+	p.Navigation.View = view
+	switch view {
+	case "services", "service-lifecycle", "custom-event", "tasks", "overview", "autonomy":
+		p.Navigation.Section = "system"
+	case "decisions":
+		p.Navigation.Section = "inbox"
+	}
 	p.Pools = s.engine.Store.Pools()
 	p.Runs = s.engine.Store.List()
 	p.Total = len(p.Runs)
@@ -449,9 +463,19 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if run.ExecutionKind == "interactive" {
+		http.Redirect(w, r, "/projects/"+run.ProjectID+"?task="+run.TaskID, http.StatusSeeOther)
+		return
+	}
 	p := s.base("run", run.Brief.Title, "work")
 	p.Run = run
 	p.Task, _ = s.engine.Store.Task(run.TaskID)
+	p.Navigation.ProjectID = run.Brief.ProjectID
+	for _, id := range p.Task.Runs {
+		if attempt, err := s.engine.Store.Get(id); err == nil {
+			p.Attempts = append(p.Attempts, attempt)
+		}
+	}
 	p.Live = run.Active()
 	s.render(w, r, p, 200)
 }
@@ -461,8 +485,13 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if run.ExecutionKind == "interactive" {
+		http.Redirect(w, r, "/projects/"+run.ProjectID+"?task="+run.TaskID+"&tab=result", http.StatusSeeOther)
+		return
+	}
 	p := s.base("report", "Work report", "work")
 	p.Run = run
+	p.Navigation.ProjectID = run.Brief.ProjectID
 	p.Live = false
 	s.render(w, r, p, 200)
 }

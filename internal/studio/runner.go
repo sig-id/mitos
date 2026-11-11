@@ -44,8 +44,12 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{provider: &compute.Local{}, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	if err = s.ensureHome(); err != nil {
+		cancel()
+		return nil, err
+	}
 	// Load confirmed project workspaces before recovering or scheduling tasks.
-	e.Desk, err = desk.Open(filepath.Join(s.Dir(), "desk"), abs)
+	e.Desk, err = desk.OpenStored(filepath.Join(s.Dir(), "desk"), abs, s)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -61,6 +65,9 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	for _, r := range s.List() {
+		if r.ExecutionKind == "interactive" {
+			continue
+		}
 		if r.Status == "stopping" && !r.Sample {
 			if err = s.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "The server restarted after a stop request. Any already harvested evidence is preserved; no command was restarted."); err != nil {
 				cancel()
@@ -169,6 +176,16 @@ func (e *Engine) Launch(b Brief, parent string) (Run, error) {
 	return e.Store.Create(b, name, parent, false)
 }
 func (e *Engine) prepareBrief(b Brief) (Brief, string, error) {
+	if b.ProjectID != "" {
+		project, err := e.Desk.Project(b.ProjectID)
+		if err != nil {
+			return Brief{}, "", err
+		}
+		if b.Workspace != "" && b.Workspace != project.Directory {
+			return Brief{}, "", errors.New("workspace differs from the selected project")
+		}
+		b.Workspace = project.Directory
+	}
 	app, ok := e.App(b.AppID)
 	if !ok {
 		return Brief{}, "", errors.New("choose an installed application")
@@ -224,6 +241,9 @@ func (e *Engine) retry(id string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	if r.ExecutionKind == "interactive" {
+		return Run{}, errors.New("replace the executor through its durable task")
+	}
 	if r.Decision != nil && r.Decision.Source != nil {
 		return Run{}, ErrConflict
 	}
@@ -252,6 +272,9 @@ func (e *Engine) cancelWork(id, reason string) error {
 	r, err := e.Store.Get(id)
 	if err != nil {
 		return err
+	}
+	if r.ExecutionKind == "interactive" {
+		return e.Desk.Stop(r.SessionID)
 	}
 	if r.Decision != nil && r.Decision.Source != nil {
 		return e.Store.cancelAgentRun(id)
@@ -327,7 +350,7 @@ func (e *Engine) dispatch() {
 			}
 			for _, candidate := range runs {
 				r := candidate.Run
-				if r.Status != "queued" || r.Sample {
+				if r.Status != "queued" || r.Sample || r.ExecutionKind == "interactive" {
 					continue
 				}
 				e.mu.Lock()

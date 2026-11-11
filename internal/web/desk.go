@@ -14,6 +14,7 @@ import (
 )
 
 type deskPage struct {
+	Navigation  navigation
 	Projects    []desk.Project
 	Project     desk.Project
 	Sessions    []desk.Session
@@ -58,6 +59,7 @@ func (s *Server) deskPage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("view") == "terminal" {
 		p.Supervising = false
 	}
+	p.Navigation = s.navigation("project", p.Project.ID)
 	var b bytes.Buffer
 	if err := s.templates.ExecuteTemplate(&b, "desk", p); err != nil {
 		http.Error(w, err.Error(), 500)

@@ -103,3 +103,27 @@ versioned migration receipt before irreversible format changes. Unmappable histo
 remains unresolved or unbound; it MUST NOT gain fabricated lineage. Read APIs MUST
 bound output and provide stable cursors where applicable. Acceptance gates belong
 to [delivery and conformance](06_DELIVERY_AND_CONFORMANCE.md).
+
+The current local project surface provides `/api/server` (stable identity, protocol,
+capabilities), `/api/workspace-home` (aggregate status and decisions), and
+`/api/projects/{project}/work` (paged tasks, goals, supervision, and execution metadata).
+A selected `task` includes its report history and up to 200 attempts; current attempts
+for the visible task page remain available. Terminal bytes use their existing stream.
+
+`POST .../work` creates an assignment using a request key and payload digest.
+The existing project session endpoint accepts a task assignment, launch key, and
+expected revision. `POST .../work/{task}/{report|accept|cancel}` checks task revision;
+reports additionally bind the current session, and acceptance checks the saved report
+digest and criteria revision. Accepted/cancelled work is closed. Acceptance waits for
+executor settlement and closed children and records the local operator's review.
+Its scope is the frozen report, not independent verification of workspace changes.
+Attempt readers identify this as `human_report_review`; shared journal records are
+referenced by sequence/hash instead of copying project-wide payloads into each attempt.
+
+`POST .../responsibilities/{id}/messages` saves bounded supervision notes; it does
+not claim delivery, acknowledgment, or application. The HTTP-backed CLI exposes
+`desk work --task ID` and `desk report-work --task ID --revision N --body TEXT`.
+`X-Mitos-Server`, when supplied, must match the home identity. This local routing
+check is not pairing or authentication. Capability discovery explicitly marks
+remote placement, confinement, process reattachment, and durable control application
+unavailable. Existing local session and batch endpoints remain supported.

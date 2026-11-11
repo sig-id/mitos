@@ -7,18 +7,34 @@ section is descriptive; it does not establish conformance to the full target.
 ## Current baseline
 
 As reviewed on 2026-11-11, Mitos is a local Go server with a browser workspace and
-HTTP-backed CLI. The implementation has useful but separate execution paths:
+HTTP-backed CLI. Interactive metadata and batch state now share the canonical
+journal; their execution adapters still have different admission and scheduling paths:
 
 | Area | Existing foundation | Material limit |
 |---|---|---|
-| Interactive work | Native CLI agents, PTYs, projects, supervision links, topics, resume/fork/handover, retained output | Session state and lifecycle remain separate from batch tasks; prompt instructions are not enforcement. |
+| Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general coordinator fencing remain incomplete. |
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
 | Recovery | Journal replay, retained artifacts and output, interruption holds, explicit inspection before replacement | Server restart interrupts active local execution; general surviving-process reattachment and unified receipts remain target work. |
 
-Batch state uses the `.mitos` journal; interactive metadata uses the desk state
-store. Neither their existence nor historical passing tests proves a unified
+The first startup imports legacy desk metadata into a versioned journal record,
+retains its original file as backup, and leaves historical unbound sessions unbound.
+New assigned sessions have stable Task IDs and distinct Run/Process/Session IDs;
+replacement retains assignment, criteria, report history, and supervisory inbox.
+Request keys deduplicate assignment creation and launch admission with payload
+checks. Failed persistence restores the published desk state and blocks further
+mutations. This is not a process-host launch receipt or a general mutation protocol.
+
+The browser starts at Projects and provides Work, Services, Resources, Inbox, and
+Connections views. Project work reads are paginated and terminal output streams only
+for the opened session. The local server identity is durable; wrong-server mutation
+headers are refused. Independent-server aggregation and pairing are not implemented.
+
+The journal currently stores bounded workspace metadata snapshots. Session/history
+limits and the metadata byte limit refuse further writes while preserving existing
+records; archival and large-fleet performance remain work. These changes establish
+parts of M1 and foundations for M2/M3, not completion of those gates or a fully unified
 runtime. The local provider's unattended grant remains zero. Broad remote placement,
 hard confinement, general coordinator fencing, and unknown-effect reconciliation
 MUST NOT be advertised as complete without the gates below.

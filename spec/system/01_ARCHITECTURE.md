@@ -122,3 +122,10 @@ Mitos retains Go and its canonical journal. Storage replacement, replicated writ
 commercial settlement, and automatic failover require separate decisions. Details
 of admission and recovery belong to [runtime](02_RUNTIME.md); connection security,
 client protocols, and adapters belong to [interfaces](05_INTERFACES_AND_INTEGRATIONS.md).
+
+The local migration uses the canonical Store writer for both batch events and
+versioned workspace metadata. A legacy desk snapshot is imported once and retained
+as backup; journal replay becomes authoritative. Common Task/Run projections expose
+new interactive bindings without manufacturing bindings for old sessions. Execution
+adapters remain distinct during this cutover. This staging does not relax the common
+admission, accounting, or enforcement target; delivery gates remain authoritative.

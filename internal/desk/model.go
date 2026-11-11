@@ -15,6 +15,11 @@ type Project struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 type Session struct {
+	TaskID             string               `json:"task_id,omitempty"`
+	AttemptID          string               `json:"attempt_id,omitempty"`
+	ProcessID          string               `json:"process_id,omitempty"`
+	ResponsibilityID   string               `json:"responsibility_id,omitempty"`
+	Generation         int                  `json:"generation,omitempty"`
 	SetupDraftID       string               `json:"setup_draft_id,omitempty"`
 	SupervisorID       string               `json:"supervisor_id,omitempty"`
 	Workspace          string               `json:"workspace,omitempty"`
@@ -73,13 +78,17 @@ type Job struct {
 	Detail    string     `json:"detail"`
 }
 type state struct {
-	ProfileDrafts []ProfileDraft `json:"profile_drafts,omitempty"`
-	Notices       []Notice       `json:"notices,omitempty"`
-	Version       int            `json:"version"`
-	Projects      []Project      `json:"projects"`
-	Sessions      []Session      `json:"sessions"`
-	Topics        []Topic        `json:"topics"`
-	Jobs          []Job          `json:"jobs"`
+	Work             []WorkAssignment `json:"work,omitempty"`
+	Goals            []Goal           `json:"goals,omitempty"`
+	Responsibilities []Responsibility `json:"responsibilities,omitempty"`
+	WorkReceipts     []WorkReceipt    `json:"work_receipts,omitempty"`
+	ProfileDrafts    []ProfileDraft   `json:"profile_drafts,omitempty"`
+	Notices          []Notice         `json:"notices,omitempty"`
+	Version          int              `json:"version"`
+	Projects         []Project        `json:"projects"`
+	Sessions         []Session        `json:"sessions"`
+	Topics           []Topic          `json:"topics"`
+	Jobs             []Job            `json:"jobs"`
 }
 type Output struct {
 	Data   []byte `json:"data"` // JSON base64 preserves arbitrary terminal bytes.

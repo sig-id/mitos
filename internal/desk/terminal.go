@@ -49,6 +49,12 @@ func (m *Manager) StartAgent(project string, request agentcli.Request, serverURL
 	return m.startAgentLocked(p, request, installation, serverURL, "")
 }
 func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installation agentcli.Installation, serverURL, draftID string) (Session, error) {
+	if request.Key != "" {
+		if prior, found, err := m.launchReceiptLocked(p.ID, request); err != nil || found {
+			return prior, err
+		}
+	}
+	requestForReceipt := request
 	originalPrompt := request.Prompt
 	if (installation.Kind == "agent" || request.Role == "coordinator") && strings.TrimSpace(originalPrompt) == "" {
 		return Session{}, errors.New("provide a goal before starting an agent; use project setup to draft context first")
@@ -58,6 +64,13 @@ func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installa
 	}
 	if installation.Kind == "agent" && installation.Capabilities.InitialPrompt {
 		request.Prompt = sessionContext(p, request.Role) + "\nOperator objective:\n" + originalPrompt
+	}
+	if request.Assignment != nil && request.Assignment.TaskID != "" && m.storage != nil {
+		task, err := m.workLocked(request.Assignment.TaskID)
+		if err != nil || task.ProjectID != p.ID {
+			return Session{}, errors.New("task must belong to this project")
+		}
+		request.Prompt += fmt.Sprintf("\nDurable task: %s (revision %d)\nAssignment: %s\nCompletion criteria (revision %d): %s\nRead desk work for current supervision messages and previously submitted evidence. A report is not accepted completion.\n", task.ID, task.Revision, task.Intent, task.CriteriaRevision, task.Criteria)
 	}
 	launch, err := m.Agents.Prepare(request)
 	if err != nil {
@@ -79,7 +92,7 @@ func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installa
 		name = "Project supervisor"
 		pending = false
 	}
-	return m.startLocked(p.ID, name, role, launch.AgentName, serverURL, launch, startOptions{DraftID: draftID, NamePending: pending, Assignment: request.Assignment, Prompt: originalPrompt})
+	return m.startLocked(p.ID, name, role, launch.AgentName, serverURL, launch, startOptions{DraftID: draftID, NamePending: pending, Assignment: request.Assignment, Prompt: originalPrompt, Request: &requestForReceipt})
 }
 
 func promptTitle(prompt string) string {
@@ -99,6 +112,7 @@ func promptTitle(prompt string) string {
 }
 
 type startOptions struct {
+	Request      *agentcli.Request
 	DraftID      string
 	ID           string
 	NamePending  bool
@@ -180,6 +194,10 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	if err := m.prepareSessionContextLocked(p, &s, &launch); err != nil {
 		return Session{}, err
 	}
+	if err := m.bindWorkLocked(p, &s, options); err != nil {
+		return Session{}, err
+	}
+	assignment = s.Assignment
 	m.state.Sessions = append(m.state.Sessions, s)
 	for i := range m.state.Notices {
 		n := &m.state.Notices[i]
@@ -210,9 +228,12 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	if assignment != nil {
 		cmd.Env = append(cmd.Env, "MITOS_GOAL_ID="+assignment.GoalID, "MITOS_TASK_ID="+assignment.TaskID, "MITOS_REQUESTED_BY="+assignment.RequestedBy, "MITOS_HANDOFF_TOPIC_ID="+assignment.HandoffTopicID)
 	}
+	if s.TaskID != "" {
+		cmd.Env = append(cmd.Env, "MITOS_ATTEMPT_ID="+s.AttemptID, "MITOS_PROCESS_ID="+s.ProcessID, "MITOS_RESPONSIBILITY_ID="+s.ResponsibilityID)
+	}
 	instructions := filepath.Join(m.dir, s.ID+".md")
 	text := fmt.Sprintf("# Mitos project %s\n\nRole: %s. Working directory: %s.\nUse mitos desk topics to discover relevant topics; read details with mitos desk topic ID.\nUse mitos desk post --topic ID --revision N --body TEXT, follow --topic ID, and jobs.\nUse mitos desk build -- ARGS for a coordinated Cargo build. Builds serialize; joining is explicit with mitos desk join JOB_ID. A joined result does not automatically validate your later edits.\nUse mitos desk resources to inspect the shared directory and current process activity.\nCoordinate shared-file and Git changes through topics. CLI commands outside managed jobs are cooperative and are not intercepted.\nThe coordinator maintains the plan, publishes topic summaries, and asks the operator for choices outside the brief. It has no additional runtime permissions.\n", p.Name, role, s.Workspace)
-	text += "\nFleet tools: mitos desk agents, inspect-agent --agent ID, sessions, start-session --agent ID --prompt TEXT, send-prompt --prompt TEXT SESSION_ID, and stop-session SESSION_ID. Use --goal ID --task ID --handoff-topic TOPIC_ID on start-session to retain assignment lineage. Native CLI sub-agents are separate from Mitos sessions.\nUse the topic board to report completion with evidence, blockers, or requests for more agents. Before handing off, write your own continuation prompt in a topic: objective, current state, evidence, remaining work, and relevant files. Pass that topic to the next session; a topic reference does not inject its content automatically.\nUse mitos desk resume-session, fork-session, and handover-session with --mode native or context. Use --handoff-topic ID to snapshot your handoff notes. A handover starts the replacement then stops the source; a fork leaves the source running. Read MITOS_HANDOVER when present. Record your exact native conversation ID with mitos desk link-session --native-session ID SESSION_ID when it is not already recorded.\nMitos currently supplies fleet tools, not an autonomous scheduler. Terminal prompts are input bytes and are not proof that an agent accepted a direction.\n"
+	text += "\nFleet tools: mitos desk agents, inspect-agent --agent ID, sessions, start-session --agent ID --prompt TEXT, send-prompt --prompt TEXT SESSION_ID, and stop-session SESSION_ID. Use --goal ID --task ID --handoff-topic TOPIC_ID on start-session to retain assignment lineage. Native CLI sub-agents are separate from Mitos sessions.\nUse the topic board to report completion with evidence, blockers, or requests for more agents. Before handing off, write your own continuation prompt in a topic: objective, current state, evidence, remaining work, and relevant files. Pass that topic to the next session; a topic reference does not inject its content automatically.\nUse mitos desk resume-session, fork-session, and handover-session with --mode native or context. Use --handoff-topic ID to snapshot your handoff notes. A task-bound handover stops and settles the source before starting its replacement; legacy unbound handovers start the replacement first. A fork leaves the source running. Read MITOS_HANDOVER when present. Record your exact native conversation ID with mitos desk link-session --native-session ID SESSION_ID when it is not already recorded.\nMitos currently supplies fleet tools, not an autonomous scheduler. Terminal prompts are input bytes and are not proof that an agent accepted a direction.\n"
 	text = sessionContext(p, role) + "\nActual session workspace: " + s.Workspace + "\nSupervisor: " + s.SupervisorID + "\n\n" + text
 	if err = os.WriteFile(instructions, []byte(text), 0600); err != nil {
 		return m.startFailedLocked(s.ID, err)

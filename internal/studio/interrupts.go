@@ -241,6 +241,19 @@ func readInterruptLog(path string) ([]Run, int, error) {
 			if err = json.Unmarshal(event.Data, &c); err != nil {
 				return nil, 0, err
 			}
+			if c.Home != nil {
+				if event.RunID != "" || event.Kind != "home_server_created" || c.Home.ID == "" {
+					return nil, 0, errors.New("invalid home server record")
+				}
+				continue
+			}
+			if c.DeskState != nil {
+				projection := &Store{runs: runs}
+				if err = projection.applyDesk(event, c.DeskState); err != nil {
+					return nil, 0, err
+				}
+				continue
+			}
 			if c.ServiceLifecycle != nil {
 				if err = validateServiceLifecycle(event, c); err != nil {
 					return nil, 0, err

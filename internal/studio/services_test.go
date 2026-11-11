@@ -21,11 +21,12 @@ func TestServiceCatalogPreviewRevisionAndAtomicTriggerReplay(t *testing.T) {
 	apps, _ := LoadApps("")
 	e, s := testEngine(t, t.TempDir(), apps)
 	e.Close() // Keep queued receipts stable while testing concurrent trigger intake.
+	initialSeq := s.seq
 	c := serviceCatalog(e.Root)
 	if _, err := e.PreviewServices(c); err != nil {
 		t.Fatal(err)
 	}
-	if s.seq != 0 || len(s.Tasks()) != 0 {
+	if s.seq != initialSeq || len(s.Tasks()) != 0 {
 		t.Fatal("preview wrote state")
 	}
 	view, err := e.ConfigureServices(c, 0)
@@ -33,7 +34,7 @@ func TestServiceCatalogPreviewRevisionAndAtomicTriggerReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := view.Catalog.Revision
-	if revision != 1 {
+	if revision != initialSeq+1 {
 		t.Fatal("catalog revision is not its event sequence")
 	}
 	c.Work["inventory"] = Brief{}
@@ -138,13 +139,14 @@ func TestServicesRejectInvalidBindingsWithoutEvents(t *testing.T) {
 		func(c *ServiceCatalog) { c.Config.Units[0].Trigger = "interval" },
 		func(c *ServiceCatalog) { c.Config.Units[0].ConflictsWith = []string{"inventory"} },
 	}
+	initialSeq := s.seq
 	for _, mutate := range cases {
 		c := serviceCatalog(e.Root)
 		mutate(&c)
 		if _, err := e.ConfigureServices(c, 0); err == nil {
 			t.Fatal("invalid catalog accepted")
 		}
-		if s.seq != 0 {
+		if s.seq != initialSeq {
 			t.Fatal("refused catalog wrote event")
 		}
 	}
@@ -156,7 +158,7 @@ func TestServicesRejectInvalidBindingsWithoutEvents(t *testing.T) {
 			t.Fatal("invalid trigger key accepted")
 		}
 	}
-	if s.seq != 1 {
+	if s.seq != initialSeq+1 {
 		t.Fatal("refused call wrote event")
 	}
 }

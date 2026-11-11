@@ -114,3 +114,5 @@ body{font-size:.9375rem;line-height:1.5}
 
 .saved-terminal{height:100%;margin:0;padding:0 12px 0 0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;font:15px/1.5 "Liberation Mono",Consolas,monospace;color:#d8dee9;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:8}
 .saved-terminal:focus-visible{outline:1px solid var(--accent);outline-offset:-1px}
+
+.work-home{display:block;padding:10px;color:var(--accent);font-size:15px}.work-binding{display:flex;gap:15px;justify-content:space-between;padding:10px 18px;border-bottom:1px solid var(--line);font-size:14px;flex:none}.work-binding a{color:var(--accent)}.work-binding span{color:var(--muted)}

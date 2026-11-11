@@ -28,3 +28,17 @@ After `go build -o bin/mitos ./cmd/mitos`, run `npm run test:sessions --prefix t
 view against a temporary Git repository, including syntax and intraline colors,
 line alignment, added/deleted/renamed/binary files, quoted paths, missing final
 newlines, mobile layout, and bounded output truncation.
+
+`npm run test:operating --prefix tools/terminal-eval` covers project creation,
+reviewed launch, durable task/attempt bindings, supervision notes, replacement,
+stale-report refusal, human report acceptance, service activation, mobile layout,
+disconnection, wrong-server routing, and restart continuity. It uses temporary data
+and local process fixtures. `MITOS_BIN` selects a separately built server binary;
+`MITOS_SCREENSHOT_DIR` optionally saves desktop and mobile screenshots.
+
+`npm run test:pages --prefix tools/terminal-eval` audits all HTML page families at
+desktop and mobile widths against an isolated demo. It checks shared navigation,
+assets, scroll containment, cross-page script loading, application launch, report
+and artifact access, service controls, and decision resolution. It makes no model
+calls and does not mutate the running demo. Set `MITOS_SCREENSHOT_DIR` to retain
+the page screenshots.

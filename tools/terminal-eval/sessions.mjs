@@ -15,7 +15,7 @@ await writeFile(fixture,'printf "ARG:%s\\n" "$@"\nif test -n "$MITOS_HANDOVER"; 
 await writeFile(path.join(data,'agents.json'),JSON.stringify({applications:['source-test','target-test'].map(id=>({id,name:id,kind:'agent',executables:[bash],args:[fixture],prompt:'positional',session_protocol:'claude'}))}));
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));
 const base=`http://127.0.0.1:${port}`;
-const server=spawn(path.join(root,'bin/mitos'),['serve','--addr',`127.0.0.1:${port}`,'--data',data,'--workspace-root',temporary],{cwd:root,stdio:['ignore','ignore','pipe']});
+const server=spawn(process.env.MITOS_BIN||path.join(root,'bin/mitos'),['serve','--addr',`127.0.0.1:${port}`,'--data',data,'--workspace-root',temporary],{cwd:root,stdio:['ignore','ignore','pipe']});
 let log='',startError;server.stderr.on('data',b=>log=(log+b).slice(-8000));server.on('error',e=>startError=e);
 const exited=new Promise(resolve=>{server.once('exit',resolve);server.once('error',resolve)});
 const api=async(p,body)=>{const r=await fetch(base+p,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const text=await r.text();assert.equal(r.status,200,text);return JSON.parse(text)};

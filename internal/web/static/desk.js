@@ -430,6 +430,8 @@
     if (['changes','resources'].includes(b.dataset.tab)) inspect().catch(error); else if(b.dataset.tab==='terminal') { window.dispatchEvent(new Event('resize')); if (focusTerminal) focusTerminal(); }
   }));
   let topicID='', topicRevision=0, topicCursor=0, topicsSignature='', jobsSignature='';
+  const initialView=new URLSearchParams(location.search).get('view');
+  if(['changes','resources'].includes(initialView))document.querySelector(`[data-tab=${initialView}]`)?.click();
   async function topics() {
     const query=new URLSearchParams({q:$('topic-search').value}); if ($('followed-only').checked) query.set('follower','operator');
     const values=await api(projectAPI(`topics?${query}`)), signature=JSON.stringify(values); if (signature===topicsSignature) return; topicsSignature=signature;

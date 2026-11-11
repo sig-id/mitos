@@ -6,9 +6,9 @@
 <h1>{{.Run.Brief.Title}}</h1>
 <p>{{.Run.AppName}} <span class="separator">/</span> Started {{when .Run.CreatedAt}}</p>
 </div>
-<div class="actions">{{if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
+<div class="actions">{{if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form hx-boost="true" action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "retry"}}Run again</button>
-</form>{{else}}<form action="/runs/{{.Run.ID}}/cancel" method="post" hx-disabled-elt="find button">
+</form>{{else}}<form hx-boost="true" action="/runs/{{.Run.ID}}/cancel" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "stop"}}Stop work</button>
 </form>{{end}}<a class="button primary" href="/runs/{{.Run.ID}}/report">Open report {{icon "arrow"}}</a>
 </div>
@@ -23,7 +23,7 @@
 {{if .Task.ContinuousEpoch}}<p class="notice">This task belongs to a continuous service. While enabled, the service replaces stopped or finished tasks after its restart delay. <a href="/services">Disable the service</a> to stop its managed work.</p>{{end}}
 {{if and .Run.Decision (eq .Run.Status "parked") (eq .Run.Decision.Choice "")}}<div class="run-decision">{{template "decisioncard" .Run}}</div>{{end}}
 {{if and .Run.ClaimConflicts (eq .Run.Status "queued")}}<section class="panel padded"><h2>Waiting for shared work</h2><p>This work will start when the conflicting claims are released.</p><ul>{{range .Run.ClaimConflicts}}<li><a class="text-link" href="/runs/{{.RunID}}">{{.Kind}}: {{.Resource}}</a></li>{{end}}</ul></section>{{end}}
-{{if .Run.Claim}}{{if and (not .Run.Claim.ReleasedAt) (or (eq .Run.Status "parked") .Run.Terminal)}}<section class="panel padded"><h2>Previous execution needs inspection</h2><p>Its ownership and resource claims are still held. Inspect the previous processes and stop them before releasing these claims.</p><form action="/runs/{{.Run.ID}}/claims/release" method="post" hx-disabled-elt="find button"><input type="hidden" name="confirmed_stopped" value="true"><button class="button" type="submit">I inspected and stopped the previous processes</button></form></section>{{end}}{{end}}
+{{if .Run.Claim}}{{if and (not .Run.Claim.ReleasedAt) (or (eq .Run.Status "parked") .Run.Terminal)}}<section class="panel padded"><h2>Previous execution needs inspection</h2><p>Its ownership and resource claims are still held. Inspect the previous processes and stop them before releasing these claims.</p><form hx-boost="true" action="/runs/{{.Run.ID}}/claims/release" method="post" hx-disabled-elt="find button"><input type="hidden" name="confirmed_stopped" value="true"><button class="button" type="submit">I inspected and stopped the previous processes</button></form></section>{{end}}{{end}}
 <div class="outcome-strip {{.Run.Status}}">
 <span class="outcome-icon">{{if .Run.Verified}}{{icon "check"}}{{else if eq .Run.Status "failed"}}{{icon "decision"}}{{else}}{{icon "work"}}{{end}}</span>
 <div>
@@ -31,27 +31,9 @@
 <p>{{.Run.Summary}}</p>
 </div>{{if .Run.Verified}}<span class="pill">Acceptance passed</span>{{end}}</div>
 <div class="detail-grid">
-<section class="panel">
-<div class="section-heading">
-<div>
-<p class="eyebrow">THE EXECUTION RECORD</p>
-<h2>What happened</h2>
-</div>
-<span class="pill">{{len .Run.Events}} events</span>
-</div>
-<ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
-<span class="timeline-dot">{{if eq .Type "decision"}}{{icon "arrow"}}{{else}}{{icon "check"}}{{end}}</span>
-<div>
-<div class="timeline-heading">
-<strong>{{eventTitle .Kind}}</strong>
-<time>{{when .At}}</time>
-</div>{{if eventSummary .}}<p>{{eventSummary .}}</p>{{end}}<span class="event-kind">{{.Type}} · {{.Seq}}</span>
-</div>
-</li>{{end}}</ol>
-</section>
-<aside class="run-aside">
+<section>
 <section class="panel padded">
-<p class="eyebrow">THE BRIEF</p>
+<p class="eyebrow">Assignment</p>
 {{if .Task.ID}}<p>Task {{.Task.Status}} · <a class="text-link" href="/tasks">{{.Task.Scheduling.Pool}} pool</a></p>{{end}}
 <a class="text-link" href="/api/runs/{{.Run.ID}}/evidence" hx-boost="false">Structured fleet evidence</a>
 <h3>{{.Run.Brief.Title}}</h3>
@@ -79,12 +61,25 @@
 </dd>
 </div>{{end}}</dl>
 </section>
+<details class="execution-fold" id="execution-activity"><summary>Activity · {{len .Run.Events}} events</summary><ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
+<span class="timeline-dot">{{if eq .Type "decision"}}{{icon "arrow"}}{{else}}{{icon "check"}}{{end}}</span>
+<div>
+<div class="timeline-heading">
+<strong>{{eventTitle .Kind}}</strong>
+<time>{{when .At}}</time>
+</div>{{if eventSummary .}}<p>{{eventSummary .}}</p>{{end}}<span class="event-kind">{{.Type}} · {{.Seq}}</span>
+</div>
+</li>{{end}}</ol></details>
+<details class="execution-fold" id="execution-attempts"><summary>Attempts · {{len .Attempts}}</summary>{{range .Attempts}}<a class="artifact" href="/runs/{{.ID}}"><div><strong>{{.AppName}}</strong><p>{{.Stage}} · {{when .CreatedAt}}</p><span class="mono">{{.ID}}{{if eq $.Run.ID .ID}} · Current view{{end}}</span></div>{{template "badge" .}}</a>{{end}}</details>
+</section>
+<aside class="run-aside">
+
 {{if .Run.Checkpoints}}<section class="panel padded">
 <p class="eyebrow">RECOVERY POINTS</p>
 {{range .Run.Checkpoints}}<div class="artifact"><div><strong>{{if eq .SegmentNumber 0}}Initial workspace{{else}}Segment {{.SegmentNumber}}{{end}}</strong><p>{{if .Invalidated}}Superseded by recovery{{else if .Green}}Predicate passed{{else}}Predicate {{.Predicate.Verdict}}{{end}}</p><span class="mono">{{short .WorkspaceCommit}}</span></div></div>{{end}}
 </section>{{end}}
 <section class="panel padded">
-<p class="eyebrow">DELIVERABLES</p>{{template "artifacts" .Run}}</section>
+<p class="eyebrow">Artifacts</p>{{template "artifacts" .Run}}</section>
 </aside>
 </div>{{end}}
 
@@ -100,22 +95,14 @@
 </div>
 <article class="report">
 <header class="report-header">
-<div class="report-brand">
-<span class="brandmark">
-<i>
-</i>
-<i>
-</i>
-<i>
-</i>
-</span>mitos</div>
+
 <div class="title-badges">{{template "badge" .Run}}{{if .Run.Sample}}<span class="sample-label">Illustrative example</span>{{end}}</div>
 <h1>{{.Run.Brief.Title}}</h1>
 <p>{{.Run.AppName}} · {{when .Run.CreatedAt}}</p>
 </header>
 <div class="report-summary">
-<p class="eyebrow">THE OUTCOME</p>
-<h2>{{if .Run.Verified}}A result, with evidence.{{else if .Run.Active}}The result is still taking shape.{{else}}A record worth keeping.{{end}}</h2>
+
+<h2>{{if .Run.Verified}}Verified result{{else if .Run.Active}}Execution in progress{{else}}Execution result{{end}}</h2>
 <p>{{.Run.Summary}}</p>
 </div>
 <div class="report-stats">
@@ -133,10 +120,10 @@
 </div>
 </div>
 <section class="report-section">
-<p class="eyebrow">TAKE THE WORK WITH YOU</p>
+
 <h2>Deliverables</h2>{{template "artifacts" .Run}}</section>
 <section class="report-section">
-<p class="eyebrow">WHAT WAS ASKED</p>
+<h2>Assignment</h2>
 <p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}{{.Run.Brief.Title}}{{end}}</p>
 <p class="field-help">Workspace: <code>{{.Run.Brief.Workspace}}</code>
 </p>

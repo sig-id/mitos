@@ -11,8 +11,9 @@ market, and intended experience. The [specification guide](spec/README.md) expla
 current behavior from remaining work.
 
 Today Mitos provides a local Go server, browser workspace, and CLI. Interactive
-agent sessions and durable batch tasks are useful foundations with separate stores
-and lifecycles; their unification is still planned.
+assignments and batch tasks share a canonical journal and Task/Run readers. Native
+process execution and batch scheduling still have distinct adapters; enforced
+resource accounting and remote placement remain delivery targets.
 
 ## Start
 
@@ -44,15 +45,25 @@ between client access, server ownership, and execution placement.
 
 ## Use the workspace
 
-Open a project directory, choose an installed agent, and select **Analyze project**.
-Review the proposed context and goal, then **Start supervisor**. Analysis produces
-a draft; it does not itself change the saved profile or start working sessions.
-The supervisor delegates to real managed agents with recorded relationships.
+Open a project directory from **Projects**, then choose **New work**. Define the
+outcome, assignment, completion criteria, and execution: one worker or a supervisor
+with delegated work. Review the assignment before starting its executor.
 
-You can also **Add agent** directly. Interactive agents use native CLI configuration.
-Terminals support input, resize, scrollback, interrupt, and stop. The session menu
-provides supported resume, fork, and handover operations. Topics support discussion
-and discovery; they do not confer execution authority.
+**Work** shows goals, tasks, and a persistent supervision inbox. Select a task to
+inspect its assignment, reports, and attempts, or open its native session. Stopping
+an executor leaves its task open; **Replace executor** keeps the task and creates
+a new attempt. Submitted reports require an explicit human review. That acceptance
+covers the saved report, not unverified repository changes.
+
+**Services** activates project applications on request or on an interval. **Resources**
+shows workspace and execution information. **Inbox** collects pending report reviews,
+process inspections, and batch decisions. **Connections** shows the local server's
+identity and actual capabilities.
+
+**Context & setup** retains project analysis and profile editing. Terminals retain
+input, resize, scrollback, interrupt, stop, resume, fork, and handover. Earlier
+sessions without task bindings remain accessible as saved history. Topics support
+discussion and discovery; they do not confer execution authority.
 
 For batch work, open **Task history → New work → Workspace inventory** and select
 a local directory. This example copies eligible files, inventories their hashes,
@@ -103,8 +114,10 @@ The CLI connects to the running server:
 ./bin/mitos interrupts
 ```
 
-Batch history is reconstructed from `.mitos/events.jsonl`; interactive metadata has
-its own desk state store. Keep backups of the complete data directory. Interrupted
+Work and interactive metadata are reconstructed from `.mitos/events.jsonl`. On first
+startup with this model, the server imports `desk/state.json` and retains that file
+as the pre-migration backup; it is no longer updated. Keep backups of the complete
+data directory, including terminal output and batch artifacts. Interrupted
 work retains output, partial changes, and recovery decisions. A retry gets a new
 Run ID under the same Task. Silence does not authorize a pending local decision.
 
@@ -123,7 +136,7 @@ it is not the full remote-client contract. See
 | Path | Contents |
 |---|---|
 | `cmd/mitos/` | Server and HTTP-backed CLI |
-| `internal/studio/` | Batch state, applications, and execution |
+| `internal/studio/` | Canonical journal, common work readers, applications, and batch execution |
 | `internal/desk/` | Interactive projects, PTY sessions, topics, and builds |
 | `internal/compute/`, `internal/workpool/` | Providers, admission, scheduling, and dependencies |
 | `internal/workspace/`, `internal/acceptance/` | Snapshots, artifacts, and verification |
