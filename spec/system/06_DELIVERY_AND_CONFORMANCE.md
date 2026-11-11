@@ -15,8 +15,8 @@ journal; their execution adapters still have different admission and scheduling 
 | Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general coordinator fencing remain incomplete. |
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
-| Adaptive graphs | Task/attempt identities, dependency witnesses, canonical journal, and separate execution adapters | No `work-graph/v1` admission, graph amendment/closure protocol, common agent/application scheduler, or adaptive controller lifecycle. |
-| Decision inference | Optional System One (Jev/Laya-compatible) and OpenAI Decisions Choice adapters; journaled segment/recovery gates, probability thresholds, bounded calls, cancellation fencing | Batch `main` step only; no generic graph interpreter, predicate/score hooks, model spend enforcement, or automatic replay of unknown inference. |
+| Adaptive graphs | Local application adapter: atomic graph amendments, shared Task/Run queue, frozen specs, obligation/closure checks, registered controllers, fenced candidate decisions, native output evidence | PTY admission, cross-graph imports, graph service templates, autonomous root acceptance, and complete G1–G5 conformance remain. See the [backend contract](../../docs/adaptive-runtime.md). |
+| Decision inference | Optional System One (Jev/Laya-compatible) and OpenAI Decisions Choice adapters; journaled segment/recovery gates, probability thresholds, bounded calls, cancellation fencing | Batch hooks plus separately journaled graph candidate choices; no predicate/score hooks, model spend enforcement, or automatic replay of unknown inference. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
 | Messaging | MQTT 5 via external broker, signed peers and exact grants, journal outbox/inbox receipts, durable notes and atomic service events, local HTTP/CLI | Broker/key configuration is explicit; general control leases and automatic bridges remain outside this adapter. |
 | Recovery | Journal replay, retained artifacts and output, interruption holds, explicit inspection before replacement | Server restart interrupts active local execution; general surviving-process reattachment and unified receipts remain target work. |
@@ -39,8 +39,8 @@ limits and the metadata byte limit refuse further writes while preserving existi
 records; archival and large-fleet performance remain work. These changes establish
 parts of M1 and foundations for M2/M3, not completion of those gates or a fully unified
 runtime. In particular, the batch drainer excludes interactive attempts; a shared
-Task reader does not establish shared scheduling. The new graph specification does
-not change this baseline. The local provider's unattended grant remains zero.
+Task reader does not establish shared scheduling. The graph application adapter adds automatic dispatch for its registered applications
+and decision Tasks, while existing PTYs still use the desk adapter. The local provider's unattended grant remains zero.
 Broad remote placement,
 hard confinement, general coordinator fencing, and unknown-effect reconciliation
 MUST NOT be advertised as complete without the gates below.

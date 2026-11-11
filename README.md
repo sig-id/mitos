@@ -100,6 +100,15 @@ failure, cancellation, or timeout. Acceptance uses saved verification material a
 a separately reconstructed result. See [applications](spec/system/05_INTERFACES_AND_INTEGRATIONS.md) and
 [workspaces and verification](spec/system/04_STATE_AND_VERIFICATION.md).
 
+## Adaptive work graphs
+
+The [adaptive runtime backend](docs/adaptive-runtime.md) supports dynamically added
+work, atomic graph amendments, automatic application dispatch, registered controller
+applications, and optional typed decisions. Native worker output stays intact.
+Use `/api/graphs` to create and inspect graphs; `/api/graphs/capabilities` reports the
+implemented adapter and remaining integrations. Existing workspace forms and PTY
+sessions retain their current lifecycle.
+
 ## Optional decision models
 
 Command applications can add `decision_model` to choose whether to start a segment

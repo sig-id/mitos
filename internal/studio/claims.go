@@ -21,6 +21,9 @@ func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, er
 	if r == nil {
 		return false, ErrNotFound
 	}
+	if task := s.tasks[r.TaskID]; task != nil && task.GraphID != "" && !s.graphCanDispatch(task) {
+		return false, nil
+	}
 	if s.lifecycleTaskHeld(s.tasks[r.TaskID]) {
 		return false, nil
 	}
@@ -64,6 +67,18 @@ func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, er
 		c.Task.DependencyEvidence = witnesses
 		policy := s.configuredPools()[c.Task.Scheduling.Pool]
 		c.Task.AdmissionPool = &policy
+	}
+	if r.GraphAttempt != nil {
+		bound := graphClone(*r.GraphAttempt)
+		now := time.Now().UTC()
+		bound.AdmittedAt = &now
+		if g := s.graphs[bound.GraphID]; g != nil {
+			bound.GraphRevision = g.Revision
+			bound.PolicyRevision = g.PolicyRevision
+			bound.Generation = g.ControllerGeneration
+		}
+		bound.Witnesses = append([]workpool.Witness(nil), witnesses...)
+		c.GraphAttempt = &bound
 	}
 	if err := s.commit(id, "effect", kind, c); err != nil {
 		return false, err

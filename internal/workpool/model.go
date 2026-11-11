@@ -112,7 +112,7 @@ func (r Request) Validate() error {
 			return errors.New("dependency strength must be hard or soft")
 		}
 		switch d.Guard {
-		case "", "done", "failed", "cancelled":
+		case "", "done", "failed", "cancelled", "candidate_available":
 		default:
 			return errors.New("dependency guard must be a terminal task status")
 		}

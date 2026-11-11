@@ -22,6 +22,8 @@ import (
 )
 
 type Store struct {
+	graphs                 map[string]*WorkGraph
+	graphCreations         map[string]graphCreation
 	messagesOut            map[string]messaging.Outbound
 	messagesIn             map[string]messaging.Inbound
 	deskState              json.RawMessage
@@ -153,6 +155,14 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.Graph != nil {
+		if err := s.applyGraph(e, c.Graph); err != nil {
+			return err
+		}
+		if e.RunID == "" {
+			return nil
+		}
 	}
 	if c.Message != nil {
 		if err := s.applyMessage(e, c.Message); err != nil {
@@ -299,6 +309,9 @@ func (s *Store) apply(e Event) error {
 		}
 		s.deviceHistory[r.ID+"/"+r.Decision.ID] = *r.Decision
 	}
+	if c.GraphAttempt != nil {
+		r.GraphAttempt = c.GraphAttempt
+	}
 	r.UpdatedAt = e.At
 	if r.Terminal() && r.FinishedAt.IsZero() {
 		r.FinishedAt = e.At
@@ -428,7 +441,17 @@ func (s *Store) prepareEvent(id, typ, kind string, c change, seq int64, previous
 	if typ == "effect" && c.ServiceContinuous == nil {
 		c.ServiceContinuous = s.continuousChange(id, c, at)
 	}
+	if c.Graph == nil {
+		var err error
+		c.Graph, err = s.graphRunChange(id, kind, c, at, seq)
+		if err != nil {
+			return Event{}, err
+		}
+	}
 	data, err := json.Marshal(c)
+	if c.Graph != nil && len(data) > 8<<20 {
+		return Event{}, errors.New("graph journal record capacity exceeded")
+	}
 	if err != nil {
 		return Event{}, err
 	}
@@ -530,6 +553,9 @@ func (s *Store) createWithEventLocked(b Brief, appName, parentID string, sample 
 		}
 		taskID = p.TaskID
 		if current := s.tasks[taskID]; current != nil {
+			if current.GraphID != "" {
+				return Run{}, errors.New("graph tasks retry through a graph amendment")
+			}
 			if s.lifecycleTaskHeld(current) {
 				return Run{}, errors.New("service lifecycle is stopped")
 			}

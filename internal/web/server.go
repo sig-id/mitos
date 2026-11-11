@@ -117,6 +117,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	s := &Server{engine: engine, templates: t, demo: demo, streamContext: streamContext, stopStreams: stopStreams}
 	mux := http.NewServeMux()
 	s.messagingRoutes(mux)
+	s.graphRoutes(mux)
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -307,6 +308,9 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		limit := int64(32 << 10)
+		if r.Method == "POST" && (r.URL.Path == "/api/graphs" || strings.HasPrefix(r.URL.Path, "/api/graphs/")) {
+			limit = 2 << 20
+		}
 		if r.Method == "POST" && r.URL.Path == "/api/messaging/outbox" {
 			limit = 96 << 10
 		}

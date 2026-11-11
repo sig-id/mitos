@@ -105,8 +105,17 @@ func (s *Store) boundInput(w workpool.Witness, a workpool.Artifact) ([]byte, err
 	for _, event := range producer.Events {
 		if event.Seq == w.Seq && event.Hash == w.Hash {
 			var c change
-			if json.Unmarshal(event.Data, &c) == nil && c.Task != nil && c.Task.ID == w.TaskID && c.Task.CurrentRunID == w.RunID && c.Task.Status == w.Status {
-				matched = true
+			if json.Unmarshal(event.Data, &c) == nil {
+				if c.Task != nil && c.Task.ID == w.TaskID && c.Task.CurrentRunID == w.RunID && c.Task.Status == w.Status {
+					matched = true
+				}
+				if c.Graph != nil {
+					for _, task := range c.Graph.Tasks {
+						if task.ID == w.TaskID && task.CurrentRunID == w.RunID && task.Status == w.Status {
+							matched = true
+						}
+					}
+				}
 			}
 			break
 		}

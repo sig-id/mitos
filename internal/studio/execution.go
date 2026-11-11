@@ -26,6 +26,9 @@ var errCommandFailed = errors.New("command_failed")
 var errPredicateFailed = errors.New("predicate_failed")
 
 func (e *Engine) perform(ctx context.Context, r Run) error {
+	if r.ExecutionKind == "graph_decision" {
+		return e.executeGraphDecision(ctx, r)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -39,6 +42,13 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 		return err
 	}
 	app, ok := e.App(r.Brief.AppID)
+	if r.GraphAttempt != nil {
+		frozen := r.GraphAttempt.Executor
+		app = frozen.Application
+		app.Directory = frozen.Directory
+		app.Builtin = frozen.Builtin
+		ok = true
+	}
 	if !ok {
 		return errors.New("application is no longer installed")
 	}
@@ -194,7 +204,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 		healthMonitor = &serviceHealthMonitor{store: e.Store, runID: r.ID, scope: healthState, provider: e.provider, launch: launch}
 		healthInput = map[string]any{"monitor_id": healthState.MonitorID, "segment_id": segment.ID, "heartbeat_route": "/api/runs/" + r.ID + "/heartbeat"}
 	}
-	input, err := json.Marshal(map[string]any{"run_id": r.ID, "task_id": r.TaskID, "dependencies": task.DependencyEvidence, "service_lifecycle": task.ServiceLifecycle, "service_ingress": task.ServiceIngress, "service_event": task.ServiceEvent, "service_cycle": task.ServiceCycle, "service_dependencies": task.ServiceDependencyEvidence, "service_health": healthInput, "inputs": inputs, "brief": r.Brief, "workspace": workspace, "segment": segment, "failure_memo": memo})
+	input, err := json.Marshal(map[string]any{"graph": r.GraphAttempt, "run_id": r.ID, "task_id": r.TaskID, "dependencies": task.DependencyEvidence, "service_lifecycle": task.ServiceLifecycle, "service_ingress": task.ServiceIngress, "service_event": task.ServiceEvent, "service_cycle": task.ServiceCycle, "service_dependencies": task.ServiceDependencyEvidence, "service_health": healthInput, "inputs": inputs, "brief": r.Brief, "workspace": workspace, "segment": segment, "failure_memo": memo})
 	if err != nil {
 		return err
 	}
@@ -237,6 +247,23 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 			return recordErr
 		}
 		return errors.Join(runErr, fmt.Errorf("workspace harvest failed: %w", err))
+	}
+	// Only registered graph controller attempts expose this optional typed tool
+	// artifact. Worker stdout is never parsed for commands or graph mutations.
+	if r.GraphAttempt != nil {
+		graph, graphErr := e.Store.Graph(r.GraphAttempt.GraphID)
+		if graphErr != nil {
+			return graphErr
+		}
+		if member := graph.Members[r.TaskID]; member != nil && member.ControllerFor != "" {
+			for _, file := range harvested.Snapshot.Files {
+				if file.Path == "graph-proposal.json" && len(file.Data) <= graphMaxBytes {
+					if err = e.Store.SaveArtifact(r.ID, prefix+"graph-proposal.json", file.Data); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 	manifest, err := harvested.Manifest()
 	if err != nil {

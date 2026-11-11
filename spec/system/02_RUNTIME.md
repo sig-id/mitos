@@ -29,8 +29,9 @@ be distinguishable from admitted execution. Retries preserve history and charges
 The target composition profile is `work-graph/v1`. It is a versioned composition
 of Tasks and Records, not a new execution-attempt namespace. It MUST preserve Run
 as an Attempt and MUST NOT replace `ExecutionPlan.runtime` or pretend that existing
-batch and interactive adapters have converged. This profile is not implemented;
-[delivery](06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) owns its gates.
+batch and interactive adapters have converged. A local application adapter implements a subset of this profile;
+[the backend guide](../../docs/adaptive-runtime.md) documents its wire operations and limits.
+It does not claim complete profile conformance. [Delivery](06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) owns its gates.
 
 A WorkGraph MUST bind one home server, project, root Task, goal/assignment revision,
 structural revision, policy revision, activation origin, and bounded membership.

@@ -62,6 +62,10 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			e.Desk.Close()
 		}
 	}()
+	if err = s.recoverGraphDecisions(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if err = s.recoverDecisionRequests(); err != nil {
 		cancel()
 		return nil, err
@@ -343,6 +347,9 @@ func (e *Engine) dispatch() {
 				continue
 			}
 			if err := e.scheduleServices(cycleTime, false); err != nil {
+				continue
+			}
+			if err := e.reconcileGraphs(); err != nil {
 				continue
 			}
 			e.reconcileDecisions()

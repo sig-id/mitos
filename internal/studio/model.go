@@ -57,6 +57,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	GraphAttempt       *GraphAttempt          `json:"graph_attempt,omitempty"`
 	ModelDecisions     []ModelDecision        `json:"model_decisions,omitempty"`
 	RecordRefs         []RecordRef            `json:"record_refs,omitempty"`
 	VerificationMethod string                 `json:"verification_method,omitempty"`
@@ -152,6 +153,8 @@ type Event struct {
 }
 
 type change struct {
+	Graph             *graphChange               `json:"graph,omitempty"`
+	GraphAttempt      *GraphAttempt              `json:"graph_attempt,omitempty"`
 	ModelDecision     *ModelDecision             `json:"model_decision,omitempty"`
 	Message           *messageChange             `json:"message,omitempty"`
 	DeskState         json.RawMessage            `json:"desk_state,omitempty"`

@@ -18,6 +18,7 @@ type TaskHead struct {
 	Hash string `json:"hash"`
 }
 type Task struct {
+	GraphID                   string                     `json:"graph_id,omitempty"`
 	ProjectID                 string                     `json:"project_id,omitempty"`
 	GoalID                    string                     `json:"goal_id,omitempty"`
 	ParentTaskID              string                     `json:"parent_task_id,omitempty"`
@@ -145,9 +146,15 @@ func (s *Store) validateTaskRequest(id string, r workpool.Request, sample bool) 
 	}
 	graph[id] = r
 	for _, dep := range r.Deps {
+		if dep.Guard == "candidate_available" {
+			return errors.New("candidate_available requires graph verifier admission")
+		}
 		upstream := s.tasks[dep.From]
 		if upstream == nil {
 			return fmt.Errorf("dependency task %s does not exist", dep.From)
+		}
+		if upstream.GraphID != "" {
+			return errors.New("graph results require explicit graph input admission")
 		}
 		if upstream.Tenant != decision.LocalTenant || (!sample && upstream.Sample) {
 			return errors.New("dependency must belong to the same local tenant and cannot use sample work")
@@ -266,6 +273,9 @@ func (s *Store) readiness(t *Task, states map[string]workpool.State) workpool.Re
 	if t.AdmittedRunID == t.CurrentRunID {
 		return workpool.Readiness{Ready: true, Matched: append([]workpool.Witness(nil), t.DependencyEvidence...)}
 	}
+	if t.GraphID != "" {
+		return s.graphReadiness(t)
+	}
 	return workpool.Evaluate(t.Scheduling, states)
 }
 func (s *Store) activePools(ids []string) map[string]int {
@@ -315,6 +325,9 @@ func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 			if err := s.commit(r.ID, "effect", "task_deadline_expired", change{Status: "failed", Stage: "Task deadline expired", Summary: "The absolute task deadline expired before dispatch. No new execution was started."}); err != nil {
 				return nil, err
 			}
+			continue
+		}
+		if t.GraphID != "" && !s.graphCanDispatch(t) {
 			continue
 		}
 		ready := s.readiness(t, states)
@@ -415,6 +428,9 @@ func (s *Store) schedule(id string, activeIDs []string, expected *workpool.Pool)
 		return false, ErrConflict
 	}
 	if expected != nil && s.configuredPools()[task.Scheduling.Pool] != *expected {
+		return false, nil
+	}
+	if task.GraphID != "" && !s.graphCanDispatch(task) {
 		return false, nil
 	}
 	ready := s.readiness(task, s.taskStates())
