@@ -1,12 +1,16 @@
 # Mitos
 
-Mitos is the operating system for agents.
+Mitos is an operating system for agents, under active development.
 Services define ongoing responsibilities, tasks define concrete work, and
-replaceable processes execute it. The operating system governs resources,
+replaceable processes execute it. The target runtime governs resources,
 authority, communication, and durable state for both LLM and deterministic executors.
+The current build has separate local batch and interactive execution paths.
 
-The [agent operating system architecture](docs/AGENT_OPERATING_SYSTEM.md) defines
-six primitives: task, process, resource, grant, channel, and record. Supervisors
+The [agent operating system architecture](spec/system/AGENT_OPERATING_SYSTEM.md) defines
+six primitives: task, process, resource, grant, channel, and record.
+The [normative specification](spec/README.md) separates product contracts, system
+contracts, and ADRs. The [durable runtime contract](spec/system/DURABLE_RUNTIME.md)
+defines their planned unification and recovery guarantees. Supervisors
 coordinate work as managed processes. Services activate work on schedules,
 external events, and task outcomes.
 
@@ -16,7 +20,7 @@ changes, and share managed builds.
 
 Mitos uses **Go + HTMX**, with a server, CLI, and browser workspace.
 
-See [the handheld device API](docs/DEVICE_API.md) for optional HTTPS snapshots,
+See [the handheld device API](spec/system/DEVICE_API.md) for optional HTTPS snapshots,
 confirmed decision receipts, pairing, Codex/Claude question and approval adapters,
 and voice-draft configuration.
 
@@ -61,20 +65,21 @@ The supervisor receives these instructions and delegates using `mitos desk start
 creating actual Mitos agents with recorded supervisor relationships. Only one
 supervisor can be active per project. The default overview shows its graph,
 clickable assignments, topic board, and attention acknowledgments; its terminal
-remains available separately. See [project supervision](docs/PROJECT_SUPERVISION.md).
+remains available separately. See [project supervision](spec/system/PROJECT_SUPERVISION.md).
 
 You can also **Add agent** directly. Sessions get a stable name from their first
 required work goal and use their native CLI configuration. Startup discovers installed agents;
 environment profiles select agent-specific setup without copying credentials into
-session metadata. See the [agent abstraction](docs/AGENT_CLI_ABSTRACTION.md).
+session metadata. See the [agent abstraction](spec/system/AGENT_CLI_ABSTRACTION.md).
 
 The terminal has real PTY input, resize, scrollback, interrupt, and stop controls.
-The **Session ▾** menu supports [resume, fork, and context handover](docs/SESSION_CONTINUATION.md) to another coding agent.
+The **Session ▾** menu supports [resume, fork, and context handover](spec/system/SESSION_CONTINUATION.md) to another coding agent.
 Output streams over WebSocket with acknowledged replay after reconnect.
-See the [streaming and Ghostty evaluation](docs/TERMINAL_RENDERER_EVALUATION.md).
+See the [terminal streaming contract](spec/system/TERMINAL_STREAMING.md) and
+[renderer decision and evaluation](spec/ADRs/0001_TERMINAL_RENDERER.md).
 Navigation leaves execution running. Output survives server restart; processes
 are not automatically relaunched. Interrupted sessions require explicit process
-inspection before replacement. See [interactive workspace behavior and APIs](docs/INTERACTIVE_WORKSPACE.md).
+inspection before replacement. See [interactive workspace behavior and APIs](spec/system/INTERACTIVE_WORKSPACE.md).
 
 The batch workflow is available from **Task history** → **New work** → choose **Workspace inventory** →
 choose a local directory → start. It copies the workspace, inventories actual
@@ -98,9 +103,9 @@ executes a real command and an independent acceptance command.
 - **Applications:** installed entrypoints; author in your editor and launch
   from Mitos.
 
-See [interactive workspace behavior](docs/INTERACTIVE_WORKSPACE.md) for session
-controls and APIs, [decision policy](docs/DECISIONS.md) for human resolutions,
-and [workspace and acceptance contracts](docs/WORKSPACES.md) for batch verification.
+See [interactive workspace behavior](spec/system/INTERACTIVE_WORKSPACE.md) for session
+controls and APIs, [decision policy](spec/system/DECISIONS.md) for human resolutions,
+and [workspace and acceptance contracts](spec/system/WORKSPACES.md) for batch verification.
 
 ## Local applications
 
@@ -159,7 +164,7 @@ and delta are recorded even when the acceptance predicate fails.
 The acceptance timeout defaults to 60 seconds and bounds reconstruction,
 verification, and measurements within the overall execution limit.
 `acceptance` also accepts an argv array. The example predicate checks
-the note's exact content. See [workspace and acceptance contracts](docs/WORKSPACES.md).
+the note's exact content. See [workspace and acceptance contracts](spec/system/WORKSPACES.md).
 
 Processes receive `PATH`, isolated `HOME`/`TMPDIR`, `LANG`, `MITOS_WORKSPACE`,
 and Git settings that neutralize host configuration and ancestor discovery.
@@ -177,14 +182,14 @@ declare strict `compute` requirements; unsupported tiers, broker enforcement,
 or providers are refused before a run is created. Applications without `compute`
 receive an explicitly recorded local development posture. The registered provider
 supports local execution without sandbox or credential-broker enforcement.
-See [provider admission and lifecycle](docs/COMPUTE.md).
+See [provider admission and lifecycle](spec/system/COMPUTE.md).
 
 ## Observation and interruption evidence
 
 Installed commands can opt into activity observation and a normalized JSONL
 session tail. A quiet command produces a recorded stall and an operator decision;
 its output and workspace are preserved. See [the observation contract and
-configuration](docs/OBSERVATION.md). The local adapter samples processes
+configuration](spec/system/OBSERVATION.md). The local adapter samples processes
 and does not grant unattended operation.
 
 ```sh
@@ -207,7 +212,7 @@ unknown; censored runs contribute horizon bounds rather than infinite durations.
 
 Command plans record their unattended grant separately from measured time.
 The local provider receives zero. See [metric definitions and corpus
-coverage](docs/AUTONOMY_METRICS.md).
+coverage](spec/system/AUTONOMY_METRICS.md).
 
 ## Human decisions
 
@@ -223,7 +228,7 @@ another child attempt.
 ```
 
 Local command cards require an explicit resolution: silence never authorizes them. See
-[decision policy, replay, and the local identity boundary](docs/DECISIONS.md).
+[decision policy, replay, and the local identity boundary](spec/system/DECISIONS.md).
 
 ## Checkpoints and recovery
 
@@ -241,7 +246,7 @@ Recovery preserves earlier workspaces and artifacts, uses a new segment, and kee
 the original execution deadline. Later artifact names start with `segment-002-`
 and so on. Configured supervision probes the initial predicate before work starts;
 ordinary apps retain an unknown initial checkpoint. See [configuration, evidence,
-and crash behavior](docs/RECOVERY.md). Recovery operates on local single-step runs.
+and crash behavior](spec/system/RECOVERY.md). Recovery operates on local single-step runs.
 
 ## Data and execution
 
@@ -309,7 +314,7 @@ flags to declare a narrower scope and singleton resources, or the equivalent new
 form fields / JSON brief `ownership` object. Conflicts wait before dispatch;
 out-of-scope changes are preserved but cannot pass acceptance. Crash-held claims
 require inspection and explicit `release-claims --confirmed-stopped RUN_ID`.
-See [local fleet coordination and evidence](docs/FLEET.md) for lifecycle, replay,
+See [local fleet coordination and evidence](spec/system/FLEET.md) for lifecycle, replay,
 reader bounds, and isolation limits.
 
 | Method | Path | Result |
@@ -358,9 +363,9 @@ for a successful prerequisite, or `--after-failure task_ID` for a failure branch
 bounds queue time and execution. The Work page links to task state and pool policies.
 Use repeated `--input TASK_ID:ARTIFACT_NAME` flags to consume explicitly selected
 upstream artifacts as verified private copies. The new-work form supports the same
-selection. See [bound data dependencies](docs/DATA_DEPENDENCIES.md) for limits,
+selection. See [bound data dependencies](spec/system/DATA_DEPENDENCIES.md) for limits,
 worker input paths, integrity checks, and recovery.
-See [durable tasks and work pools](docs/WORK_POOLS.md) for supported edges,
+See [durable tasks and work pools](spec/system/WORK_POOLS.md) for supported edges,
 selection, and replay.
 
 ## Structure
@@ -379,8 +384,9 @@ internal/desk/        local PTY sessions, topic board, managed builds, resource 
 internal/workpool/    dependency readiness, deterministic disciplines, pool capacity
 internal/web/         HTTP routes, embedded Go templates, CSS, HTMX
 examples/             runnable local application contract
-docs/                 architecture, behavior, APIs, and configuration
-spec/                 target contracts and current implementation status
+spec/product/         normative product behavior and acceptance
+spec/system/          normative system contracts and implementation evidence
+spec/ADRs/            architecture decisions and historical rationale
 ```
 
 Batch HTML forms and links work without JavaScript. HTMX enhances navigation, search,
@@ -397,60 +403,60 @@ requirements, optional members, conflicts, and activation reasons. Active manual
 interval, cron, event, and continuous
 services create Tasks through work pools, with durable schedule cursors
 and bounded per-service concurrency/queueing. See [service composition and
-triggers](docs/SERVICES.md) for a catalog example and idempotency/replay behavior.
+triggers](spec/system/SERVICES.md) for a catalog example and idempotency/replay behavior.
 
-Optional [service circuit breakers](docs/SERVICE_BREAKERS.md) persist failure counts,
+Optional [service circuit breakers](spec/system/SERVICE_BREAKERS.md) persist failure counts,
 cooldowns, and bounded recovery probes. They gate queued execution before claims
 and retain state across restart.
 
-[Service restart policies](docs/SERVICE_RESTARTS.md) add bounded retries with saved
+[Service restart policies](spec/system/SERVICE_RESTARTS.md) add bounded retries with saved
 backoff/deadlines and per-service abort. Pending retries preserve Task dependency
 semantics and can be cancelled from the Services screen.
 
-[Service cron schedules](docs/SERVICE_CRON.md) add timezone-aware calendar execution,
+[Service cron schedules](spec/system/SERVICE_CRON.md) add timezone-aware calendar execution,
 saved clock previews, and distinct occurrences across daylight-saving folds.
 
-[Service outcome chaining](docs/SERVICE_EVENTS.md) creates downstream Tasks from
+[Service outcome chaining](spec/system/SERVICE_EVENTS.md) creates downstream Tasks from
 final success/failure outcomes, with durable delivery, source evidence, capacity
 reservations, and shared depth/fanout limits across feedback branches.
 
-[Custom service events](docs/SERVICE_CUSTOM_EVENTS.md) deliver named JSON payloads
+[Custom service events](spec/system/SERVICE_CUSTOM_EVENTS.md) deliver named JSON payloads
 to active subscribers through `mitos emit-event`, the API, or the Services page.
 Durable source receipts preserve idempotency, payload evidence, subscriber cycles,
 and delivery limits across restart; `mitos service-events [SEQ]` reads them.
 
-[Service lifecycle](docs/SERVICE_LIFECYCLE.md) adds durable admission holds
+[Service lifecycle](spec/system/SERVICE_LIFECYCLE.md) adds durable admission holds
 and shutdown across `part_of` members. Use `mitos service-stop`,
 `mitos service-restart`, `mitos service-resume`, and `mitos service-lifecycle`, or the Services page.
 Resume waits for worker exit, claim release, and pending delivery suppression.
 
-[Continuous services](docs/SERVICE_CONTINUOUS.md) maintain one managed Task, wait
+[Continuous services](spec/system/SERVICE_CONTINUOUS.md) maintain one managed Task, wait
 through its retries, and save a restart delay on completion. Disabling the service
 stops its managed work and preserves available execution evidence.
 
-[Service queue priority](docs/SERVICE_PRIORITY.md) adds low/normal/high/critical
+[Service queue priority](spec/system/SERVICE_PRIORITY.md) adds low/normal/high/critical
 preferences to priority-pool scoring. Task bindings survive catalog edits, event
 delivery, retries, and replay.
 
-[Service replacement](docs/SERVICE_REPLACEMENT.md) supports `if_running: "kill"`.
+[Service replacement](spec/system/SERVICE_REPLACEMENT.md) supports `if_running: "kill"`.
 It saves the exact prior Task, stops it through the normal harvest path, and gates
 the new execution until shutdown and claim release are complete.
 
-[Service health checks](docs/SERVICE_HEALTH.md) monitor command workers through
+[Service health checks](spec/system/SERVICE_HEALTH.md) monitor command workers through
 file freshness, bounded shell probes, or scoped heartbeats. Unhealthy actions can
 log, stop, or use bounded Task retries while retaining output and workspace changes.
 Workers can send heartbeats with `mitos heartbeat --monitor ID --sequence N RUN_ID`.
 
-[Service conditions](docs/SERVICE_CONDITIONS.md) gate execution on file globs,
+[Service conditions](spec/system/SERVICE_CONDITIONS.md) gate execution on file globs,
 environment comparisons, and bounded command checks. Mismatches keep the trigger
 receipt and skip application execution without acceptance or failure retries.
 
-[Service completion dependencies](docs/SERVICE_DEPENDENCIES.md) bind `depends_on`
+[Service completion dependencies](spec/system/SERVICE_DEPENDENCIES.md) bind `depends_on`
 to successes in the same scheduler cycle. Manual triggers share `--cycle KEY`;
 admission saves exact prerequisite Task/Run/event witnesses and keeps them separate
 from ordinary Task joins.
 
-[Webhook and external-signal services](docs/SERVICE_INGRESS.md) accept bounded JSON
+[Webhook and external-signal services](spec/system/SERVICE_INGRESS.md) accept bounded JSON
 deliveries through configured webhook paths or `mitos service-signal`. Delivery
 IDs, payload digests, and fixed work bindings are saved atomically with Task
 receipts; identical redeliveries return the original receipt after restart.

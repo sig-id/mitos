@@ -158,8 +158,8 @@ try{
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-start-step.png')});
  await page.locator('#start-supervisor').click();await page.waitForURL(u=>!!u.searchParams.get('session'));
  assert.equal(await page.locator('#view-terminal').isVisible(),true);
- await page.waitForFunction(()=>document.querySelector('.supervisor-terminal')?.getAttribute('aria-current')==='page');
- assert.equal(await page.locator('.supervisor-link').getAttribute('aria-current'),null);
+ await page.waitForFunction(()=>document.querySelector('.supervisor-link')?.getAttribute('aria-current')==='page');
+ assert.equal(await page.locator('#supervisor-list a').count(),1,'one supervisor entry across tabs');
  await page.locator('#tab-supervision').click();
  assert.equal(await page.locator('#view-supervision').isVisible(),true);
  await wait(async()=> (await api(`/api/projects/${project}/sessions`)).length===2);
@@ -185,7 +185,7 @@ try{
  await page.getByText('Breakpoint requested · 2/2 acknowledged',{exact:true}).waitFor();
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-supervision.png')});
  await page.getByRole('button',{name:'Release breakpoint',exact:true}).click();await page.getByText('Released breakpoint · 2/2 acknowledged',{exact:true}).waitFor();
- await page.locator('#supervisor-list .supervisor-terminal').click();assert.equal(await page.locator('#view-terminal').isVisible(),true);
+ await page.locator('#supervisor-list .supervisor-link').click();assert.equal(await page.locator('#view-terminal').isVisible(),true);
  await page.locator('#tab-supervision').click();assert.equal(await page.locator('#view-supervision').isVisible(),true);
  await page.setViewportSize({width:390,height:844});await page.locator('#edit-project-profile').click();await page.locator('#profile-dialog').waitFor({state:'visible'});
  assert.equal(await page.locator('#profile-goal').inputValue(),'Ship a reviewed parser with tests');await page.locator('#profile-dialog [data-close]').click();
@@ -197,5 +197,5 @@ try{
  await page.waitForFunction(()=>document.querySelector('#setup-output').textContent.includes('Fixture sign-in failed'));
  await page.getByRole('button',{name:'Retry analysis',exact:true}).click();await page.locator('#session-dialog').waitFor({state:'visible'});
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-analysis-failure.png')});
- assert.deepEqual(errors,[]);console.log('PASS: explicit analyze/review/start workflow, review recovery without premature launch, stable tabs, Markdown and syntax highlighting, separate token usage, collapsible activity tree, expand/collapse and raw modes, safe log rendering, retained expansion, per-source refresh recovery, offline recovery without stale errors, local clock while offline, verbose live analysis, reload recovery, distinct navigation colors and selection, visible failure and retry, background project analysis, persisted editable draft, no worker or supervisor before review, required first goals, name autofill, profile defaults/save, terminal opens after supervisor launch, real CLI delegation, recorded graph edge, separate supervisor navigation, CLI acknowledgments, breakpoint release, secondary terminal, mobile profile, no browser errors');
+ assert.deepEqual(errors,[]);console.log('PASS: explicit analyze/review/start workflow, review recovery without premature launch, stable tabs, Markdown and syntax highlighting, separate token usage, collapsible activity tree, expand/collapse and raw modes, safe log rendering, retained expansion, per-source refresh recovery, offline recovery without stale errors, local clock while offline, verbose live analysis, reload recovery, distinct navigation colors and selection, visible failure and retry, background project analysis, persisted editable draft, no worker or supervisor before review, required first goals, name autofill, profile defaults/save, terminal opens after supervisor launch, real CLI delegation, recorded graph edge, single supervisor navigation, CLI acknowledgments, breakpoint release, terminal tab, mobile profile, no browser errors');
 }finally{await browser?.close();server.kill('SIGTERM');await exited;await rm(temporary,{recursive:true,force:true});}

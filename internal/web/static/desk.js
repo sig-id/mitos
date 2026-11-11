@@ -241,15 +241,16 @@
 
   let term, focusTerminal, offset = 0, alive = true, ready = false, inputChain = Promise.resolve(), inputBroken = false;
   if (session) {
-    term = new Terminal({cols:Number($('terminal').dataset.cols),rows:Number($('terminal').dataset.rows),fontSize:13,fontFamily:'"Liberation Mono", Consolas, monospace',lineHeight:1.25,cursorBlink:!matchMedia('(prefers-reduced-motion: reduce)').matches,scrollback:10000,theme:{background:'#14171b',foreground:'#d8dee9',cursor:'#aac5ff',selectionBackground:'#334864'},allowProposedApi:false});
+    term = new Terminal({cols:Number($('terminal').dataset.cols),rows:Number($('terminal').dataset.rows),fontSize:15,fontFamily:'"Liberation Mono", Consolas, monospace',lineHeight:1.35,cursorBlink:!matchMedia('(prefers-reduced-motion: reduce)').matches,scrollback:10000,theme:{background:'#14171b',foreground:'#d8dee9',cursor:'#aac5ff',selectionBackground:'#334864'},allowProposedApi:false});
     const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open($('terminal'));
     const keyButtons = [...document.querySelectorAll('[data-terminal-key]')];
     const shortcuts = $('terminal-shortcuts');
+    let savedOutput = false, savedNeedsScroll = false;
     function updateInputControls() {
       const enabled = ready && !inputBroken;
       term.options.disableStdin = !enabled;
       [...keyButtons, $('interrupt')].forEach(b => b.disabled = !enabled);
-      $('terminal-input-hint').textContent = inputBroken ? 'Input disconnected · reload to reconnect' : !ready ? 'Terminal input unavailable' : 'Click terminal to type';
+      $('terminal-input-hint').textContent = savedOutput ? 'Saved output' : inputBroken ? 'Input disconnected · reload to reconnect' : !ready ? 'Terminal input unavailable' : 'Click terminal to type';
     }
     focusTerminal = () => { if (!$('view-terminal').hidden && ready && !inputBroken && !document.querySelector('dialog[open]') && !window.DeskContextMenu.isOpen()) term.focus(); };
     $('terminal').addEventListener('click', focusTerminal);
@@ -274,14 +275,65 @@
       return inputChain;
     }
     term.onData(data => { if (ready && !inputBroken) send(data); });
-    let resizeTimer;
+    let resizeTimer, restored = false;
     function resize() {
       clearTimeout(resizeTimer); resizeTimer = setTimeout(() => {
-        if (!ready || $('view-terminal').hidden) return;
-        fit.fit(); api(`/api/sessions/${session}/resize`,{rows:term.rows,cols:term.cols}).catch(()=>{});
+        if (!alive || !restored || $('view-terminal').hidden) return;
+        if (savedOutput) {
+          if (savedNeedsScroll) { const output=$('terminal').querySelector('.saved-terminal');output.scrollTop=output.scrollHeight;savedNeedsScroll=false; }
+          return;
+        }
+        // Saved output must fit too. Only a live process needs a PTY resize.
+        fit.fit();
+        if (ready) api(`/api/sessions/${session}/resize`,{rows:term.rows,cols:term.cols}).catch(()=>{});
       },150);
     }
-    new ResizeObserver(resize).observe($('terminal'));
+    function showSavedOutput() {
+      if (savedOutput) return;
+      savedOutput = true;
+      shortcuts.hidden = true;
+      // A finished TUI cannot redraw after a resize. Preserve the restored cells
+      // as a wrapping transcript instead of reflowing cursor-addressed output.
+      const output=document.createElement('pre');
+      output.className='saved-terminal';output.tabIndex=0;
+      output.setAttribute('aria-label','Saved terminal output');
+      const palette=['#2e3440','#bf616a','#a3be8c','#ebcb8b','#81a1c1','#b48ead','#88c0d0','#e5e9f0','#4c566a','#bf616a','#a3be8c','#ebcb8b','#81a1c1','#b48ead','#8fbcbb','#eceff4'];
+      const color=(value,rgb)=>{
+        if(rgb)return '#'+value.toString(16).padStart(6,'0');
+        if(value<16)return palette[value];
+        if(value>=232){const c=8+(value-232)*10;return `rgb(${c},${c},${c})`;}
+        const n=value-16,level=x=>x===0?0:55+x*40;
+        return `rgb(${level(Math.floor(n/36))},${level(Math.floor(n/6)%6)},${level(n%6)})`;
+      };
+      const buffer=term.buffer.active;
+      for(let row=0;row<buffer.length;row++){
+        const line=buffer.getLine(row),text=line.translateToString(true);
+        let group=null,lastStyle='',columnText='';
+        const flush=()=>{if(columnText){group.textContent=columnText;output.append(group);columnText='';}};
+        // Keep one row boundary per restored line, including blank rows and diagrams.
+        let remaining=text.length;
+        for(let col=0;col<line.length&&remaining>0;col++){
+          const cell=line.getCell(col);if(!cell||cell.getWidth()===0)continue;
+          const chars=cell.getChars()||' ';remaining-=chars.length;
+          let fg=cell.isFgDefault()?'':color(cell.getFgColor(),cell.isFgRGB());
+          let bg=cell.isBgDefault()?'':color(cell.getBgColor(),cell.isBgRGB());
+          if(cell.isInverse())[fg,bg]=[bg||'#14171b',fg||'#d8dee9'];
+          const style=[fg&&`color:${fg}`,bg&&`background-color:${bg}`,cell.isBold()&&'font-weight:700',cell.isItalic()&&'font-style:italic',cell.isUnderline()&&'text-decoration:underline',cell.isDim()&&'opacity:.7'].filter(Boolean).join(';');
+          if(!group||style!==lastStyle){flush();group=document.createElement('span');group.style.cssText=style;lastStyle=style;}
+          columnText+=chars;
+        }
+        flush();output.append(document.createTextNode('\n'));
+      }
+      term.element.style.display='none';
+      $('terminal').append(output);
+      $('terminal').setAttribute('aria-label','Saved session terminal');
+      $('terminal-input-hint').textContent='Saved output';
+      savedNeedsScroll=$('view-terminal').hidden;
+      output.scrollTop=output.scrollHeight;
+    }
+    const terminalObserver = new ResizeObserver(resize);
+    terminalObserver.observe($('terminal'));
+    window.addEventListener('resize',resize);
     $('interrupt').addEventListener('click', () => send('\x03'));
     let stopPending = false;
     function updateSessionStatus(status) {
@@ -345,6 +397,8 @@
           // frame in flight, bounding memory even while a tab is backgrounded.
           offset=v.next;
           const status=updateSessionStatus(v.status), running=status==='running';
+          // Replay cursor-addressed output at its recorded size before fitting it.
+          if (data.length<65536) restored=true;
           finished=!['running','starting','stopping'].includes(status) && data.length<65536;
           if (!ready && data.length<65536 && running && socket.readyState===WebSocket.OPEN) {
             ready=true; resize();
@@ -352,6 +406,7 @@
           }
           $('connection-status').textContent=status==='stopping'?'Stopping session…':inputBroken?'Terminal input disconnected':running?(ready?'Connected':'Restoring scrollback…'):`Session ${status}`;
           updateInputControls();
+          if (finished) showSavedOutput();
           if (socket.readyState===WebSocket.OPEN) socket.send(JSON.stringify({next:offset}));
         }).catch(()=>socket.close());
       };
@@ -367,7 +422,7 @@
       };
       socket.onerror=()=>socket.close();
     }
-    output(); window.addEventListener('pagehide',()=>{alive=false;clearTimeout(outputRetry);clearTimeout(outputWatchdog);clearTimeout(resizeTimer);outputSocket?.close();term.dispose();});
+    output(); window.addEventListener('pagehide',()=>{alive=false;clearTimeout(outputRetry);clearTimeout(outputWatchdog);clearTimeout(resizeTimer);terminalObserver.disconnect();window.removeEventListener('resize',resize);outputSocket?.close();term.dispose();});
   }
   document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('[data-tab]').forEach(tab=>{ const active=tab===b;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));$(`view-${tab.dataset.tab}`).hidden=!active; });

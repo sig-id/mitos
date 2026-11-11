@@ -100,7 +100,11 @@
   }
   function updateSelection(){
     const supervision=document.body.dataset.view==='supervision';
-    document.querySelectorAll('#supervisor-list a').forEach(a=>{const selected=a.classList.contains('supervisor-link')?supervision:document.body.dataset.view==='terminal'&&a.dataset.terminalSession===document.body.dataset.session;a.classList.toggle('selected',selected);if(selected)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+    document.querySelectorAll('#supervisor-list a').forEach(a=>{
+      const selected=supervision||a.dataset.sessionId===document.body.dataset.session;
+      a.classList.toggle('selected',selected);
+      if(selected)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');
+    });
   }
   document.querySelectorAll('[data-tab]').forEach(tab=>tab.addEventListener('click',updateSelection));
   function detail(s){
@@ -154,10 +158,9 @@
     $('supervision-workspace').hidden=!sessions.length;$('project-objective').textContent=profile.goal||'';$('project-objective').hidden=!profile.goal;
     $('active-agent-count').textContent=`${workers.filter(active).length} active`;
     const rail=$('supervisor-list');rail.replaceChildren();
-    const overview=el('a',supervisor?supervisor.name:'Project setup','session-link supervisor-link');overview.href=`/workspace?project=${project}`;
+    const overview=el('a',supervisor?supervisor.name:'Project setup','session-link supervisor-link');overview.href=supervisor?terminal(supervisor):`/workspace?project=${project}`;
     if(supervisor){overview.dataset.sessionId=supervisor.id;overview.dataset.sessionName=supervisor.name;overview.setAttribute('aria-haspopup','menu');overview.setAttribute('aria-controls','desk-context-menu');overview.setAttribute('aria-keyshortcuts','Shift+F10');}
     overview.append(el('small',supervisor?`${supervisor.agent_id} · ${supervisor.status}`:snapshot.draft?`${snapshot.draft.agent_id} · analysis ${snapshot.draft.status}`:'Project overview & rules'));rail.append(overview);
-    if(supervisor){const link=el('a','Supervisor terminal ↗','supervisor-terminal');link.href=terminal(supervisor);link.dataset.terminalSession=supervisor.id;rail.append(link);}
     updateSelection();
     const graphKey=JSON.stringify([sessions,snapshot.draft?.status]);if(graphKey!==graphSignature){graphSignature=graphKey;graph(supervisor,workers);}
     if(selectedAssignment){const s=sessions.find(s=>s.id===selectedAssignment);if(s)detail(s);}

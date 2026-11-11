@@ -1,6 +1,6 @@
 # Terminal renderer evaluation
 
-See [the evaluation and transport report](../../docs/TERMINAL_RENDERER_EVALUATION.md)
+See [the renderer decision and evaluation](../../spec/ADRs/0001_TERMINAL_RENDERER.md)
 for setup, captured workloads, results, and their limits. This directory contains
 development-only dependencies; no Ghostty code is included in the Studio bundle.
 

@@ -4,7 +4,7 @@
 It needs no public deployment. Canonical portal files are in
 `internal/wifisetup/portal`; the build script emits them separately as
 `dist/wifi-setup-site-portal` for firmware embedding. Keep the portal APIs on the
-watch. See [the current contract](../../spec/19_HANDHELD_WIFI_SETUP.md).
+watch. See [the current contract](../../spec/system/19_HANDHELD_WIFI_SETUP.md).
 
 The remaining instructions describe the retained optional acoustic sender.
 
