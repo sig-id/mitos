@@ -78,21 +78,67 @@ func (s *Store) PendingMessages(now time.Time, limit int) []messaging.Outbound {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := []messaging.Outbound{}
+	if limit <= 0 {
+		return out
+	}
+	type candidate struct {
+		id  string
+		due time.Time
+	}
+	var candidates []candidate
 	for _, v := range s.messagesOut {
-		if v.Status == "pending" && !v.NextAttempt.After(now) {
-			out = append(out, copyMessage(v))
+		if v.Status == "pending" && v.Message.Deadline.After(now) && !v.NextAttempt.After(now) {
+			candidates = append(candidates, candidate{id: v.Message.ID, due: v.NextAttempt})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].NextAttempt.Equal(out[j].NextAttempt) {
-			return out[i].Message.ID < out[j].Message.ID
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].due.Equal(candidates[j].due) {
+			return candidates[i].id < candidates[j].id
 		}
-		return out[i].NextAttempt.Before(out[j].NextAttempt)
+		return candidates[i].due.Before(candidates[j].due)
 	})
-	if len(out) > limit {
-		out = out[:limit]
+	// Only the selected batch owns payload copies; the backlog contains metadata.
+	for _, selected := range candidates[:min(limit, len(candidates))] {
+		out = append(out, copyMessage(s.messagesOut[selected.id]))
 	}
 	return out
+}
+
+// ExpireMessages never waits for a network slot or a future retry time. A bounded
+// batch limits journal writes, and terminal records leave subsequent selections.
+func (s *Store) ExpireMessages(now time.Time, limit int) error {
+	if limit <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	type candidate struct {
+		id       string
+		deadline time.Time
+	}
+	var candidates []candidate
+	for id, v := range s.messagesOut {
+		if v.Status == "pending" && !v.Message.Deadline.After(now) {
+			candidates = append(candidates, candidate{id: id, deadline: v.Message.Deadline})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].deadline.Equal(candidates[j].deadline) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].deadline.Before(candidates[j].deadline)
+	})
+	for _, selected := range candidates[:min(limit, len(candidates))] {
+		v := s.messagesOut[selected.id]
+		v.Status = "expired"
+		if v.Attempts > 0 {
+			v.Status = "unknown"
+		}
+		if err := s.commit("", "effect", "message_expired", change{Message: &messageChange{Outbound: &v}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Reserve the attempt before networking. A crash must not reset retry accounting.

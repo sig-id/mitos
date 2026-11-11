@@ -3,6 +3,8 @@ package studio
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,5 +202,139 @@ func TestMessageRejectsExistingServiceEventKeyWithoutPoisoningJournal(t *testing
 	r, err = s.AcceptMessage(m)
 	if err != nil || r.Status != "applied" {
 		t.Fatal("collision poisoned writer", r, err)
+	}
+}
+
+func TestMessageExpirationBypassesBackoffAndDrainsBatches(t *testing.T) {
+	s := messageStore(t)
+	now := time.Now().UTC()
+	deadline := now.Add(time.Minute)
+	for i := 0; i < 33; i++ {
+		m := messageEnvelope(t, s, fmt.Sprintf("expire_%02d", i))
+		m.From = s.Home().ID
+		m.To = "remote"
+		m.Deadline = deadline
+		if _, err := s.QueueMessage(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// This possible send has a retry scheduled after the deadline.
+	attempted, err := s.AttemptMessage("expire_32", deadline.Add(-time.Second), 32)
+	if err != nil || !attempted.NextAttempt.After(deadline) {
+		t.Fatal(attempted, err)
+	}
+	for _, remaining := range []int{17, 1, 0} {
+		if err := s.ExpireMessages(deadline, 16); err != nil {
+			t.Fatal(err)
+		}
+		pending := 0
+		for _, v := range s.messagesOut {
+			if v.Status == "pending" {
+				pending++
+			}
+		}
+		if pending != remaining {
+			t.Fatalf("pending=%d, want %d", pending, remaining)
+		}
+	}
+	for id, v := range s.messagesOut {
+		want := "expired"
+		if id == "expire_32" {
+			want = "unknown"
+		}
+		if v.Status != want {
+			t.Fatalf("%s: status=%s want %s", id, v.Status, want)
+		}
+	}
+	seq := s.seq
+	if err := s.ExpireMessages(deadline, 16); err != nil || s.seq != seq {
+		t.Fatal("repeated expiration changed journal", err)
+	}
+	dir := s.Dir()
+	s.Close()
+	replayed, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayed.Close()
+	for id, v := range s.messagesOut {
+		got, err := replayed.OutboundMessage(id)
+		if err != nil || got.Status != v.Status || got.Attempts != v.Attempts {
+			t.Fatal("expiration lost on restart", id, got, err)
+		}
+	}
+}
+
+func pendingBacklog(count int, now time.Time) *Store {
+	payload := json.RawMessage(`{"body":"` + strings.Repeat("x", 63<<10) + `"}`)
+	s := &Store{messagesOut: make(map[string]messaging.Outbound, count)}
+	for i := count - 1; i >= 0; i-- {
+		id := fmt.Sprintf("queued_%05d", i)
+		s.messagesOut[id] = messaging.Outbound{Message: messaging.Envelope{Version: 1, ID: id, Deadline: now.Add(time.Hour), Payload: payload}, Status: "pending", NextAttempt: now.Add(-time.Minute)}
+	}
+	return s
+}
+
+func TestPendingMessagesCopiesOnlySelectedBatch(t *testing.T) {
+	now := time.Now().UTC()
+	small, large := pendingBacklog(16, now), pendingBacklog(1024, now)
+	measure := func(s *Store) float64 {
+		return testing.AllocsPerRun(3, func() {
+			if got := s.PendingMessages(now, 16); len(got) != 16 {
+				t.Fatalf("batch has %d messages", len(got))
+			}
+		})
+	}
+	smallAllocs, largeAllocs := measure(small), measure(large)
+	t.Logf("16 records: %.0f allocations; 1024 records: %.0f allocations", smallAllocs, largeAllocs)
+	// Metadata slice growth may allocate; payload copying must not scale with backlog.
+	if largeAllocs > smallAllocs+128 {
+		t.Fatalf("copies grow with backlog: %.0f vs %.0f", largeAllocs, smallAllocs)
+	}
+	batch := large.PendingMessages(now, 16)
+	for i, v := range batch {
+		if v.Message.ID != fmt.Sprintf("queued_%05d", i) {
+			t.Fatal("unstable tie order", v.Message.ID)
+		}
+	}
+	batch[0].Message.Payload[0] = 'x'
+	if !json.Valid(large.messagesOut[batch[0].Message.ID].Message.Payload) {
+		t.Fatal("selected payload aliases journal state")
+	}
+	for _, limit := range []int{0, -1} {
+		if got := large.PendingMessages(now, limit); len(got) != 0 {
+			t.Fatal("nonpositive limit selected messages", limit)
+		}
+	}
+	// Earlier retry times win; expired or settled work is never network-eligible.
+	v := large.messagesOut["queued_00020"]
+	v.NextAttempt = now.Add(-2 * time.Minute)
+	large.messagesOut[v.Message.ID] = v
+	v = large.messagesOut["queued_00000"]
+	v.Message.Deadline = now
+	large.messagesOut[v.Message.ID] = v
+	v = large.messagesOut["queued_00001"]
+	v.Status = "applied"
+	large.messagesOut[v.Message.ID] = v
+	v = large.messagesOut["queued_00002"]
+	v.NextAttempt = now.Add(time.Minute)
+	large.messagesOut[v.Message.ID] = v
+	batch = large.PendingMessages(now, 2)
+	if batch[0].Message.ID != "queued_00020" || batch[1].Message.ID != "queued_00003" {
+		t.Fatal("incorrect eligibility or retry order", batch[0].Message.ID, batch[1].Message.ID)
+	}
+}
+
+func BenchmarkPendingMessagesBacklog(b *testing.B) {
+	now := time.Now().UTC()
+	for _, count := range []int{16, 1024} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			s := pendingBacklog(count, now)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				s.PendingMessages(now, 16)
+			}
+		})
 	}
 }

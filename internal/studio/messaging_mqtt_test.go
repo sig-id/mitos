@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/mochi-mqtt/server/v2/packets"
 	"io"
 	"log/slog"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -353,4 +355,52 @@ func TestMQTTBrokerPublishDenialRetainsPendingWork(t *testing.T) {
 	}
 	acl.denyCommands.Store(false)
 	mqttWait(t, "pending work after ACL restoration", func() bool { v, _ := a.OutboundMessage(req.ID); return v.Status == "applied" })
+}
+
+type pendingPollStore struct {
+	*Store
+	polls atomic.Int64
+}
+
+func (s *pendingPollStore) PendingMessages(now time.Time, limit int) []messaging.Outbound {
+	s.polls.Add(1)
+	return s.Store.PendingMessages(now, limit)
+}
+func TestMQTTOfflineBacklogDoesNotStarveExpiration(t *testing.T) {
+	// A bound listener without an MQTT server keeps the connection unavailable.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	store := messageStore(t)
+	counted := &pendingPollStore{Store: store}
+	key, _ := mqttKeys(t)
+	client, err := messaging.New(context.Background(), messaging.Config{Broker: "mqtt://" + listener.Addr().String()}, store.Home().ID, key, counted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	req := messaging.Request{To: store.Home().ID, Project: "studio", Mailbox: "operator", Kind: "note", Type: "text", Deadline: time.Now().Add(time.Hour), Payload: json.RawMessage(`{"body":"offline"}`)}
+	for i := 0; i < 16; i++ {
+		req.ID = fmt.Sprintf("long_%02d", i)
+		if _, err = client.Send(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req.ID = "short"
+	req.Deadline = time.Now().Add(time.Second)
+	if _, err = client.Send(req); err != nil {
+		t.Fatal(err)
+	}
+	mqttWait(t, "expiration behind offline batch", func() bool { v, _ := store.OutboundMessage("short"); return v.Status == "expired" })
+	if counted.polls.Load() != 0 {
+		t.Fatal("offline loop copied network batches", counted.polls.Load())
+	}
+	for i := 0; i < 16; i++ {
+		v, err := store.OutboundMessage(fmt.Sprintf("long_%02d", i))
+		if err != nil || v.Status != "pending" || v.Attempts != 0 {
+			t.Fatal("offline message spent retry budget", v, err)
+		}
+	}
 }

@@ -20,6 +20,7 @@ type Store interface {
 	QueueMessage(Envelope) (Outbound, error)
 	OutboundMessage(string) (Outbound, error)
 	PendingMessages(time.Time, int) []Outbound
+	ExpireMessages(time.Time, int) error
 	AttemptMessage(string, time.Time, int) (Outbound, error)
 	AcceptMessage(Envelope) (Receipt, error)
 	AcceptReceipt(Envelope) error
@@ -250,15 +251,23 @@ func (s *Service) run() {
 				s.setError("receipt publication interrupted; source retry will recover it")
 			}
 		case <-tick.C:
+			// Expiration is independent of delivery order, connectivity, and backoff.
+			if err := s.store.ExpireMessages(time.Now().UTC(), 16); err != nil {
+				s.setError("message expiration could not be committed")
+				continue
+			}
+			if !s.Status().Connected {
+				continue
+			}
 			for _, v := range s.store.PendingMessages(time.Now().UTC(), 16) {
 				if s.ctx.Err() != nil {
 					return
 				}
-				// Expire even while offline. Do not spend network retry budget while disconnected.
-				now := time.Now().UTC()
-				if !s.Status().Connected && v.Message.Deadline.After(now) {
-					continue
+				// Do not spend retry budget if the connection dropped during this batch.
+				if !s.Status().Connected {
+					break
 				}
+				now := time.Now().UTC()
 				next, err := s.store.AttemptMessage(v.Message.ID, now, s.cfg.MaxAttempts)
 				if err != nil {
 					s.setError("outbound attempt could not be committed")
