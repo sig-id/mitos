@@ -30,6 +30,12 @@ claims, approve actions, or complete tasks.
 
 ## Control messages
 
+Control messages use the [MQTT 5 profile](05_INTERFACES_AND_INTEGRATIONS.md#mqtt-5-messaging).
+Logical inboxes belong to durable responsibilities, not MQTT connections or agent
+processes. Commands, committed events, and discussion notes share delivery machinery
+but retain different authority and completion semantics. MQTT acknowledgment MUST
+NOT count as agent acknowledgment, command application, or task acceptance.
+
 Messages MUST have stable identity, sender, destination, causal references, revision,
 and relevant task/attempt/generation. Mailboxes MUST bound payload, backlog, retention,
 and retries. Backpressure MUST be visible; control work MUST NOT silently disappear.

@@ -11,6 +11,7 @@ import (
 	"mitos/internal/compute"
 	"mitos/internal/decision"
 	"mitos/internal/desk"
+	"mitos/internal/messaging"
 	workspacefs "mitos/internal/workspace"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 )
 
 type Engine struct {
+	Messages *messaging.Service
 	Desk     *desk.Manager
 	provider compute.Provider
 	Store    *Store
@@ -124,6 +126,9 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 }
 func (e *Engine) Close() {
 	e.stop()
+	if e.Messages != nil {
+		e.Messages.Close()
+	}
 	if e.Desk != nil {
 		e.Desk.Close()
 	}

@@ -151,6 +151,7 @@ type Event struct {
 }
 
 type change struct {
+	Message           *messageChange             `json:"message,omitempty"`
 	DeskState         json.RawMessage            `json:"desk_state,omitempty"`
 	Home              *HomeServer                `json:"home_server,omitempty"`
 	AgentSession      *AgentSession              `json:"agent_session,omitempty"`

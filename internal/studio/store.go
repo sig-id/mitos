@@ -11,6 +11,7 @@ import (
 	"mitos/internal/acceptance"
 	"mitos/internal/decision"
 	"mitos/internal/fleet"
+	"mitos/internal/messaging"
 	"mitos/internal/service"
 	"mitos/internal/workpool"
 	"os"
@@ -21,6 +22,8 @@ import (
 )
 
 type Store struct {
+	messagesOut            map[string]messaging.Outbound
+	messagesIn             map[string]messaging.Inbound
 	deskState              json.RawMessage
 	home                   HomeServer
 	agentSessions          map[string]AgentSession
@@ -150,6 +153,14 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.Message != nil {
+		if err := s.applyMessage(e, c.Message); err != nil {
+			return err
+		}
+		if c.CustomEvent == nil {
+			return nil
+		}
 	}
 	if c.Home != nil {
 		s.home = *c.Home

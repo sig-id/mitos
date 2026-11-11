@@ -87,6 +87,16 @@ from executing as new work. A committed outbox drives dispatch; consumers MUST
 persist deduplication with state changes. This is not a general exactly-once
 guarantee for external systems.
 
+MQTT publication MUST follow a committed outbox entry. A broker PUBACK is transport
+confirmation, not proof of durable admission by the destination Mitos server.
+The destination MUST commit message identity, payload digest, and inbox state before
+issuing an application receipt. Applying it MUST commit the state change, handled
+status, and resulting outbox together. Repeated delivery returns existing state;
+changed content with the same identity conflicts. The sender retains responsibility
+for retry/reconciliation until the destination receipt arrives, even if the MQTT
+client acknowledges automatically. Retries preserve identity across lost sessions
+and broker restarts. Expiration MUST produce a recorded outcome, not silent loss.
+
 The process host MUST bind launch, inspection, cancellation, and output to operation
 identity and exact incarnation. Lost launch responses MUST be resolved against the
 original receipt before launching again. Terminal input has a separate bounded
