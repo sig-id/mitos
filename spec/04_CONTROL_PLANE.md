@@ -1,4 +1,4 @@
-# 04 — Control Plane
+# 04 – Control Plane
 
 Elaborates `01_ARCHITECTURE` §4 (control model) and §8.1/§8.2 (Decision/Effect
 events). This document fixes the two agentic control layers, the event-sourced
@@ -32,7 +32,7 @@ A run may also **park** awaiting an `invoke`'d subtask's result (`06` §5), resu
 the subtask returns.
 
 There is no authored finite-state machine (contrast chief-wiggum's pipeline of
-`steps` with `on_result`/`jump`/`max` — a hand-written graph). The pipeline is
+`steps` with `on_result`/`jump`/`max` – a hand-written graph). The pipeline is
 *enforced* by reasoning over the live log, never *pre-declared* as transitions.
 Determinism lives in the **record and the limits**, not in the next move.
 
@@ -76,7 +76,7 @@ agency where it is large (the orchestrator reasons over an open pipeline).
 
 ## 3. Orchestrator agent (cross-step)
 
-One agent. Routing/dispatch is folded in — there is **no separate routing LLM**
+One agent. Routing/dispatch is folded in – there is **no separate routing LLM**
 (contrast chief-wiggum's `system.triage` agent that returns a `gate_result`
 string consumed by `on_result` jumps). The orchestrator *is* the router.
 
@@ -93,7 +93,7 @@ The orchestrator never reads raw harness transcripts; it reads the **folded
 state** (results, evidence refs, Effect summaries). Evidence is fetched on
 demand by reference, not streamed into context.
 
-### 3.2 Output — ONLY Decision events
+### 3.2 Output – ONLY Decision events
 
 The orchestrator's sole side effect is appending one `DecisionEvent`. It MUST
 NOT mutate workspace, call tools, or write artifacts directly. `rationale` is
@@ -103,7 +103,7 @@ audit-only NL and MUST NOT be parsed to control flow (`01` §8.1).
 
 The orchestrator folds the log to spot where a capability is failing and adapts.
 The substrate also raises a `loop_manager` `escalate` Decision into the log when
-intra-step signals trip (§4.3) — the orchestrator treats that as a first-class
+intra-step signals trip (§4.3) – the orchestrator treats that as a first-class
 input. Adaptation moves, expressed as Decision `type`s:
 
 | Symptom (folded from log + evidence) | Move | Decision |
@@ -121,7 +121,7 @@ input. Adaptation moves, expressed as Decision `type`s:
 This subsumes chief-wiggum's entire `on_result`/`default_jump`/`on_max` table:
 `jump:next`→`advance`, `jump:prev`/inline-fix→`retry`/`insert`,
 `jump:abort`→`abort`, `on_max`→an orchestrator budget/iteration judgment rather
-than a pre-wired target. There is no `max`/`on_max` to author — bounding is the
+than a pre-wired target. There is no `max`/`on_max` to author – bounding is the
 budget (§11) plus loop-manager signals (§4).
 
 ### 3.4 Control loop (deterministic harness around an agent)
@@ -146,7 +146,7 @@ The `append(d)` BEFORE `execute(d)` is what makes the crash test (§7) pass.
 A coded FSM, **not** a free agent. It drives the iterations of a *single*
 capability that the orchestrator opened with `advance`/`insert`/`retry`. Its job:
 compose each iteration's context, run the harness, watch deterministic signals,
-and climb a fixed escalation ladder — spending a model call *only* to choose a
+and climb a fixed escalation ladder – spending a model call *only* to choose a
 rung. Contrast chief-wiggum, whose Ralph loop spends a model call **every**
 iteration to summarize and a periodic supervisor call to vote CONTINUE/STOP/
 RESTART (`runtime-loop.sh` PHASE 2 + SUPERVISOR PHASE).
@@ -176,11 +176,11 @@ RESTART (`runtime-loop.sh` PHASE 2 + SUPERVISOR PHASE).
 
 | State | Deterministic? | Emits | Effect(s) |
 |---|---|---|---|
-| `continue` | yes | — | `iteration_started`, `iteration_finished` |
-| `compact-context` | yes (when to); model summarizes | — | `context_compacted` |
+| `continue` | yes | – | `iteration_started`, `iteration_finished` |
+| `compact-context` | yes (when to); model summarizes | – | `context_compacted` |
 | `switch` | **1 model call to pick rung** | `switch` Decision (`actor=loop_manager`) | `harness_switched` |
 | `escalate` | yes (signal) + that same pick | `escalate` Decision (`actor=loop_manager`) | `escalation_raised` |
-| `done` | yes | — | `capability_finished` |
+| `done` | yes | – | `capability_finished` |
 
 `iteration_*`, `context_compacted`, `harness_switched`, `escalation_raised`
 extend the open Effect list of `01` §8.2 (its trailing `...`).
@@ -198,12 +198,12 @@ next_ctx = original_intent (verbatim, never summarized away)
 
 Compaction is **conditional** (fires only near the context limit), not
 per-iteration. chief-wiggum summarizes unconditionally every loop and re-injects
-the summary — paying a full model call each turn whether or not context is tight.
+the summary – paying a full model call each turn whether or not context is tight.
 We keep the original intent verbatim so compaction can never erase the goal.
 
 ### 4.3 Deterministic escalation signals
 
-These are computed from Effects + workspace diffs + token meter — **no model**.
+These are computed from Effects + workspace diffs + token meter – **no model**.
 When one trips, the FSM enters ESCALATE-CHOICE.
 
 | Signal | Trip condition (defaults; tunable per capability) | First response |
@@ -214,7 +214,7 @@ When one trips, the FSM enters ESCALATE-CHOICE.
 | `verify_fail` | deterministic verifier (§10) fails **K=2** times after a work phase | climb, then escalate |
 | `turn_exhaustion` | harness hit `max_turns` with no `final_result` | continue with carried context, bump turns once, else climb |
 | `oscillation` | result-state cycles (edit↔revert detected in diffs) | escalate (needs a different capability) |
-| `blocked_on_human` | `quiet(tree, T_block)` — no PTY bytes, no workspace writes, no *distinct* new exec — while the step is open (`14 §2`) | classify the modal state (`14 §3.2`) and raise a decision card (`15`); on `:unknown`, escalate as `judgment` |
+| `blocked_on_human` | `quiet(tree, T_block)` – no PTY bytes, no workspace writes, no *distinct* new exec – while the step is open (`14 §2`) | classify the modal state (`14 §3.2`) and raise a decision card (`15`); on `:unknown`, escalate as `judgment` |
 | `predicate_stall` | acceptance-predicate delta ≈ 0 across **K=3** consecutive segments, regardless of diff volume (`16 §3.2`) | rewind to last green (`16 §3.3`) and retry with a failure memo; on repeat, escalate |
 
 The first six signals are computed at **iteration boundaries**. The last two are
@@ -244,7 +244,7 @@ and the climb history. The orchestrator then owns the next move (§3.3).
 
 **The outer bound: restart intensity, not per-signal counters.** The N/M/K above
 are *first responses*; alone they let a run retry indefinitely by rotating which
-signal trips. The ladder is therefore bounded by OTP supervision semantics —
+signal trips. The ladder is therefore bounded by OTP supervision semantics –
 `max_restarts` within `max_seconds`, enforced per step **and** per run, with a
 `strategy` of `retry_step | rewind_to_green | rewind_tail | escalate`
 (`16 §4`). Exhausting intensity at either level escalates to a human as
@@ -270,14 +270,14 @@ DecisionEvent {
   target      : capability_ref | stage_id | checkpoint_id | null
   params      : object               # type-specific (below)
   inputs_hash : string               # hash of fold(log)+intent the decision saw (replay integrity)
-  rationale   : string               # NL — AUDIT ONLY, never parsed for control
+  rationale   : string               # NL – AUDIT ONLY, never parsed for control
   budget      : { tokens, usd, wall_ms, remaining }   # carried on EVERY decision
 }
 ```
 
 | `type` | actor | `target` | `params` |
 |---|---|---|---|
-| `advance` | orch | next `stage_id` / `capability_ref` | `{ inputs?, success_criteria_ref }` — open the step, grant its budget slice |
+| `advance` | orch | next `stage_id` / `capability_ref` | `{ inputs?, success_criteria_ref }` – open the step, grant its budget slice |
 | `insert` | orch | new `capability_ref` | `{ position: before\|after, reason_signal? }` |
 | `retry` | orch | `stage_id` | `{ feedback, reset: workspace\|context\|none }` |
 | `switch` | orch \| loop | `capability_ref` / null | `{ model?, effort?, harness?, capability? }` |
@@ -286,19 +286,19 @@ DecisionEvent {
 | `escalate` | loop (→orch) \| orch (→operator) | `stage_id` | `{ signal, climb_history, suggestion? }` |
 | `finish` | orch | null | `{ result_ref, success_criteria_met: bool }` |
 | `abort` | orch | null | `{ cause: budget\|policy\|unrecoverable, detail }` |
-| `rewind` | orch \| supervisor | `checkpoint_id` | `{ scope: step\|tail, memo, reason_signal, allow_non_green? }` — restore a checkpoint and re-open (`16 §3.3`); `memo` REQUIRED |
+| `rewind` | orch \| supervisor | `checkpoint_id` | `{ scope: step\|tail, memo, reason_signal, allow_non_green? }` – restore a checkpoint and re-open (`16 §3.3`); `memo` REQUIRED |
 
 **`actor="supervisor"`** is a fleet supervisor acting on *another* run
 (`16 §5`). It is restricted to `retry · switch · rewind · escalate · abort ·
-request_approval`, and MUST NOT emit `advance`, `insert`, `skip`, or `finish` —
+request_approval`, and MUST NOT emit `advance`, `insert`, `skip`, or `finish` –
 a supervisor that can declare another run finished can declare it finished
 wrongly. It reads that run's Decisions, Effects, diffs, and predicate verdicts;
 it MUST NOT read its `assistant_text`, inner trace, raw spool, or `rationale`
-(`16 §5.1`) — the same independence §3.1 already requires of the orchestrator
+(`16 §5.1`) – the same independence §3.1 already requires of the orchestrator
 over its own run, applied one level up.
 
 A `switch` from `actor="loop_manager"` is an intra-step climb (§4.4); from
-`"orchestrator"` it is a cross-step substitution. Same `type`, different scope —
+`"orchestrator"` it is a cross-step substitution. Same `type`, different scope –
 disambiguated by `actor` + `target`, never renamed.
 
 ---
@@ -375,7 +375,7 @@ seq 42  Effect    capability_started            ✘ never committed  ← crash h
 ```
 
 Recovery sees Decision 41 with no Effect. It does not guess and it does not
-re-decide — it **re-drives** decision 41. Because the Decision is total and the
+re-decide – it **re-drives** decision 41. Because the Decision is total and the
 Effect is not, the action simply runs again. chief-wiggum resumes from
 `pipeline-config.json.current.step_idx` (a mutable pointer that can itself be
 half-written); we resume from the immutable log, so there is no torn-pointer
@@ -416,10 +416,10 @@ operator's intent; honor it; adapt only as needed and record why."
 
 | Field | Purpose | If omitted |
 |---|---|---|
-| `goal` | the outcome, in plain language | orchestrator cannot run — the one near-required field |
+| `goal` | the outcome, in plain language | orchestrator cannot run – the one near-required field |
 | `stages` / `capabilities` | the intended sequence (names + one-line intent each) | orchestrator proposes its own ordering |
 | `allowed_capabilities` | the set it MAY draw from (incl. for `insert`) | defaults to the tenant's catalog |
-| `constraints` | hard rules (no network, no force-push, data residency, T-tier) | treated as unconstrained — discouraged |
+| `constraints` | hard rules (no network, no force-push, data residency, T-tier) | treated as unconstrained – discouraged |
 | `budget` | tokens / usd / wall_ms ceiling for the run | tenant/plan default applied |
 | `success_criteria` | how "done" is judged (tests pass, checks, human ok) | orchestrator infers from goal; weaker verify |
 | `checkpoints` | where the smart verifier (§10) MUST run | only deterministic checks run |
@@ -428,7 +428,7 @@ operator's intent; honor it; adapt only as needed and record why."
 policy at `05` and budget at `08`); the rest is *guidance* the orchestrator
 interprets. Soft guidance vs hard limit is the whole architecture in miniature.
 
-### 8.2 Example — code-feature pipeline
+### 8.2 Example – code-feature pipeline
 
 ````markdown
 # Pipeline: add-feature
@@ -450,15 +450,15 @@ checkpoints: [after:test-runner]
 ```
 
 ## Stages
-1. **planner** — read the issue + repo, write a short plan. (read-only)
-2. **code-edit** — implement the plan. Iterate until tests pass locally.
-3. **test-runner** — run the suite; on failure feed diffs back to code-edit.
-4. **pr-author** — open a PR summarizing the change and linking the issue.
+1. **planner** – read the issue + repo, write a short plan. (read-only)
+2. **code-edit** – implement the plan. Iterate until tests pass locally.
+3. **test-runner** – run the suite; on failure feed diffs back to code-edit.
+4. **pr-author** – open a PR summarizing the change and linking the issue.
 
 Notes: if the issue is ambiguous, request_approval before large edits.
 ````
 
-### 8.3 Example — design-job pipeline
+### 8.3 Example – design-job pipeline
 
 ````markdown
 # Pipeline: brand-landing
@@ -473,7 +473,7 @@ checkpoints: after the critic, and before final mockup (high-stakes, monetized).
 
 Stages (prose):
 First run **moodboard** to fix visual language from the brief and brand tokens.
-Then **layout-gen** three times for three directions — these MAY run
+Then **layout-gen** three times for three directions – these MAY run
 concurrently (independent). **design-critic** scores them against the brief;
 **request_approval** so a human picks one. Finally **mockup-builder** refines
 the pick. If the critic rejects all three, insert another layout-gen round
@@ -481,7 +481,7 @@ rather than forcing a weak pick.
 ````
 
 Both files are valid. The first leans structured (YAML fence), the second leans
-prose — the orchestrator reads either. Tooling MAY lint for the recommended
+prose – the orchestrator reads either. Tooling MAY lint for the recommended
 fields and warn, but MUST NOT reject a pipeline for shape.
 
 ---
@@ -490,7 +490,7 @@ fields and warn, but MUST NOT reject a pipeline for shape.
 
 The default *pipeline* shape is **plan → work → verify** as distinct stages
 (capabilities), which the orchestrator advances through and adapts. Separately,
-a single capability's *runtime* MAY self-plan inside its step — the loop-manager
+a single capability's *runtime* MAY self-plan inside its step – the loop-manager
 does not forbid an internal plan/act loop within the harness. Two levels:
 
 ```
@@ -511,7 +511,7 @@ Plan stages SHOULD be read-only (no workspace mutation; cf. chief-wiggum's
 | Tier | When | What | Cost |
 |---|---|---|---|
 | **Deterministic / heuristic** | **always**, after every work phase | tests, linters, schema/contract checks, diff sanity, the §4.3 signals | cheap, no model |
-| **Smart-model verifier** | only at pipeline `checkpoints`, high-stakes, or **monetized** runs | a capability that interprets the soft result + evidence (`01` §8.3) and judges against `success_criteria` | ~doubles agents — gated |
+| **Smart-model verifier** | only at pipeline `checkpoints`, high-stakes, or **monetized** runs | a capability that interprets the soft result + evidence (`01` §8.3) and judges against `success_criteria` | ~doubles agents – gated |
 
 The deterministic tier feeds the loop-manager's `verify_fail` signal directly.
 The smart verifier is itself a capability (a T0 helper) emitting a soft verdict;
@@ -553,7 +553,7 @@ run budget ─▶ orchestrator partitions per advance ─▶ step slice ─▶ l
 **Concurrency.** Independent stages MAY run in parallel (e.g. §8.3's three
 `layout-gen`). Each concurrent capability runs in its own sandbox, but all
 Effects funnel through **one per-run writer** (a BEAM process owning the run)
-that assigns the monotonic `seq` — so the log stays a single totally-ordered
+that assigns the monotonic `seq` – so the log stays a single totally-ordered
 stream even under fan-out, and `fold` remains deterministic. Concurrent stages
 draw from disjoint budget slices; the writer rejects a charge that would drive
 `remaining` negative. Cross-run concurrency (multi-tenant) is isolated by
@@ -563,17 +563,17 @@ draw from disjoint budget slices; the writer rejects a charge that would drive
 
 ## 12. Judgment calls (flagged for review)
 
-1. **Loop-manager Decisions are sparse by design** — `continue`/`compact`/`done`
+1. **Loop-manager Decisions are sparse by design** – `continue`/`compact`/`done`
    produce only Effects, not Decisions; only `switch`/`escalate` are Decisions.
    This keeps the Decision log a policy-change log. Alternative: emit a Decision
    per iteration (heavier log, simpler causality).
 2. **One ESCALATE-CHOICE model call per trip** is the only loop-manager agency.
-   If even that is too much, the ladder could be fully fixed (no model) — cheaper
+   If even that is too much, the ladder could be fully fixed (no model) – cheaper
    but blind to *why* it's stuck.
 3. **No schema validator for pipeline markdown** is deliberate (docs carry it).
    Risk: malformed intent fails late, at orchestration. Mitigation: a non-blocking
    linter (§8.3).
-4. **Re-drive vs re-decide on recovery** — §7 prefers re-driving the pending
+4. **Re-drive vs re-decide on recovery** – §7 prefers re-driving the pending
    Decision (cheaper, deterministic) over re-invoking the orchestrator. For
    non-idempotent egress it degrades to at-most-once + approval. Confirm that
    matches the broker semantics in `05`.

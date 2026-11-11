@@ -3,12 +3,7 @@
   const project = document.body.dataset.project, session = document.body.dataset.session;
   const $ = id => document.getElementById(id);
   const error = err => { $('desk-error').textContent = err.message || String(err); $('desk-error').hidden = false; };
-  async function api(path, body) {
-    const response = await fetch(path, body === undefined ? {cache:'no-store'} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.error || `Request failed (${response.status})`);
-    return value;
-  }
+  const api = window.MitosConnection.request;
   const projectAPI = suffix => `/api/projects/${project}/${suffix}`;
   function el(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
   function action(text, fn) { const b = el('button', text); b.type = 'button'; b.addEventListener('click', () => Promise.resolve().then(fn).catch(error)); return b; }
@@ -355,7 +350,7 @@
             ready=true; resize();
             if (document.activeElement===document.body && !document.querySelector('dialog[open]')) focusTerminal();
           }
-          $('connection-status').textContent=status==='stopping'?'Stopping session…':inputBroken?'Terminal input disconnected':running?(ready?'Connected · real terminal':'Restoring scrollback…'):`Session ${status}`;
+          $('connection-status').textContent=status==='stopping'?'Stopping session…':inputBroken?'Terminal input disconnected':running?(ready?'Connected':'Restoring scrollback…'):`Session ${status}`;
           updateInputControls();
           if (socket.readyState===WebSocket.OPEN) socket.send(JSON.stringify({next:offset}));
         }).catch(()=>socket.close());
@@ -431,7 +426,7 @@
   const size=n=>n>1048576?`${(n/1048576).toFixed(1)} MiB`:`${(n/1024).toFixed(1)} KiB`;
   async function inspect(){
     const r=await api(projectAPI('resources?details=true'));
-    $('git-status').textContent=r.git_status||'Working directory is clean.';$('git-diff').textContent=r.diff||'No tracked diff against HEAD. Untracked files appear in status above.';$('git-worktrees').textContent=r.worktrees;
+    window.MitosDiff.render(r);$('git-worktrees').textContent=r.worktrees;
     $('resource-coverage').textContent=r.coverage;$('resource-summary').replaceChildren();
     for(const [value,label] of [[r.processes.length,'observed processes'],[size(r.processes.reduce((n,p)=>n+p.rss_bytes,0)),'summed RSS · may share pages'],[size(r.disk_bytes),r.disk_partial?'allocated bytes · partial scan':'allocated bytes · directory scan']]){const stat=el('div',undefined,'resource-stat');stat.append(el('strong',String(value)),el('span',label));$('resource-summary').append(stat);}
     $('process-list').replaceChildren();
@@ -453,6 +448,6 @@
     const selected=values.find(s=>s.id===session);if(selected?.detail)$('connection-status').textContent=selected.detail;
     if (selected) $('session-name').textContent=selected.name;
   }
-  async function refresh(){try{await Promise.all([topics(),jobs(),sessions()]);}catch(err){error(err);}if(alive)setTimeout(refresh,3000);}
+  async function refresh(){try{await Promise.all([topics(),jobs(),sessions()]);window.MitosConnection.recovered('workspace');}catch(err){window.MitosConnection.failed('workspace',err);}if(alive)setTimeout(refresh,3000);}
   refresh();
 })();

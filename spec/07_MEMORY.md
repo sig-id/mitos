@@ -1,4 +1,4 @@
-# 07 — Memory
+# 07 – Memory
 
 Conforms to `01_ARCHITECTURE` (the constitution). This doc owns the **cross-run
 knowledge service**: OS-owned, multi-tenant, two-track memory with write-time
@@ -27,7 +27,7 @@ Two things are easy to conflate. They are different and live in different specs.
 **DATA is NOT the memory service.** A capability's reference corpus is packaged,
 content-addressed, and mounted RO via `prepare` (`05 §SandboxProvider`,
 `01 §8.4`). It does not learn, is not tenant-scoped, and emits no
-`memory_written`. Everything below concerns the second column only — the
+`memory_written`. Everything below concerns the second column only – the
 *knowledge* a tenant accumulates by *running* capabilities. Detail on the DATA
 mount belongs to `03`/`05`; we delegate it and never duplicate it.
 
@@ -43,11 +43,11 @@ the BEAM substrate.
 
 | Track | Who writes | From | Form | CW analogue |
 |---|---|---|---|---|
-| **A — Deterministic stats** | code only (a pure fold) | the event log (`01 §8.2`) | typed `CapabilityStats` rows | `memory_collect_stats`, `memory_rebuild_agent_stats`, `memory_rebuild_global_stats` |
-| **B — Agent observations** | an analysis agent, *proposing* | run trace + Track A + existing memory | cited `Observation` records | `memory-analyst.md` (writes), `self-improver.md` (consumes) |
+| **A – Deterministic stats** | code only (a pure fold) | the event log (`01 §8.2`) | typed `CapabilityStats` rows | `memory_collect_stats`, `memory_rebuild_agent_stats`, `memory_rebuild_global_stats` |
+| **B – Agent observations** | an analysis agent, *proposing* | run trace + Track A + existing memory | cited `Observation` records | `memory-analyst.md` (writes), `self-improver.md` (consumes) |
 
 Hard rule, inherited from CW: **Track B agents MUST NOT write Track A.** In CW
-the rule is "NEVER write or modify .json files"; here it is enforced by the API —
+the rule is "NEVER write or modify .json files"; here it is enforced by the API –
 the observation-proposal endpoint cannot mutate stats, and stats are derived, not
 authored. Stats are *folded from the log*, so they are replayable and tamper-evident;
 observations are *proposed and validated*, so they are auditable and attributable.
@@ -62,16 +62,16 @@ The one upgrade over CW: Track A is sourced from the **canonical event log**
 
 Memory is **OS-owned** (`01 §2`, §7: "memory storage/retrieval"). The BEAM
 control plane owns storage, retrieval, ranking, attribution, supersession, and
-privacy. The sandbox **never** connects to the store directly — it receives an
+privacy. The sandbox **never** connects to the store directly – it receives an
 injected slice inbound and, if it needs more, reaches the store only *through the
 broker* (§5). Logical layout:
 
 ```
 tenant/<tenant_id>/
-  stats/                       # Track A — derived, never agent-written
+  stats/                       # Track A – derived, never agent-written
     <capability_ref>/<model>/<harness>/CapabilityStats   # rebuilt by fold
     _global/GlobalStats                                  # roll-up (cf. CW global stats.json)
-  knowledge/                   # Track B — proposed, validated, versioned
+  knowledge/                   # Track B – proposed, validated, versioned
     obs/<obs_id>               # active | superseded | tombstoned
     tomb/<supersession_id>     # append-only supersession ledger
     index/<vector>             # embeddings for similarity retrieval (active only)
@@ -86,13 +86,13 @@ the obs/tomb store are projections that can be rebuilt by replay).
 
 ## 4. Schemas
 
-### 4.1 Track A — `CapabilityStats` (derived, code-only)
+### 4.1 Track A – `CapabilityStats` (derived, code-only)
 
 ```
 CapabilityStats {                         # = fold(events where scope matches)
   scope          : { tenant_id, capability_ref, model, harness }   # ranking keys
   runs           : u64
-  pass_rate      : f32     # (PASS+SKIP)/runs    — cf. CW pass_rate
+  pass_rate      : f32     # (PASS+SKIP)/runs    – cf. CW pass_rate
   fix_rate       : f32     # cf. CW fix_rate
   fail_rate      : f32
   avg_iterations : f32     # cf. CW avg_iterations (loop-manager iters, 04)
@@ -105,11 +105,11 @@ CapabilityStats {                         # = fold(events where scope matches)
 }
 ```
 
-`GlobalStats` is the tenant roll-up (tasks analyzed, success rate, avg cost) —
+`GlobalStats` is the tenant roll-up (tasks analyzed, success rate, avg cost) –
 the direct heir of CW `memory_rebuild_global_stats`. Both are **pure projections**:
 delete them and a log replay reconstructs them exactly.
 
-### 4.2 Track B — `Observation` (proposed, validated)
+### 4.2 Track B – `Observation` (proposed, validated)
 
 ```
 Observation {
@@ -131,7 +131,7 @@ Observation {
 }
 ```
 
-`escalation` is the heir of CW `ESCALATED.md` — a structural issue the agent
+`escalation` is the heir of CW `ESCALATED.md` – a structural issue the agent
 system cannot self-resolve; it is injected with high priority and surfaced to the
 tenant, never silently superseded.
 
@@ -174,7 +174,7 @@ Track A joins in: ranking SHOULD down-weight observations attached to a
 (capability, model) whose `pass_rate` is low, and prefer those whose linked
 configuration verifiably performs. Superseded/tombstoned entries are excluded.
 
-**Injection (inbound, hermetic — `01 §8.5`).** At `prepare`, mitos selects the
+**Injection (inbound, hermetic – `01 §8.5`).** At `prepare`, mitos selects the
 top-N slices for `(tenant, capability, model)` within a token budget and writes
 them into the **curated context slices** that `01 §8.5` already enumerates as a
 legitimate inbound. The capability sees a read-only knowledge digest (a
@@ -183,7 +183,7 @@ tenants. This is the hermetic default (`01 §10.8`: "mitos owns memory, not the
 harness").
 
 **Mid-run dynamic fetch (outbound, through the broker).** If a harness needs more
-than was injected, the request leaves the sandbox the *only* way anything does —
+than was injected, the request leaves the sandbox the *only* way anything does –
 egress to the **broker** (`01 §8.5`). The broker calls the memory retrieval API
 server-side (tenant context attached by the broker, never by the sandbox),
 returns a slice, and logs the crossing as a `tool_brokered` Effect. The sandbox
@@ -194,7 +194,7 @@ never holds a store credential; deny-all-except-broker still holds.
 ## 6. Forgetting = write-time contradiction-supersession (decided)
 
 The decided model: **we do not blind-append.** On every write we retrieve, and if
-the new entry *contradicts* a prior one, the prior is superseded — not silently
+the new entry *contradicts* a prior one, the prior is superseded – not silently
 shadowed by recency, not left to rot. Recency/usage **decay is a secondary
 signal** that only reorders retrieval and breaks ties; it never deletes.
 
@@ -203,7 +203,7 @@ signal** that only reorders retrieval and breaks ties; it never deletes.
 ```
 propose(entry)                          # Track-B agent proposes (cannot persist directly)
   │
-  ├─ validate(entry):                   # mitos, deterministic gate — REJECT if:
+  ├─ validate(entry):                   # mitos, deterministic gate – REJECT if:
   │     · evidence empty                 (CW: "only changes supported by evidence")
   │     · evidence references another tenant's run   (cross-tenant guard, §7)
   │     · malformed claim / over size budget
@@ -281,7 +281,7 @@ populates the **per-model skill-adaptation seam** that `03` defines
 
 Boundary with `03`/`04`: the knowledge service is the **source of the distilled
 signal and the candidate adaptation**; it does **not** own the adaptation
-*generator* — `01 §5` marks that "generator out of scope," and `03` owns the seam
+*generator* – `01 §5` marks that "generator out of scope," and `03` owns the seam
 contract and `04` owns verify+distill. We produce evidence-backed proposals and a
 ranked corpus; `03`/`04` decide how a candidate becomes a resolved skill. Each
 adopted adaptation is itself evidence-linked back to the runs that justified it.
@@ -294,7 +294,7 @@ adopted adaptation is itself evidence-linked back to the runs that justified it.
 |---|---|
 | Scope | every `CapabilityStats`, `Observation`, `Supersession` carries `tenant_id`; entries also scope to `capability_ref` (and optionally `model`/`harness`). |
 | Isolation | retrieval, injection, and storage MUST filter `tenant_id` at the partition level (MUST, not best-effort). No cross-tenant entry is ever injected or ranked. |
-| Write guard | `validate` (§6) REJECTS any proposal whose evidence references another tenant's `run_id`/`event_seq` — blocks leakage at authoring time. |
+| Write guard | `validate` (§6) REJECTS any proposal whose evidence references another tenant's `run_id`/`event_seq` – blocks leakage at authoring time. |
 | First-party | the `system/` (T0) corpus MAY be injected to all tenants; it is curated, opt-in, and contains **no** tenant-derived data. |
 | Seller capabilities (`08`) | a seller capability's observations default to the **buyer** tenant that produced them. Marketplace-quality roll-ups across buyers MUST be k-anonymized / counts-only (Track A aggregates), never raw Track-B observations. |
 | Right-to-delete | a tenant delete cascades: write `Supersession{reason=privacy_delete, superseded_by=null}`, purge `body`+`embedding`, drop from the active index. Track A is re-folded from retained anonymized counters or purged per policy. |
@@ -319,9 +319,9 @@ adopted adaptation is itself evidence-linked back to the runs that justified it.
 
 1. **`classify` cost/placement.** Cheap-rule vs small-LLM split, and whether it
    runs inside the Track-B analysis agent or as a separate validated OS step.
-2. **`τ_sim` and decay weights** (`w_*`) — tuning, and whether they are per-tenant
+2. **`τ_sim` and decay weights** (`w_*`) – tuning, and whether they are per-tenant
    configurable or fixed substrate constants.
-3. **Distill cadence.** Per-run vs batched/scheduled (`06`) — CW queues workers
+3. **Distill cadence.** Per-run vs batched/scheduled (`06`) – CW queues workers
    (`pending.list`) and processes async; do we mirror that, or distill inline post-run?
 4. **Stats sink.** `CapabilityStats` as a live BEAM projection vs a periodic
    rebuild job; interaction with metering (`08`) which reads the same Effect events.

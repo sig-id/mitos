@@ -1,4 +1,4 @@
-# 15 — Decision Plane (Asking a Human, Rarely and Well)
+# 15 – Decision Plane (Asking a Human, Rarely and Well)
 
 Every place mitos needs a human, and the one shape that request takes. This doc
 owns the **human decision contract**: when to ask (§2), what a card is (§3),
@@ -40,7 +40,7 @@ Irreversibility is a property of the *consequence*, and consequence is what a
 human is actually being asked about. The corollary is the design's main
 autonomy lever:
 
-> **Blast-radius declaration buys autonomy — not a better model.** A run that
+> **Blast-radius declaration buys autonomy – not a better model.** A run that
 > structurally cannot reach anything outside its sandbox earns near-total
 > freedom for free, because every mistake it can make is one `rewind` away
 > (`16 §3`).
@@ -50,12 +50,12 @@ autonomy lever:
 ## 2. Reversibility classes
 
 Computed **deterministically** by the substrate from the act and the run's
-grants — never by a model, never from the agent's own claim about its intent.
+grants – never by a model, never from the agent's own claim about its intent.
 
 | Class | Definition | Examples | Policy |
 |---|---|---|---|
 | `internal` | confined to the sandbox workspace; undone by `rewind` to a checkpoint (`16 §3`) | file edits, test runs, local commits, in-sandbox processes | **never escalate.** Log only. |
-| `recoverable` | escapes the workspace but a checkpoint or a compensating action restores it | push to a mitos-owned mirror, writes outside the workspace but inside the sandbox, a draft PR | **act, log, queue for async review** (digest, §5.3) — do not push |
+| `recoverable` | escapes the workspace but a checkpoint or a compensating action restores it | push to a mitos-owned mirror, writes outside the workspace but inside the sandbox, a draft PR | **act, log, queue for async review** (digest, §5.3) – do not push |
 | `external` | visible outside mitos's control; assumed irreversible | upstream push, package publish, payment, message to a third party, prod mutation, any brokered egress with `requires_approval` | **always escalate. No default. Park.** |
 
 Two kinds escalate regardless of class, because no policy can resolve them:
@@ -67,14 +67,14 @@ Two kinds escalate regardless of class, because no policy can resolve them:
 
 And one derived from `16`: a run that has burned its restart intensity, or whose
 acceptance predicate has not moved for K segments, escalates as `judgment`
-(`16 §4`) — the substrate has run out of moves, which is exactly when a human is
+(`16 §4`) – the substrate has run out of moves, which is exactly when a human is
 worth interrupting.
 
 ### 2.1 Determinism obligation
 
 The class MUST be derivable from `(act, egress_policy, workspace bounds,
-capability grants)` alone. Where it cannot be — an unclassifiable act, an
-`:unknown` modal state (`14 §3.2`), a `steer_rejected` (`14 §3.3`) — the
+capability grants)` alone. Where it cannot be – an unclassifiable act, an
+`:unknown` modal state (`14 §3.2`), a `steer_rejected` (`14 §3.3`) – the
 substrate MUST treat it as `external`. **Unclassifiable is not permission.**
 
 ---
@@ -114,7 +114,7 @@ HumanResolution {
 A card MUST be resolvable in under a minute by someone who has not been
 watching. Therefore:
 
-- `context` is **folded state** (`04 §3.1`) — what was attempted, what is
+- `context` is **folded state** (`04 §3.1`) – what was attempted, what is
   blocked, evidence by reference. A card MUST NOT carry a transcript, and MUST
   NOT carry `rationale` (audit-only, `01 §8.1`).
 - Composition of `context` and `options` MAY use a model (this is the
@@ -134,7 +134,7 @@ watching. Therefore:
 
 ---
 
-## 4. Silence — defaults, TTL, and parking
+## 4. Silence – defaults, TTL, and parking
 
 Silence MUST advance the run or explicitly hold it. It MUST never be undefined.
 
@@ -162,11 +162,11 @@ is preserved on the log forever, because it feeds `decision_precision` (`16 §6`
 
 Without the second tier "unattended overnight" costs a night of idle sandboxes,
 which is the difference between a feature and a bill. Rehydration on resolution
-is the ordinary `04 §7` resume path — no new mechanism.
+is the ordinary `04 §7` resume path – no new mechanism.
 
 ---
 
-## 5. Transport — a sink out, a connector in
+## 5. Transport – a sink out, a connector in
 
 A decision needs no new plane. It is exactly the `10 §5.4` round-trip.
 
@@ -196,7 +196,7 @@ card's message id, exactly as a chat connector carries a thread.
 - `dedupe_key` collapses identical cards across parallel workers into **one**
   card. Resolving it resolves every member.
 - Cards below the tenant's `escalation_floor` accumulate into a **digest**
-  delivered on a schedule — a list to read, not a push to answer. `recoverable`
+  delivered on a schedule – a list to read, not a push to answer. `recoverable`
   acts land here by default.
 - Pushes are rate-limited per tenant; excess degrades to digest, never to drop.
 - Effects (`01 §8.2` open list): `decision_delivered`, `decision_defaulted`,
@@ -214,9 +214,9 @@ contract that keeps Studio's convenience out of Market's trust boundary.
 |---|---|---|
 | Resolver | the operator (tenant-authenticated) | the **buyer** for acts on their own data; the **seller** for policy set ahead of the run |
 | Transport | push / chat / CLI / console | the entrypoint's `reply_ref` + the commercial-cut watch page (`11 §4`) |
-| Defaults | permitted for `internal` / `recoverable` | **never permitted** — a stranger's silence MUST NOT authorize spend or egress |
+| Defaults | permitted for `internal` / `recoverable` | **never permitted** – a stranger's silence MUST NOT authorize spend or egress |
 | Frequency target | rare, by exception (`16 §6`) | **zero on the happy path** (`02 §6`) |
-| A card on the happy path | normal | a **defect** in the capability, not a feature — the seller must resolve it in policy before publishing |
+| A card on the happy path | normal | a **defect** in the capability, not a feature – the seller must resolve it in policy before publishing |
 | Cut | full dev cut | commercial cut: no `rationale`, no inner trace, destinations only (`08 §5`) |
 
 That last row is how `02 §6`'s "no human in the loop on the happy path" survives
@@ -241,7 +241,7 @@ capability that routinely raises them fails its own launch criteria.
 ## Cross-references
 
 - Decision/Effect schema, decision card contract: `01 §8.1`, `§8.2`, `§8.9`.
-- Broker `requires_approval` parking: `05 §5.3` — a card is how it is asked.
+- Broker `requires_approval` parking: `05 §5.3` – a card is how it is asked.
 - Sinks, connectors, round-trip: `10 §3`, `§5`.
 - Escalation signals that raise cards: `04 §4.3`, `16 §2`, `16 §4`.
 - `:unknown` modal state and rejected steers: `14 §3.2`, `§3.3`.

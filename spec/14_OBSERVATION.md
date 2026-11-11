@@ -1,4 +1,4 @@
-# 14 — Observation Plane (Three Channels, One Clock)
+# 14 – Observation Plane (Three Channels, One Clock)
 
 How mitos knows what a harness is doing. This doc owns the **observation
 contract**: the three channels, their trust ranking, the quiescence clock that
@@ -6,7 +6,7 @@ makes discrete reads possible, and the terminal's bounded, re-admitted role.
 
 It supersedes the observation half of `01 §8.6` and `05 §5.2`; it does not
 redefine the harness adapter's field names (`01 §8.6` remains canonical) and it
-introduces no new authority path — every channel here is **read-only
+introduces no new authority path – every channel here is **read-only
 observation plus mitos-initiated control**, never an agent callback (`01 §8.5`).
 
 RFC 2119 keywords are normative.
@@ -20,7 +20,7 @@ harness in a non-interactive mode that emits a machine-readable stream, drain it
 per iteration. That bet holds for `Market` (`02 §1`) and breaks for `Studio`:
 
 > Running a harness in its structured-output mode **is** running it in a
-> different mode — non-interactive, no permission prompts, no TUI, different
+> different mode – non-interactive, no permission prompts, no TUI, different
 > defaults, different failure behaviour. An operator who wants their own agent
 > observed does not want it observed *as a different program*.
 
@@ -30,14 +30,14 @@ failure is worth naming precisely, because the wrong lesson was recorded:
 > **The defect was streaming, not the PTY.** A PTY carrying a TUI is a *display*
 > protocol, not a data protocol. Parsing it continuously means sampling a
 > surface mid-repaint: torn frames, escape sequences split across read
-> boundaries, spinner rows read as new content, wrapped-line ambiguity, and —
-> the fatal one — **no way to distinguish new information from the same
+> boundaries, spinner rows read as new content, wrapped-line ambiguity, and –
+> the fatal one – **no way to distinguish new information from the same
 > information redrawn.** Every error class the prior attempt hit follows from
 > continuous parsing, and none of them follow from the PTY itself.
 
 This plane keeps the ban on continuous screen parsing and re-admits the terminal
 under conditions that make a screen read a *replayable function of a byte
-prefix* — and therefore auditable, meterable, and safe to base control on.
+prefix* – and therefore auditable, meterable, and safe to base control on.
 
 ---
 
@@ -45,16 +45,16 @@ prefix* — and therefore auditable, meterable, and safe to base control on.
 
 | # | Channel | Answers | Trust | Available |
 |---|---|---|---|---|
-| **C1** | **Effect surface** — fs / exec / net crossings, mediated at the sandbox edge (`05 §5`) | *what actually happened* | ground truth; unforgeable by the agent | always |
-| **C2** | **Session artifacts** — the harness's own structured record (Claude Code `$CLAUDE_CONFIG_DIR/projects/**/*.jsonl`, equivalents elsewhere) | *what the model said, planned, and called* | high — the harness's own record, not our reading of a screen | when the adapter declares it (§4) |
-| **C3** | **Terminal** — the PTY grid | *what is this terminal waiting for, right now* | low; bounded questions only | interactive runs only |
+| **C1** | **Effect surface** – fs / exec / net crossings, mediated at the sandbox edge (`05 §5`) | *what actually happened* | ground truth; unforgeable by the agent | always |
+| **C2** | **Session artifacts** – the harness's own structured record (Claude Code `$CLAUDE_CONFIG_DIR/projects/**/*.jsonl`, equivalents elsewhere) | *what the model said, planned, and called* | high – the harness's own record, not our reading of a screen | when the adapter declares it (§4) |
+| **C3** | **Terminal** – the PTY grid | *what is this terminal waiting for, right now* | low; bounded questions only | interactive runs only |
 
 Three normative rules bind them:
 
 1. **Run semantics MUST come from C1 and C2.** Progress, tool calls, token
    usage, results, and every input to the orchestrator (`04 §3.1`) are read from
    C1/C2. C3 is never a semantic source.
-2. **C3 answers exactly one class of question** — the *modal state* of the
+2. **C3 answers exactly one class of question** – the *modal state* of the
    terminal (§3.2): is something being waited on, of what shape, with what
    options. This is a bounded, enumerable classification, not open-ended content
    extraction.
@@ -72,14 +72,14 @@ The consequence was not previously drawn:
 > Because mitos chooses where the harness writes its session record, mitos can
 > **tail that record**. A modern harness emits a structured, append-only session
 > log *in interactive mode*. That is a structured stream from an unmodified
-> interactive session — the thing `01 §8.6` assumed required a mode change.
+> interactive session – the thing `01 §8.6` assumed required a mode change.
 
 C2 therefore satisfies the Studio constraint (no mode change) with Market's
 data quality (structured, no scraping). The adapter declares its shape (§4);
 the substrate tails it and normalizes into the same event vocabulary
 (`01 §8.6`: `assistant_text | tool_use | tool_result | token_usage | status |
-final_result`). **One normalized stream, two possible sources** — headless
-stdout for Market, session artifacts for Studio — and nothing downstream of the
+final_result`). **One normalized stream, two possible sources** – headless
+stdout for Market, session artifacts for Studio – and nothing downstream of the
 adapter knows which.
 
 ---
@@ -121,7 +121,7 @@ and MUST be derived from observed think-time percentiles, not guessed.
 
 ### 2.2 What the clock serves
 
-One mechanism, five consumers — this is why it is specified here and not
+One mechanism, five consumers – this is why it is specified here and not
 inside any of them:
 
 | Consumer | Uses the edge to |
@@ -138,7 +138,7 @@ inside any of them:
 
 Three separations make C3 safe. Each removes one error class from §0.
 
-### 3.1 Separation 1 — parse continuously, materialize on demand
+### 3.1 Separation 1 – parse continuously, materialize on demand
 
 The VT parser MUST be fed **every** byte (it is a state machine; skipped bytes
 desynchronize it) and MUST emit **nothing**. It maintains a grid; no consumer
@@ -150,7 +150,7 @@ snapshot(session)          # on demand:  {:ok, grid} | {:error, :unstable}
 ```
 
 `snapshot/1` MUST refuse (`:unstable`) unless the parser is at a consistent
-boundary — no pending escape sequence, no partial UTF-8 — **and** the session is
+boundary – no pending escape sequence, no partial UTF-8 – **and** the session is
 at a quiescence edge of at least `T_snap`. This is what kills torn frames and
 split escapes: they are not handled, they are *not observed*.
 
@@ -166,13 +166,13 @@ Grid {
 
 **Replayability (the property that makes C3 auditable).** `snapshot` is a pure
 function of the spool prefix `[0, pty_offset)`. Given the spooled artifact, any
-later reader — a replay (`04 §7`), an audit, a proof (`08 §5`) — recomputes the
+later reader – a replay (`04 §7`), an audit, a proof (`08 §5`) – recomputes the
 identical grid and verifies `digest`. A screen read is therefore evidence, not
 an unrepeatable observation. **This is the precise reason the `01 §8.6` ban is
 lifted:** the objection was that PTY did not compose with audit/proof/metering,
 and a replayable, digested, offset-anchored snapshot does.
 
-### 3.2 Separation 2 — a bounded question, and `:unknown` is an answer
+### 3.2 Separation 2 – a bounded question, and `:unknown` is an answer
 
 The grid is consumed only by a per-harness **modal classifier** with a closed
 output type:
@@ -196,7 +196,7 @@ classify(grid) :: %{
   in its `inputs_hash` preimage (`01 §8.1`), so replay can prove what was on
   screen when the decision was taken.
 
-### 3.3 Separation 3 — control is a verified transaction, never a keystroke
+### 3.3 Separation 3 – control is a verified transaction, never a keystroke
 
 Writing to the PTY master is stable; firing and forgetting is not. Every
 control write is a transaction on a quiescence edge:
@@ -212,8 +212,8 @@ steer(session, command):
   else:                         EMIT steer_rejected{...}; send ESC; escalate (15)
 ```
 
-- `command` is the `01 §8.6` vocabulary — `approve | answer | interrupt |
-  select | prompt` — unchanged.
+- `command` is the `01 §8.6` vocabulary – `approve | answer | interrupt |
+  select | prompt` – unchanged.
 - A `steer_rejected` MUST NOT be retried automatically. A screen that did not go
   where the classifier predicted means the classifier is wrong about this build
   of this harness; retrying blind is how a wrong keystroke lands in a prompt.
@@ -227,7 +227,7 @@ steer(session, command):
   operator-authored corrections at step boundaries; it does not carry a chat.
 - Not a progress source. `no_progress` (`04 §4.3`) MUST be computed from C1/C2.
 - Not required. A run with `interactive: false` never opens a PTY, and every
-  mechanism above degrades to C1+C2 with no loss except modal-state visibility —
+  mechanism above degrades to C1+C2 with no loss except modal-state visibility –
   which a non-interactive harness does not have.
 
 ---
@@ -255,16 +255,16 @@ observable set from this block and refuses configurations it cannot observe:
 | `structured_output` | `session_artifacts` | Studio (T0/T1) | Market (T2) |
 |---|---|---|---|
 | `:stream` | any | usable headless | **preferred** |
-| `:none` / `:artifact` | present, `tail: true` | **preferred** — interactive, C2 tail | usable |
-| `:none` | absent | C1 + C3 only — MUST warn; MUST NOT run unattended (`16`) | **MUST refuse** |
+| `:none` / `:artifact` | present, `tail: true` | **preferred** – interactive, C2 tail | usable |
+| `:none` | absent | C1 + C3 only – MUST warn; MUST NOT run unattended (`16`) | **MUST refuse** |
 
 A harness observable only through C1+C3 can be watched by a human but MUST NOT
-be granted an unattended horizon (`16 §6`), and MUST NOT serve a Market run —
+be granted an unattended horizon (`16 §6`), and MUST NOT serve a Market run –
 because a buyer's proof (`08 §5`) cannot be built from a screen.
 
 ---
 
-## 5. Contract tests — the maintenance cost, made visible
+## 5. Contract tests – the maintenance cost, made visible
 
 Harness churn is the largest ongoing cost in this design (`02 §8` R1). It MUST
 be detected by CI, not by a stalled overnight run.
@@ -287,13 +287,13 @@ be detected by CI, not by a stalled overnight run.
 
 | Owns | Delegates to |
 |---|---|
-| the three channels and their trust ranking | the normalized event vocabulary — `01 §8.6` |
-| the VT state machine, and its purity over the byte prefix | the pty itself — the engine (`01 §7`); mitos ships a `script(1)`-backed local transport so the channel is demonstrable without it |
-| the quiescence clock and its Effects | the signals computed from it — `04 §4.3`, `16 §2` |
-| terminal spool / snapshot / classify / steer transaction | authority and secrets — `05 §5` (unchanged) |
-| the observation capability matrix + contract tests | trust-tier → provider/posture — `05 §4` |
-| replayability of a screen read | replay of the run — `04 §7` |
-| what happens on `:unknown` / `steer_rejected` (escalate) | how a human is asked — `15` |
+| the three channels and their trust ranking | the normalized event vocabulary – `01 §8.6` |
+| the VT state machine, and its purity over the byte prefix | the pty itself – the engine (`01 §7`); mitos ships a `script(1)`-backed local transport so the channel is demonstrable without it |
+| the quiescence clock and its Effects | the signals computed from it – `04 §4.3`, `16 §2` |
+| terminal spool / snapshot / classify / steer transaction | authority and secrets – `05 §5` (unchanged) |
+| the observation capability matrix + contract tests | trust-tier → provider/posture – `05 §4` |
+| replayability of a screen read | replay of the run – `04 §7` |
+| what happens on `:unknown` / `steer_rejected` (escalate) | how a human is asked – `15` |
 
 ## Cross-references
 

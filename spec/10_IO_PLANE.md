@@ -1,6 +1,6 @@
-# 10 — I/O Plane (Connectors In · Sinks Out)
+# 10 – I/O Plane (Connectors In · Sinks Out)
 
-This document specifies the **I/O plane** — the previously-missing layer that
+This document specifies the **I/O plane** – the previously-missing layer that
 gives mitos a *world-facing input and output*. The substrate had **sources-in**
 for developer trackers (`06_WORK_POOL §6`) but **no first-class outputs**, and
 ingress was limited to GitHub/Linear/kanban shapes. The I/O plane makes
@@ -26,19 +26,19 @@ world or *deliver* to it except through a developer poking the API. Three things
 are unspecified:
 
 1. **Ingress beyond dev trackers.** Chat apps, email, calendar events, generic
-   webhooks/events — the everyday ways a non-developer would *start* work.
+   webhooks/events – the everyday ways a non-developer would *start* work.
 2. **A scheduling/service surface a user actually operates.** `06 §8` has the
    systemd-like runtime; what was missing is the *I/O around it*.
 3. **Any output at all.** A run harvests a `{diff, result, artifacts}` (`05 §5.4`)
-   and stops. Nothing carries that outcome back to a human or a system —
+   and stops. Nothing carries that outcome back to a human or a system –
    no notification, no delivery, no reply.
 
 The I/O plane closes all three. Crucially, **I/O lives at the platform, not
 inside each application.** A capability's pillars stay `(DATA + SKILL + TOOLS)`
 (`03`); connectors and sinks are *bindings around* an application, so the same
 pipeline can be triggered by Slack today and by email tomorrow without editing
-the recipe. (An application MAY ship a *usage-specific* connector — e.g. a CAD
-tool feed — but the generic ingress/egress classes are platform-provided; §3.4.)
+the recipe. (An application MAY ship a *usage-specific* connector – e.g. a CAD
+tool feed – but the generic ingress/egress classes are platform-provided; §3.4.)
 
 ---
 
@@ -68,7 +68,7 @@ the work pool and an **egress** edge after harvest:
 
 ---
 
-## 3. Ingress — connectors & triggers
+## 3. Ingress – connectors & triggers
 
 ### 3.1 What a connector is
 
@@ -85,9 +85,9 @@ unit of mitos work. It is the generalization of `06 §6.2`'s tracker connectors
 | `event` | an Effect on the log matches a subscription | a trigger event (`06 §6.1` `event`) |
 | `tracker` (GitHub/Linear/kanban) | issue/card created/updated | a Task (`06 §6.2`, KEPT) |
 | `manual` / `web` | operator UI / API / CLI | a Task (the web app is a connector, §6) |
-| `decision` | a resolution of a decision card — a button press, a link, a CLI answer | an `approval_resolved` Effect on an **existing** run, never a new Task (`15 §5.2`) |
+| `decision` | a resolution of a decision card – a button press, a link, a CLI answer | an `approval_resolved` Effect on an **existing** run, never a new Task (`15 §5.2`) |
 
-Every connector resolves to the **same durable unit — a Task** — enqueued into a
+Every connector resolves to the **same durable unit – a Task** – enqueued into a
 pool, never run directly (`06 §6`). One pool, many provenances; `task.source`
 already carries `connector:<name>` / `trigger:<id>` (`01 §8.7`).
 
@@ -112,10 +112,10 @@ capabilities()                :: %{ingress: true, round_trip?: bool, auth: _, sc
   same custody rule as the broker (`01 §8.5`): they are platform secrets and
   **never enter the sandbox**.
 
-### 3.3 The selection step — intent → pipeline [OPEN]
+### 3.3 The selection step – intent → pipeline [OPEN]
 
 Ingress produces an *intent + inputs*; something must choose **which pipeline**
-runs (the user always runs a pipeline, never a bare capability — `11 §2`).
+runs (the user always runs a pipeline, never a bare capability – `11 §2`).
 Selection is a **pluggable step** in the input layer:
 
 | Mode | How the pipeline is chosen | Default |
@@ -127,7 +127,7 @@ This mirrors `06 §2`'s `agent_pick` discipline: fuzzy/agentic selection is
 **opt-in**, never the only path. `explicit` is the v1 default; `smart` is an
 experiment to validate before committing (an open question, §8).
 
-### 3.4 Where connectors live — platform vs application
+### 3.4 Where connectors live – platform vs application
 
 | Connector class | Lives at | Examples |
 |---|---|---|
@@ -138,13 +138,13 @@ Generic connectors are configured as **bindings** (§7), not baked into a
 capability. An application MAY declare a usage-specific connector it needs; the
 platform still mediates credentials and enqueue (no secrets in the sandbox).
 
-### 3.5 Scheduling & services — reuse `06`, don't re-spec it
+### 3.5 Scheduling & services – reuse `06`, don't re-spec it
 
 Connectors feed the existing trigger types (`06 §6.1`: `cron · interval ·
 continuous · event · webhook · external_signal · manual`); triggers + schedules
 drive **services** (`06 §8`, systemd-like units); services run pipelines. The I/O
 plane owns *the connectors and the bindings*; `06` owns *the pools, services,
-disciplines, and the drainer*. A connector is **not** a trigger — it is a source
+disciplines, and the drainer*. A connector is **not** a trigger – it is a source
 that produces Tasks/events the service runtime acts on (`06 §1`'s rejected
 "triggers-in-pipeline" note holds).
 
@@ -157,7 +157,7 @@ touching its capabilities**. Bindings are declared at the **application or
 service** level (`11 §2` hierarchy), per-tenant scoped (`06 §12`):
 
 ```yaml
-# app-level (or service-level) I/O binding — NOT inside a capability
+# app-level (or service-level) I/O binding – NOT inside a capability
 io:
   inputs:
     - connector: webhook
@@ -182,9 +182,9 @@ pipeline ref (`04`), the Task `reply_ref` (§3.2), run/Effect lifecycle (`01 §8
 
 ---
 
-## 5. Egress — sinks & notifications (the genuinely new part)
+## 5. Egress – sinks & notifications (the genuinely new part)
 
-### 5.1 A sink is NOT the egress broker — keep them apart
+### 5.1 A sink is NOT the egress broker – keep them apart
 
 This is the load-bearing distinction. Two different outbound mechanisms, two
 different trust postures:
@@ -225,13 +225,13 @@ deliver(handle, payload)      :: {:ok, receipt} | {:error, reason}
 capabilities()                :: %{egress: true, round_trip?: bool, retries: _}
 ```
 
-- `render/2` reads **folded run state + harvested artifacts** only — the same
+- `render/2` reads **folded run state + harvested artifacts** only – the same
   source as the proof page (`08 §5`). Buyer-facing renders MUST redact recipe
   (`08 §5`: `rationale` is audit-only); platform/dev renders MAY show more.
 - **Every delivery is an Effect** (extends the open list of `01 §8.2`):
   `delivery_attempted | delivery_sent | delivery_failed`, with `caused_by` the
   terminal Decision/Effect and `ref` the receipt. Delivery is therefore on the
-  log — auditable, replayable, and metered like every other crossing.
+  log – auditable, replayable, and metered like every other crossing.
 - Delivery is **at-least-once with idempotency**: a `delivery_sent` keyed by
   `(run_id, sink, dest)` suppresses duplicates on re-drive (cf. `04 §7.1`).
 
@@ -239,7 +239,7 @@ capabilities()                :: %{egress: true, round_trip?: bool, retries: _}
 
 `decide` + `decision` are §5.4's pattern with the payload being a card instead
 of a result. This is why pushing decisions to a phone costs almost no new
-architecture — it is an existing shape with a new render:
+architecture – it is an existing shape with a new render:
 
 ```
 run parks (05 §5.3 / 04 §4.3 blocked_on_human)
@@ -281,15 +281,15 @@ sink; the binding (§4) pairs them.
 
 ## 6. The web app is one connector + one sink
 
-The web app is **not special** — it is an I/O surface like the others:
+The web app is **not special** – it is an I/O surface like the others:
 
 - as a **connector** (`manual`/`web`): state intent + inputs → a Task; trigger a
   run; the fastest path to "do this now."
 - as a **sink** (`web`): the live run trace (`11 §4`), receipts, and result
   cards; it *is* the notification/delivery surface for a human at a screen.
 
-Treating the web app as I/O (not as a privileged client) keeps `01 §10.11` true —
-UI, CLI, API, and connectors all call the same backend ops — and means the
+Treating the web app as I/O (not as a privileged client) keeps `01 §10.11` true –
+UI, CLI, API, and connectors all call the same backend ops – and means the
 operate/watch experience (`11 §8`) is a *rendering of the same plane* a Slack
 reply or a webhook POST uses.
 
@@ -303,7 +303,7 @@ reply or a webhook POST uses.
   (`01 §7`), never in the sandbox (`01 §8.5`). Same rule as the broker; different
   vault scope (`(tenant, connector|sink, dest)`).
 - **Metering & audit.** `signal_received`, `task_enqueued` (ingress) and
-  `delivery_attempted|sent|failed` (egress) are Effects on the log — the I/O plane
+  `delivery_attempted|sent|failed` (egress) are Effects on the log – the I/O plane
   adds **no parallel ledger**; deliveries fold into the same billing/audit view as
   everything else (`08 §4`).
 
@@ -327,7 +327,7 @@ The I/O plane's scope is exactly what a **paid job** needs: `webhook` + `manual`
 2. **Delivery guarantees (§5.3):** at-least-once + idempotency is the floor; do
    any sinks need exactly-once (and is that even achievable for chat/email)?
 3. **Connector auth model:** per-tenant OAuth app vs bring-your-own-token, per
-   connector class — pairs with the broker vault design (`05`, `08 §3.2`).
+   connector class – pairs with the broker vault design (`05`, `08 §3.2`).
 4. **Application-shipped connectors (§3.4):** the sandbox/trust posture for a
-   usage-specific connector an untrusted app ships — likely must run control-plane
+   usage-specific connector an untrusted app ships – likely must run control-plane
    side, not in-sandbox; confirm against `05`'s T2 constraints.

@@ -146,7 +146,12 @@ mediation and verified snapshot-based result sharing remain provider integration
 work, described in [the shared-workspace proposal](SHARED_WORKSPACE_COORDINATION.md).
 
 The inspection views show real Git status, tracked diff against HEAD, worktree
-metadata, sampled process identity, RSS, cumulative CPU time (with raw ticks retained in the API), handle counts,
+metadata, and a side-by-side Changes view with syntax colors, added/deleted lines,
+intraline changes, and old/new line numbers. Renames, binary changes and missing
+final newlines are labeled; output exceeding the 128 KiB capture limit is marked
+partial. Untracked files appear in file status, outside the HEAD comparison.
+The resource view also shows
+sampled process identity, RSS, cumulative CPU time (with raw ticks retained in the API), handle counts,
 observed workspace handles, and a bounded directory allocation scan. RSS can share
 pages across processes; allocated bytes can double-count hardlinks or shared
 storage. These are labeled measurements, not precise billing or reclaimable-space

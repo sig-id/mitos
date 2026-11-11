@@ -1,7 +1,7 @@
-# 09 — System Decomposition
+# 09 – System Decomposition
 
 This doc normatively decomposes the mitos control plane into its components and
-fixes the **launch gate** — the acceptance contract the whole system must
+fixes the **launch gate** – the acceptance contract the whole system must
 satisfy. It owns no field names or signatures (those live in `01` §8 and
 `03`–`08`); it maps components to the specs that own their contracts.
 
@@ -68,7 +68,7 @@ branches (`01` §10.12).
 
 ## 2. The launch gate
 
-mitos is **launched** — it satisfies the product contract (`02`, `08` §9) — when
+mitos is **launched** – it satisfies the product contract (`02`, `08` §9) – when
 this end-to-end acceptance holds:
 
 > A stranger pays for a capability; mitos admits the payment, runs the capability
@@ -95,7 +95,7 @@ URL" (`11`) means a buyer needs no account beyond the payment itself.
 > segments and produces a green, verifier-checked change by morning, with zero
 > or one human decisions, each resolvable in under a minute from a phone.
 
-It is not a subset of §2 and not a milestone toward it in the loose sense — it
+It is not a subset of §2 and not a milestone toward it in the loose sense – it
 is the *same machinery under a different policy* (`02 §2.1`), which is why it is
 worth gating on. §2 adds payment, cross-tenant isolation, and proof-for-a-
 stranger on top of a substrate that has already been shown to run without a
@@ -110,7 +110,7 @@ Ordered by dependency, not by appeal. Each item is unblocked by the one above.
 | # | Ship | Unblocks | Spec |
 |---|---|---|---|
 | 0 | **Instrument, don't build.** Replay existing sessions off the log → the interrupt distribution (approve-the-boring / missing-info / judgment / rescue) | decides whether the first build is a gate, a broker, or a supervisor; seeds the eval corpus | `02` §6.1 |
-| 1 | **Quiescence clock + `blocked_on_human`** | everything — without it an interactive run hangs forever and no other signal can fire | `14` §2, `04` §4.3 |
+| 1 | **Quiescence clock + `blocked_on_human`** | everything – without it an interactive run hangs forever and no other signal can fire | `14` §2, `04` §4.3 |
 | 2 | **Session-artifact tail** (structured observation of an unmodified interactive harness) + the `observation` matrix + contract tests | Studio at all; kills the mode-change constraint | `14` §1.1, §4, §5 |
 | 3 | **Decision card + reversibility policy + `decide`/`decision` pair** | unattended operation becomes safe rather than merely quiet | `15`, `10` §5.3a |
 | 4 | **`acceptance` predicate, run outside the workspace** + `predicate_stall` | a non-narrative progress metric; every later mechanism is unmeasurable without it | `16` §3.2, `03` §7.1 |
@@ -139,7 +139,7 @@ These thread every component and are normative (`01` §4):
   commit, broker crossings, and provider lifecycle for latency/cost queries, but
   they are a derivative; the log is canonical. A second trace store is a defect.
 - **Keys live only at the broker / `Vault`.** Secrets never enter the sandbox env
-  and never appear on the log — only credential *references* and
+  and never appear on the log – only credential *references* and
   brokered-crossing Effects.
 - **All surfaces call the same backend operations.** UI, CLI, API, and automation
   invoke identical folds and processes (`01` §10.11); they differ only in

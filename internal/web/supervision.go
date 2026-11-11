@@ -21,6 +21,11 @@ func (s *Server) supervisionRoutes(mux *http.ServeMux) {
 		v, err := m.ProfileDraft(r.PathValue("project"), r.PathValue("draft"))
 		deskResult(w, v, err)
 	})
+	mux.HandleFunc("GET /api/projects/{project}/profile-drafts/{draft}/output", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		v, err := m.ReadProfileDraftOutput(r.PathValue("project"), r.PathValue("draft"))
+		deskResult(w, v, err)
+	})
 	mux.HandleFunc("POST /api/projects/{project}/profile-drafts/{draft}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		deskResult(w, map[string]bool{"ok": true}, m.CancelProfileDraft(r.PathValue("project"), r.PathValue("draft")))
 	})

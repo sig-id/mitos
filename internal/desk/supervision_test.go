@@ -56,7 +56,7 @@ func TestSupervisorDelegationContextAndCompletion(t *testing.T) {
 	}
 	await(t, func() bool {
 		out, _ := m.ReadOutput(supervisor.ID, 0)
-		return strings.Contains(string(out.Data), "You are the Mitos supervisor") && strings.Contains(string(out.Data), "desk start-session")
+		return strings.Contains(string(out.Data), "You are the Mitos supervisor") && strings.Contains(string(out.Data), "desk start-session") && strings.Contains(string(out.Data), "Before implementation") && strings.Contains(string(out.Data), "do not make implementation edits yourself")
 	})
 	profile := DefaultProjectProfile()
 	profile.MaxAgents = 1

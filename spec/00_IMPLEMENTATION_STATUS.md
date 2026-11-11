@@ -174,7 +174,7 @@ the actual command, manifest, data, and execution contracts. Sample outcomes
 are illustrative; a local acceptance exit code is not the inaccessible oracle
 required by `16 §3.2`.
 
-## Latest implementation evidence — 2026-09-09
+## Latest implementation evidence – 2026-09-09
 
 `docs/OBSERVATION.md` documents the shipped observation adapter and its limits.
 `docs/interrupt-baseline.json` records the available historical corpus audit:
@@ -194,7 +194,7 @@ violations, unknown schemas, workspace renames/moves, contract-failure parking,
 replay, and rejection of harness self-reports as acceptance verdicts.
 
 
-## Workspace and acceptance increment — 2026-09-09
+## Workspace and acceptance increment – 2026-09-09
 
 `docs/WORKSPACES.md` specifies the new execution contract. The change record is
 pulled after stop and acceptance is checked on its independent reconstruction.
@@ -219,7 +219,7 @@ acceptance evidence. A live HTTP smoke test ran the example app, downloaded and
 applied its patch to a fresh directory, inspected the portable report, and parked
 an oracle-changing app while proving the source files remained unchanged.
 
-## Local checkpoint and supervision increment — 2026-09-09
+## Local checkpoint and supervision increment – 2026-09-09
 
 `docs/RECOVERY.md` specifies local checkpoint identities, predicate binding,
 restart policy, shared operator actions, and crash behavior. Rewind is recorded
@@ -250,7 +250,7 @@ segment 2: three checkpoints, one rewind Decision, one restore Effect. It verifi
 the unchanged source and deadline, downloaded both segments' distinct output,
 and downloaded the restored result's full patch.
 
-## Human decision contract increment — 2026-09-09
+## Human decision contract increment – 2026-09-09
 
 `docs/DECISIONS.md` describes the bound card, deterministic policy, resolution
 provenance, and application recovery. The request itself durably parks execution
@@ -282,7 +282,7 @@ server. It retained one canonical resolution, one rewind, two segments, the
 original resolver/time/transport, and one measured human touch. Source contents,
 deadline, and earlier artifacts remained unchanged by recovery.
 
-## Provider and admission increment — 2026-09-09
+## Provider and admission increment – 2026-09-09
 
 `docs/COMPUTE.md` describes the provider seam and current launch boundary. Worker
 execution, normalized lifecycle status, stop, and harvest now pass through the
@@ -310,7 +310,7 @@ provider path, retained all recovery evidence across restart, and recorded four
 provider lifecycle statuses. A strict T2 application was refused before another
 run was created. Deadline, source contents, and prior segment output were preserved.
 
-## Autonomy measurement increment — 2026-09-09
+## Autonomy measurement increment – 2026-09-09
 
 `docs/AUTONOMY_METRICS.md` records the metric definitions and uncertainty rules.
 Readers fold the log rather than trusting mutable run projections or harness
@@ -334,7 +334,7 @@ A built-binary live check returned identical CLI/API/offline metrics for one
 accepted change, one human decision, three checkpoints, and one discarded segment;
 the recorded unattended grant remained zero across restart.
 
-## Fleet coordination and evidence increment — 2026-09-09
+## Fleet coordination and evidence increment – 2026-09-09
 
 `docs/FLEET.md` documents declared path ownership, named singleton resources,
 pre-dispatch acquisition, harvested-path enforcement, and explicit inspection of
@@ -366,7 +366,7 @@ and blocked conflicting work. The test inspected and stopped that worker's proce
 group, explicitly released the claims, observed the follower complete, and verified
 both the unchanged source and replay-stable evidence after another restart.
 
-## Task and pool dispatch increment — 2026-09-09
+## Task and pool dispatch increment – 2026-09-09
 
 `docs/WORK_POOLS.md` records the new Task/drainer contract. Every local submission
 has a durable Task, and dispatch now computes dependency readiness before selecting
@@ -399,7 +399,7 @@ were identical after restart; CLI/API/offline autonomy reports matched, and the
 source workspace remained unchanged. The full Studio/Market gates and the
 remaining Work Pool mechanisms listed above remain outstanding.
 
-## Artifact data-dependency increment — 2026-09-09
+## Artifact data-dependency increment – 2026-09-09
 
 `docs/DATA_DEPENDENCIES.md` documents explicit artifact transfer through FS data
 edges. Admission binds selected artifact names, SHA-256 values, and sizes to the
@@ -432,7 +432,7 @@ stayed unchanged, and live/offline metrics agreed. Typed generalized outputs,
 other dependency relations, invoke, protected mounts, and the full launch gates
 remain outstanding.
 
-## Service composition and manual-trigger increment — 2026-09-09
+## Service composition and manual-trigger increment – 2026-09-09
 
 `docs/SERVICES.md` describes the local project catalog and desired-set resolver.
 Targets and explicit enables create mandatory demands; presets and wants create
@@ -470,7 +470,7 @@ triggers. Automatic triggers, service health/breakers/restarts, part-of lifecycl
 propagation, pipeline requirements, platform/tenant classification, and hosted
 project isolation remain unimplemented. Both full product gates remain unmet.
 
-## Interval scheduling and service backpressure increment — 2026-09-09
+## Interval scheduling and service backpressure increment – 2026-09-09
 
 `docs/SERVICES.md` now covers automatic interval Tasks using the retained
 `schedule.interval`, `jitter`, `run_on_startup`, and `concurrency` field names.
@@ -513,7 +513,7 @@ pipeline roots, and hosted tenancy remain outstanding. Scheduled local execution
 retains the existing provider posture and zero unattended grant. Both complete
 product gates remain unmet.
 
-## Service circuit-breaker increment — 2026-09-09
+## Service circuit-breaker increment – 2026-09-09
 
 `docs/SERVICE_BREAKERS.md` records closed/open/half-open behavior using the retained
 threshold, cooldown, and half_open_requests fields. Admitted execution failures
@@ -554,7 +554,7 @@ kill-on-overlap, lifecycle propagation, pipeline roots, and hosted tenancy are
 still outstanding. Circuit breakers do not change the local provider posture or
 zero unattended grant. Both full product gates remain unmet.
 
-## Service restart-policy increment — 2026-09-09
+## Service restart-policy increment – 2026-09-09
 
 `docs/SERVICE_RESTARTS.md` describes retry/skip/abort, explicit zero retry counts,
 and capped exponential backoff. Service admission persists policy and the root
@@ -593,7 +593,7 @@ propagation, pipeline roots, hosted tenancy, and the broader outstanding mechani
 above still prevent either full product gate. Local execution retains its existing
 provider posture and zero unattended grant.
 
-## Calendar scheduling increment — 2026-09-09
+## Calendar scheduling increment – 2026-09-09
 
 `docs/SERVICE_CRON.md` documents the retained five-field numeric matcher and IANA
 zones. All fields must match, including day-of-month and weekday; wildcard steps
@@ -628,7 +628,7 @@ lifecycle propagation, pipeline roots, hosted tenancy, and the broader missing
 mechanisms still leave both full product gates unmet. Cron scheduling does not
 change the local provider posture or recorded zero unattended grant.
 
-## Service outcome chaining increment — 2026-09-09
+## Service outcome chaining increment – 2026-09-09
 
 `docs/SERVICE_EVENTS.md` documents event schedules and inferred event hooks for
 service Task success, failure, and completion. Exact and trailing-wildcard
@@ -671,7 +671,7 @@ lifecycle propagation, distributed fencing, hosted tenancy, and the broader
 missing mechanisms above still leave both full product gates unmet. This local
 chaining increment retains the provider's zero unattended grant.
 
-## Continuous service lifetime increment — 2026-09-09
+## Continuous service lifetime increment – 2026-09-09
 
 `docs/SERVICE_CONTINUOUS.md` specifies the continuous controller. Desired activation
 initializes its epoch and initial due time in the catalog Effect. A Task receipt
@@ -716,7 +716,7 @@ worker events, webhook/external intake, distributed ownership, hosted tenancy,
 and the other outstanding product mechanisms still leave both full gates unmet.
 Continuous work retains the current local provider's zero unattended grant.
 
-## Service queue priority increment — 2026-09-09
+## Service queue priority increment – 2026-09-09
 
 `docs/SERVICE_PRIORITY.md` defines the retained low/normal/high/critical service
 preference and its fixed v1 adjustments. Priority pools add that adjustment to
@@ -753,7 +753,7 @@ external intake, distributed fencing, hosted tenancy, and the broader missing
 mechanisms still leave both product gates unmet. Queue preferences retain the
 local provider's zero unattended grant.
 
-## Kill-on-overlap service replacement increment — 2026-09-09
+## Kill-on-overlap service replacement increment – 2026-09-09
 
 `docs/SERVICE_REPLACEMENT.md` defines bounded `if_running: kill` intake for all
 registered triggers. At capacity, one replacement captures an exact prior
@@ -798,7 +798,7 @@ custom/external intake, distributed fencing, hosted tenancy, and the remaining
 mechanisms above still leave both full product gates unmet. Replacement retains
 the same local provider posture and zero unattended grant.
 
-## Service health increment — 2026-09-09
+## Service health increment – 2026-09-09
 
 `docs/SERVICE_HEALTH.md` defines optional file, command, and heartbeat monitoring
 for service command applications. Admission binds the effective policy; each
@@ -845,7 +845,7 @@ missing mechanisms remain outstanding. Health probes retain the local same-user
 provider's zero unattended grant; they do not establish isolated oracle evidence.
 Both full product gates remain unmet.
 
-## Conditional service execution increment — 2026-09-09
+## Conditional service execution increment – 2026-09-09
 
 `docs/SERVICE_CONDITIONS.md` documents the retained conjunctive `condition` fields:
 file existence/absence globs, nonempty environment presence, equality/inequality
@@ -894,7 +894,7 @@ missing mechanisms remain outstanding. The current local provider still has no
 enforced oracle/credential isolation or positive unattended grant. The full Studio
 and Market product gates remain unmet.
 
-## Service completion dependency increment — 2026-09-09
+## Service completion dependency increment – 2026-09-09
 
 `docs/SERVICE_DEPENDENCIES.md` defines the retained `depends_on` contract as
 successful completion in the same scheduler cycle. The catalog rejects missing
@@ -946,7 +946,7 @@ coordination/fencing, hosted tenancy, and the broader missing mechanisms remain
 outstanding. This increment retains the local provider's zero unattended grant.
 The full Studio and Market gates remain unmet.
 
-## Webhook and external-signal intake increment — 2026-09-09
+## Webhook and external-signal intake increment – 2026-09-09
 
 `docs/SERVICE_INGRESS.md` defines local webhook paths and named external-signal
 sources. Both create ordinary Tasks from the catalog's fixed work binding. HTTP
@@ -998,7 +998,7 @@ the broader missing mechanisms remain outstanding. Source names remain caller
 claims matched to local configuration. The local provider still grants zero
 unattended execution; both full product gates remain unmet.
 
-## Custom named service events increment — 2026-09-09
+## Custom named service events increment – 2026-09-09
 
 `docs/SERVICE_CUSTOM_EVENTS.md` defines named JSON emission through
 `mitos emit-event`, `POST /api/service-events`, and the Services form. Exact names,
@@ -1048,7 +1048,7 @@ and the broader missing mechanisms remain outstanding. Custom names remain local
 caller claims. The local provider still grants zero unattended execution, and
 both full product gates remain unmet.
 
-## Explicit service stop and resume increment — 2026-09-09
+## Explicit service stop and resume increment – 2026-09-09
 
 `docs/SERVICE_LIFECYCLE.md` specifies explicit unit/target stops through
 `mitos service-stop`, the lifecycle API, and the Services page. Stop follows reverse
@@ -1100,7 +1100,7 @@ raw worker/scheduler producers, distributed fencing, hosted tenancy, and the bro
 missing mechanisms remain outstanding. This increment retains the local provider's
 zero unattended grant; both full product gates remain unmet.
 
-## Explicit service group restart increment — 2026-09-09
+## Explicit service group restart increment – 2026-09-09
 
 The lifecycle API, `mitos service-restart`, and Services UI now support a durable
 restart request over the captured `part_of` group. Old work uses the existing

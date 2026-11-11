@@ -28,6 +28,7 @@ type Manager struct {
 	state         state
 	live          map[string]*terminal
 	drafts        map[string]context.CancelFunc
+	draftLogs     map[string]*draftLog
 	jobs          map[string]*runningJob
 	closed        bool
 	writeErr      error

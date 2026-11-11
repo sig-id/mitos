@@ -1,27 +1,27 @@
-# 08 — Gentix Facilitator
+# 08 – Gentix Facilitator
 
 This is the business/monetization spec. Mitos (the substrate, `01_ARCHITECTURE`)
 is the engine; **Gentix is the hosted, multi-tenant facilitator that runs on it**
 and is the revenue path for ~2 years. It fixes how a packaged capability becomes a
 metered paid endpoint, how charges are derived off the event log (01 §8.2), how
 isolation, key custody, and settlement work, and what the system must do to clear the
-success gate. It defines no new contracts — it composes `01`'s. Where this and
+success gate. It defines no new contracts – it composes `01`'s. Where this and
 `01` disagree, `01` wins.
 
 Organizing principle: **Gentix is the read side of
 the execution log, made into a business** (`02 §1`). The substrate writes the log;
 Gentix (a) guarantees the write-side conditions that make the log credible between
-strangers (§3), (b) sells reads of it — the meter (§4), the proof (§5), attribution
-(§6) — and (c) settles the meter over an external rail (§7).
+strangers (§3), (b) sells reads of it – the meter (§4), the proof (§5), attribution
+(§6) – and (c) settles the meter over an external rail (§7).
 
 RFC 2119 keywords (MUST / SHOULD / MAY) are normative.
 
 ---
 
-## 1. Thesis — the capability is the unit; the read side is the product
+## 1. Thesis – the capability is the unit; the read side is the product
 
 `01 §1` makes the capability `(data + skill + tools)` the atom of *execution*.
-Gentix makes that same atom — and pipelines of it — the atom of *monetization*.
+Gentix makes that same atom – and pipelines of it – the atom of *monetization*.
 The seller's recipe (skill.md, tool code, prompts, dataset) stays **server-side
 and never ships**; only the run's **outputs + proof** ship to the buyer.
 
@@ -29,7 +29,7 @@ and never ships**; only the run's **outputs + proof** ship to the buyer.
 > calls.** Pickaxe resells single prompt→completion calls as "apps". Gentix
 > resells whole **jobs** executed by a real harness (Claude Code, Codex, Gemini
 > CLI; `01 §4`) inside a T2 sandbox, and delivers a completed artifact set with an
-> evidence/proof page — not a chat response.
+> evidence/proof page – not a chat response.
 
 | | Pickaxe-class | **Gentix** |
 |---|---|---|
@@ -42,20 +42,20 @@ and never ships**; only the run's **outputs + proof** ship to the buyer.
 
 Two revenue lines, in priority order:
 
-1. **Hosted take — primary (~2 yr).** 10–15% on hosted GMV (GMV = buyer payments
+1. **Hosted take – primary (~2 yr).** 10–15% on hosted GMV (GMV = buyer payments
    for runs Gentix executes). This is the focus of every section below.
-2. **Protocol take — secondary.** 3–5% on runs settled through the open
+2. **Protocol take – secondary.** 3–5% on runs settled through the open
    metering/settlement protocol but executed elsewhere. Depends on the open
    engine being adopted (§11); not a near-term number.
 
 Stated in the `02 §1` framing: the write side of the execution log is industry
 consensus (`13 §1.3`); everything Gentix charges for is a **read** of it. Both
-revenue lines are read-side revenue — the hosted take sells operated reads, the
+revenue lines are read-side revenue – the hosted take sells operated reads, the
 protocol take sells the read contracts.
 
 ---
 
-## 2. One log, many readers — the organizing contract
+## 2. One log, many readers – the organizing contract
 
 Every Gentix product surface is a deterministic read over the same append-only
 Decision/Effect log (`01 §8.2`). The readers, their trust boundaries, and their
@@ -63,12 +63,12 @@ redaction cuts:
 
 | Reader | Boundary | Read model | Sees | Never sees | Owner |
 |---|---|---|---|---|---|
-| substrate (orchestrator) | internal | resume/replay — `state = fold(events)` | everything | — | `01 §4`, `04` |
-| platform | internal | **meter** — fold → charge + split | billable Effects (§4.1) | — | §4 |
-| buyer | cross-tenant (stranger) | **proof** — render of the run's Effect excerpt | what happened: crossings (dest only), totals, timeline, artifacts, log-hash | the recipe: `rationale`, skill/prompts, tool source, dataset, harness identity | §5 |
-| seller | cross-tenant | **attribution** — revenue + operations per `capability_id` | their revenue lines, own-key spend, result signals | the buyer's data (§6, open question) | §6 |
-| dispute / auditor | privileged | **audit** — full-fidelity replay | everything, under dispute rules | — | §5 |
-| verifier / distill loop | internal | verification + self-improvement reads | `result + evidence + trace` | — | `04`, `07` |
+| substrate (orchestrator) | internal | resume/replay – `state = fold(events)` | everything | – | `01 §4`, `04` |
+| platform | internal | **meter** – fold → charge + split | billable Effects (§4.1) | – | §4 |
+| buyer | cross-tenant (stranger) | **proof** – render of the run's Effect excerpt | what happened: crossings (dest only), totals, timeline, artifacts, log-hash | the recipe: `rationale`, skill/prompts, tool source, dataset, harness identity | §5 |
+| seller | cross-tenant | **attribution** – revenue + operations per `capability_id` | their revenue lines, own-key spend, result signals | the buyer's data (§6, open question) | §6 |
+| dispute / auditor | privileged | **audit** – full-fidelity replay | everything, under dispute rules | – | §5 |
+| verifier / distill loop | internal | verification + self-improvement reads | `result + evidence + trace` | – | `04`, `07` |
 
 Invariants (MUST hold; they are what make the reads sellable):
 
@@ -76,25 +76,25 @@ Invariants (MUST hold; they are what make the reads sellable):
    reader has a second data store; there is no parallel ledger (`01 §8.2`).
 2. **Redaction is the only difference.** Readers differ by what is cut, never by
    where it comes from. The same `budget_charged` fold that bills the buyer (§4)
-   appears on the proof (§5) and in the seller's revenue line (§6) — drift
+   appears on the proof (§5) and in the seller's revenue line (§6) – drift
    between bill, proof, and payout is impossible by construction.
 3. **Redaction is directional and symmetric.** The buyer never reads the recipe;
    the seller never reads the buyer's data. Two cuts of one record.
 4. **Reads are recomputable.** Given the log excerpt and its hashes, a third
-   party can recompute any read — this is what "replayable" sells, and what the
+   party can recompute any read – this is what "replayable" sells, and what the
    optional on-chain log-hash anchor (§7) attests.
 
 ---
 
-## 3. Write side — making the log worth reading
+## 3. Write side – making the log worth reading
 
 The reads in §4–§6 are sellable only because the write side makes the log
 **credible between strangers**: (1) events are emitted by the substrate, never
-by tenant code — the sandbox cannot reach the log, and every crossing is
+by tenant code – the sandbox cannot reach the log, and every crossing is
 recorded at the broker, so neither seller nor buyer can forge or suppress the
 record (§3.1); (2) no secret ever enters the sandbox or the log, so no read can
 leak one (§3.2). A single-tenant runtime needs neither guarantee, which is why
-its log — however durable — cannot be sold across a trust boundary (`13 §1.3`).
+its log – however durable – cannot be sold across a trust boundary (`13 §1.3`).
 
 ### 3.1 Multi-tenancy
 
@@ -112,7 +112,7 @@ SELLER tenant                         BUYER tenant
   ┌──────────────────────────────────────────────────────────────────┐
   │ T2: remote µVM (E2B/Daytona) · broker-only egress, deny-all-else  │  01 §6, 05
   │   inject (hermetic): image + RO data + buyer workspace            │  01 §8.5
-  │   per-tenant memory namespace (07) — hermetic by default          │  01 princ. 8
+  │   per-tenant memory namespace (07) – hermetic by default          │  01 princ. 8
   └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -120,7 +120,7 @@ SELLER tenant                         BUYER tenant
   capability on buyer data ⇒ remote µVM, broker-only egress, RO data snapshot.
   T2 is non-negotiable in the marketplace; sellers MAY NOT downgrade trust.
 - **Buyer data is RO-injected** into the workspace and **never persists into the
-  seller's cross-run memory** — hermetic by default (`01 §8`, princ. 8; `07`).
+  seller's cross-run memory** – hermetic by default (`01 §8`, princ. 8; `07`).
   Memory is per-tenant namespaced (`07`); a seller's capability cannot read across
   buyer tenants.
 - **Per-tenant budgets** (`01 §8.1` `budget`) cap blast radius: a buyer's prepaid
@@ -129,11 +129,11 @@ SELLER tenant                         BUYER tenant
   **sigid** (the external IdP, `01` §0); mitos consumes assertions and never
   authenticates users itself.
 
-### 3.2 Key custody — seller BYO keys, broker-only injection
+### 3.2 Key custody – seller BYO keys, broker-only injection
 
 Sellers bring their own provider keys (Anthropic, OpenAI, image APIs, their own
 SaaS). This is enforced through the **broker as the single key-custody point**
-(`01 §8.5`). The constitutional invariant — *no secrets enter the sandbox* — is
+(`01 §8.5`). The constitutional invariant – *no secrets enter the sandbox* – is
 the whole mechanism.
 
 ```
@@ -163,12 +163,12 @@ not a policy the harness is trusted to honor.
 
 ---
 
-## 4. Read model: the meter — the event log *is* the billing ledger
+## 4. Read model: the meter – the event log *is* the billing ledger
 
 `01 §8.2` already declares the event log to be "run state, debug trace, replay
 source, audit record, **and billing ledger (`08`)**." Gentix adds **no parallel
 meter**: every billable signal is an Effect event the substrate already emits, and
-metering is a deterministic fold over the log — exactly like state (`01 §4`:
+metering is a deterministic fold over the log – exactly like state (`01 §4`:
 `state(t) = fold(events[0..t])`).
 
 ### 4.1 Effect events → billable / audit signals
@@ -194,7 +194,7 @@ raw `token_usage` against the buyer.
 per run R, over events[0..end]:
 
   compute_ms    = ts(capability_finished) − ts(capability_started)
-  provider_cost = Σ budget_charged.usd            # on SELLER's OWN key (01 §8.5) — NOT settled via Gentix
+  provider_cost = Σ budget_charged.usd            # on SELLER's OWN key (01 §8.5) – NOT settled via Gentix
   egress_units  = count(egress_allowed)
   tool_units    = count(tool_brokered)
   artifacts     = count(artifact_registered)
@@ -215,21 +215,21 @@ Key economic stances (opinionated, MUST hold):
 
 - **Provider tokens are the seller's cost, on the seller's own key.** Gentix
   brokers the key (01 §8.5), records `budget_charged` for transparency, never
-  moves that money — staying out of reseller margins and provider ToS.
+  moves that money – staying out of reseller margins and provider ToS.
 - **Compute is Gentix's cost**, recovered from the take or an explicit
   `compute_surcharge`; a `take_floor` MUST exist so a cheap job can't run net-
   negative on µVM cost.
 - **Every charge line is reconstructible from the log.** A charge with no backing
   `budget_charged`/`capability_finished` event is invalid by construction; the
-  same fold feeds billing and the proof page (§5) — one source, no drift (§2).
+  same fold feeds billing and the proof page (§5) – one source, no drift (§2).
 
 ---
 
-## 5. Read model: the proof — "completed jobs with evidence, not chat"
+## 5. Read model: the proof – "completed jobs with evidence, not chat"
 
 Delivery is the harvest contract (`01 §8.2`/`05`): `harvest(session) → {diff,
 result, artifacts}`. On top of it, Gentix renders a **proof/evidence page** from
-the run's event-log excerpt — *this page is the product differentiator.*
+the run's event-log excerpt – *this page is the product differentiator.*
 
 ```
 DELIVERY = { workspace diff, RESULT (01 §8.3 result.schema), registered artifacts }   ← 05 harvest
@@ -238,7 +238,7 @@ PROOF    = render( events[capability_started .. capability_finished] ):
              · budget_charged · artifacts manifest · run wall-time · log-hash anchor
 ```
 
-| Proof page SHOWS (what happened) | Proof page HIDES (the recipe — never ships) |
+| Proof page SHOWS (what happened) | Proof page HIDES (the recipe – never ships) |
 |---|---|
 | egress destinations, counts, timing | skill.md / prompts / `rationale` text (01 §8.1) |
 | `budget_charged` totals, artifact list | tool source, dataset contents |
@@ -246,17 +246,17 @@ PROOF    = render( events[capability_started .. capability_finished] ):
 | event-log hash (replay/audit anchor) | seller keys (never on the log; §3.2) |
 
 - Proof is generated from Effect events only; Decision-event `rationale`
-  (`01 §8.1`, "AUDIT ONLY") is **redacted** from buyer-facing proof — it leaks
+  (`01 §8.1`, "AUDIT ONLY") is **redacted** from buyer-facing proof – it leaks
   recipe. Full audit-grade proof goes to the seller and dispute resolution only
   (see §6's open question on the buyer-privacy cut of audit grade).
-- The deliverable is the **artifact set + proof**, not a transcript — literally
+- The deliverable is the **artifact set + proof**, not a transcript – literally
   the harvest output plus a fold over the same billing ledger that computed the
   charge (§4). One log, many readers (§2): bill, proof, and audit are cuts of
   the same record.
 
 ---
 
-## 6. Read model: attribution — what the seller reads
+## 6. Read model: attribution – what the seller reads
 
 The seller's read is the same log, cut the other way:
 
@@ -266,16 +266,16 @@ The seller's read is the same log, cut the other way:
   comparable and versions can be priced apart.
 - **Cost transparency.** `token_usage`/`budget_charged` on the seller's own key
   (§3.2): Gentix never moves that money (§4.2), but the seller sees exactly what
-  each run cost them — no provider-bill reconciliation.
-- **Operations.** Result signals, wall-time, egress/tool counts per run — enough
+  each run cost them – no provider-bill reconciliation.
+- **Operations.** Result signals, wall-time, egress/tool counts per run – enough
   to see which runs struggle without a support ticket. The verify→distill loop
   (`04`, `07`) consumes the same material to improve the capability: attribution
   and self-improvement are the same read family, one commercial, one internal.
 - **Audit grade.** Full-fidelity trace including Decision `rationale`
-  (`01 §8.1`) for the seller's own capability's runs — the buyer's proof redacts
+  (`01 §8.1`) for the seller's own capability's runs – the buyer's proof redacts
   it (§5); the seller's read includes it, subject to the open question below.
 
-**Open question — symmetric redaction at audit grade.**
+**Open question – symmetric redaction at audit grade.**
 `rationale` and tool output may quote the buyer's private inputs; an unrestricted
 seller read of audit-grade traces would leak buyer data in the direction §2's
 invariant 3 forbids. Likely resolution: the default attribution read excludes raw
@@ -285,11 +285,11 @@ buyer consent. MUST be decided before open seller onboarding (post-launch,
 
 ---
 
-## 7. Settlement — the meter's external rail (USDC / x402)
+## 7. Settlement – the meter's external rail (USDC / x402)
 
 Settlement is not a read model; it is the transfer the meter's fold drives:
 fold (§4.2) → split → transfer. It uses **x402** (HTTP 402 Payment Required +
-stablecoin) so a stranger with a wallet — or an agent — can pay an endpoint with
+stablecoin) so a stranger with a wallet – or an agent – can pay an endpoint with
 no account. Flow:
 
 ```
@@ -314,7 +314,7 @@ buyer ──repeat + X-PAYMENT (USDC transfer proof)──►  endpoint
 - **No buyer payment ⇒ no run.** Admission gates on verified payment/escrow;
   refusal returns 402 and emits nothing billable.
 - **Failure refunds.** If the run `abort`s before the declared RESULT
-  (`01 §8.3`), escrow refunds the buyer minus `compute_surcharge` only — no
+  (`01 §8.3`), escrow refunds the buyer minus `compute_surcharge` only – no
   `platform_take` on a non-delivery. The log decides delivery, not the seller.
 - **Settlement is a fold + a transfer.** On `capability_finished` the metering
   fold (§4.2) yields the split; payouts MAY be batched off-chain, flushed on-chain
@@ -322,7 +322,7 @@ buyer ──repeat + X-PAYMENT (USDC transfer proof)──►  endpoint
 
 ---
 
-## 8. Seller onboarding — recipe → metered endpoint
+## 8. Seller onboarding – recipe → metered endpoint
 
 ```
 1 author      skill.md + tools + data  ──build──►  OCI image (SKILL+TOOLS) + RO data snapshot   (01 §5, §8.3; 03)
@@ -338,7 +338,7 @@ buyer ──repeat + X-PAYMENT (USDC transfer proof)──►  endpoint
   policy compiler (`05`); Gentix only *adds* pricing, payout, key-vault binding,
   and endpoint publication. It MUST NOT fork the manifest schema (`01 §8.3`).
   An Eve `agent/` directory enters this pipeline at step 1 via the import
-  mapping (`03 §10.1`) — the funnel move of `02 §1`.
+  mapping (`03 §10.1`) – the funnel move of `02 §1`.
 - `trust_tier` is **forced to T2** at publish for any marketplace capability,
   overriding a seller-declared lower tier.
 - A **Gentix-compliant endpoint** = the run-trigger surface (`06` dispatch) +
@@ -354,7 +354,7 @@ every order **manually**. She has product-market fit and a payment relationship;
 she lacks machine fulfillment. That gap is exactly Gentix.
 
 **Success gate (single, binary):** *one stranger-paid, machine-fulfilled
-transaction, with proof.* Not a marketplace, not throughput — one end-to-end
+transaction, with proof.* Not a marketplace, not throughput – one end-to-end
 dollar that the machine, not the human, earned.
 
 The system must do exactly this end-to-end, and no more:
@@ -391,7 +391,7 @@ The pivot backlog, each item mapped to the spec/section that owns the mechanism
 | seller onboarding | manifest/authoring `03`; policy `05` | §8 |
 | key custody | broker `05` / `01 §8.5` | §3.2 |
 | metering / billing | event log `01 §8.2` | §4 |
-| settlement (x402 / USDC) | — (new external rail) | §7 |
+| settlement (x402 / USDC) | – (new external rail) | §7 |
 | Gentix-compliant public endpoint | dispatch/triggers `06` | §8, §7 |
 | buyer delivery + proof | harvest `05`; log `01 §8.2` | §5 |
 | seller attribution / audit-grade access | log `01 §8.2`; identity `03 §9` | §6 |
@@ -407,10 +407,10 @@ publication surface over contracts `01` already fixes.
 ## 11. Open / closed split
 
 The engine leans **open**; the hosted facilitator leans **closed**. The split is
-chosen so the two take-rates reinforce each other — in §2's terms: the **write
+chosen so the two take-rates reinforce each other – in §2's terms: the **write
 side and the read contracts are open; the operated reads are closed.**
 
-| Open-source (the engine — drives adoption) | Closed (hosted Gentix — the moat) |
+| Open-source (the engine – drives adoption) | Closed (hosted Gentix – the moat) |
 |---|---|
 | event log + Decision/Effect contracts (`01 §8.1/§8.2`) | Gentix endpoint + x402 admission (§7) |
 | capability manifest format (`01 §8.3`; `03`) | metering→billing→settlement service (§4, §7) |
@@ -420,7 +420,7 @@ side and the read contracts are open; the operated reads are closed.**
 | local CLI / single-machine mode (`01 §1.6`) | multi-tenant control plane + hosted T2 pool (§3.1) |
 
 Rationale: the **protocol take (3–5%)** is only collectible if the open engine and
-its contracts are adopted widely enough to settle through Gentix — so the engine
+its contracts are adopted widely enough to settle through Gentix – so the engine
 must be forkable. The **hosted take (10–15%)** is collectible because the closed
 facilitator is the *easiest place to actually run* a T2 capability with brokered
 keys, metered billing, and one-click USDC settlement. Open the standard, close the

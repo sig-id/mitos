@@ -207,3 +207,48 @@ func TestDraftParserRejectsInvalidPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProfileDraftVerboseProgressIsVisibleAndDoesNotCancel(t *testing.T) {
+	m, p := draftManager(t, `head -c 200000 /dev/zero | tr '\000' x >&2
+printf '\nReading README.md\n' >&2
+while [ ! -f release-analysis ]; do sleep 0.01; done
+printf '{"context":"Inspected README.md"}'
+`)
+	d, err := m.StartProfileDraft(p.ID, ProfileDraftRequest{Key: "verbose", AgentID: "analyst"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	await(t, func() bool {
+		out, err := m.ReadProfileDraftOutput(p.ID, d.ID)
+		return err == nil && strings.Contains(out.Text, "Reading README.md")
+	})
+	current, _ := m.ProfileDraft(p.ID, d.ID)
+	out, err := m.ReadProfileDraftOutput(p.ID, d.ID)
+	if err != nil || current.Status != "running" || !out.Truncated || len(out.Text) > draftLogLimit {
+		t.Fatal("verbose analysis did not remain running with bounded output", current, len(out.Text), err)
+	}
+	if _, err := m.ReadProfileDraftOutput("another-project", d.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("cross-project output exposed", err)
+	}
+	if err := os.WriteFile(filepath.Join(p.Directory, "release-analysis"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	d = awaitDraft(t, m, p, d.ID)
+	if d.Status != "ready" || d.Profile.Context != "Inspected README.md" {
+		t.Fatal(d)
+	}
+	out, err = m.ReadProfileDraftOutput(p.ID, d.ID)
+	if err != nil || !strings.Contains(out.Text, "Reading README.md") {
+		t.Fatal("saved output missing", err)
+	}
+	m.Close()
+	reopened, err := Open(m.dir, m.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	out, err = reopened.ReadProfileDraftOutput(p.ID, d.ID)
+	if err != nil || !strings.Contains(out.Text, "Reading README.md") {
+		t.Fatal("output did not survive restart", err)
+	}
+}

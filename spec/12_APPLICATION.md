@@ -1,10 +1,10 @@
-# 12 — Application (Packaging, Manifest, and the Unit of Sale)
+# 12 – Application (Packaging, Manifest, and the Unit of Sale)
 
-The **agentic application** is the *shipping unit* (`11 §2`) — and, post the
+The **agentic application** is the *shipping unit* (`11 §2`) – and, post the
 commerce repositioning (`02 §1`), the **unit of sale**: what a developer
 publishes, what a tenant adds, what a seller prices. This document fixes its
 **manifest**, **identity**, **packaging**, the **identity/offer boundary**, and
-the **import path** — and it *references*, never redefines, the capability
+the **import path** – and it *references*, never redefines, the capability
 (`03`), pipeline (`04`), I/O (`10`), service (`06`), and facilitator (`08`)
 contracts. The canonical skeleton lives in `01 §8.8`; this doc elaborates it,
 exactly as `03` elaborates the capability manifest (`01 §8.3`).
@@ -14,7 +14,7 @@ canonical and MUST NOT be redefined here. RFC 2119 keywords are normative.
 
 ---
 
-## 1. What an application is — four units, one bundle
+## 1. What an application is – four units, one bundle
 
 First principles. The spec set already fixes three units; the application
 closes the commercial loop with a fourth:
@@ -54,7 +54,7 @@ simplest valid application is one entrypoint → one single-step pipeline → on
 capability.
 
 **Alignment with `08`.** The facilitator's endpoint
-(`/capabilities/{id}/runs`, `08 §8`) is exactly this degenerate form — one
+(`/capabilities/{id}/runs`, `08 §8`) is exactly this degenerate form – one
 capability wrapped in a one-step pipeline behind one entrypoint. The general
 published paid surface is an **application entrypoint**; the flow and contracts
 (Task `01 §8.7`, x402 admission `08 §7`) are unchanged either way.
@@ -64,9 +64,9 @@ published paid surface is an **application entrypoint**; the flow and contracts
 ## 2. The manifest (annotated)
 
 A worked **image-resize** application, continuing the `resize-and-deliver`
-example of `06 §13` / `10 §4`. The manifest is structured (YAML/JSON) — unlike
+example of `06 §13` / `10 §4`. The manifest is structured (YAML/JSON) – unlike
 the *pipelines* it ships, which stay loose markdown (`04 §8`). Field skeleton:
-`01 §8.8`. Note what is **absent**: no price, no payout, no credentials — the
+`01 §8.8`. Note what is **absent**: no price, no payout, no credentials – the
 offer is facilitator-side (§8), secrets are tenant-side (`01 §8.5`, `10 §7`).
 
 ```yaml
@@ -76,15 +76,15 @@ description: Resize + watermark an image and deliver it with a proof page.
 authors:  [ "design-tools@acme" ]      # metadata only
 license:  Apache-2.0                   # optional
 
-capabilities:                          # §3 — the pinned atoms (03 §9 identity)
+capabilities:                          # §3 – the pinned atoms (03 §9 identity)
   - { ref: oci://reg.mitos/image-resize@sha256:a1b2…,   as: image-resize }
   - { ref: oci://reg.mitos/watermark@sha256:c3d4…,      as: watermark }
   - { ref: oci://reg.mitos/deliver-proof@sha256:e5f6…,  as: deliver-proof }
 
-pipelines:                             # §1 — markdown pipelines (04 §8), bundled
+pipelines:                             # §1 – markdown pipelines (04 §8), bundled
   - { id: resize-and-deliver, file: ./pipelines/resize-and-deliver.md }
 
-entrypoints:                           # §4 — the runnable surface + order form
+entrypoints:                           # §4 – the runnable surface + order form
   - id: resize
     pipeline: resize-and-deliver
     title: Resize an image
@@ -92,14 +92,14 @@ entrypoints:                           # §4 — the runnable surface + order fo
     workspace: { kind: dataset }        # {kind: repo|dataset|none, ref?, refspec?} (01 §8.7 payload.workspace)
     inputs:                            # JSON Schema (abbrev.) → Task payload.inputs  (the SUBJECT data)
       schema: { image: { type: file }, width: { type: int }, height: { type: int } }
-    parameters:                        # §4.1 — per-run KNOBS (how to run), typed, with defaults
+    parameters:                        # §4.1 – per-run KNOBS (how to run), typed, with defaults
       - { name: format, type: string, default: webp, description: "Output format: webp|png|jpg." }
       - { name: keep_original, type: boolean, default: false, description: "Retain the unresized input." }
     defaults:                          # optional run defaults (04 §8.1 / 01 §8.7)
       budget: { usd: 2, wall_ms: 300000 }
       constraints: [ "stay within sRGB" ]
 
-io:                                    # §5 — DEFAULT bindings (10 §4); tenant overrides at install
+io:                                    # §5 – DEFAULT bindings (10 §4); tenant overrides at install
   inputs:
     - { connector: webhook, path: /apps/resize/runs, entrypoint: resize,
         select: { mode: explicit } }
@@ -109,7 +109,7 @@ io:                                    # §5 — DEFAULT bindings (10 §4); tena
         reply_to: input.reply_ref, render: "result.summary + artifacts" }
     - { sink: web,   on: run.done, entrypoint: resize }                       # deliverable page (11 §5)
 
-services:                              # §6 — composition root (06 §9–10)
+services:                              # §6 – composition root (06 §9–10)
   requires: [ render-pool ]            # activating the app pulls these in
   wants:    [ usage-meter ]
 
@@ -126,35 +126,35 @@ not re-specify.
 
 ---
 
-## 3. Capabilities — the pinned atoms
+## 3. Capabilities – the pinned atoms
 
 `capabilities[]` lists the atoms the app's pipelines compose, each with:
 
-- `ref` — a **capability reference**: a content-addressed `oci://…@sha256` (a
+- `ref` – a **capability reference**: a content-addressed `oci://…@sha256` (a
   pinned `capability_id`, `03 §9`) when published, or a **local path** during
   dev (resolved to a digest at publish, §7).
-- `as` — a stable **alias** the pipelines use, so a pipeline's
+- `as` – a stable **alias** the pipelines use, so a pipeline's
   `allowed_capabilities` / stage names (`04 §8.1`) bind to a pinned atom
   regardless of registry path.
 
 An app **pins** exact capability versions; a capability upgrade is a new app
 version with a new digest (§7). The same capability MAY be referenced by many
-apps (content-addressed dedup) — it is not embedded, only referenced. An
+apps (content-addressed dedup) – it is not embedded, only referenced. An
 imported capability (`03 §10.1`) is a local directory like any other and is
 pinned the same way at publish.
 
 ---
 
-## 4. Entrypoints — the runnable surface + the order form
+## 4. Entrypoints – the runnable surface + the order form
 
 Not every pipeline is user-facing; some are internal (e.g. invoked as subtasks,
-`06 §5`). `entrypoints[]` declares the pipelines a user or connector MAY run —
+`06 §5`). `entrypoints[]` declares the pipelines a user or connector MAY run –
 and **how to collect their input**. An entrypoint is one contract worn three
 ways:
 
 1. the **Run form** a screen renders (`11 §4`);
 2. the **connector payload** an I/O binding validates (`10 §3`);
-3. the **order form of a purchase** — what a Gentix quote validates and prices
+3. the **order form of a purchase** – what a Gentix quote validates and prices
    before admission (`08 §7`).
 
 An entrypoint maps directly onto a **Task** (`01 §8.7`) at run time. Its input
@@ -173,9 +173,9 @@ run(entrypoint=resize, workspace=W, inputs=I, parameters=P)  ⇒  Task {
 
 | Field | Is | Supplied by | Defaulted? |
 |---|---|---|---|
-| **`workspace`** | the **data substrate** the run operates on — a repo or dataset | the caller (a git URL/path + optional refspec), resolved + cloned by `prepare` (`01 §7`, `05 §5.4`) | no (when `kind != none`) |
-| **`inputs`** | the run's **subject data** — *what* to work on (a file, a task id, a diff command) | the caller, validated against `inputs.schema` | per JSON Schema `required` |
-| **`parameters`** | per-run **knobs** — *how* to run (output format, severity floor, parallelism) | the caller, validated against `parameters[]` | **yes — each has a `default`** |
+| **`workspace`** | the **data substrate** the run operates on – a repo or dataset | the caller (a git URL/path + optional refspec), resolved + cloned by `prepare` (`01 §7`, `05 §5.4`) | no (when `kind != none`) |
+| **`inputs`** | the run's **subject data** – *what* to work on (a file, a task id, a diff command) | the caller, validated against `inputs.schema` | per JSON Schema `required` |
+| **`parameters`** | per-run **knobs** – *how* to run (output format, severity floor, parallelism) | the caller, validated against `parameters[]` | **yes – each has a `default`** |
 
 - `inputs.schema` is **JSON Schema** (aligned with the tool I/O dialect
   question, `03 §11.4`); it lets the platform render a form, validate a
@@ -184,7 +184,7 @@ run(entrypoint=resize, workspace=W, inputs=I, parameters=P)  ⇒  Task {
   `inputs.schema`/`parameters` MUST be rejected **before** the 402 quote
   (`08 §7`): no escrow is taken for an un-runnable order, and no model is spent
   on a malformed one. The typed order form is what makes a price computable
-  up front — flat directly, metered as an escrow ceiling seeded from
+  up front – flat directly, metered as an escrow ceiling seeded from
   `defaults.budget`.
 - `parameters[]` is a flat array of `{ name, type, default?, description? }`
   using the same type vocabulary as `inputs.schema`. A caller MAY omit any
@@ -193,7 +193,7 @@ run(entrypoint=resize, workspace=W, inputs=I, parameters=P)  ⇒  Task {
   `kind` is declared by the entrypoint (`repo | dataset | none`);
   `ref`/`refspec` are supplied at run time. Resolution (clone/checkout) happens
   **server-side in `prepare`**, so the browser/connector only ever passes a ref
-  — **it never handles git credentials** (creds stay in the control-plane
+  – **it never handles git credentials** (creds stay in the control-plane
   vault, `01 §8.5`, `10 §7`). A bare `kind` string (`workspace: repo`) is
   shorthand for `{ kind: repo }`.
 - `defaults` seed the run's `budget`/`constraints`; a caller MAY override
@@ -214,7 +214,7 @@ pipeline `{{placeholder}}` resolves from either.
 
 ---
 
-## 5. I/O bindings — ship defaults, bind at install (two phase)
+## 5. I/O bindings – ship defaults, bind at install (two phase)
 
 The `io` block is the `10 §4` binding, scoped per `entrypoint` and shipped as
 **defaults**. Binding is two-phase so an app is portable while credentials stay
@@ -222,16 +222,16 @@ tenant-side:
 
 | Phase | Who | What |
 |---|---|---|
-| **ship** | app author | declares *which connector/sink classes* and *how to render/select* (`io` block) — **no credentials, no tenant specifics** |
+| **ship** | app author | declares *which connector/sink classes* and *how to render/select* (`io` block) – **no credentials, no tenant specifics** |
 | **bind** | tenant at install | supplies concrete connector instances + credentials (control-plane vault, `10 §7`); MAY override/disable any default binding |
 
-An application with an empty `io` block is still valid — runnable manually (the
+An application with an empty `io` block is still valid – runnable manually (the
 `manual`/`web` connector, `10 §6`) with the `web` sink; an operator can add
 bindings later. `io` defaults are **suggestions**, never authority.
 
 ---
 
-## 6. Services — the application as a composition root
+## 6. Services – the application as a composition root
 
 `services` lets the app declare the units/targets it needs (`06 §9–10`).
 **Activating an application acts as a target** (`06 §10`, lifted to the app):
@@ -245,7 +245,7 @@ services and named targets only.
 
 ## 7. Identity, immutability, dev → publish
 
-**Identity is content, not the label** — mirroring `03 §9`:
+**Identity is content, not the label** – mirroring `03 §9`:
 
 ```
 app_id = H( canonical(app_manifest) ‖ sorted(capability_id …) ‖ sorted(pipeline_sha256 …) )
@@ -275,24 +275,24 @@ dev loop runs from disk (`11 §6`).
 
 ---
 
-## 8. The offer — price is not content
+## 8. The offer – price is not content
 
 The commercial boundary, first-principles: **identity answers "what runs";
 the offer answers "what it costs."** They MUST NOT be conflated:
 
 ```
 identity = app_id                                   # content-addressed (§7)
-           what ran — the replay, metering, and attribution key
+           what ran – the replay, metering, and attribution key
 offer    = { price: flat | metered (08 §4.2),
              payout_addr, terms?, availability }    # facilitator-side, mutable
-           what it costs — attached at Gentix publish (08 §8, steps 4/6)
+           what it costs – attached at Gentix publish (08 §8, steps 4/6)
 ```
 
 - The offer **MUST NOT appear in the application manifest**. `01 §8.8` defines
   no such fields, and this doc keeps it that way: repricing MUST NOT mint a new
   `app_id`; changing content MUST.
 - A quote (`08 §7`) binds `(app_id, entrypoint, offer_rev)`; the buyer's
-  receipt/proof pins `app_id` + `capability_ids` — so a buyer can verify *what
+  receipt/proof pins `app_id` + `capability_ids` – so a buyer can verify *what
   exactly ran* independent of any price history.
 - Consequences: two digests MAY carry different offers (version pricing); a
   price experiment is an offer change, not a release; the attribution read
@@ -304,7 +304,7 @@ offer    = { price: flat | metered (08 §4.2),
 
 An application publishes as an **OCI artifact** that **bundles** the manifest +
 pipeline markdown and **references** capability images by digest (it does not
-embed them — capabilities stay independently content-addressed and shareable,
+embed them – capabilities stay independently content-addressed and shareable,
 `03 §9`):
 
 ```
@@ -320,26 +320,26 @@ its manifest + pipelines and (lazily) the referenced capability images.
 
 ---
 
-## 10. Import — an Eve `agent/` becomes an application
+## 10. Import – an Eve `agent/` becomes an application
 
 `mitos import eve <dir>` produces a complete application scaffold.
 `03 §10.1` owns the capability cut; this section owns the application cut:
 
 | Eve source (`agent/`) | → application |
 |---|---|
-| the agent as a whole | one capability + one single-step pipeline + one entrypoint — the §1 degenerate form |
+| the agent as a whole | one capability + one single-step pipeline + one entrypoint – the §1 degenerate form |
 | `instructions.md` (title/summary) | entrypoint `title`/`description` |
 | `channels/*` | `io.inputs` **defaults** (§5); credentials re-bound at install (`10 §7`) |
 | `schedules/*` | `services` / triggers (§6, `06 §6`) |
 | `evals/*` | test material for `mitos test` (`11 §6`, `04 §10`) |
 
-**The message→order gap — the one mandatory manual step.** An Eve agent's
+**The message→order gap – the one mandatory manual step.** An Eve agent's
 input is a free-form message: session-shaped. A mitos entrypoint requires a
 typed order (§4): a workspace kind, an `inputs.schema`, parameters. Import
 cannot synthesize that schema reliably from prose instructions; it MUST emit a
 stub (`inputs: { message: string }`), mark the entrypoint `draft`, and refuse
 publish until the author types the order form. This is not incidental
-friction: **a typed order is exactly what makes the agent sellable** — the
+friction: **a typed order is exactly what makes the agent sellable** – the
 quote and the refund rule (`08 §7`) need to know what "the job" is before it
 runs. Sessions-vs-jobs (`02 §1`), made mechanical.
 
@@ -385,18 +385,18 @@ The application manifest is **not an authority surface**. Authority stays where
 ## 13. Open questions
 
 1. **Parameter enums:** enum/`oneOf` support for `parameters[]` (a fixed policy
-   set) — currently a free `string` with options named in `description`. Must
+   set) – currently a free `string` with options named in `description`. Must
    keep aligning with the tool I/O dialect decision (`03 §11.4`).
 2. **OCI artifact shape:** referenced capability images via OCI
-   `subject`/referrers vs an index image embedding them — pull cost vs registry
+   `subject`/referrers vs an index image embedding them – pull cost vs registry
    support.
 3. **Versioning UX:** when a referenced capability has a newer digest, is
    bumping the app manual, or is there an assisted "update pins" flow?
 4. **Partial install:** if a `requires` service or needed `connector` is
-   unavailable at install — fail closed for `requires`, degrade to manual-only
+   unavailable at install – fail closed for `requires`, degrade to manual-only
    for `wants` (lean), cf. `05 §4`.
 5. **`offer_rev` semantics:** where offer history lives and how a quote pins it
-   — likely `08`-owned; flagged here because the receipt renders both identity
+   – likely `08`-owned; flagged here because the receipt renders both identity
    and offer.
 6. **Schema synthesis on import (§10):** can the judge propose an
    `inputs.schema` from `instructions.md` + `evals/*` (`04 §10`)? Even if yes,

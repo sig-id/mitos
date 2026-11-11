@@ -1,4 +1,4 @@
-# 03 — Capability
+# 03 – Capability
 
 Elaborates `01_ARCHITECTURE` §5 (the atom), §8.3 (manifest), §8.6 (harness
 adapter). Where this doc and `01` disagree, `01` wins. RFC 2119 keywords are
@@ -16,7 +16,7 @@ normative. Field names come from `01` §8 and MUST NOT be redefined here.
 
 The capability ships *know-how and machinery*; mitos supplies *the model, the
 isolation, the authority, and the record*. A capability MUST NOT bake in a
-harness, a model, secrets, or the input it operates on — those are injected at
+harness, a model, secrets, or the input it operates on – those are injected at
 launch. Everything a capability needs to be reasoned about is declared in its
 **manifest** (§7, `01` §8.3).
 
@@ -42,12 +42,12 @@ launch. Everything a capability needs to be reasoned about is declared in its
 
 The pillar split maps cleanly onto chief-wiggum's two agent formats: a CW
 `*.md` agent becomes the SKILL pillar (formalized), a CW `*.sh`
-imperative agent becomes one or more typed TOOLS, and DATA is **new** —
+imperative agent becomes one or more typed TOOLS, and DATA is **new** –
 chief-wiggum has no per-agent persistent corpus.
 
 ---
 
-## 2. SKILL — formalized know-how with a per-model seam
+## 2. SKILL – formalized know-how with a per-model seam
 
 The SKILL is the prompt-shaped intelligence of the capability: domain rules,
 the procedure to follow, and the success criteria. It is authored as **anchored
@@ -61,8 +61,8 @@ markdown** so a deterministic layer can address its sections:
 ```
 
 **Anchors are RECOMMENDED, not REQUIRED**. A plain markdown
-skill in the de-facto cross-vendor skills convention — the format the harness
-vendors seeded and Eve installs from (`13 §1`) — is a valid base skill: it runs
+skill in the de-facto cross-vendor skills convention – the format the harness
+vendors seeded and Eve installs from (`13 §1`) – is a valid base skill: it runs
 verbatim, and the §2.1 overlay degrades to document-scope `append`/`prepend`
 (no `replace`; there is no anchor to address). Authoring friction is a
 competitive variable (`02 §1`): mitos MUST accept the common format as-is and
@@ -79,13 +79,13 @@ composable layer.
 resolved_skill = base_skill ⊕ per_model_adapt(model)
 ```
 
-- `base_skill` — the anchored markdown in the image (`/skill/skill.md`).
-- `per_model_adapt(model)` — an **adaptation overlay**: a set of typed directives
+- `base_skill` – the anchored markdown in the image (`/skill/skill.md`).
+- `per_model_adapt(model)` – an **adaptation overlay**: a set of typed directives
   keyed to base anchors. Sources, resolved at launch in priority order:
   1. baked overlay `/skill/adapt/<model_family>.md` (capability-authored),
   2. memory-served overlay distilled by the verify→distill loop (`04`/`07`),
   3. **none** ⇒ overlay is `∅`.
-- `⊕` — a **pure, deterministic** merge (no model call). It applies overlay
+- `⊕` – a **pure, deterministic** merge (no model call). It applies overlay
   directives to base anchors in declaration order:
 
 ```
@@ -108,19 +108,19 @@ distill) and `07` (memory). Until a generator exists, every capability runs
 
 > Why a seam, not per-model skills? One model-agnostic base stays authorable and
 > reviewable; adaptations are small, attributable patches that the system can
-> grow automatically without forking the skill. chief-wiggum has no equivalent —
+> grow automatically without forking the skill. chief-wiggum has no equivalent –
 > its prompts are static markdown with `{{var}}` interpolation only.
 
 ---
 
-## 3. TOOLS — deterministic, typed machinery
+## 3. TOOLS – deterministic, typed machinery
 
 TOOLS are the deterministic code the agent invokes: CLIs, Python, JS, baked into
 the image. **The rules of *when/how* to use a tool live in the SKILL; the *code*
 is deterministic and lives here.** This is the clean refactor of chief-wiggum's
 `*.sh` agents, which tangled imperative logic and orchestration together.
 
-Every tool is **typed** — `name` + I/O schema — so the harness adapter can expose
+Every tool is **typed** – `name` + I/O schema – so the harness adapter can expose
 it (as native tools or MCP, §8.6) and the substrate can validate calls:
 
 ```yaml
@@ -142,9 +142,9 @@ Rules:
 
 ---
 
-## 4. DATA — the persistent capability corpus
+## 4. DATA – the persistent capability corpus
 
-DATA is the capability's own long-lived knowledge — a reference corpus, embedded
+DATA is the capability's own long-lived knowledge – a reference corpus, embedded
 vector DB, lookup tables, golden examples. **It is NOT the input workspace.**
 
 | | DATA (`/data`) | workspace (`/workspace`) |
@@ -156,7 +156,7 @@ vector DB, lookup tables, golden examples. **It is NOT the input workspace.**
 
 DATA is mounted RO via a SandboxProvider snapshot or volume (`05`). For T2
 (untrusted) the snapshot is the *only* corpus access and is immutable for the run
-(`01` §6). A capability MAY ship with no DATA. **New vs chief-wiggum** — CW
+(`01` §6). A capability MAY ship with no DATA. **New vs chief-wiggum** – CW
 agents carry no persistent per-agent data; their only "corpus" is whatever the
 prompt embeds.
 
@@ -194,7 +194,7 @@ manifest.harnesses: [claude-code, codex, gemini-cli]   # capability declares com
 
 A capability run is a bracket: deterministic `hooks.pre` → agentic loop under the
 harness → deterministic `hooks.post` → harvest. Hooks run **deterministic code**
-(no model), with access to `/workspace`, `/data`, and TOOLS — the place for git
+(no model), with access to `/workspace`, `/data`, and TOOLS – the place for git
 worktree setup, environment prep, and validation gates.
 
 ```
@@ -247,7 +247,7 @@ harvests it as `01` §8.4's `result`. Its shape is declared by the manifest's
 `result.schema`, and its evidence paths by `result.evidence` (`01` §8.3):
 
 ```jsonc
-// RESULT artifact — harness-agnostic, harvested at exit
+// RESULT artifact – harness-agnostic, harvested at exit
 {
   "signal":     "ship | revise | block",   // SOFT, capability-defined; ADVISORY only
   "confidence": 0.0,                         // 0..1, self-reported
@@ -289,19 +289,19 @@ acceptance:
 | Rule | Why |
 |---|---|
 | Machine-checkable; an LLM judge MAY supplement it but MUST NOT be the sole verdict for a run granted an unattended horizon | a model grading its own work is not evidence |
-| Executed **outside** the workspace — pristine checkout + harvested patch + oracle fetched from a path the sandbox never mounted writable | "make the tests pass" and "make the runner lie" are the same gradient until the oracle is out of reach |
+| Executed **outside** the workspace – pristine checkout + harvested patch + oracle fetched from a path the sandbox never mounted writable | "make the tests pass" and "make the runner lie" are the same gradient until the oracle is out of reach |
 | A harvested diff intersecting `oracle_paths` ⇒ `oracle_tampered` Effect + escalate as `judgment` (`15 §2`) | a path check on a diff is cheap and removes the commonest confidently-wrong green |
 | **Absent ⇒ zero unattended horizon** (`16 §6`) | such a capability may be watched, not left |
 
 `result` stays soft and advisory; `acceptance` is the verdict. They answer
-different questions — *what does the capability think happened* versus *did it
-happen* — and neither substitutes for the other.
+different questions – *what does the capability think happened* versus *did it
+happen* – and neither substitutes for the other.
 
 ---
 
 ## 8. The capability manifest (annotated)
 
-Elaboration of `01` §8.3 — a realistic **design-critique** capability (rich DATA).
+Elaboration of `01` §8.3 – a realistic **design-critique** capability (rich DATA).
 Field names are exactly those of §8.3.
 
 ```yaml
@@ -309,15 +309,15 @@ name: design-critique
 version: 1.4.0                                  # human label; identity = digest (§9)
 image: oci://registry.mitos/design-critique@sha256:9f3c…   # SKILL + TOOLS baked in
 
-data:                                            # §4 — RO corpus, NOT the input
+data:                                            # §4 – RO corpus, NOT the input
   snapshot: snap://designs/ref-200@2026-05-01    # 200 reference designs + vector index
   mount: /data
   ro: true
 
-harnesses: [claude-code, codex]                  # §5 — compat set; mitos injects one
-skill: ./skill.md                                # §2 — base; resolved = base ⊕ adapt(model)
+harnesses: [claude-code, codex]                  # §5 – compat set; mitos injects one
+skill: ./skill.md                                # §2 – base; resolved = base ⊕ adapt(model)
 
-tools:                                            # §3 — typed, deterministic
+tools:                                            # §3 – typed, deterministic
   - { name: nn_search,   exec: /tools/nn_search.py,  input: {query_png: string, k: int},
                                                       output: {neighbors: [object]},
                                                       deterministic: true, side_effects: [data_read] }
@@ -325,24 +325,24 @@ tools:                                            # §3 — typed, deterministic
                                                       output: {violations: [object]},
                                                       deterministic: true }
 
-trust_tier: T2                                   # §6/01 — untrusted seller on buyer data ⇒ remote µVM
+trust_tier: T2                                   # §6/01 – untrusted seller on buyer data ⇒ remote µVM
 resources: { cpu: 2, mem: 4Gi, timeout: 900s }
 
 egress_policy:                                   # consumed by broker, 01 §8.5
   - { dest: "api.figma.com", credential: figma_pat, requires_approval: false }
   # default: deny-all-except-broker; secrets live ONLY at the broker
 
-result:                                          # §7 — soft result + evidence (ADVISORY)
+result:                                          # §7 – soft result + evidence (ADVISORY)
   schema: ./result.schema.json                   # declares signal vocab: ship|revise|block
   evidence: [ "critique.md", "annotated.svg", "scores.json" ]
 
-acceptance:                                      # §7.1/16 §3.2 — the hard verdict
+acceptance:                                      # §7.1/16 §3.2 – the hard verdict
   cmd: [/oracle/check_critique.py, /harvest]     # runs OUTSIDE the workspace
   oracle_paths: ["/oracle/**"]                   # a diff touching these ⇒ oracle_tampered
   timeout_ms: 120000
   measure: [/oracle/check_critique.py, --score]  # Δ per segment = progress
 
-hooks:                                           # §6 — deterministic entry/exit
+hooks:                                           # §6 – deterministic entry/exit
   pre:  [ { name: snapshot_input, run: [git, -C, /workspace, stash, --include-untracked],
             on_fail: warn } ]
   post: [ { name: gate, run: /tools/validate_critique.py, on_fail: block },
@@ -376,7 +376,7 @@ capability_id = H( image_digest ‖ data_snapshot_ref ‖ skill_sha256 ‖ tools
   skill's `sha256` is recorded per-run (Effect, §2.1) so the exact instructions
   are still replayable without forking identity.
 
-**Trust-tier implications** (`01` §6) — the tier in the manifest selects launch
+**Trust-tier implications** (`01` §6) – the tier in the manifest selects launch
 posture, compiled by the Tier-1 policy compiler (`05`):
 
 | Tier | Typical author | Sandbox | DATA / workspace | Egress | Manifest enforcement |
@@ -390,11 +390,11 @@ egress MUST be rejected at launch, not at runtime.
 
 ---
 
-## 10. Authoring guide — porting chief-wiggum's `software-engineer`
+## 10. Authoring guide – porting chief-wiggum's `software-engineer`
 
 How to write a capability, worked against CW's `software-engineer.md`.
 
-**Step 1 — Split the CW agent into pillars.** CW's `software-engineer.md` is one
+**Step 1 – Split the CW agent into pillars.** CW's `software-engineer.md` is one
 markdown file mixing role, procedure, git rules, and a PASS/FAIL gate. Decompose:
 
 | CW source (software-engineer.md) | → mitos pillar / field |
@@ -405,16 +405,16 @@ markdown file mixing role, procedure, git rules, and a PASS/FAIL gate. Decompose
 | `## Git Restrictions` (no `git commit`/`add`) | **TOOLS + hooks.post** (commit is a deterministic hook, not a prompt rule) |
 | `completion_check: status_file:prd.md` | `hooks.post` gate `run: /tools/prd_complete.py` |
 | `{{workspace}}`, `../prd.md`, `{{plan_file}}` | injected context slices + `/workspace` (`05`) |
-| `readonly`, `supervisor_interval: 2` | NOT here — supervision is the loop-manager's job (`04`) |
+| `readonly`, `supervisor_interval: 2` | NOT here – supervision is the loop-manager's job (`04`) |
 
-**Step 2 — Write the base skill** (model-agnostic; CW's phases map 1:1):
+**Step 2 – Write the base skill** (model-agnostic; CW's phases map 1:1):
 
 ```markdown
 <!-- @skill:role -->
 Senior software engineer implementing one task from a PRD to production quality.
 <!-- @skill:rules -->
 - Trace every change to spec/PRD/intent. Match existing patterns. Handle errors at boundaries.
-- Do NOT run git commit/add/reset — the runtime commits via hooks.post.   ← was "Git Restrictions"
+- Do NOT run git commit/add/reset – the runtime commits via hooks.post.   ← was "Git Restrictions"
 <!-- @skill:procedure -->
 1. Read PRD, pick first `- [ ]`.  2. Study architecture + patterns.
 3. Implement + unit tests.        4. Build + run tests.
@@ -422,28 +422,28 @@ Senior software engineer implementing one task from a PRD to production quality.
 All PRD items done AND build/tests pass. Emit RESULT {signal, evidence:[diff, test_log]}.
 ```
 
-**Step 3 — Promote imperative `.sh` logic to typed TOOLS.** CW's
+**Step 3 – Promote imperative `.sh` logic to typed TOOLS.** CW's
 `git-conflict-resolver.sh` `_auto_resolve_trivial_conflicts` (accept-theirs for
 lockfiles, then stage) becomes a deterministic tool
 `resolve_lockfile_conflicts` (§3). The *rule* "resolve stale conflict markers
 immediately" stays in `@skill:rules`; the *mechanism* is the tool.
 
-**Step 4 — Define the soft result.** Replace `valid_results: [PASS, FAIL]` with
+**Step 4 – Define the soft result.** Replace `valid_results: [PASS, FAIL]` with
 `result.schema` defining `signal: done|needs_work|blocked` plus
-`evidence: [diff, test_log, prd_state]`. The orchestrator interprets it — no
+`evidence: [diff, test_log, prd_state]`. The orchestrator interprets it – no
 fixed PASS→next / FAIL→abort table.
 
-**Step 5 — Optional DATA.** software-engineer usually needs none. A variant could
+**Step 5 – Optional DATA.** software-engineer usually needs none. A variant could
 mount a `/data` snapshot of the project's API docs (CW does this ad hoc via
-`wdoc`/`.ralph/docs` — here it is a declared RO snapshot, §4).
+`wdoc`/`.ralph/docs` – here it is a declared RO snapshot, §4).
 
-**Step 6 — Hooks + manifest.** `hooks.pre`: create git worktree/branch.
+**Step 6 – Hooks + manifest.** `hooks.pre`: create git worktree/branch.
 `hooks.post`: run the build/test gate (`on_fail: block`) then commit
 (`on_fail: warn`). Fill the §8 manifest, set `trust_tier` (`T1` for own code).
 Build → content-address → publish (immutable, §9).
 
-The capability is now harness-agnostic, hermetic, replayable, meterable, and —
-unlike the CW agent — improvable without editing the base skill, via the §2.1
+The capability is now harness-agnostic, hermetic, replayable, meterable, and –
+unlike the CW agent – improvable without editing the base skill, via the §2.1
 adaptation seam.
 
 ### 10.1 Importing an Eve `agent/` directory
@@ -455,19 +455,19 @@ build step SHOULD map:
 
 | Eve source (`agent/`) | → mitos pillar / field |
 |---|---|
-| `instructions.md` | SKILL base (unanchored, §2 — valid as-is) |
+| `instructions.md` | SKILL base (unanchored, §2 – valid as-is) |
 | `skills/*` | SKILL modules (§2); common skills format accepted verbatim |
-| `tools/*.ts` (`defineTool`) | typed TOOLS (§3) — I/O schema carries over; impl runs as a JS tool |
+| `tools/*.ts` (`defineTool`) | typed TOOLS (§3) – I/O schema carries over; impl runs as a JS tool |
 | `connections/*` | `egress_policy` claims (§8); credentials re-homed to the **broker**, never baked |
-| `sandbox/*` | **dropped** — mitos supplies the sandbox (`05`); posture comes from `trust_tier` |
-| `agent.ts` (model config) | **dropped** — model/harness are injected (§5); kept only as a preference hint |
+| `sandbox/*` | **dropped** – mitos supplies the sandbox (`05`); posture comes from `trust_tier` |
+| `agent.ts` (model config) | **dropped** – model/harness are injected (§5); kept only as a preference hint |
 | `subagents/*` | candidate pipeline steps (`04`), not intra-capability nesting |
 | `channels/*`, `schedules/*` | NOT capability concerns → I/O bindings (`10 §4`) and triggers (`06 §6`) |
 | `evals/*` | candidate verifier material (`04`) |
 
 What does NOT survive import unchanged: anything that assumes the agent owns
 its egress, its secrets, or its model. Import is a funnel, not a compatibility
-promise — the capability that comes out is hermetic, brokered, content-addressed
+promise – the capability that comes out is hermetic, brokered, content-addressed
 (§9), and metered like any other. An imported capability defaults to **T2**
 unless the operator vets it down.
 
@@ -475,16 +475,16 @@ unless the operator vets it down.
 
 ## 11. Open questions (to resolve with `04`/`05`/`07`)
 
-1. **Overlay precedence** — when a baked `/skill/adapt/<model>.md` and a
+1. **Overlay precedence** – when a baked `/skill/adapt/<model>.md` and a
    memory-served overlay both target `skill:procedure`, which wins? (Proposed:
    memory > baked, since memory is the live distillation; needs `07` sign-off.)
-2. **Hook execution locus** — do hooks run inside the sandbox (T2-safe, but
+2. **Hook execution locus** – do hooks run inside the sandbox (T2-safe, but
    git-identity for commit?) or at the boundary? (Proposed: inside sandbox using
    workspace; commit identity is a non-secret injected value; broker signs if
-   pushed — confirm in `05`.)
-3. **RESULT trust at T2** — the RESULT is written by an untrusted capability;
+   pushed – confirm in `05`.)
+3. **RESULT trust at T2** – the RESULT is written by an untrusted capability;
    `metrics`/`confidence` are self-reported. The orchestrator MUST treat them as
    claims and lean on independent verifier capabilities (`04`).
-4. **Tool I/O schema dialect** — JSON Schema vs a lighter typed DSL; must align
+4. **Tool I/O schema dialect** – JSON Schema vs a lighter typed DSL; must align
    with how the harness adapter exposes tools (native vs MCP, `01` §8.6).
 ```

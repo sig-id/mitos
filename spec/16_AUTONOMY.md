@@ -1,4 +1,4 @@
-# 16 — Autonomy Plane (Running Unattended)
+# 16 – Autonomy Plane (Running Unattended)
 
 What makes a run survive hours without a human. This doc owns the **unattended
 contract**: stall detection (§2), checkpoints and rewind (§3), restart intensity
@@ -43,14 +43,14 @@ they survive.
    │ escalation (15)               │  when the substrate is out of moves
    └──────────────┬───────────────┘
                   │
-        supervisor (§5) — evidence only, never the worker's context
+        supervisor (§5) – evidence only, never the worker's context
                   │
-        autonomy metrics (§6) — is any of this working?
+        autonomy metrics (§6) – is any of this working?
 ```
 
 ---
 
-## 2. Stall detection — the gap that blocks everything
+## 2. Stall detection – the gap that blocks everything
 
 `04 §4.3`'s six signals are all computed at **iteration boundaries**. An
 interactive harness parked at its own permission prompt never returns, so no
@@ -62,7 +62,7 @@ acceptance predicate (§3.2) rather than off iteration boundaries:
 
 | Signal | Trip condition | First response |
 |---|---|---|
-| `blocked_on_human` | `quiet(tree, T_block)` (`14 §2.1`) while the step is open | classify the modal state (`14 §3.2`); raise a decision card (`15`) — or, if `:unknown`, escalate as `judgment` |
+| `blocked_on_human` | `quiet(tree, T_block)` (`14 §2.1`) while the step is open | classify the modal state (`14 §3.2`); raise a decision card (`15`) – or, if `:unknown`, escalate as `judgment` |
 | `predicate_stall` | acceptance-predicate delta ≈ 0 across **K=3** consecutive segments, regardless of diff volume or narration | rewind to last green (§3.3), retry with a failure memo; on repeat, escalate |
 
 `predicate_stall` exists because `no_progress` is diff-based and therefore
@@ -77,7 +77,7 @@ the signal that makes "unattended" a measurable claim rather than a hope.
 
 `blocked_on_human` MUST be evaluated before the classifier, and the classifier's
 result MUST NOT be required for the signal to fire. A stall detected with an
-unreadable screen still escalates — with less information, on time.
+unreadable screen still escalates – with less information, on time.
 
 ---
 
@@ -90,7 +90,7 @@ taken at a quiescence edge (`14 §2.2`):
 
 ```
 Checkpoint {
-  checkpoint_id, run_id, seq,          # log offset — the fold prefix
+  checkpoint_id, run_id, seq,          # log offset – the fold prefix
   workspace_commit : sha,              # 05 §5.4 harvest surface, committed
   sandbox_snapshot : ref | :unsupported,   # 05 §8
   predicate        : { verdict: pass|fail|unknown, delta, evidence_ref },
@@ -103,7 +103,7 @@ returns `:unsupported`) still checkpoint on commit + log offset; rewind then
 replays from the commit rather than restoring a VM, which is slower and equally
 correct.
 
-### 3.2 The acceptance predicate — the only ground truth
+### 3.2 The acceptance predicate – the only ground truth
 
 `03`'s capability `result` is a **soft** result interpreted by the orchestrator
 (`01 §8.3`). Over one step that is fine; over a twelve-hour horizon it is a
@@ -130,14 +130,14 @@ Three normative rules:
    the same gradient until the oracle is out of reach.
 3. **Touching the oracle is an event, not a judgment call.** If the harvested
    diff intersects `oracle_paths`, the substrate emits `oracle_tampered` and
-   escalates as `judgment` (`15 §2`). This is a path check on a diff — cheap,
+   escalates as `judgment` (`15 §2`). This is a path check on a diff – cheap,
    deterministic, and it removes the most common way a long run produces a
    confidently wrong green.
 
 **Progress is `Δpredicate` per segment.** That is the definition used by
 `predicate_stall` (§2), by the supervisor (§5), and by the metrics (§6).
 
-### 3.3 `rewind` — the tenth Decision type
+### 3.3 `rewind` – the tenth Decision type
 
 `01 §8.1` gains `rewind`:
 
@@ -158,7 +158,7 @@ Three normative rules:
 
 ---
 
-## 4. Restart intensity — OTP semantics, not ad-hoc counters
+## 4. Restart intensity – OTP semantics, not ad-hoc counters
 
 The retry limits in `04 §4.3`/`§4.4` are per-signal counters (N=3, M=2, K=2)
 with no run-level bound, so a run can retry indefinitely by rotating which
@@ -168,7 +168,7 @@ implements and has run at decade scale:
 ```
 supervision : {
   max_restarts : int,          # default 3
-  max_seconds  : int,          # default 3600 — restarts within this window
+  max_seconds  : int,          # default 3600 – restarts within this window
   strategy     : retry_step | rewind_to_green | rewind_tail | escalate
 }
 ```
@@ -180,7 +180,7 @@ analogy:
 |---|---|
 | supervisor never inspects the failed child's internals | the supervisor reads evidence, never the worker's context (§5) |
 | `one_for_one` / `one_for_all` | `rewind{scope: step}` / `rewind{scope: tail}` |
-| **restart intensity** — `max_restarts` in `max_seconds` | how many segment restarts before a human is worth interrupting |
+| **restart intensity** – `max_restarts` in `max_seconds` | how many segment restarts before a human is worth interrupting |
 | restart from a known-good `init` | rewind to the last **green** checkpoint, never repair forward |
 | shutdown escalates to the parent | intensity exhausted ⇒ `escalate` ⇒ decision card (`15 §2`, kind `judgment`) |
 
@@ -195,7 +195,7 @@ triggers; this is the outer bound they were missing.
 A supervisor is **a capability running in the substrate** (`03`), whose input is
 the folded logs of other runs. Building it as a capability rather than a special
 process means it is sandboxed, metered, replayable, and versioned like anything
-else — and mitos supervises itself with its own machinery.
+else – and mitos supervises itself with its own machinery.
 
 ### 5.1 The independence rule (normative)
 
@@ -217,7 +217,7 @@ log with `actor: "supervisor"` (extending `01 §8.1`'s actor enum):
 `retry` · `switch` · `rewind` · `escalate` · `abort` · `amend_brief` (via
 `15 §3` `kind: amend_brief`) · `request_approval`.
 
-It MUST NOT emit `advance`, `insert`, `skip`, or `finish` — those are the
+It MUST NOT emit `advance`, `insert`, `skip`, or `finish` – those are the
 orchestrator's judgment about its own pipeline, and a supervisor that can
 declare another run finished can declare it finished wrongly.
 
@@ -235,7 +235,7 @@ declare another run finished can declare it finished wrongly.
 
 ---
 
-## 6. The metrics — is it working?
+## 6. The metrics – is it working?
 
 All computable from the existing log on day one, which means the product can be
 measured before most of it is built.
@@ -256,18 +256,18 @@ noise and SHOULD be deleted or its floor raised (`15 §7`). This is why
 The **unattended horizon** is also a *grant*, not only a measurement: a run
 is granted a horizon (`unattended_until`), and a harness observable only through
 C1+C3 (`14 §4`), or a capability with no machine-checkable predicate (§3.2), is
-granted **zero** — it may be watched, not left.
+granted **zero** – it may be watched, not left.
 
-### 6.1 Replay as eval — the compounding asset
+### 6.1 Replay as eval – the compounding asset
 
-Failure attribution — model vs. brief vs. environment — is unanswerable without
+Failure attribution – model vs. brief vs. environment – is unanswerable without
 replay, and replay is nearly free here because the log is already
 content-addressed and re-drivable (`01 §4`, `04 §7`).
 
 Therefore: **the recorded run corpus is the regression suite.** A change to an
 escalation threshold, an orchestrator prompt, a classifier, or a default policy
 is replayed against N recorded runs before it ships. This adds one reader to
-`02 §1`'s list — the buyer reads a proof, the platform reads a meter, the seller
+`02 §1`'s list – the buyer reads a proof, the platform reads a meter, the seller
 reads attribution, the auditor reads the record, and **mitos's own CI reads the
 corpus**. It is the reader no single-tenant framework grows, because it requires
 runs worth replaying and a log designed for strangers to read.

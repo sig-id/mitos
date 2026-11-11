@@ -1,11 +1,11 @@
-# 06 — Work Pool
+# 06 – Work Pool
 
-This is the **Work Pool plane** — the *durable-intent* layer that sits between
+This is the **Work Pool plane** – the *durable-intent* layer that sits between
 **TRIGGERS** and **DISPATCH** in the layer stack (`01_ARCHITECTURE` §3). It owns:
 
 1. the **pool(s)** of durable **Tasks** and their pluggable **scheduling disciplines** (§2),
 2. the **Task lifecycle** (§3) and the **dependency graph** between Tasks (§4),
-3. the dynamic **invoke / result** mechanism — mitos-brokered **subtasks** (§5),
+3. the dynamic **invoke / result** mechanism – mitos-brokered **subtasks** (§5),
 4. the **sources / connectors** that fill the pool and the **drainer** that empties it (§6–7),
 5. the **service runtime + composition layer** that produces and drains the pool (§8–11).
 
@@ -23,7 +23,7 @@ The plane turns on keeping three things distinct:
 
 | | **Pipeline** (`04`) | **Service** (§8) | **Pool** (this plane) |
 |---|---|---|---|
-| Is | the **WORK** — a composition of capabilities | the **TRIGGER + LIFECYCLE** — a runtime unit | the **DURABLE WORK CONTAINER** — Tasks + a discipline |
+| Is | the **WORK** – a composition of capabilities | the **TRIGGER + LIFECYCLE** – a runtime unit | the **DURABLE WORK CONTAINER** – Tasks + a discipline |
 | Analogue | a program | a systemd unit (`.service`) | a scheduler run-queue *of any discipline* |
 | Authored in | markdown (`01` §1) | declarative unit config | substrate-managed; pools are configured, Tasks enqueued |
 | Answers | *what to do* | *when to start it, how to keep it alive* | *what work is pending, how it's picked* |
@@ -35,9 +35,9 @@ into the pool (§6.3) or **invoke** a subtask (§5).
 
 > **Rejected: triggers-in-pipeline-markdown (GitHub-Actions style).** An `on: {cron,
 > webhook}` block in the pipeline file cannot express a continuous daemon, a health probe,
-> a circuit breaker, or backpressure — those are **service** properties, not work
+> a circuit breaker, or backpressure – those are **service** properties, not work
 > properties. Triggers live in the service unit; the pipeline markdown stays pure work. A
-> pipeline MAY *declare service dependencies* (§10) — a dependency is not a trigger.
+> pipeline MAY *declare service dependencies* (§10) – a dependency is not a trigger.
 
 ```
 SOURCES (produce Tasks)                 WORK POOL                          CONSUMER
@@ -53,7 +53,7 @@ SOURCES (produce Tasks)                 WORK POOL                          CONSU
 
 ---
 
-## 2. Pools & disciplines — *a pool is not a queue* [NEW]
+## 2. Pools & disciplines – *a pool is not a queue* [NEW]
 
 A **queue** names a discipline (FIFO). A **pool** names only the *container*; **how a
 Task is selected from it is a separate, pluggable `discipline`.** This is the core
@@ -72,7 +72,7 @@ Pool {
 }
 ```
 
-**Disciplines** (how `drain()` chooses the next ready Task — pluggable):
+**Disciplines** (how `drain()` chooses the next ready Task – pluggable):
 
 | Discipline | Picks | Use |
 |---|---|---|
@@ -82,7 +82,7 @@ Pool {
 | `weighted_fair` | round-robins across `fairness_key` by weight | multi-tenant fairness (§12) |
 | `deadline_edf` | earliest deadline first | `paid:<sla>` pools, latency SLOs |
 | `random` | uniformly at random | load tests, tie-breaking |
-| `agent_pick` | **a smart selector agent chooses** the next Task | judgement-heavy backlogs — *the only place an LLM may enter selection, opt-in per pool* |
+| `agent_pick` | **a smart selector agent chooses** the next Task | judgement-heavy backlogs – *the only place an LLM may enter selection, opt-in per pool* |
 | `<custom>` | a registered selector fn | escape hatch |
 
 Pools are the old "lanes," now carrying their discipline explicitly:
@@ -92,15 +92,15 @@ Pools are the old "lanes," now carrying their discipline explicitly:
 | `interactive` | `priority` + `preempts:[batch]` | reserved capacity, low latency, synchronous wait on the run |
 | `batch` | `fifo` | throughput; no reserved capacity; backlog, scheduled work, follow-ups |
 | `paid:<sla>` | `deadline_edf` | per-tier capacity + latency SLO, metered (`08`) |
-| `calls` | `lifo` (or `agent_pick`) | invoked subtasks (§5) — depth-first keeps parents unblocking |
+| `calls` | `lifo` (or `agent_pick`) | invoked subtasks (§5) – depth-first keeps parents unblocking |
 
 **All work is a Task; there is no bypass path.** "Interactive" is a pool with a
-low-latency discipline + reserved capacity, *not* a separate code path — so backpressure,
+low-latency discipline + reserved capacity, *not* a separate code path – so backpressure,
 fairness, audit, and billing cover everything uniformly.
 
 ---
 
-## 3. The Task & its lifecycle — `task.status` ≠ `run.status` [NEW]
+## 3. The Task & its lifecycle – `task.status` ≠ `run.status` [NEW]
 
 chief-wiggum fused these (its kanban `[=]` *means* "a worker is running"). We split them:
 **queue lifecycle is the Task; execution is the Run; "in progress" is *derived*** ("has an
@@ -127,11 +127,11 @@ created ─► queued ──deps met (§4)──► scheduled ─► running ─
 CW markers map cleanly: `[ ]`→queued · `[=]`→running · `[P]`→parked · `[x]`→done ·
 `[*]`→failed · `[N]`→cancelled. Every transition is an Effect event (`01` §8.2:
 `task_enqueued | task_blocked | … | invoke_requested | subtask_returned`); the pool is a
-**`fold`** over them — replayable like everything else.
+**`fold`** over them – replayable like everything else.
 
 ---
 
-## 4. Dependencies — the Task graph [NEW, generalizes chief-wiggum]
+## 4. Dependencies – the Task graph [NEW, generalizes chief-wiggum]
 
 Dependencies are **edges between Tasks**. They are **task-bound, not pool-bound**: two
 Tasks in *different* pools may depend on each other, and the graph is resolved across the
@@ -139,13 +139,13 @@ whole tenant scope, not within one pool. chief-wiggum had three of these (FS `de
 guarded completion `on_complete/on_failure`, file-conflict mutex via the MIS optimizer);
 this generalizes to a small primitive set plus named patterns.
 
-### 4.1 Primitive axes — every static edge is a combination
+### 4.1 Primitive axes – every static edge is a combination
 
 | Axis | Values |
 |---|---|
 | **Relation** (when the edge fires) | `finish→start` (FS, default) · `finish→finish` (FF) · `start→start` (SS) · `start→finish` (SF) |
-| **Payload** | `control` (ordering only) · `data` (downstream consumes upstream's result/artifact — injected into its Task payload) |
-| **Strength** | `hard` (gates readiness — `blocked` until satisfied) · `soft` (priority hint only, never blocks) |
+| **Payload** | `control` (ordering only) · `data` (downstream consumes upstream's result/artifact – injected into its Task payload) |
+| **Strength** | `hard` (gates readiness – `blocked` until satisfied) · `soft` (priority hint only, never blocks) |
 | **Guard** | `unconditional` · `conditional(pred)` (fires only if the upstream **soft result** (`03`) matches `pred`) |
 
 ```
@@ -153,22 +153,22 @@ Dep { from: task_id, to: task_id, relation: FS|FF|SS|SF, payload: control|data,
       strength: hard|soft, guard: null | predicate_over_result }
 ```
 
-### 4.2 Named patterns — sugar over the primitives
+### 4.2 Named patterns – sugar over the primitives
 
 | Pattern | Shape | = primitives |
 |---|---|---|
 | **chain** | A→B | FS |
-| **fanout** | A→{B₁…Bₙ} | FS to many — *"end→start," one parent fans out* |
+| **fanout** | A→{B₁…Bₙ} | FS to many – *"end→start," one parent fans out* |
 | **join / fan-in** | {A₁…Aₙ}→B | FS/FF + a **join rule**: `all` (barrier) · `any` (race, first wins) · `k_of_n` (quorum) |
 | **gate / branch** | A→(B if pred) | FS + `conditional` guard (chief-wiggum's `on_result` lifted to the task graph) |
 | **pipeline-of-tasks** | A→B→C | FS chain (distinct from a *pipeline of capabilities* inside one run, `04`) |
 
-### 4.3 Constraints — not enabling edges, scheduling restrictions
+### 4.3 Constraints – not enabling edges, scheduling restrictions
 
 | Constraint | Meaning | Enforced by |
 |---|---|---|
-| **conflict / mutex** | A and B MUST NOT run concurrently (resource/file overlap) | drainer (§7) — generalizes chief-wiggum's MIS PR-merge graph + systemd `Conflicts=` |
-| **affinity** | A and B SHOULD co-schedule (same worker/batch) — soft | drainer, best-effort |
+| **conflict / mutex** | A and B MUST NOT run concurrently (resource/file overlap) | drainer (§7) – generalizes chief-wiggum's MIS PR-merge graph + systemd `Conflicts=` |
+| **affinity** | A and B SHOULD co-schedule (same worker/batch) – soft | drainer, best-effort |
 
 The graph MUST be acyclic for enabling edges (a cycle is a load-time error, cf.
 chief-wiggum `init-scheduler` cycle detection); constraints (`conflict`/`affinity`) are
@@ -177,14 +177,14 @@ running*; the discipline (§2) then orders the ready set.
 
 ---
 
-## 5. Invoke / result — subtasks (the dynamic dependency) [NEW]
+## 5. Invoke / result – subtasks (the dynamic dependency) [NEW]
 
 Mid-run, a capability may need *separate* work done and its **result returned**. This is
 sub-agent-shaped but **mitos-determined, not harness-determined**. It is a **dynamic**
 dependency (created during execution), and the *only* one where the **caller waits for the
 callee**.
 
-### 5.1 Three "more work" mechanisms — de-conflated
+### 5.1 Three "more work" mechanisms – de-conflated
 
 | Mechanism | Who decides | Scope | New Task? | Returns to caller? |
 |---|---|---|---|---|
@@ -192,13 +192,13 @@ callee**.
 | async **follow-up** (§6.3) | capability emits a Task | separate run, fire-and-forget | yes | **no** |
 | **`invoke` / result** ← NEW | capability, mid-run, via the authority channel | separate run | yes (a **subtask**) | **yes** (result injected back) |
 
-### 5.2 Why it's distinct from a harness sub-agent — and better
+### 5.2 Why it's distinct from a harness sub-agent – and better
 
 The subtask is a **full Task**: its own capability package (skill+tools+data), its **own
 sandbox** (own trust tier / isolation, `05`), **own metering** and **audit trail** (`08`),
 own pool/discipline. A harness sub-agent is opaque, shares the harness's sandbox, and is
 not independently packaged/metered/sandboxed. So `invoke` is **"sub-agents promoted to
-first-class, sandboxed, metered capabilities,"** brokered by mitos — and a Gentix seller's
+first-class, sandboxed, metered capabilities,"** brokered by mitos – and a Gentix seller's
 capability can `invoke` another seller's capability, each sandboxed, metered, and
 proof-logged separately.
 
@@ -209,7 +209,7 @@ prompt = affordance, env = authority):
 
 ```
 parent run (capability A)
-   │ invoke(capability_ref|task_spec, args)         # governed affordance on the authority channel — typed, policy-checked
+   │ invoke(capability_ref|task_spec, args)         # governed affordance on the authority channel – typed, policy-checked
    ▼
 substrate: create SUBTASK B { parent_task: A, return_to: <A's continuation>, pool: "calls" }
    │  emit Effect invoke_requested (01 §8.2)
@@ -224,12 +224,12 @@ parent A continues with the result
 ```
 
 Parent and child stay two separate sealed packages; mitos brokers a typed **`invoke`** out
-and a typed **result** in. The boundary is intact — the substrate mediates, the parent
+and a typed **result** in. The boundary is intact – the substrate mediates, the parent
 never runs the child directly.
 
 ### 5.4 Execution: sync by default, async when long [DECIDED]
 
-- **Default — synchronous.** The parent **parks** (`parked:awaiting-invoke`), holding its
+- **Default – synchronous.** The parent **parks** (`parked:awaiting-invoke`), holding its
   context, and resumes with the result injected. Authors reason about it as a function call.
 - **Substrate MAY transparently convert to async continuation** when the subtask is
   long-running or budget-heavy (projected wall-time / budget over a policy threshold): it
@@ -250,7 +250,7 @@ own deps (§4) and pool (§2) apply.
 
 ## 6. Sources & intake [KEPT shape / CHANGED wiring]
 
-Every source resolves to the same durable unit — a **Task** — which is **enqueued** into a
+Every source resolves to the same durable unit – a **Task** – which is **enqueued** into a
 pool, not run directly. **One pool, many provenances.** The trigger/source is the only
 fully deterministic, mitos-owned step in *starting* work.
 
@@ -265,15 +265,15 @@ fully deterministic, mitos-owned step in *starting* work.
 | `external_signal` | external system / queue message |
 | `manual` | operator / API / `mitos run <service>` |
 
-### 6.2 Connectors — the pool is the truth, trackers are adapters
+### 6.2 Connectors – the pool is the truth, trackers are adapters
 
 The internal pool is the source of truth; **kanban-md** and **GitHub / Linear issues** are
 optional **bidirectional connectors** (issue→Task on import; Task status→labels/comments on
-export). No connector is required, and **none implies a git repo** — a code `workspace` is
+export). No connector is required, and **none implies a git repo** – a code `workspace` is
 an *optional* field on the Task payload (`repo | dataset | none`). Same pluggable spirit as
 the harness / transport abstractions.
 
-### 6.3 Agent-emitted Tasks — work begets work, governed
+### 6.3 Agent-emitted Tasks – work begets work, governed
 
 Distinct from `insert` (§5.1) and `invoke` (§5): a capability **emits a proposed Task** (an
 Effect); the substrate enqueues it under policy, **fire-and-forget** (no return). Runaway
@@ -284,7 +284,7 @@ guardrails: a `provenance.depth` cap, **dedup on enqueue** (contradiction-supers
 
 ## 7. The drainer & dispatch [CHANGED]
 
-Draining the pool is itself a built-in **platform service** (§11) — chief-wiggum's
+Draining the pool is itself a built-in **platform service** (§11) – chief-wiggum's
 `task-spawner` was exactly this. Each tick, for each pool, it:
 
 1. computes the **ready set** (§4: hard deps satisfied, no conflicting Task running),
@@ -293,7 +293,7 @@ Draining the pool is itself a built-in **platform service** (§11) — chief-wig
 3. hands the chosen Task to **dispatch** (`01` §3; `04` §3): select pipeline → open a run →
    orchestrator.
 
-Selection is **deterministic** unless the pool's discipline is `agent_pick` — fuzzy
+Selection is **deterministic** unless the pool's discipline is `agent_pick` – fuzzy
 prioritization is opt-in per pool, never a global control layer. Dispatch, run admission,
 and everything after belong to `04` (and, for paid endpoints, x402 admission in `08` §5).
 **This plane owns the pools, disciplines, Task lifecycle, dependency graph, invoke, and the
@@ -301,11 +301,11 @@ drainer; it hands a chosen Task to dispatch.**
 
 ---
 
-## 8. The service runtime — KEPT from chief-wiggum [KEPT]
+## 8. The service runtime – KEPT from chief-wiggum [KEPT]
 
 chief-wiggum's `SERVICES_SPEC.md` got the **unit** right: a systemd-like declarative
 runtime unit. Mitos keeps it (full field semantics: `SERVICES_SPEC` §"Service Definition"
-.. §"Advanced Features" — not re-derived here):
+.. §"Advanced Features" – not re-derived here):
 
 | Concern | Kept mechanism (chief-wiggum §) | Notes for mitos |
 |---|---|---|
@@ -313,17 +313,17 @@ runtime unit. Mitos keeps it (full field semantics: `SERVICES_SPEC` §"Service D
 | **Chaining** | `triggers.{on_complete,on_failure,on_finish}` → `event` | normalized to mitos Effect events (`01` §8.2) |
 | **Health checks** | `file · command · heartbeat`, `on_unhealthy: restart\|kill\|log` | verbatim |
 | **Circuit breaker** | `closed→open→half-open`, threshold/cooldown | verbatim; per-tenant scoped (§12) |
-| **Concurrency** | `max_instances`, `if_running: skip\|queue\|kill`, `queue_max`, `priority` | verbatim — service-level backpressure (distinct from pool discipline §2) |
+| **Concurrency** | `max_instances`, `if_running: skip\|queue\|kill`, `queue_max`, `priority` | verbatim – service-level backpressure (distinct from pool discipline §2) |
 | **Restart policy** | `retry\|skip\|abort` + exp backoff | verbatim |
 | **Dependencies** | `depends_on` (intra-cycle completion) | KEPT, distinct from Task deps (§4) and composition relations (§9) |
 | **Conditions** | `file_exists`, `env_*`, `command` gate | verbatim |
 | **State** | per-unit `last_run/status/run_count/circuit_state/metrics` | folded onto the event log (`01` §8.2), not a side file |
 
-**[CHANGED] — two adaptations, no field renames:**
+**[CHANGED] – two adaptations, no field renames:**
 
 1. **`execution.type` narrows to `{pipeline, capability, internal}`.** chief-wiggum's
    `command`/`function`/`agent` collapse: tenant units run a **pipeline** (`04`) or a single
-   **capability** (`03`); raw shell/function becomes **`internal`** — first-party substrate
+   **capability** (`03`); raw shell/function becomes **`internal`** – first-party substrate
    handlers only. This generalizes the `svc_*`-prefix allowlist into the tenancy boundary (§11).
 2. **The bash tick loop is a substrate internal.** chief-wiggum's
    `startup/pre/periodic/post/shutdown` phases were artifacts of a single-process Ralph loop.
@@ -332,26 +332,26 @@ runtime unit. Mitos keeps it (full field semantics: `SERVICES_SPEC` §"Service D
 
 ---
 
-## 9. The composition layer — targets / presets / conflicts / derived view [NEW]
+## 9. The composition layer – targets / presets / conflicts / derived view [NEW]
 
 > **The diagnosis:** chief-wiggum copied systemd's *units* but **not** systemd's
-> *composition layer* — `.target`, presets, `Wants=/Requires=/Conflicts=/Before=/After=`.
+> *composition layer* – `.target`, presets, `Wants=/Requires=/Conflicts=/Before=/After=`.
 > Its flat `groups` are *labels for bulk toggle*, not a composition primitive. Result:
 > *too many services, manual per-project enable/disable, interference nobody declared.*
 
 Four primitives, layered above the kept runtime, run in the BEAM control plane (`01` §7)
 as the **active-set resolver**.
 
-### 9.1 Targets — activate a coherent bundle
+### 9.1 Targets – activate a coherent bundle
 
 ```
 Target { id, description, scope: platform|org|project,
-         requires: [unit|target],   # hard members — activating pulls these in
-         wants:    [unit|target],    # soft members — best-effort
+         requires: [unit|target],   # hard members – activating pulls these in
+         wants:    [unit|target],    # soft members – best-effort
          conflicts_with: [target|unit], after: [target] }
 ```
 
-### 9.2 Presets — default on/off per project type
+### 9.2 Presets – default on/off per project type
 
 ```
 Preset { project_type: "marketplace-seller"|"ci"|"local-dev"|…,
@@ -360,7 +360,7 @@ Preset { project_type: "marketplace-seller"|"ci"|"local-dev"|…,
 Precedence: **preset < target membership < explicit project override** (kept
 `.ralph/services.json` merge semantics).
 
-### 9.3 Conflicts + ordering — interference becomes *declared*
+### 9.3 Conflicts + ordering – interference becomes *declared*
 
 Units and targets gain the systemd relation set: `part_of`, `wants`, `requires`,
 `conflicts_with`, `before`/`after`.
@@ -386,7 +386,7 @@ broker-warm         active   continuous   seller-endpoint.target (requires)
 webhook-listener    active   webhook      seller-endpoint.target (requires)
 usage-meter         active   interval/180 preset:marketplace-seller (enable)
 render-pool         active   continuous   pipeline:resize-and-deliver (requires)
-local-poll          masked   —            conflicts_with webhook-listener  (soft, masked)
+local-poll          masked   –            conflicts_with webhook-listener  (soft, masked)
 ```
 `STATE ∈ {active, inactive, masked, failed, circuit-open}`; `WHY` is computed by the
 resolver, not stored.
@@ -410,13 +410,13 @@ apply to that union, not to any single source.
 mitos exposes **both** activation intents and unions them:
 
 1. **Platform targets/presets** for the always-on plumbing (dispatch listener, usage
-   metering, broker warmers) — operators manage these as named targets with presets.
+   metering, broker warmers) – operators manage these as named targets with presets.
 2. **Pipelines declare the services they need.** A pipeline (`04`) MAY carry a `requires`
-   block; **activating the pipeline pulls in its required services** — the pipeline *acts as
+   block; **activating the pipeline pulls in its required services** – the pipeline *acts as
    a target*. A dependency declaration, **not** a trigger (§1).
 
 ```
-# pipeline frontmatter (04) — declares dependencies, NOT triggers
+# pipeline frontmatter (04) – declares dependencies, NOT triggers
 requires:
   services: [render-pool]
   targets:  [seller-endpoint.target]
@@ -439,7 +439,7 @@ AND a pipeline is one unit with two `WHY` rows.
 Tenants author pipelines (`04`) and MAY reference targets (§9.1); they never author raw
 `internal` services. The `svc_*` allowlist is promoted to a **structural tenancy boundary**:
 `internal` units are first-party only; tenant units are `pipeline`/`capability` only.
-Internal usage/metering plumbing feeds the event-log billing ledger (`01` §8.2, `08` §2) —
+Internal usage/metering plumbing feeds the event-log billing ledger (`01` §8.2, `08` §2) –
 it is *how* metering happens, not something a tenant schedules. The **drainer** (§7) is an
 `internal` platform service.
 
@@ -456,7 +456,7 @@ Pools, dependency resolution, and active sets are **per-org / per-project**, mir
   `conflict` (§4.3) are evaluated **within a tenant scope**; `weighted_fair` (§2) shares a
   shared pool's capacity fairly *across* tenants without leaking work between them.
 - **Per-tenant breaker / budget blast-radius.** Circuit-breaker state (§8) and budgets
-  (`01` §8.1) are keyed by tenant — one tenant's failing unit trips only its own breaker.
+  (`01` §8.1) are keyed by tenant – one tenant's failing unit trips only its own breaker.
   This is the scheduling-side complement to T2 isolation (`05` / `08` §3).
 - Tenant `enable/disable` overrides persist per project, never globally.
 
@@ -466,13 +466,13 @@ Pools, dependency resolution, and active sets are **per-org / per-project**, mir
 
 A Gentix seller (`08`) publishes an image-resize endpoint.
 
-**(a) Target** — always-on plumbing (enabled by the `marketplace-seller` preset):
+**(a) Target** – always-on plumbing (enabled by the `marketplace-seller` preset):
 ```json
 { "id": "seller-endpoint.target", "scope": "project",
   "requires": ["webhook-listener", "broker-warm"], "wants": ["usage-meter"],
   "conflicts_with": ["local-dev.target"] }
 ```
-**(b) Service unit** — the webhook trigger, declared conflict + ordering:
+**(b) Service unit** – the webhook trigger, declared conflict + ordering:
 ```json
 { "id": "webhook-listener", "part_of": ["seller-endpoint.target"], "after": ["broker-warm"],
   "conflicts_with": ["local-poll"],
@@ -481,7 +481,7 @@ A Gentix seller (`08`) publishes an image-resize endpoint.
   "concurrency": { "max_instances": 8, "if_running": "queue", "queue_max": 64 },
   "scope": "project" }
 ```
-**(c) Pipeline** — the WORK (`04`), declaring a required service; a purchase lands a Task in
+**(c) Pipeline** – the WORK (`04`), declaring a required service; a purchase lands a Task in
 the `paid:<sla>` pool (§2):
 ```markdown
 ---
@@ -499,7 +499,7 @@ webhook-listener  active  webhook     seller-endpoint.target (requires)
 broker-warm       active  continuous  seller-endpoint.target (requires)  [before webhook-listener]
 usage-meter       active  interval    seller-endpoint.target (wants) ∪ preset:marketplace-seller
 render-pool       active  continuous  pipeline:resize-and-deliver (requires)
-local-poll        masked  —           conflicts_with webhook-listener (soft)
+local-poll        masked  –           conflicts_with webhook-listener (soft)
 ```
 
 ---
@@ -515,4 +515,4 @@ local-poll        masked  —           conflicts_with webhook-listener (soft)
 
 The thesis in one line: **a pool is a container, not a queue; its discipline, its Task
 dependency graph (including mitos-brokered invoke/subtasks), and the systemd composition
-layer chief-wiggum skipped are all first-class — and every active unit explains itself.**
+layer chief-wiggum skipped are all first-class – and every active unit explains itself.**

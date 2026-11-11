@@ -1,6 +1,6 @@
-# 05 — Compute Plane
+# 05 – Compute Plane
 
-This document specifies **how a capability runs safely** — locally and remotely —
+This document specifies **how a capability runs safely** – locally and remotely –
 behind one provider abstraction, and how mitos enforces authority at the **sandbox
 boundary**. It elaborates `01_ARCHITECTURE` §6 (trust tiers), §7 (runtime
 ownership), §8.4 (`SandboxProvider`), §8.5 (authority boundary), and §8.6 (harness
@@ -8,17 +8,17 @@ adapter). Where this doc and `01` disagree, `01` wins; field names from `01` §8
 reproduced verbatim and MUST NOT be renamed.
 
 Two corrections vs earlier mitos thinking are load-bearing here. **(1) Nucleus is
-one provider, not the architecture** — the gVisor strict-agent sandbox (Nucleus) is an **external product**, shipped as OCI containers; mitos integrates with it as one `SandboxProvider` implementation, described by contract, not by its internals. **(2) The authority plane is the sandbox
-boundary, not an in-harness MCP server** — authority is granted by *inbound
+one provider, not the architecture** – the gVisor strict-agent sandbox (Nucleus) is an **external product**, shipped as OCI containers; mitos integrates with it as one `SandboxProvider` implementation, described by contract, not by its internals. **(2) The authority plane is the sandbox
+boundary, not an in-harness MCP server** – authority is granted by *inbound
 hermetic injection*, gated by an *outbound egress credential broker*, and results
 come from *harvest*; MCP is a DEMOTED, optional tool affordance (§5.5), never the
 trust boundary.
 
-RFC 2119 keywords (MUST / SHOULD / MAY) are normative. Every provider — Nucleus, Docker, E2B, Daytona — is an external product behind the `SandboxProvider` seam (`01` §0); mitos ships only the in-process `Provider.Local`.
+RFC 2119 keywords (MUST / SHOULD / MAY) are normative. Every provider – Nucleus, Docker, E2B, Daytona – is an external product behind the `SandboxProvider` seam (`01` §0); mitos ships only the in-process `Provider.Local`.
 
 ---
 
-## 1. The standard usage model — clone the environment *into* the sandbox
+## 1. The standard usage model – clone the environment *into* the sandbox
 
 The whole environment is assembled **inside** the sandbox; the harness then runs
 **natively** there, as it would on a developer laptop. Mitos sits outside: it
@@ -43,7 +43,7 @@ tool calls.
 
 This is the same shape used by E2B, Daytona, and Codex-cloud: ship the repo into a
 disposable VM/container, let the agent work, snapshot/diff out the result.
-Codex-cloud additionally **disables or allowlists network during the task** — that
+Codex-cloud additionally **disables or allowlists network during the task** – that
 network cutoff *is* the exfiltration defense. Mitos generalizes it: every provider
 MUST route egress through the broker (§5.3). Hence a hard admission requirement:
 
@@ -89,7 +89,7 @@ LaunchSpec {
   context     : [ <ctx-slice-ref> ]             # curated memory/context (07), RO
   harness     : claude-code | codex | ...        # the injected one
   posture     : { net_mode, mounts, broker_endpoint, ca_ref, resources, timeouts }
-  egress_policy: [ {dest, credential_id, requires_approval} ]  # IDs only — no secret material
+  egress_policy: [ {dest, credential_id, requires_approval} ]  # IDs only – no secret material
 }
 ```
 
@@ -102,7 +102,7 @@ LaunchSpec {
 | **snapshot** | Capture resumable state (filesystem + harness session if reusable). | `session` | `{:ok, snap}` or `:unsupported`. `snap` is opaque + content-addressed; restore via `prepare(launch_spec{from: snap})`. |
 | **harvest** | Extract results without trusting the agent: workspace **diff**, the `RESULT` artifact, and **registered** artifacts. | `session` | `{:ok, %{diff, result, artifacts}}`. Pure read; MUST be callable after a clean *or* failed/timed-out stop. |
 | **stop** | Terminate the session and release resources. | `session` | Idempotent. Local: kill process tree + tear down namespaces. Remote: destroy VM/workspace. |
-| **capabilities** | Static descriptor for the policy compiler. | — | `egress` MUST be `:broker`. `net_modes`, `data_mount`, `snapshot?`, `remote?`, `isolation` drive eligibility (§4). |
+| **capabilities** | Static descriptor for the policy compiler. | – | `egress` MUST be `:broker`. `net_modes`, `data_mount`, `snapshot?`, `remote?`, `isolation` drive eligibility (§4). |
 
 Lifecycle: `prepare → start → (stream ⇄ control)* → [snapshot] → harvest → stop`.
 The `commit`/`capability_finished` Effect (`01` §8.2) is emitted off `harvest`, not
@@ -117,16 +117,16 @@ Each row is a `SandboxProvider` implementation. Columns map directly to
 
 | Provider | Isolation mechanism | Locality | Egress / authority transport | DATA mount | Snapshot | Default tier |
 |---|---|---|---|---|---|---|
-| **Nucleus** (gVisor strict-agent) | gVisor userspace kernel + seccomp; per-run agent; syscall interposition | **local** | gVisor netstack `deny-all`; **unix-domain socket** to the in-process broker | bind (RO/RW) or RO overlay | yes — gVisor checkpoint/restore | **T0 / T1** |
-| **Docker / OCI** | namespaces + cgroups + seccomp/AppArmor (shared host kernel — **weak**) | **local** | host-loopback forced proxy + docker network policy (allowlist = broker only) | bind (RO/RW) | coarse (commit only) — treated as **no** | **T1** |
-| **E2B** | Firecracker **microVM** (KVM, separate kernel) | **remote** | **forced HTTP/SOCKS proxy** → broker over TLS; VM firewall deny-all-else | RO provider **volume / snapshot** | yes — Firecracker VM snapshot | **T2** |
-| **Daytona** | workspace VM / container | **remote** | network policy → broker proxy; egress allowlist = broker endpoint only | RO provider volume | partial — workspace snapshot | **T2** |
+| **Nucleus** (gVisor strict-agent) | gVisor userspace kernel + seccomp; per-run agent; syscall interposition | **local** | gVisor netstack `deny-all`; **unix-domain socket** to the in-process broker | bind (RO/RW) or RO overlay | yes – gVisor checkpoint/restore | **T0 / T1** |
+| **Docker / OCI** | namespaces + cgroups + seccomp/AppArmor (shared host kernel – **weak**) | **local** | host-loopback forced proxy + docker network policy (allowlist = broker only) | bind (RO/RW) | coarse (commit only) – treated as **no** | **T1** |
+| **E2B** | Firecracker **microVM** (KVM, separate kernel) | **remote** | **forced HTTP/SOCKS proxy** → broker over TLS; VM firewall deny-all-else | RO provider **volume / snapshot** | yes – Firecracker VM snapshot | **T2** |
+| **Daytona** | workspace VM / container | **remote** | network policy → broker proxy; egress allowlist = broker endpoint only | RO provider volume | partial – workspace snapshot | **T2** |
 
 - **Docker is weak isolation** (shared kernel): acceptable for T1 and dev, but MUST
-  NOT be selected for T2. **Nucleus** is the strong *local* option — gVisor's
+  NOT be selected for T2. **Nucleus** is the strong *local* option – gVisor's
   userspace kernel narrows the host attack surface and the broker is reachable only
   over a unix-domain socket, so deny-all-except-broker lives in the netstack.
-  **E2B / Daytona** are the strong *remote* options — a separate guest kernel
+  **E2B / Daytona** are the strong *remote* options – a separate guest kernel
   defends escape; forced-proxy egress defends exfiltration. New providers plug in
   by satisfying R1 + the behaviour; `04`'s orchestrator/loop-manager are
   provider-agnostic.
@@ -142,7 +142,7 @@ credential broker** for all tiers.
 ## 4. Trust tiers → provider + posture (the launch policy compiler)
 
 `trust_tier` is an input; the deterministic **Tier-1 launch policy compiler** (BEAM,
-coded not agentic — `01` §3's enforcement layer) maps it to an **eligible provider
+coded not agentic – `01` §3's enforcement layer) maps it to an **eligible provider
 set** + **network/mount posture**:
 
 ```
@@ -164,7 +164,7 @@ violates any):
 
 1. **remote microVM** isolation (`remote? = true`, microVM-class `isolation`);
 2. **broker-only egress**, deny-all-else, no host-network/loopback bypass;
-3. **RO data** as a provider snapshot/volume — never a host bind mount;
+3. **RO data** as a provider snapshot/volume – never a host bind mount;
 4. **no host bind mounts** at all; workspace is an ephemeral in-guest clone;
 5. **fully metered** (CPU/mem/wall/egress) into the billing ledger (`08`).
 
@@ -182,7 +182,7 @@ harness must speak. On the mitos side, the **secrets vault**, the **broker**, an
 the **event log** (`01` §8.2) all sit *outside* the sandbox; only the broker ever
 holds real credentials.
 
-### 5.1 ① Inbound — hermetic injection (at `prepare`)
+### 5.1 ① Inbound – hermetic injection (at `prepare`)
 
 Everything the run is allowed to *have* enters here, and **nothing else does**:
 the **workspace** (input repo **cloned INTO** the sandbox, RW ephemeral); the
@@ -190,7 +190,7 @@ the **workspace** (input repo **cloned INTO** the sandbox, RW ephemeral); the
 `/data`, §7, versioned with the capability); **curated context slices** (selected
 by `07_MEMORY`, RO `/ctx`); and the **mitos CA** for brokered-TLS (§5.3).
 
-**What "cloned in" means.** The clone MUST honour the source's ignore rules —
+**What "cloned in" means.** The clone MUST honour the source's ignore rules –
 tracked files plus untracked-but-not-ignored ones. Build output, caches, VM
 images, and fuzz corpora are not the subject of the work and were never meant to
 cross the boundary; copying them wholesale is not an isolation guarantee but a
@@ -201,7 +201,7 @@ its largest contributors named**, never started and discovered at 94% disk.
 **Turning the sandbox off (`mode: :in_place`).** A T0/T1 operator working on
 their own repo MAY run without the copy: the workspace *is* their tree. This is
 a per-run, explicitly-requested, **logged** choice (`run_started.workspace_mode`)
-— never a default and never inferred — because it changes the authority story:
+– never a default and never inferred – because it changes the authority story:
 there is no copy to throw away, so an `internal` act is now an edit to the
 operator's real files, and `16 §3.3`'s rewind becomes a git restore rather than
 a tree swap.
@@ -228,7 +228,7 @@ token into `env` or a file is a spec violation, even at T0.
 
 Mitos **drives** the harness process and **reads its normalized event stream**
 (`01` §8.6): `assistant_text | tool_use | tool_result | token_usage | status |
-final_result`. Steering goes the other way via `control(session, command)` —
+final_result`. Steering goes the other way via `control(session, command)` –
 `approve | answer | interrupt | select | prompt`. This is **mitos-initiated**, not
 an agent callback: the agent never "calls home" for authority. Per `01` §7, the
 **Zig engine** owns local transports (pty/stdio, VT parser, raw spool +
@@ -238,7 +238,7 @@ loop-manager (`04`).
 
 **The stream has two possible sources, and the boundary hides which** (`14 §1.1`).
 For a headless/structured harness it is stdout. For an **unmodified interactive**
-harness it is a tail of the harness's own session artifacts — which mitos can
+harness it is a tail of the harness's own session artifacts – which mitos can
 read precisely because §6's hermeticity already redirects `HOME` and the session
 store to mitos-controlled paths inside the sandbox. Structured observation of an
 interactive session therefore needs no mode change and no screen parsing.
@@ -250,19 +250,19 @@ operations, all owned by `14 §3`:
 | Op | Cadence | Rule |
 |---|---|---|
 | `spool` | continuous | raw bytes → append-only redacted artifact; **never parsed for control**. This is evidence, and it is what makes the channel compose with proof and replay. |
-| `snapshot` | **on demand only** | refuses unless the VT parser is at a consistent boundary *and* the session is at a quiescence edge ≥ `T_snap`. Returns a digested grid anchored to a spool offset — a pure function of the spool prefix, so any later replay or audit recomputes it. |
+| `snapshot` | **on demand only** | refuses unless the VT parser is at a consistent boundary *and* the session is at a quiescence edge ≥ `T_snap`. Returns a digested grid anchored to a spool offset – a pure function of the spool prefix, so any later replay or audit recomputes it. |
 | `steer` | on a quiescence edge ≥ `T_steer` | a verified transaction: snapshot-before → write → snapshot-after → assert the classifier's predicted transition, else `steer_rejected`, send ESC, and escalate. Never a fire-and-forget keystroke. |
 
 Continuous screen parsing remains banned (`01 §8.6`): the prior implementation's
-failure was **streaming a display protocol**, and every error class it hit —
-torn frames, split escape sequences, redraws read as new content — follows from
+failure was **streaming a display protocol**, and every error class it hit –
+torn frames, split escape sequences, redraws read as new content – follows from
 sampling a moving surface rather than reading a stable one. No run-control
 decision may rest on a screen read alone; a Decision triggered by a
 classification MUST carry the grid digest and spool offset in its `inputs_hash`
 preimage. An `:unknown` classification escalates to a human (`15`), never
 guesses.
 
-### 5.3 ③ Outbound — egress credential broker (the only way out)
+### 5.3 ③ Outbound – egress credential broker (the only way out)
 
 Sandbox egress is **deny-all-except-broker**. The broker is the single egress
 chokepoint and the **only** place real credentials exist.
@@ -291,10 +291,10 @@ Key properties:
   (bearer/header/basic/mTLS cert) keyed by `credential_id`+destination, then
   forwards; the sandbox only ever sees an *uncredentialed* request leave it. To
   attach a credential to HTTPS the broker terminates TLS with the mitos CA injected
-  at `prepare` (trusted **only** for brokered destinations) — a deliberate, scoped
+  at `prepare` (trusted **only** for brokered destinations) – a deliberate, scoped
   MITM owned by mitos, the price of "no secrets in the sandbox."
 - **Every crossing is an Effect event.** `egress_allowed` / `egress_denied`
-  (`01` §8.2) with destination, bytes, status, `caused_by` — the log is both audit
+  (`01` §8.2) with destination, bytes, status, `caused_by` – the log is both audit
   record and egress meter for `08`. `requires_approval` parks the request, emits
   `approval_requested`, and `approval_resolved` gates forward-vs-deny through the
   same control-plane UI/API as run approvals (`06`).
@@ -304,7 +304,7 @@ egress through a mitos-controlled **HTTP/SOCKS proxy** (the broker's ingress) ov
 TLS and/or a VM **network policy** whose only allowed destination is that proxy;
 `HTTP(S)_PROXY` is set in the guest and the firewall drops everything else, so the
 proxy cannot be bypassed (realizing R1). *Local (Nucleus):* egress is broked
-**in-process** — gVisor's netstack denies all outbound and the capability reaches
+**in-process** – gVisor's netstack denies all outbound and the capability reaches
 the broker over a **unix-domain socket**, so no TCP path to the host network exists
 to bypass. (Docker maps the same idea onto a host-loopback proxy + docker network
 policy allowlisting only the broker.)
@@ -384,7 +384,7 @@ and replayable (`01` §4).
 **Snapshot / resume.** `snapshot(session)` captures filesystem (+ optional harness
 session, §6) as an opaque content-addressed `snap`; resume is
 `prepare(launch_spec{from: snap})`. Providers without real checkpointing return
-`:unsupported`; mitos falls back to **event-log replay** (`01` §4) — re-`prepare` a
+`:unsupported`; mitos falls back to **event-log replay** (`01` §4) – re-`prepare` a
 fresh sandbox, re-drive committed Decision/Effect events, re-invoke the
 orchestrator. Filesystem snapshot is an *optimization*; the **event log is the
 authoritative resume source**.
@@ -401,7 +401,7 @@ work survives) → `stop`. Parked egress approvals have their own timeout →
 | harness crash | `harvest` partial (§5.4) → loop-manager `retry`/`escalate` (`04`); idempotent on `run_id` |
 | sandbox/provider unavailable | policy compiler re-selects an eligible provider (§4); **never** a lower tier |
 | broker denies/parks egress | `egress_denied` Effect; capability sees a normal network error; orchestrator may `request_approval` |
-| crash between Decision and Effect | re-drive the Decision (`01` §4 crash test) — Effect not committed ⇒ action simply re-run |
+| crash between Decision and Effect | re-drive the Decision (`01` §4 crash test) – Effect not committed ⇒ action simply re-run |
 | timeout / budget exhausted | interrupt → harvest → stop; `budget_charged` to ledger (`08`) |
 
 All transitions land as Effect events (`01` §8.2); the run is replayable and
@@ -411,7 +411,7 @@ billable from the log.
 
 ## 9. Threat model
 
-Two primary threats, each defended by a *different* mechanism — neither relies on
+Two primary threats, each defended by a *different* mechanism – neither relies on
 trusting the agent or the model:
 
 | Threat | Vector | Defense | Where |

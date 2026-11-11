@@ -1,4 +1,4 @@
-# 02 — Product
+# 02 – Product
 
 Scope: the product thesis, who it is for, the atomic unit, the business it funds,
 the wedge it must win, and the smallest build that wins it. Vocabulary and
@@ -17,14 +17,14 @@ by the replacement yet.
 > **Mitos is a cloud-first, multi-tenant substrate that runs packaged
 > capabilities through agent-driven pipelines, where an agent decides policy and
 > deterministic code records every decision and enforces every limit.**
-> — `01_ARCHITECTURE §0`
+> – `01_ARCHITECTURE §0`
 
 ### Two products, one substrate
 
 The thesis names the substrate. The substrate ships as **two products** that are
 the same run cut differently (`01 §1.7`):
 
-| | **Studio** — the operator's product | **Market** — the commerce product (`08`) |
+| | **Studio** – the operator's product | **Market** – the commerce product (`08`) |
 |---|---|---|
 | Sells | **unattended hours**: a standing brief that produces green checkpoints while you sleep | **completed jobs with proof**, to strangers |
 | Customer | one developer/team, on their own repos | buyer ↔ seller, no prior relationship |
@@ -37,7 +37,7 @@ requirement is a Studio requirement with the human removed and the reader set
 widened: unattended execution, a machine-checkable oracle, checkpointed
 recovery, replayable evidence. A capability that cannot run unattended for the
 operator who wrote it cannot be sold unattended to a stranger. So Studio ships
-first *because* it is on Market's critical path — the sequencing in `09 §2` is a
+first *because* it is on Market's critical path – the sequencing in `09 §2` is a
 build order over one substrate, not a change of business.
 
 The cost is honest and belongs on the record: **the facilitator's revenue moves
@@ -57,8 +57,8 @@ work; mitos makes that work **bounded, isolated, replayable, and billable**.
 > responses.
 
 Pickaxe (and the single-prompt-wrapper class) sells a templated call to a model
-API. Mitos sells the output of a full coding-agent *harness* — file edits, tool
-runs, multi-step pipelines — executed in an isolated sandbox, harvested as a diff
+API. Mitos sells the output of a full coding-agent *harness* – file edits, tool
+runs, multi-step pipelines – executed in an isolated sandbox, harvested as a diff
 + `RESULT` + artifacts (`01 §8.5`), and presented as a **proof page**: the
 evidence bundle and a replayable trace from the event log. The buyer pays for a
 finished job they can inspect, not a turn of conversation.
@@ -73,30 +73,30 @@ schedules, evals, approvals, observability. Three consequences:
 
 1. **Outward positioning is the commerce layer, not the OS.** "Substrate/OS"
    stays the *internal* architecture identity (`01 §0`); the *outward* claim is
-   where frameworks stop: **your agent exists — mitos makes it a paid, metered,
+   where frameworks stop: **your agent exists – mitos makes it a paid, metered,
    proven product sold to strangers.** Mitos MUST NOT present as an agent
    framework; that fight is lost on distribution before it is fought on merit.
 2. **The one-line differentiation: frameworks sell sessions that persist;
-   mitos sells jobs that complete** — input → sandbox → diff + `RESULT` +
+   mitos sells jobs that complete** – input → sandbox → diff + `RESULT` +
    evidence + receipt, across a trust boundary between strangers.
 3. **Frameworks are funnel, not foe.** An Eve `agent/` directory imports as a
    capability (`03 §10.1`), exactly as harnesses are suppliers (`13 §2.3`).
    Every Eve author is a prospective seller.
 
-**Execution as event log — write-side consensus, read-side moat.** Eve's
+**Execution as event log – write-side consensus, read-side moat.** Eve's
 independent convergence on event-sourced execution (`13 §1.3`) confirms the
 `01 §4` bet: execution *is* the append-only log, and resume, audit, and
-observability are **reads** of it. That write side is now commodity — every
+observability are **reads** of it. That write side is now commodity – every
 serious runtime will have it. The differentiation is entirely on the **read
 side**: who may read the log, across which trust boundary, under what
-guarantees. A single-tenant framework's log has **one reader** — the deployer
+guarantees. A single-tenant framework's log has **one reader** – the deployer
 (resume + telemetry). Mitos's log is specified for **many readers across trust
 boundaries**: the buyer reads a proof (`08 §5`), the platform reads a meter
 (`08 §4`), the seller reads attribution (`08 §6`, `03 §9`), an auditor reads the
 record (`01 §8.2`). `08 §2` fixes this as the facilitator's organizing contract. That is why it carries properties a single-tenant log never grows:
 content-addressed Decision inputs (`01 §8.1`), a redaction boundary (the recipe
 stays server-side while the proof ships), and settlement semantics (billing is
-a fold of the same log — no reconciliation). The product, stated in one line:
+a fold of the same log – no reconciliation). The product, stated in one line:
 **mitos sells the read side of the execution log.**
 
 ---
@@ -107,17 +107,17 @@ a fold of the same log — no reconciliation). The product, stated in one line:
 |---|---|
 | a substrate/OS that runs packaged **capabilities** (`01 §5`) | a chatbot or assistant UI |
 | a host for **agent-driven pipelines** the orchestrator enforces (`04`) | a single-prompt / single-API-call wrapper (Pickaxe-class) |
-| **harness-agnostic** — wraps Claude Code, Codex, Gemini CLI, … (`01 §1.4`) | tied to one model vendor or one harness |
+| **harness-agnostic** – wraps Claude Code, Codex, Gemini CLI, … (`01 §1.4`) | tied to one model vendor or one harness |
 | an **agentic** control plane: policy is reasoned, record is deterministic | a fixed/authored pipeline-runner or hard-coded FSM workflow tool |
-| the **authority boundary** at the sandbox edge — inject / broker / harvest (`05`) | a trust model that relies on the agent or a harness protocol |
+| the **authority boundary** at the sandbox edge – inject / broker / harvest (`05`) | a trust model that relies on the agent or a harness protocol |
 | **cloud-first, multi-tenant**, locally runnable (`01 §1.6`) | a single-tenant local-only dev toy |
 | a seller of **finished jobs with proof**, metered off the event log (`08`) | a seller of chat turns or raw tokens |
-| the **commerce layer where frameworks stop** — jobs that complete, sold to strangers | an agent framework competing for the authoring slot (Eve-class, `13 §1`) — frameworks are funnel, not foe |
+| the **commerce layer where frameworks stop** – jobs that complete, sold to strangers | an agent framework competing for the authoring slot (Eve-class, `13 §1`) – frameworks are funnel, not foe |
 
-### 2.1 Studio vs Market — where the two products actually differ
+### 2.1 Studio vs Market – where the two products actually differ
 
 Everything not in this table is shared. This table is the whole delta, and it is
-**policy**, not mechanism — which is what makes one substrate honest rather than
+**policy**, not mechanism – which is what makes one substrate honest rather than
 a slogan.
 
 | Axis | **Studio** | **Market** | Owned by |
@@ -125,13 +125,13 @@ a slogan.
 | Trust tier | T0 / T1, local | **T2** remote µVM | `05 §4` |
 | Harness mode | interactive, **unmodified** | headless / structured | `14 §4` |
 | Observation | C1 effect surface + C2 session artifacts + C3 terminal | C1 + structured stream; **no C3** | `14 §1` |
-| Human on happy path | yes — asynchronous, by exception | **no**, by construction | `15 §6` |
-| Decision defaults | permitted for `internal`/`recoverable` | **never** — a stranger's silence authorizes nothing | `15 §4`, `§6` |
+| Human on happy path | yes – asynchronous, by exception | **no**, by construction | `15 §6` |
+| Decision defaults | permitted for `internal`/`recoverable` | **never** – a stranger's silence authorizes nothing | `15 §4`, `§6` |
 | Acceptance oracle | operator-declared repo predicate | capability-declared `acceptance` + `result.schema` | `16 §3.2`, `03 §8` |
 | Egress | operator's own keys, local broker | seller keys at the broker, `egress_policy` per destination | `05 §5.3`, `08 §3.2` |
 | Log readers | operator · supervisor · eval corpus | buyer · meter · seller · auditor | `08 §2` |
 | Primary surface | CLI + phone (`11 §13`, `15 §5`) | entrypoint URL + proof page (`11 §4`, `§5`) | `11 §3` |
-| Redaction cut | full dev cut | commercial cut — no `rationale`, no inner trace | `08 §5` |
+| Redaction cut | full dev cut | commercial cut – no `rationale`, no inner trace | `08 §5` |
 
 The "not a fixed pipeline tool" line is the hard one and the reason for the
 redesign: a pipeline is **enforced at runtime by an orchestrator agent**, not
@@ -150,7 +150,7 @@ things** and this doc previously conflated them: the facilitator is where the
 money is, the operator is where the first real load is, and the second is a
 prerequisite for the first (`§1`, `01 §1.7`).
 
-### FIRST CUSTOMER — the single operator (Studio)
+### FIRST CUSTOMER – the single operator (Studio)
 
 A developer or small team running agentic work on **their own repos**, on their
 own machine or their own cloud, at T1. Their pain is not cost per token; it is
@@ -165,15 +165,15 @@ metric (`16 §6`). It is also mitos's first workload: **mitos's own development
 runs on it**, which is the fastest available source of the eval corpus that
 every later change is regression-tested against (`16 §6.1`).
 
-### REVENUE CUSTOMER — hosted multi-tenant orgs (via the Gentix facilitator)
+### REVENUE CUSTOMER – hosted multi-tenant orgs (via the Gentix facilitator)
 
 Two roles inside one hosted service:
 
-- **Capability sellers** — own a prompt/skill, a pipeline, and/or a dataset.
+- **Capability sellers** – own a prompt/skill, a pipeline, and/or a dataset.
   They package it as a capability (`03_CAPABILITY`), bring **their own provider
   keys**, set a price, and publish a metered, paid endpoint. The recipe stays
   server-side; only outputs ship (`08_FACILITATOR`).
-- **Capability buyers** — pay per job, send inputs, and receive a **completed
+- **Capability buyers** – pay per job, send inputs, and receive a **completed
   job + proof page**. They never see the recipe.
 
 This is the revenue surface and the reason mitos is cloud-first and multi-tenant
@@ -198,14 +198,14 @@ prerequisites (`§2.1`); the reverse is not true.
             │                  M I T O S                      │──► proof page
   buyer  ──►│ pay · submit input · receive completed job      │     + receipt
             └─────────────────────────────────────────────────┘
-  same substrate, same log, same sandbox — different policy (§2.1)
+  same substrate, same log, same sandbox – different policy (§2.1)
 ```
 
 ---
 
 ## 4. The atom: capability → pipeline → money
 
-The **capability** is the single atomic unit across all three concerns —
+The **capability** is the single atomic unit across all three concerns –
 execution, composition, and monetization (`01 §1.1`):
 
 | Concern | Unit | Owner doc |
@@ -216,7 +216,7 @@ execution, composition, and monetization (`01 §1.1`):
 
 One unit, not three, is the load-bearing product decision. It means a seller
 prices the exact thing the substrate executes, and metering reads the **event
-log** directly (`01 §8.2`, `08`) — no separate billing model to reconcile against
+log** directly (`01 §8.2`, `08`) – no separate billing model to reconcile against
 execution. A pipeline is just a composition; it is priced and metered as the sum
 of its capability crossings on the log. Mechanics: see `08_FACILITATOR`. Do not
 duplicate them here.
@@ -225,7 +225,7 @@ duplicate them here.
 
 ## 5. Business framing (the 2-year revenue path)
 
-The revenue path for ~2 years is the **Gentix facilitator** — context you need to
+The revenue path for ~2 years is the **Gentix facilitator** – context you need to
 read this spec set correctly, detailed in `08`:
 
 | Lever | Setting |
@@ -251,7 +251,7 @@ facilitator is the money.
 **Design partner #1:** a designer who is **already paid by strangers** for a
 repeatable creative job but **fulfills it manually**. The demand is proven; the
 fulfillment is human. Mitos's job is to move fulfillment behind a capability
-without losing the buyer's trust — which is why the output ships as a **proof
+without losing the buyer's trust – which is why the output ships as a **proof
 page**, not a chat reply.
 
 **Success gate (single, binary):**
@@ -260,7 +260,7 @@ page**, not a chat reply.
 
 This stays the **Market** gate. It is now preceded by a Studio gate (§6.1) that
 is strictly easier to reach, uses the same substrate, and produces the evidence
-that the harder clause of this one — *machine-fulfilled, no human in the loop* —
+that the harder clause of this one – *machine-fulfilled, no human in the loop* –
 is achievable at all.
 
 Decomposed, every clause is a hard requirement:
@@ -288,7 +288,7 @@ not on the path to it is in scope.
 | **multiple segments** | checkpointed; a failed segment rewinds to green rather than repairing forward | `16 §3` |
 | **green** | a machine-checkable acceptance predicate, executed outside the workspace, passed | `16 §3.2` |
 | **zero or one decisions** | escalation on irreversibility × uncertainty, not category | `15 §1`, `§2` |
-| **under a minute** | a typed card with options, a recommendation, and a cost of being wrong — never a transcript | `15 §3.1` |
+| **under a minute** | a typed card with options, a recommendation, and a cost of being wrong – never a transcript | `15 §3.1` |
 
 Why this gate and not "it works": every clause is a mechanism Market also needs
 (`§2.1`), and the pair (`autonomy ratio`, `unattended horizon`) is measurable
@@ -297,7 +297,7 @@ it is built.
 
 **Measure before building.** The first instrument is not a feature: replay two
 weeks of real sessions off the existing log and produce the **interrupt
-distribution** — what fraction of human touches were approve-the-boring,
+distribution** – what fraction of human touches were approve-the-boring,
 missing-information, genuine judgment, or rescue-from-thrash. That distribution
 decides whether the first build is mostly a gate, a broker, or a supervisor,
 and it doubles as the seed of the eval corpus (`16 §6.1`).
@@ -306,7 +306,7 @@ and it doubles as the seed of the eval corpus (`16 §6.1`).
 
 ## 7. Launch scope
 
-The smallest end-to-end path that reaches the success gate — one capability, one
+The smallest end-to-end path that reaches the success gate – one capability, one
 trivial pipeline, one buyer, one proof:
 
 ```
@@ -330,13 +330,13 @@ capability ──► pipeline ──► sandbox ──► broker ──► harve
 
 ### Non-goals (explicitly out of scope)
 
-- Marketplace, discovery, seller dashboards, ratings — one design partner, no market.
-- Multi-capability pipeline depth, branching, or sophisticated orchestration — 1–2 steps suffice.
+- Marketplace, discovery, seller dashboards, ratings – one design partner, no market.
+- Multi-capability pipeline depth, branching, or sophisticated orchestration – 1–2 steps suffice.
 - Memory (`07`), self-improvement / verify-and-distill loops (`04`) beyond what proof needs.
-- Harness-switching breadth — **one** harness wired end-to-end is enough; the agnostic seam (`01 §8.6`) stays a seam.
-- Rich scheduling/services (`06`) — trigger is the buyer's paid request; no cron/webhook fan-out.
-- Protocol-take settlement (`08`) and the second take lever — primary take only.
-- Polished local-dev DX — secondary mode must *work*, not delight.
+- Harness-switching breadth – **one** harness wired end-to-end is enough; the agnostic seam (`01 §8.6`) stays a seam.
+- Rich scheduling/services (`06`) – trigger is the buyer's paid request; no cron/webhook fan-out.
+- Protocol-take settlement (`08`) and the second take lever – primary take only.
+- Polished local-dev DX – secondary mode must *work*, not delight.
 
 This proves the product sentence (§6) end-to-end; scale is a separate concern (`09 §2`).
 
@@ -346,20 +346,20 @@ This proves the product sentence (§6) end-to-end; scale is a separate concern (
 
 | # | Risk | Why it threatens the product | Mitigation (owning spec) |
 |---|---|---|---|
-| R1 | **Harness fragility** — coding-agent CLIs change output formats, prompts, and session-artifact layouts; they break and they hang | a silent observation failure means a run that is stalled, mis-metered, or wrongly reported as fine | three channels with a trust ranking, semantics never from a screen (`14 §1`); the terminal read only as a replayable digested snapshot at a quiescence edge, never streamed (`14 §3`); an **observation capability matrix** per adapter with **nightly contract tests against upstream `@latest`**, and quarantine on failure — Studio drops the run's unattended horizon to zero, Market refuses to schedule (`14 §4`, `§5`); harness-switchable mid-step; stuck detection incl. `blocked_on_human` (`04 §4.3`, `16 §2`) |
-| R2 | **Untrusted-workload isolation** — seller capability runs on buyer data; both are untrusted to mitos | a leak or escape ends the business on transaction #1 | trust tier **T2** ⇒ remote µVM (E2B/Daytona), **deny-all egress except broker**, RO snapshot of buyer data, no secrets in env (`01 §6`, `05`) |
-| R3 | **Seller-key custody** — sellers bring provider keys; recipe must stay server-side | a key leak or recipe exfiltration is a breach and a trust collapse | secrets live **only at the broker**; broker attaches/withholds per `egress_policy` + destination and logs each crossing; recipe never enters the buyer-visible surface (`01 §8.5`, `05`, `08`) |
-| R4 | **Cost of LLM verification** — proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); at launch, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
-| R5 | **A platform player bolts monetization onto its framework** — the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof — real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (`09 §2`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`) — the parts a single-tenant framework structurally cannot retrofit |
+| R1 | **Harness fragility** – coding-agent CLIs change output formats, prompts, and session-artifact layouts; they break and they hang | a silent observation failure means a run that is stalled, mis-metered, or wrongly reported as fine | three channels with a trust ranking, semantics never from a screen (`14 §1`); the terminal read only as a replayable digested snapshot at a quiescence edge, never streamed (`14 §3`); an **observation capability matrix** per adapter with **nightly contract tests against upstream `@latest`**, and quarantine on failure – Studio drops the run's unattended horizon to zero, Market refuses to schedule (`14 §4`, `§5`); harness-switchable mid-step; stuck detection incl. `blocked_on_human` (`04 §4.3`, `16 §2`) |
+| R2 | **Untrusted-workload isolation** – seller capability runs on buyer data; both are untrusted to mitos | a leak or escape ends the business on transaction #1 | trust tier **T2** ⇒ remote µVM (E2B/Daytona), **deny-all egress except broker**, RO snapshot of buyer data, no secrets in env (`01 §6`, `05`) |
+| R3 | **Seller-key custody** – sellers bring provider keys; recipe must stay server-side | a key leak or recipe exfiltration is a breach and a trust collapse | secrets live **only at the broker**; broker attaches/withholds per `egress_policy` + destination and logs each crossing; recipe never enters the buyer-visible surface (`01 §8.5`, `05`, `08`) |
+| R4 | **Cost of LLM verification** – proving a job is "done" with an LLM judge is expensive and can exceed the margin | verification cost eats the 10–15% take | verify **cheaply and tiered**, reuse verification as the self-improvement signal (`01 §10.10`, `04`); at launch, proof = evidence + replayable trace, LLM-judge only where a deterministic check can't decide |
+| R5 | **A platform player bolts monetization onto its framework** – the distance from Eve to "publish your agent as a paid endpoint" is one product decision: Vercel already owns Marketplace, Connect (delegated credentials), consumption billing, and Agent Runs (`13 §1.5`) | mitos's remaining differentiation narrows to key custody + server-side recipe + T2 cross-tenant isolation + counterparty-facing proof – real, but harder to explain; distribution asymmetry does the rest | **speed over breadth**: reach the §6 gate loudly before the gap closes (`09 §2`); **import, don't compete** (Eve `agent/` → capability, `03 §10.1`); keep the moat surfaces first-class and named: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`) – the parts a single-tenant framework structurally cannot retrofit |
 
-| R6 | **Sequencing cost** — reaching the Market gate later than a competitor because Studio ships first (`§3`) | the facilitator's revenue moves right, and `13 §1.5`'s one-product-decision gap (a framework bolting on monetization) has longer to close | the sequencing is only defensible because Studio's mechanisms *are* Market's prerequisites (`§2.1`) and nothing is rebuilt; the mitigation is **speed within the order**, not reordering — plus the moat surfaces stay first-class and unstarted-by-others: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`), and now the eval corpus (`16 §6.1`), which is the one asset that compounds with time rather than being copied in a quarter |
-| R7 | **Unattended action taken by silence** — a decision default fires on an irreversible act | one unrecoverable external effect (a force-push, a publish, a payment) authorized by nobody ends the operator's trust permanently, and would end a buyer's | the fail-safe/fail-secure split is **structural, not procedural**: `external` acts MUST carry no default and MUST park indefinitely; the card schema forbids `default` without `ttl` and vice versa; unclassifiable reversibility is treated as `external` — *unclassifiable is not permission* (`01 §8.9`, `15 §2.1`, `§4`) |
+| R6 | **Sequencing cost** – reaching the Market gate later than a competitor because Studio ships first (`§3`) | the facilitator's revenue moves right, and `13 §1.5`'s one-product-decision gap (a framework bolting on monetization) has longer to close | the sequencing is only defensible because Studio's mechanisms *are* Market's prerequisites (`§2.1`) and nothing is rebuilt; the mitigation is **speed within the order**, not reordering – plus the moat surfaces stay first-class and unstarted-by-others: custody (`08 §3.2`), T2 (`05`), proof-for-a-stranger (`08 §5`), and now the eval corpus (`16 §6.1`), which is the one asset that compounds with time rather than being copied in a quarter |
+| R7 | **Unattended action taken by silence** – a decision default fires on an irreversible act | one unrecoverable external effect (a force-push, a publish, a payment) authorized by nobody ends the operator's trust permanently, and would end a buyer's | the fail-safe/fail-secure split is **structural, not procedural**: `external` acts MUST carry no default and MUST park indefinitely; the card schema forbids `default` without `ttl` and vice versa; unclassifiable reversibility is treated as `external` – *unclassifiable is not permission* (`01 §8.9`, `15 §2.1`, `§4`) |
 
-Cross-cutting: the **event log is the source of truth** (`01 §8.2`) — it is
+Cross-cutting: the **event log is the source of truth** (`01 §8.2`) – it is
 simultaneously run state, audit record, the proof page's backing data, and the
 billing ledger. Every risk above is observable on it after the fact, which is the
 difference between "a job went wrong" and "a job went wrong and we cannot say
-how." In the §1 framing: those four reads *are* the product — the write side is
+how." In the §1 framing: those four reads *are* the product – the write side is
 industry consensus (`13 §1.3`); R5 is only fatal if mitos's read side stays
 unbuilt while the write side commoditizes.
 

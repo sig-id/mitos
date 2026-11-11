@@ -5,28 +5,34 @@
   const $=id=>document.getElementById(id), active=s=>['starting','running','stopping','interrupted'].includes(s.status);
   const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
   const fail=e=>{$('desk-error').textContent=e.message;$('desk-error').hidden=false;};
-  async function api(path,body){const r=await fetch(path,body===undefined?{cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw new Error(v.error||'Request failed');return v;}
+  const api=window.MitosConnection.request;
   const endpoint=s=>`/api/projects/${project}/${s}`, terminal=s=>`/workspace?project=${project}&session=${s.id}&view=terminal`;
   const button=(text,fn)=>{const b=el('button',text);b.type='button';b.onclick=()=>Promise.resolve().then(fn).catch(fail);return b;};
-  let snapshot, signature='', graphSignature='', profileRevision=0, selectedAssignment='', alive=true, reviewDraft=null, setupKey='', setupPayload='';
+  let snapshot, signature='', graphSignature='', profileRevision=0, selectedAssignment='', alive=true, reviewDraft=null, setupKey='', setupPayload='', outputDraft='', outputStatus='';
+  const reviewKey=id=>`mitos:review:${project}:${id}`;
+  function reviewed(draft){
+    if(!draft)return null;
+    if(draft.reviewed_profile)return {profile:draft.reviewed_profile,revision:draft.base_revision};
+    try{const saved=JSON.parse(sessionStorage.getItem(reviewKey(draft.id)));return saved?.revision===draft.base_revision?saved:null;}catch{return null;}
+  }
   function showProfile(draft=null){
     if(!snapshot)return;
-    const f=$('profile-form'), p=draft?(draft.reviewed_profile||draft.profile):snapshot.profile;
+    const f=$('profile-form'), p=draft?(reviewed(draft)?.profile||draft.profile):snapshot.profile;
     reviewDraft=draft;profileRevision=draft?draft.base_revision:p.revision;
-    $('profile-dialog-title').textContent=draft?'Review project context':'Project profile';
-    $('profile-introduction').textContent=draft?'The agent proposed this context in a separate analysis. Review the findings and rules, edit anything, and supply the goal you want the supervisor to work on.':'Edit the saved project context and working rules. Updated rules are announced to active agents.';
-    $('profile-save').textContent=draft?'Save and start supervisor':'Save project profile';
+    $('profile-dialog-title').textContent=draft?'Review context & set a goal':'Project profile';
+    $('profile-introduction').textContent=draft?'Continue to the final launch step when you are ready.':'Changes apply to this project’s agents.';
+    $('profile-save').textContent=draft?'Continue':'Save project profile';
     $('profile-goal').required=!!draft;
     for(const [key,value] of Object.entries(p)){const input=f.elements.namedItem(key);if(input)input.value=Array.isArray(value)?value.join('\n'):value;}
     f.querySelector('.form-error').textContent='';$('profile-dialog').showModal();
   }
   $('edit-project-profile').onclick=()=>showProfile();
-  $('profile-dialog').addEventListener('close',()=>{if(reviewDraft)sessionStorage.setItem(`mitos:dismissedDraft:${reviewDraft.id}`,'true');});
+  if($('return-to-setup'))$('return-to-setup').onclick=()=>$('tab-supervision').click();
   async function submit(form,fn){form.addEventListener('submit',async e=>{e.preventDefault();const b=form.querySelector('[type=submit]'),error=form.querySelector('.form-error');b.disabled=true;error.textContent='';try{await fn(Object.fromEntries(new FormData(form)));}catch(e){error.textContent=e.message;}finally{b.disabled=false;}});}
   submit($('profile-form'),async value=>{
     value.temp_paths=value.temp_paths.split('\n').map(s=>s.trim()).filter(Boolean);
     value.max_agents=Number(value.max_agents);value.min_free_mb=Number(value.min_free_mb);
-    if(reviewDraft){const s=await api(endpoint(`profile-drafts/${reviewDraft.id}/start`),{profile:value,revision:profileRevision});location.href=terminal(s).replace('&view=terminal','');return;}
+    if(reviewDraft){sessionStorage.setItem(reviewKey(reviewDraft.id),JSON.stringify({profile:value,revision:profileRevision}));$('profile-dialog').close();render();return;}
     await api(endpoint('profile'),{profile:value,revision:profileRevision});$('profile-dialog').close();await refresh();
   });
   submit($('attention-form'),async value=>{await api(endpoint('attention'),{body:value.body,pause:value.pause==='on'});$('attention-dialog').close();$('attention-form').reset();await refresh();});
@@ -45,22 +51,63 @@
     const request={agent_id:value.agent_id,profile_id:value.profile_id,prompt:value.prompt||''};
     const serialized=JSON.stringify(request);if(serialized!==setupPayload||!setupKey){setupPayload=serialized;setupKey=crypto.randomUUID();}
     const d=await api(endpoint('profile-drafts'),{...request,key:setupKey});
-    sessionStorage.removeItem(`mitos:dismissedDraft:${d.id}`);$('session-dialog').close();$('tab-supervision').click();await refresh();
+    $('session-dialog').close();$('tab-supervision').click();await refresh();
   }};
   function renderDraft(){
-    const d=snapshot.draft,box=$('setup-progress');box.hidden=!d||d.status==='started';box.replaceChildren();if(box.hidden)return;
-    const names={running:'Analyzing project…',ready:'Project context ready for review',reviewed:'Profile saved · supervisor has not started',failed:'Project analysis failed',cancelled:'Project analysis cancelled',interrupted:'Project analysis interrupted'};
-    box.append(el('h3',names[d.status]||d.status),el('p',d.status==='running'?'The selected agent is inspecting the project in a separate background conversation. You can leave this page and return.':d.detail||''));
-    if(d.status==='ready'||d.status==='reviewed')box.append(button('Review project context',()=>showProfile(d)));
-    if(d.status==='running'||d.status==='ready'||d.status==='reviewed')box.append(button('Discard setup',async()=>{await api(endpoint(`profile-drafts/${d.id}/cancel`),{});setupKey='';await refresh();}));
-    else box.append(button('Retry analysis',()=>{setupKey='';chooseRole('coordinator');}));
+    const d=snapshot.draft,box=$('setup-progress'),supervisor=snapshot.sessions.find(s=>s.role==='coordinator'&&active(s));
+    const running=!!supervisor,ready=d&&['ready','reviewed'].includes(d.status),review=ready&&reviewed(d);
+    const step=running?4:review?3:ready?2:1;
+    document.body.dataset.setup=String(!running&&!snapshot.sessions.length);
+    $('setup-workflow').hidden=running;
+    for(const item of $('setup-steps').children){const n=Number(item.dataset.step);item.classList.toggle('complete',n<step);item.classList.toggle('current',n===step);if(n===step)item.setAttribute('aria-current','step');else item.removeAttribute('aria-current');item.firstElementChild.textContent=n<step?'✓':String(n);}
+    const stage=$('workspace-stage');stage.replaceChildren(el('span',undefined,`state-dot ${running?supervisor.status:d?.status==='failed'?'failed':''}`),el('span',running?supervisor.status[0].toUpperCase()+supervisor.status.slice(1):step===3?'Ready to start':step===2?'Review':d?.status==='running'?'Analyzing':'Setup'));
+    box.replaceChildren();if(running)return;
+    const actions=el('div',undefined,'setup-actions');
+    const primary=(label,fn)=>{const b=button(label,fn);b.classList.add('primary');actions.append(b);return b;};
+    if(review){
+      box.append(el('h2','Ready to start'),el('p',review.profile.goal,'setup-goal'));
+      const launch=primary('Start supervisor',async()=>{launch.disabled=true;try{const session=await api(endpoint(`profile-drafts/${d.id}/start`),review);sessionStorage.removeItem(reviewKey(d.id));location.href=terminal(session);}finally{launch.disabled=false;}});launch.id='start-supervisor';
+      actions.append(button('Edit context or goal',()=>showProfile(d)));
+    }else if(ready){
+      box.append(el('h2','Analysis complete'));
+      primary('Review context & set goal',()=>showProfile(d));
+    }else if(d?.status==='running'){
+      box.append(el('h2','Analyzing project…'));
+      actions.append(button('Cancel analysis',async()=>{await api(endpoint(`profile-drafts/${d.id}/cancel`),{});setupKey='';await refresh();}));
+    }else{
+      const failed=d&&['failed','interrupted','cancelled'].includes(d.status);
+      box.append(el('h2',failed?({failed:'Project analysis failed',interrupted:'Analysis interrupted',cancelled:'Analysis cancelled'}[d.status]):'Set up your project'));
+      if(failed&&d.detail)box.append(el('p',d.detail,'setup-error-detail'));
+      primary(failed?'Retry analysis':'Analyze project',()=>{setupKey='';chooseRole('coordinator');});
+    }
+    box.append(actions);
   }
-  function offerReview(){const d=snapshot?.draft;if(d?.status==='ready'&&document.body.dataset.view==='supervision'&&!document.querySelector('dialog[open]')&&!sessionStorage.getItem(`mitos:dismissedDraft:${d.id}`))showProfile(d);}
+  function updateDraftClock(){
+    const d=snapshot?.draft;if(!d||d.status==='started')return;
+    const elapsed=Math.max(0,Math.floor(((d.finished_at?new Date(d.finished_at):new Date())-new Date(d.created_at))/1000));
+    $('setup-output-status').textContent=`${d.agent_id} · ${d.status} · ${Math.floor(elapsed/60)}m ${elapsed%60}s`;
+  }
+  async function refreshDraftOutput(){
+    const d=snapshot?.draft,panel=$('setup-output-panel');panel.hidden=!d||d.status==='started';if(panel.hidden){window.MitosConnection.recovered('analysis-output');return;}
+    if(outputDraft!==d.id||outputStatus!==d.status){panel.open=d.status==='running'||d.status==='failed';outputDraft=d.id;outputStatus=d.status;}
+    updateDraftClock();
+    try{
+      const output=await api(endpoint(`profile-drafts/${d.id}/output`));if(snapshot?.draft?.id!==d.id)return;
+      window.MitosConnection.recovered('analysis-output');
+      window.MitosAnalysisOutput.render(output,d);
+      $('setup-output-note').hidden=!output.truncated;$('setup-output-note').textContent=output.truncated?'Earlier activity was trimmed.':'';
+    }catch(e){window.MitosConnection.failed('analysis-output',e);$('setup-output-note').hidden=false;$('setup-output-note').textContent='Reconnecting…';}
+  }
+  function updateSelection(){
+    const supervision=document.body.dataset.view==='supervision';
+    document.querySelectorAll('#supervisor-list a').forEach(a=>{const selected=a.classList.contains('supervisor-link')?supervision:document.body.dataset.view==='terminal'&&a.dataset.terminalSession===document.body.dataset.session;a.classList.toggle('selected',selected);if(selected)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});
+  }
+  document.querySelectorAll('[data-tab]').forEach(tab=>tab.addEventListener('click',updateSelection));
   function detail(s){
     selectedAssignment=s.id;
-    const box=$('assignment-detail');box.replaceChildren(el('h3',s.name),el('p',s.initial_prompt||'No task prompt recorded.'));
+    const box=$('assignment-detail');box.hidden=false;box.replaceChildren(el('h3',s.name),el('p',s.initial_prompt||'No task prompt recorded.'));
     box.append(el('p',`Supervisor: ${snapshot.sessions.find(v=>v.id===s.supervisor_id)?.name||'Unassigned'} · ${s.status}`,'muted'),el('code',s.workspace||'Project checkout'));
-    if(s.assignment){const a=s.assignment;box.append(el('p',`Goal: ${a.goal_id||'—'} · Task: ${a.task_id||'—'} · Requested by: ${a.requested_by||'operator'}`,'muted'));if(a.handoff_topic_id)box.append(el('p',`Handoff topic: ${a.handoff_topic_id}`,'muted'));}
+    if(s.assignment){const a=s.assignment;box.append(el('p',`Goal: ${a.goal_id||'–'} · Task: ${a.task_id||'–'} · Requested by: ${a.requested_by||'operator'}`,'muted'));if(a.handoff_topic_id)box.append(el('p',`Handoff topic: ${a.handoff_topic_id}`,'muted'));}
     box.append(el('p',`Profile at launch: revision ${s.policy_revision||0} · Attention: ${transport(s)}`,'muted'));
     const link=el('a','Open terminal →','text-link');link.href=terminal(s);box.append(link);
   }
@@ -74,7 +121,7 @@
     const box=$('supervision-graph');box.replaceChildren();
     const attached=workers.filter(s=>supervisor&&s.supervisor_id===supervisor.id);
     const others=workers.filter(s=>!supervisor||s.supervisor_id!==supervisor.id);
-    if(!supervisor){box.append(el('p','Set the project goal, then start a supervisor to delegate work to Mitos agents.','graph-empty'));}
+    if(!supervisor){box.append(el('p',snapshot.draft?.status==='running'?'Project analysis is running above. After review, the selected agent becomes the supervisor and its terminal opens here.':'The supervisor is a coding agent that coordinates other agents. Complete setup to open its terminal.','graph-empty'));}
     else{
       const rows=Math.ceil(attached.length/3), height=135+rows*125;
       const nodeX=i=>{const count=Math.min(3,attached.length-Math.floor(i/3)*3);return 900/(count+1)*(i%3+1);};
@@ -95,7 +142,7 @@
       node(supervisor,450,52,true);
       attached.forEach((s,i)=>node(s,nodeX(i),190+Math.floor(i/3)*125,false));
       box.append(svg);
-      if(!attached.length)box.append(el('p','No assigned agents yet. Give the supervisor a concrete objective in its terminal, or add an agent here.','graph-empty'));
+      if(!attached.length)box.append(el('p','No workers delegated yet.','graph-empty'));
       const choices=el('div',undefined,'assignment-buttons');attached.forEach(s=>choices.append(button(`Assignment: ${s.name}`,()=>detail(s))));box.append(choices);
     }
     if(others.length){box.append(el('h3','Other sessions'));for(const s of others){const row=el('div',undefined,'other-session');const a=el('a',s.name,'text-link');a.href=terminal(s);row.append(a,el('span',s.supervisor_id?'Assigned to an earlier supervisor':'Unassigned','muted'),button('Details',()=>detail(s)));box.append(row);}}
@@ -104,18 +151,18 @@
     renderDraft();
     const {sessions,profile,notices}=snapshot, supervisors=sessions.filter(s=>s.role==='coordinator');
     const supervisor=supervisors.find(active)||supervisors.at(-1), workers=sessions.filter(s=>s.role!=='coordinator');
-    $('project-objective').textContent=profile.goal||'Start a supervisor to analyze this project, then review its context and define a work goal.';
-    $('supervision-summary').replaceChildren(el('span',`${workers.filter(active).length} / ${profile.max_agents} active agents`),el('span',profile.git_mode==='worktree'?'Separate agent worktrees':'Shared project checkout'),el('span',`Profile revision ${profile.revision}`));
-    $('start-supervisor').hidden=!!supervisor&&active(supervisor);
+    $('supervision-workspace').hidden=!sessions.length;$('project-objective').textContent=profile.goal||'';$('project-objective').hidden=!profile.goal;
+    $('active-agent-count').textContent=`${workers.filter(active).length} active`;
     const rail=$('supervisor-list');rail.replaceChildren();
-    const overview=el('a',supervisor?supervisor.name:'Set up supervision','session-link supervisor-link');overview.href=`/workspace?project=${project}`;
+    const overview=el('a',supervisor?supervisor.name:'Project setup','session-link supervisor-link');overview.href=`/workspace?project=${project}`;
     if(supervisor){overview.dataset.sessionId=supervisor.id;overview.dataset.sessionName=supervisor.name;overview.setAttribute('aria-haspopup','menu');overview.setAttribute('aria-controls','desk-context-menu');overview.setAttribute('aria-keyshortcuts','Shift+F10');}
-    overview.append(el('small',supervisor?`${supervisor.status} · ${transport(supervisor)}`:'Project overview & rules'));rail.append(overview);
-    if(supervisor){const link=el('a','Supervisor terminal ↗','supervisor-terminal');link.href=terminal(supervisor);rail.append(link);}
-    const graphKey=JSON.stringify(sessions);if(graphKey!==graphSignature){graphSignature=graphKey;graph(supervisor,workers);}
+    overview.append(el('small',supervisor?`${supervisor.agent_id} · ${supervisor.status}`:snapshot.draft?`${snapshot.draft.agent_id} · analysis ${snapshot.draft.status}`:'Project overview & rules'));rail.append(overview);
+    if(supervisor){const link=el('a','Supervisor terminal ↗','supervisor-terminal');link.href=terminal(supervisor);link.dataset.terminalSession=supervisor.id;rail.append(link);}
+    updateSelection();
+    const graphKey=JSON.stringify([sessions,snapshot.draft?.status]);if(graphKey!==graphSignature){graphSignature=graphKey;graph(supervisor,workers);}
     if(selectedAssignment){const s=sessions.find(s=>s.id===selectedAssignment);if(s)detail(s);}
     const list=$('attention-list');list.replaceChildren();
-    if(!notices.length)list.append(el('p','No attention requests. Use the topic board for ordinary progress updates.','muted'));
+    if(!notices.length)list.append(el('p','No messages.','muted'));
     for(const n of notices){
       const card=el('article',undefined,'attention-card');const ack=n.targets.filter(t=>t.acknowledged_at).length;
       card.append(el('h4',`${n.pause?(n.released_at?'Released breakpoint':'Breakpoint requested'):'Attention'} · ${ack}/${n.targets.length} acknowledged`),el('p',n.body));
@@ -127,8 +174,9 @@
       list.append(card);
     }
   }
-  async function refresh(){const next=await api(endpoint('supervision')),key=JSON.stringify(next);snapshot=next;if(key!==signature){signature=key;render();}offerReview();}
-  async function poll(){try{await refresh();}catch(e){fail(e);}if(alive)setTimeout(poll,3000);}
-  refresh().then(()=>{if(new URLSearchParams(location.search).get('setup')==='true'&&!snapshot?.draft)chooseRole('coordinator');}).catch(fail);
-  poll();window.addEventListener('pagehide',()=>{alive=false;});
+  async function refresh(){const next=await api(endpoint('supervision')),key=JSON.stringify(next);snapshot=next;if(key!==signature){signature=key;render();}await refreshDraftOutput();}
+  async function poll(){try{await refresh();window.MitosConnection.recovered('supervision');}catch(e){window.MitosConnection.failed('supervision',e);}if(alive)setTimeout(poll,3000);}
+  refresh().then(()=>{if(new URLSearchParams(location.search).get('setup')==='true'&&!snapshot?.draft)chooseRole('coordinator');}).catch(e=>window.MitosConnection.failed('supervision',e)).finally(()=>{if(alive)setTimeout(poll,3000);});
+  const clockTimer=setInterval(updateDraftClock,1000);
+  window.addEventListener('pagehide',()=>{alive=false;clearInterval(clockTimer);});
 })();

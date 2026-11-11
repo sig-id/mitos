@@ -45,18 +45,19 @@ func clockTickRate() float64 {
 }
 
 type Resources struct {
-	Scratch      []Scratch     `json:"scratch"`
-	GitActivity  []GitActivity `json:"git_activity"`
-	At           time.Time     `json:"at"`
-	Coverage     string        `json:"coverage"`
-	Processes    []Process     `json:"processes"`
-	ChangedFiles []string      `json:"changed_files"`
-	GitStatus    string        `json:"git_status"`
-	Diff         string        `json:"diff"`
-	Worktrees    string        `json:"worktrees"`
-	DiskBytes    int64         `json:"disk_bytes"`
-	DiskFiles    int           `json:"disk_files"`
-	DiskPartial  bool          `json:"disk_partial"`
+	Scratch       []Scratch     `json:"scratch"`
+	GitActivity   []GitActivity `json:"git_activity"`
+	At            time.Time     `json:"at"`
+	Coverage      string        `json:"coverage"`
+	Processes     []Process     `json:"processes"`
+	ChangedFiles  []string      `json:"changed_files"`
+	GitStatus     string        `json:"git_status"`
+	Diff          string        `json:"diff"`
+	DiffTruncated bool          `json:"diff_truncated,omitempty"`
+	Worktrees     string        `json:"worktrees"`
+	DiskBytes     int64         `json:"disk_bytes"`
+	DiskFiles     int           `json:"disk_files"`
+	DiskPartial   bool          `json:"disk_partial"`
 }
 
 func processSnapshot() []Process {
@@ -147,8 +148,8 @@ func (m *Manager) Resources(ctx context.Context, project string, details bool) (
 	r.Scratch, r.GitActivity = m.artifactViews(project)
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	r.GitStatus = gitView(ctx, p.Directory, "status", "--short", "--untracked-files=normal")
-	r.Diff = gitView(ctx, p.Directory, "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--")
+	r.GitStatus = gitView(ctx, p.Directory, "status", "--porcelain=v1", "--untracked-files=normal")
+	r.Diff, r.DiffTruncated = gitViewBounded(ctx, p.Directory, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--")
 	r.Worktrees = gitView(ctx, p.Directory, "worktree", "list", "--porcelain")
 	deadline := time.Now().Add(time.Second)
 	_ = filepath.WalkDir(p.Directory, func(path string, d fs.DirEntry, err error) error {
@@ -182,22 +183,32 @@ func (m *Manager) Resources(ctx context.Context, project string, details bool) (
 	return r, nil
 }
 
-type boundedBuffer struct{ data []byte }
+type boundedBuffer struct {
+	data      []byte
+	truncated bool
+}
 
 func (b *boundedBuffer) Write(p []byte) (int, error) {
 	n := len(p)
+	if n > (128<<10)-len(b.data) {
+		b.truncated = true
+	}
 	if len(b.data) < 128<<10 {
 		b.data = append(b.data, p[:min(len(p), (128<<10)-len(b.data))]...)
 	}
 	return n, nil
 }
 func gitView(ctx context.Context, dir string, args ...string) string {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)...)
+	text, _ := gitViewBounded(ctx, dir, args...)
+	return text
+}
+func gitViewBounded(ctx context.Context, dir string, args ...string) (string, bool) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "color.ui=false"}, args...)...)
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat"}
 	var out boundedBuffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	_ = cmd.Run()
-	return string(out.data)
+	return string(out.data), out.truncated
 }

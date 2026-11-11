@@ -142,8 +142,13 @@ func (m *Manager) StartProfileDraft(project string, request ProfileDraftRequest)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	m.drafts[d.ID] = cancel
+	if m.draftLogs == nil {
+		m.draftLogs = make(map[string]*draftLog)
+	}
+	log := &draftLog{}
+	m.draftLogs[d.ID] = log
 	m.wg.Add(1)
-	go m.runProfileDraft(ctx, cancel, p, d, launch, directory, outputPath)
+	go m.runProfileDraft(ctx, cancel, p, d, launch, directory, outputPath, log)
 	return cloneDraft(d), nil
 }
 func profileDraftPrompt(p Project, objective string) string {
@@ -180,16 +185,17 @@ func (b *limitedDraftOutput) Write(p []byte) (int, error) {
 	b.buf.Write(p)
 	return size, nil
 }
-func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc, p Project, d ProfileDraft, launch agentcli.Launch, directory, outputPath string) {
+func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc, p Project, d ProfileDraft, launch agentcli.Launch, directory, outputPath string, log *draftLog) {
 	defer m.wg.Done()
 	defer cancel()
 	stdout := &limitedDraftOutput{limit: 1 << 20, cancel: cancel}
-	stderr := &limitedDraftOutput{limit: 64 << 10, cancel: cancel}
 	cmd := exec.CommandContext(ctx, launch.Executable, launch.Args...)
 	cmd.Dir = p.Directory
 	cmd.Env = launch.Env
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = io.MultiWriter(stdout, log)
+	// Native CLIs stream repository reads and progress on stderr. Retain a
+	// bounded tail without treating ordinary diagnostic volume as a failure.
+	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Pdeathsig: syscall.SIGKILL}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
@@ -202,7 +208,8 @@ func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc
 	if cmd.Process != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	_ = os.WriteFile(filepath.Join(directory, "output.log"), append(append([]byte{}, stdout.buf.Bytes()...), stderr.buf.Bytes()...), 0600)
+	output := log.snapshot()
+	_ = os.WriteFile(filepath.Join(directory, "output.log"), []byte(output.Text), 0600)
 	raw := stdout.buf.Bytes()
 	if err == nil && d.AgentID == "codex" {
 		// The Codex CLI writes the final response separately from its progress output.
@@ -229,6 +236,7 @@ func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.drafts, d.ID)
+	delete(m.draftLogs, d.ID)
 	current, lookupErr := m.draftLocked(d.ProjectID, d.ID)
 	if lookupErr != nil {
 		return
@@ -242,7 +250,7 @@ func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		current.Status = "failed"
 		current.Detail = "Project analysis timed out. Retry with a narrower objective or check the agent configuration."
-	case stdout.overflow || stderr.overflow:
+	case stdout.overflow:
 		current.Status = "failed"
 		current.Detail = "Project analysis exceeded the output limit. The saved profile was not changed."
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -250,7 +258,7 @@ func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc
 		current.Detail = "Project analysis cancelled."
 	case err != nil:
 		current.Status = "failed"
-		current.Detail = "The agent did not produce a valid project profile. Check its installation and sign-in, then retry. Diagnostics are in the local profile-drafts directory."
+		current.Detail = fmt.Sprintf("Project analysis failed: %s. See the analysis output below for details.", err)
 	default:
 		profile.Revision = d.BaseRevision
 		current.Profile = &profile

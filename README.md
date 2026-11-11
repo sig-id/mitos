@@ -1,11 +1,20 @@
-# Mitos Studio
+# Mitos
 
-Run coding CLIs in a shared project workspace. Keep their terminals visible,
-discover coordination topics, inspect changes, and share managed builds.
+Mitos is the operating system for agents.
+Services define ongoing responsibilities, tasks define concrete work, and
+replaceable processes execute it. The operating system governs resources,
+authority, communication, and durable state for both LLM and deterministic executors.
 
-Mitos is being rebuilt in **Go + HTMX**, starting with the Studio product in
-the specs. The previous `beam/` implementation has been removed. This is a new
-implementation, not a feature-complete port of that runtime.
+The [agent operating system architecture](docs/AGENT_OPERATING_SYSTEM.md) defines
+six primitives: task, process, resource, grant, channel, and record. Supervisors
+coordinate work as managed processes. Services activate work on schedules,
+external events, and task outcomes.
+
+With **Mitos**, run coding CLIs in a shared project
+workspace, keep their terminals visible, discover coordination topics, inspect
+changes, and share managed builds.
+
+Mitos uses **Go + HTMX**, with a server, CLI, and browser workspace.
 
 See [the handheld device API](docs/DEVICE_API.md) for optional HTTPS snapshots,
 confirmed decision receipts, pairing, Codex/Claude question and approval adapters,
@@ -19,12 +28,12 @@ database service, or CDN is required to serve it. Terminal assets are vendored.
 
 ```sh
 just serve                 # http://127.0.0.1:4646
-just stop                  # gracefully stop this project's Studio; safe to repeat
+just stop                  # gracefully stop this project's server; safe to repeat
 just demo 4756             # labelled example history, separate .mitos-demo data
 just check                # vet + race-enabled tests
 ```
 
-`just serve` rebuilds, stops the previous Studio using the same data directory,
+`just serve` rebuilds, stops the running server using the same data directory,
 and launches the new build in the foreground. `mitos serve` also replaces the
 previous process. Saved data survives the restart.
 `just stop .mitos-demo` stops the demo instance. The equivalent CLI command is
@@ -38,10 +47,13 @@ go test -race ./...
 go build -o bin/mitos ./cmd/mitos
 ```
 
-The Studio opens on the **project workspace**. **Open a project** → select any
-existing local directory → **Start supervisor** → choose its agent → **Analyze project**.
+Mitos opens on the **project workspace**. **Open a project** → select any
+existing local directory → choose an agent → **Analyze project**.
 The selected agent drafts project context in a separate background conversation.
-Review and edit that draft, supply a concrete work goal, then **Save and start supervisor**.
+Follow the three setup steps: **Analyze**, **Review & goal**, then **Start supervisor**.
+After analysis, choose **Review context & set goal**, edit the draft, and select
+**Continue**. The final step shows your goal and a **Start supervisor** button,
+which saves the profile and opens the supervisor's terminal.
 Analysis alone starts no working sessions and does not change the saved profile.
 The profile supplies the goal, Git/push/merge/review rules, temporary paths, disk
 reserve, agent limit, and shared-checkout or separate-worktree layout.
@@ -64,14 +76,14 @@ Navigation leaves execution running. Output survives server restart; processes
 are not automatically relaunched. Interrupted sessions require explicit process
 inspection before replacement. See [interactive workspace behavior and APIs](docs/INTERACTIVE_WORKSPACE.md).
 
-The existing batch workflow is available from **Task history** → **New work** → choose **Workspace inventory** →
+The batch workflow is available from **Task history** → **New work** → choose **Workspace inventory** →
 choose a local directory → start. It copies the workspace, inventories actual
 files, records their content hashes, checks the saved artifact, and delivers
 `inventory.json` and `report.md`. This built-in application performs no model
 calls or code-quality assessment. The optional **Workspace note** example
 executes a real command and an independent acceptance command.
 
-## The product
+## Workspace
 
 - **Agent workspace:** projects, actual CLI sessions, a topic board, working-directory
   diffs, observed processes, session scratch, and managed Cargo builds.
@@ -84,13 +96,11 @@ executes a real command and an independent acceptance command.
 - **Decisions:** explicit choices with context and consequences. Interrupted
   execution parks until the operator chooses to restart or close it.
 - **Applications:** installed entrypoints; author in your editor and launch
-  from Studio.
+  from Mitos.
 
-The workspace follows the [revised product design](docs/ORCHESTRATION_REDESIGN.md),
-with current boundaries in [interactive workspace behavior](docs/INTERACTIVE_WORKSPACE.md).
-Batch execution retains `15_DECISION_PLANE` and `16_AUTONOMY`'s decision and
-acceptance boundaries. See [the product/design decisions](docs/PRODUCT_DESIGN.md) and
-[the implementation boundary](spec/00_IMPLEMENTATION_STATUS.md).
+See [interactive workspace behavior](docs/INTERACTIVE_WORKSPACE.md) for session
+controls and APIs, [decision policy](docs/DECISIONS.md) for human resolutions,
+and [workspace and acceptance contracts](docs/WORKSPACES.md) for batch verification.
 
 ## Local applications
 
@@ -129,7 +139,7 @@ The runner receives JSON on stdin:
 ```
 
 The application runs in a copied workspace with its own Git repository. Its
-stdout/stderr is saved as `output.txt`. After the command stops, Studio saves
+stdout/stderr is saved as `output.txt`. After the command stops, Mitos saves
 `baseline.json`, `changes.patch`, `changes.json`, and `workspace.tar.gz`, including
 partial changes after command failure, cancellation, or timeout. Result capture
 has the same 64 MiB / 10,000-file ceiling; a harvest failure records its cause
@@ -147,40 +157,39 @@ records a local pass; another exit fails the run with evidence. The optional
 and delta are recorded even when the acceptance predicate fails.
 
 The acceptance timeout defaults to 60 seconds and bounds reconstruction,
-verification, and measurements within the overall execution limit. Existing
-argv-array `acceptance` declarations still load. The example predicate checks
+verification, and measurements within the overall execution limit.
+`acceptance` also accepts an argv array. The example predicate checks
 the note's exact content. See [workspace and acceptance contracts](docs/WORKSPACES.md).
 
 Processes receive `PATH`, isolated `HOME`/`TMPDIR`, `LANG`, `MITOS_WORKSPACE`,
 and Git settings that neutralize host configuration and ancestor discovery.
-Provider credentials are not inherited. Broker integration remains outstanding.
+Provider credentials are not inherited.
 Combined stdout/stderr is capped at 2 MiB per command.
 
-**This is a trusted local process provider, not a sandbox.** Processes run as
-the operator and can access the host. The external verifier's working directory
-separates execution from the copied workspace, but does not enforce an
-inaccessible oracle. Untrusted applications, T2 isolation, credential brokering,
-and the full autonomy gate require the integrations listed in the implementation
-status. The server binds only to loopback and rejects foreign Host headers and
-cross-origin mutations. There is no hosted identity or public buyer surface yet.
+**Local applications run as the operator and can access the host.** The local
+process provider requires trusted applications. The external verifier uses a
+separate working directory, but the provider does not enforce sandboxing or an
+inaccessible oracle. The main server binds only to loopback and rejects foreign
+Host headers and cross-origin mutations.
 
-Command execution and harvest now use a provider interface. Applications can
+Command execution and harvest use a provider interface. Applications can
 declare strict `compute` requirements; unsupported tiers, broker enforcement,
-or providers are refused before a run is created. Existing apps without `compute`
-retain an explicitly recorded local development posture. See [provider admission
-and lifecycle](docs/COMPUTE.md); no strict sandbox provider is registered yet.
+or providers are refused before a run is created. Applications without `compute`
+receive an explicitly recorded local development posture. The registered provider
+supports local execution without sandbox or credential-broker enforcement.
+See [provider admission and lifecycle](docs/COMPUTE.md).
 
 ## Observation and interruption evidence
 
 Installed commands can opt into activity observation and a normalized JSONL
 session tail. A quiet command produces a recorded stall and an operator decision;
 its output and workspace are preserved. See [the observation contract and
-configuration](docs/OBSERVATION.md). This first adapter samples local processes
+configuration](docs/OBSERVATION.md). The local adapter samples processes
 and does not grant unattended operation.
 
 ```sh
 ./bin/mitos interrupts                      # recorded requests and human touches
-./bin/mitos interrupts --logs .runs          # read-only historical corpus audit
+./bin/mitos interrupts --logs .mitos         # read-only log audit
 ```
 
 The report excludes labelled demo runs, verifies current log chains when reading
@@ -196,8 +205,8 @@ unknown; censored runs contribute horizon bounds rather than infinite durations.
 ./bin/mitos autonomy --logs .mitos   # read-only, verified log replay
 ```
 
-New command plans record their unattended grant separately from measured time.
-The current local provider receives zero. See [metric definitions and corpus
+Command plans record their unattended grant separately from measured time.
+The local provider receives zero. See [metric definitions and corpus
 coverage](docs/AUTONOMY_METRICS.md).
 
 ## Human decisions
@@ -213,10 +222,8 @@ another child attempt.
 ./bin/mitos resolve --choice cancel --note 'Keep the evidence.' local_RUN_ID decision_ID
 ```
 
-Local command cards remain external: silence never authorizes them. See
+Local command cards require an explicit resolution: silence never authorizes them. See
 [decision policy, replay, and the local identity boundary](docs/DECISIONS.md).
-Hosted identity, automatic defaults, and notification/digest transport remain
-outstanding.
 
 ## Checkpoints and recovery
 
@@ -234,8 +241,7 @@ Recovery preserves earlier workspaces and artifacts, uses a new segment, and kee
 the original execution deadline. Later artifact names start with `segment-002-`
 and so on. Configured supervision probes the initial predicate before work starts;
 ordinary apps retain an unknown initial checkpoint. See [configuration, evidence,
-and crash behavior](docs/RECOVERY.md). This is local single-step recovery; composed
-pipeline recovery and enforced oracle isolation remain outstanding.
+and crash behavior](docs/RECOVERY.md). Recovery operates on local single-step runs.
 
 ## Data and execution
 
@@ -246,7 +252,7 @@ Batch intake uses Git's
 ignore rules: tracked files plus untracked, non-ignored files, including nested
 `.gitignore` rules. Plain directories use a temporary external Git index; their
 source is not initialized as a repository. Intake omits symlinks, Git internals,
-and this Studio's data directory. Unsupported special files and submodule
+and the server's data directory. Unsupported special files and submodule
 materialization are refused. The 64 MiB / 10,000-file preflight names the largest
 contributors when it refuses a workspace. Source branches and indexes remain
 untouched.
@@ -275,12 +281,9 @@ harvest share directory and log flushes; already-persisted parent directories
 are not flushed again. Submissions and execution barriers still wait for durable
 storage, but slow flushes do not hold up status reads.
 
-The old ignored `.runs/` records are left in place and are not automatically
-imported. The new log format is different.
-
 ## CLI and HTTP
 
-All clients use the same Go operations. The CLI connects to a running Studio:
+All clients use the same Go operations. The CLI connects to a running Mitos server:
 
 ```sh
 ./bin/mitos run --title 'Inspect this workspace' --workspace . --minutes 5
@@ -307,7 +310,7 @@ form fields / JSON brief `ownership` object. Conflicts wait before dispatch;
 out-of-scope changes are preserved but cannot pass acceptance. Crash-held claims
 require inspection and explicit `release-claims --confirmed-stopped RUN_ID`.
 See [local fleet coordination and evidence](docs/FLEET.md) for lifecycle, replay,
-reader bounds, and the outstanding supervisor isolation boundary.
+reader bounds, and isolation limits.
 
 | Method | Path | Result |
 |---|---|---|
@@ -358,7 +361,7 @@ upstream artifacts as verified private copies. The new-work form supports the sa
 selection. See [bound data dependencies](docs/DATA_DEPENDENCIES.md) for limits,
 worker input paths, integrity checks, and recovery.
 See [durable tasks and work pools](docs/WORK_POOLS.md) for supported edges,
-selection, replay, and outstanding work-pool mechanisms.
+selection, and replay.
 
 ## Structure
 
@@ -376,7 +379,7 @@ internal/desk/        local PTY sessions, topic board, managed builds, resource 
 internal/workpool/    dependency readiness, deterministic disciplines, pool capacity
 internal/web/         HTTP routes, embedded Go templates, CSS, HTMX
 examples/             runnable local application contract
-docs/                 product and UX rationale
+docs/                 architecture, behavior, APIs, and configuration
 spec/                 target contracts and current implementation status
 ```
 
@@ -387,13 +390,14 @@ with their MIT licenses under `internal/web/static/`; it requires JavaScript.
 HTMX 2.0.10 is vendored with its BSD 2-Clause license under
 `internal/web/static/`. The remaining UI uses system fonts and local assets.
 
-The Work page also links to **Services**: preview/save project targets, presets,
+## Services
+
+The Work page links to **Services**: preview/save project targets, presets,
 requirements, optional members, conflicts, and activation reasons. Active manual,
 interval, cron, event, and continuous
-services create Tasks through the existing pools, with durable schedule cursors
+services create Tasks through work pools, with durable schedule cursors
 and bounded per-service concurrency/queueing. See [service composition and
 triggers](docs/SERVICES.md) for a catalog example and idempotency/replay behavior.
-Provider-specific ingress connectors and the remaining service runtime are still outstanding.
 
 Optional [service circuit breakers](docs/SERVICE_BREAKERS.md) persist failure counts,
 cooldowns, and bounded recovery probes. They gate queued execution before claims

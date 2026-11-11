@@ -1,4 +1,4 @@
-# 01 — Architecture (Constitution)
+# 01 – Architecture (Constitution)
 
 This document is the constitution. It fixes the vocabulary, the layer model, the
 control model, and the **canonical contracts** (§8) that every other spec in this
@@ -22,9 +22,9 @@ integrates with through a defined seam; mitos neither contains nor builds it:
 
 | External product | Seam (`§8`) | Role |
 |---|---|---|
-| **the engine** — a harness-execution product (the Zig-based one, if retained) | `Harness` adapter (`§8.6`) + transport | launches a harness in a sandbox and normalizes its output into the event stream. A structured-output harness (e.g. Claude Code `--output-format stream-json`) needs no engine; the engine is required only where PTY/transport complexity demands it. |
-| **Nucleus** — a gVisor-class sandbox shipped as OCI containers | `SandboxProvider` (`§8.4`) | T2 isolation. mitos ships its own in-process `Provider.Local` for T0/T1; Nucleus (or E2B/Daytona) is the external T2 provider. |
-| **sigid** — the identity provider | identity/assertion intake | every human identity (operator/seller/buyer) is asserted by sigid; mitos consumes assertions and never runs its own IdP. |
+| **the engine** – a harness-execution product (the Zig-based one, if retained) | `Harness` adapter (`§8.6`) + transport | launches a harness in a sandbox and normalizes its output into the event stream. A structured-output harness (e.g. Claude Code `--output-format stream-json`) needs no engine; the engine is required only where PTY/transport complexity demands it. |
+| **Nucleus** – a gVisor-class sandbox shipped as OCI containers | `SandboxProvider` (`§8.4`) | T2 isolation. mitos ships its own in-process `Provider.Local` for T0/T1; Nucleus (or E2B/Daytona) is the external T2 provider. |
+| **sigid** – the identity provider | identity/assertion intake | every human identity (operator/seller/buyer) is asserted by sigid; mitos consumes assertions and never runs its own IdP. |
 
 A seam is a Go interface with normative contracts. A second implementation of
 anything is a new interface implementation, never an inline branch.
@@ -49,8 +49,8 @@ anything is a new interface implementation, never an inline branch.
    replayable**, never pre-declared. There is no authored finite-state machine and
    no formal-methods (TLA) obligation.
 3. **The sandbox boundary is the security boundary.** Authority is enforced at the
-   edges of the sandbox — hermetic *injection* inbound, an *egress credential
-   broker* outbound, *harvest* of results — not by trusting the agent and not by a
+   edges of the sandbox – hermetic *injection* inbound, an *egress credential
+   broker* outbound, *harvest* of results – not by trusting the agent and not by a
    protocol the harness must speak. (See §8.5.)
 4. **Harness-agnostic.** Mitos wraps coding-agent harnesses (Claude Code, Codex,
    Gemini CLI, OpenCode, …) and never hard-codes one. The harness does the hard
@@ -64,7 +64,7 @@ anything is a new interface implementation, never an inline branch.
    single operator's unattended work on their own repos (read side: the
    operator, the supervisor, mitos's own eval corpus). **Market** is paid
    completed work for strangers (read side: buyer proof, meter, seller
-   attribution, auditor — `08`). They share every mechanism in this document and
+   attribution, auditor – `08`). They share every mechanism in this document and
    differ only in **policy**, tabulated in `02 §2.1`. Studio is Market's staging
    environment: a run that cannot go unattended for its own operator cannot be
    sold unattended to a stranger, so Studio is on Market's critical path, not
@@ -115,7 +115,7 @@ agency where it is large (the orchestrator reasons over an open pipeline).
 
 ---
 
-## 4. Control model — agentic policy, deterministic record
+## 4. Control model – agentic policy, deterministic record
 
 The orchestrator never mutates state directly. Each step it emits a **Decision
 event** (§8.1); the substrate executes the chosen action through deterministic
@@ -129,18 +129,18 @@ resume   = replay events to last committed Effect, then re-invoke the orchestrat
 ```
 
 **Crash test (must pass):** if the process dies after a Decision but before the
-Effect commits, mitos recovers without guessing — the Decision is on the log, the
+Effect commits, mitos recovers without guessing – the Decision is on the log, the
 Effect is not, so the action is simply re-driven. Reasoning is stochastic; the
 record of *what was decided and done* is total.
 
-**Normative invariants (load-bearing — violating any defeats the architecture):**
+**Normative invariants (load-bearing – violating any defeats the architecture):**
 
 - The event log is the **only** source of truth for run state. Processes MAY
   cache a fold; they MUST NOT own state the log cannot reproduce. Any answer
   returned to a caller MUST be recomputable from `fold(events)` with no process
   running.
 - A new `Effect` subtype MUST be consumed by every fold reader in the same
-  change — in mitos: `Run.State`, `Meter`, and `Proof` (`08 §2`). A reader that
+  change – in mitos: `Run.State`, `Meter`, and `Proof` (`08 §2`). A reader that
   silently ignores a new Effect is a defect, never a deferral.
 - Redaction is enforced at the **data layer**, never the view layer: a
   commercial cut is a fold over a strict Effect subset; `rationale` and harness
@@ -156,7 +156,7 @@ Two agentic control layers, no third:
 
 ---
 
-## 5. The capability (atom) — see `03_CAPABILITY`
+## 5. The capability (atom) – see `03_CAPABILITY`
 
 | Pillar | What | Where |
 |---|---|---|
@@ -185,7 +185,7 @@ eligible provider set + network/mount posture.
 
 ## 7. Runtime ownership
 
-| mitos — Go control plane (this project) | External products (integrated via seams) | Sandbox interior (per run) |
+| mitos – Go control plane (this project) | External products (integrated via seams) | Sandbox interior (per run) |
 |---|---|---|
 | orchestrator + loop-manager, event-log writer, policy compiler, **egress broker**, scheduling/services, memory, multi-tenancy/keys/metering, web + CLI | **the engine** (transport/terminal/local launch; `§8.6`), **Nucleus / E2B / Daytona** (sandbox providers; `§8.4`), **sigid** (identity) | harness process + capability image + RO data + workspace + (optional MCP tool relay) |
 
@@ -220,7 +220,7 @@ DecisionEvent {
   target      : capability_ref | stage_id | checkpoint_id | null
   params      : object              # type-specific (e.g. switch → {model,effort,harness})
   inputs_hash : string             # hash of the state the decision was taken on (replay integrity)
-  rationale   : string             # NL justification — AUDIT ONLY, never controls flow
+  rationale   : string             # NL justification – AUDIT ONLY, never controls flow
   budget      : { tokens, usd, wall_ms, remaining }
 }
 ```
@@ -248,7 +248,7 @@ The **event log** is the append-only ordered union of Decision + Effect events.
 It is simultaneously: run state, debug trace, replay source, audit record, and
 billing ledger (`08`).
 
-### 8.3 Capability manifest (skeleton — elaborated in `03`)
+### 8.3 Capability manifest (skeleton – elaborated in `03`)
 
 ```
 name, version
@@ -281,21 +281,21 @@ stop(session)               :: :ok
 capabilities()              :: %{isolation, remote?, egress: :broker, data_mount, snapshot?, net_modes}
 ```
 
-### 8.5 Authority boundary (the sandbox edges — elaborated in `05`)
+### 8.5 Authority boundary (the sandbox edges – elaborated in `05`)
 
-- **Inbound — hermetic injection** at `prepare`: workspace (input repo cloned in),
+- **Inbound – hermetic injection** at `prepare`: workspace (input repo cloned in),
   capability image, RO DATA snapshot, curated context slices. **No secrets enter
   the sandbox.**
-- **Outbound — egress credential broker**: the *only* path out. Sandbox egress is
+- **Outbound – egress credential broker**: the *only* path out. Sandbox egress is
   deny-all-except-broker. The broker attaches or withholds the real credential per
   `egress_policy` + destination, gates approvals, and logs every crossing as an
   Effect event. Secrets live only at the broker.
 - **Harvest**: results come from the workspace diff + a `RESULT` artifact +
-  registered artifacts — not a callback the agent initiates.
+  registered artifacts – not a callback the agent initiates.
 - **MCP** is a DEMOTED, optional tool-delivery affordance for harnesses that speak
   it. It is never the trust boundary.
 
-### 8.6 Harness adapter contract (modern — elaborated in `03`/`05`)
+### 8.6 Harness adapter contract (modern – elaborated in `03`/`05`)
 
 ```
 launch(argv, env, cwd)
@@ -314,48 +314,48 @@ capabilities  : { structured_output, mcp_tools?, sessions?, effort_levels,
                   observation: {...} }              # the observation matrix, 14 §4
 ```
 
-**Normative posture — three channels, one clock (`14`).** The harness is
+**Normative posture – three channels, one clock (`14`).** The harness is
 observed on three channels ranked by trust: **C1** the effect surface (fs / exec
-/ net crossings — ground truth of what happened), **C2** the harness's own
+/ net crossings – ground truth of what happened), **C2** the harness's own
 session artifacts (structured, and available from an *unmodified interactive*
 session because `05 §6` already makes mitos choose where they are written), and
 **C3** the terminal. **Run semantics MUST come from C1 and C2**; C3 answers only
 the bounded question of what a terminal is waiting for.
 
-A prior implementation **streamed** the PTY — parsed a redrawing TUI
-continuously — and it did not compose with audit, proof, or metering. The defect
+A prior implementation **streamed** the PTY – parsed a redrawing TUI
+continuously – and it did not compose with audit, proof, or metering. The defect
 was *streaming*, not the PTY: a display protocol sampled mid-repaint yields torn
 frames, split escape sequences, and no way to distinguish new information from a
-redraw. `14 §3` re-admits the terminal under three separations — parse
+redraw. `14 §3` re-admits the terminal under three separations – parse
 continuously but **materialize only on demand**, read only at a **quiescence
-edge**, answer only a **bounded modal-state question** — which makes a screen
+edge**, answer only a **bounded modal-state question** – which makes a screen
 read a pure, digested function of the spool prefix, and therefore replayable and
 auditable. **Continuous screen parsing stays banned**; so does PTY as a
 live-conversation channel.
 
-### 8.7 Task (work-pool unit — elaborated in `06`)
+### 8.7 Task (work-pool unit – elaborated in `06`)
 
 ```
 Task {
   id          : string
   tenant      : { org, project }            # multi-tenant scoping
   source      : human | trigger:<id> | connector:<name> | run:<run_id> | purchase:<id> | invoke:<parent>
-  pool        : string                       # which pool (container + discipline) — `06` §2
+  pool        : string                       # which pool (container + discipline) – `06` §2
   priority    : int                          # within-pool ordering (+ aging); honored by the discipline
   status      : queued | blocked | scheduled | running | done | failed | parked | cancelled
-  deps        : [Dep]                         # typed edges (relation/payload/strength/guard) — `06` §4; cross-pool
+  deps        : [Dep]                         # typed edges (relation/payload/strength/guard) – `06` §4; cross-pool
   pipeline    : pipeline_ref | null           # explicit recipe, or null → dispatch selects
   payload     : { intent, workspace?, inputs, parameters?, constraints, success_criteria }
-               # workspace?  : {kind: repo|dataset|none, ref?, refspec?}  — kind declared by the entrypoint
+               # workspace?  : {kind: repo|dataset|none, ref?, refspec?}  – kind declared by the entrypoint
                #               (12 §4); ref/refspec supplied at run time and resolved+cloned by
                #               `prepare` (§7), so the browser/connector never handles git credentials.
-               # inputs      : the run's SUBJECT data (what to work on) — typed by entrypoint.inputs.schema.
-               # parameters?: per-run KNOBS (how to run), typed with defaults — distinct from inputs (12 §4).
+               # inputs      : the run's SUBJECT data (what to work on) – typed by entrypoint.inputs.schema.
+               # parameters?: per-run KNOBS (how to run), typed with defaults – distinct from inputs (12 §4).
   budget      : { tokens, usd, wall_ms }
   runs        : [run_id]                      # 0..N executions (retry/resume/branch)
   provenance  : { created_by, depth, parent_task? }   # depth bounds agent-emitted + invoked work
   invoke      : { parent_task, return_to } | null     # set on a subtask: where its result is injected (`06` §5)
-  external    : { connector, ref } | null     # e.g. GitHub issue # — for bidi sync
+  external    : { connector, ref } | null     # e.g. GitHub issue # – for bidi sync
   ts          : { created, ready_at, updated }
 }
 ```
@@ -364,7 +364,7 @@ The pool is a `fold` over Task-lifecycle Effect events; `task.status` (queue) is
 from `run.status` (execution). Pools + disciplines, the dependency graph, invoke/subtasks,
 sources/connectors, and the drainer are specified in `06`.
 
-### 8.8 Application manifest (skeleton — elaborated in `12`)
+### 8.8 Application manifest (skeleton – elaborated in `12`)
 
 The **application** is the shipping unit: a bundle of pipelines + the capabilities
 they reference + this manifest. It *references* the contracts above; it MUST NOT
@@ -380,14 +380,14 @@ ApplicationManifest {
   services     : { requires: [...], wants: [...], units?: [...] } # composition root (06 §9–10)
   requirements : { harnesses, connectors, egress, trust_tier, resources }  # install-time transparency (authority stays per-cap)
 }
-# identity (immutable, replayable — mirrors 03 §9):
+# identity (immutable, replayable – mirrors 03 §9):
 #   app_id = H( canonical(manifest) ‖ sorted(capability_id …) ‖ sorted(pipeline_sha256 …) )
 ```
 
 A user **runs a pipeline** named by an `entrypoint`, never a bare capability; an
 entrypoint maps onto a Task (§8.7) at run time (`12 §4`).
 
-### 8.9 Human decision card (skeleton — elaborated in `15`)
+### 8.9 Human decision card (skeleton – elaborated in `15`)
 
 The one shape every request for a human takes, carried in the
 `approval_requested` Effect payload. It is an *input* to the substrate, never an
@@ -412,8 +412,8 @@ HumanResolution { decision_id, resolver, choice, value?, note?, resolved_at, via
 ```
 
 **The invariant that must never invert:** reversible acts **fail safe** (a
-default, on a clock — silence advances the run); externally-visible acts **fail
-secure** (no default, park indefinitely — silence never authorizes an
+default, on a clock – silence advances the run); externally-visible acts **fail
+secure** (no default, park indefinitely – silence never authorizes an
 irreversible action). Reversibility that cannot be derived is `external`;
 unclassifiable is not permission (`15 §2.1`).
 
@@ -421,29 +421,29 @@ unclassifiable is not permission (`15 §2.1`).
 
 ## 9. Glossary
 
-- **Capability** — `(data+skill+tools)` OCI image run under an injected harness; the
+- **Capability** – `(data+skill+tools)` OCI image run under an injected harness; the
   atomic unit of execution and monetization.
-- **Pipeline** — a composition of capabilities, authored in markdown (loose format).
-- **Orchestrator** — the cross-step agent that enforces/adapts a pipeline by emitting Decision events.
-- **Loop-manager** — the intra-step deterministic FSM that drives one capability's iterations.
-- **Harness** — a coding-agent CLI mitos wraps (Claude Code, Codex, …).
-- **Skill / Tools / Data** — the three capability pillars (§5).
-- **Decision event / Effect event** — the two log record types (§8.1–8.2).
-- **Broker** — the egress credential broker; the outbound authority point (§8.5).
-- **Hermetic** — a run carries only what mitos injected; no harness cross-run state.
-- **Trust tier (T0/T1/T2)** — isolation/egress posture selector (§6).
-- **Target / Preset** — service-composition units in the work pool plane (§06).
-- **Service** — a systemd-like runtime unit (trigger + lifecycle); may invoke a pipeline.
-- **Task** — a durable unit of intent in the work pool (status, priority, deps, provenance, payload); 0..N Runs execute it. Human backlog, GitHub issues, trigger events, agent follow-ups, invoked subtasks, and paid jobs are all Tasks. (`06`, §8.7)
-- **Run** — one execution of a pipeline against a Task, recorded as events; a Task may have several (retry/resume/branch).
-- **Work pool / Pool** — the durable container of Tasks. A *pool* names only the container; **how a Task is picked is a separate, pluggable `discipline`** — a pool is *not* a queue (FIFO is one discipline). (`06` §2)
-- **Discipline** — how the drainer selects the next Task from a pool: `fifo | lifo | priority | weighted-fair | deadline | agent-pick | custom`. (`06` §2)
-- **Subtask** — a child Task a capability spawns mid-run via the governed `invoke` affordance; its result returns to the parent (which parks). A full sandboxed/metered Task — unlike an opaque harness sub-agent. (`06` §5)
-- **Agentic application** — the shipping unit: a bundle of one or more *pipelines* + the *capabilities* they reference + an application manifest (§8.8: entrypoints, I/O bindings, service defaults), packaged as OCI. A user **runs a pipeline**, never a bare capability. (`12`; user-facing framing `11` §2)
-- **Entrypoint** — a pipeline an application exposes as runnable, with an input schema; maps onto a Task (§8.7) at run time. (`12` §4)
-- **Connector** — a platform-level **ingress** adapter that normalizes an external signal (chat/email/calendar/webhook/event, the dev trackers kanban-md/GitHub/Linear, or the web app) into a Task/trigger; the pool is the source of truth. (`06` §6, generalized in `10` §3)
-- **Sink** — a control-plane **egress** adapter that delivers a run's outcome (notify/deliver/reply/web) after harvest, reading the event log + artifacts. NOT the in-sandbox egress broker (`05` §5.3). (`10` §5)
-- **I/O plane** — the layer that gives mitos a world-facing input/output: connectors in, sinks out, the web app as one of each. (`10`)
+- **Pipeline** – a composition of capabilities, authored in markdown (loose format).
+- **Orchestrator** – the cross-step agent that enforces/adapts a pipeline by emitting Decision events.
+- **Loop-manager** – the intra-step deterministic FSM that drives one capability's iterations.
+- **Harness** – a coding-agent CLI mitos wraps (Claude Code, Codex, …).
+- **Skill / Tools / Data** – the three capability pillars (§5).
+- **Decision event / Effect event** – the two log record types (§8.1–8.2).
+- **Broker** – the egress credential broker; the outbound authority point (§8.5).
+- **Hermetic** – a run carries only what mitos injected; no harness cross-run state.
+- **Trust tier (T0/T1/T2)** – isolation/egress posture selector (§6).
+- **Target / Preset** – service-composition units in the work pool plane (§06).
+- **Service** – a systemd-like runtime unit (trigger + lifecycle); may invoke a pipeline.
+- **Task** – a durable unit of intent in the work pool (status, priority, deps, provenance, payload); 0..N Runs execute it. Human backlog, GitHub issues, trigger events, agent follow-ups, invoked subtasks, and paid jobs are all Tasks. (`06`, §8.7)
+- **Run** – one execution of a pipeline against a Task, recorded as events; a Task may have several (retry/resume/branch).
+- **Work pool / Pool** – the durable container of Tasks. A *pool* names only the container; **how a Task is picked is a separate, pluggable `discipline`** – a pool is *not* a queue (FIFO is one discipline). (`06` §2)
+- **Discipline** – how the drainer selects the next Task from a pool: `fifo | lifo | priority | weighted-fair | deadline | agent-pick | custom`. (`06` §2)
+- **Subtask** – a child Task a capability spawns mid-run via the governed `invoke` affordance; its result returns to the parent (which parks). A full sandboxed/metered Task – unlike an opaque harness sub-agent. (`06` §5)
+- **Agentic application** – the shipping unit: a bundle of one or more *pipelines* + the *capabilities* they reference + an application manifest (§8.8: entrypoints, I/O bindings, service defaults), packaged as OCI. A user **runs a pipeline**, never a bare capability. (`12`; user-facing framing `11` §2)
+- **Entrypoint** – a pipeline an application exposes as runnable, with an input schema; maps onto a Task (§8.7) at run time. (`12` §4)
+- **Connector** – a platform-level **ingress** adapter that normalizes an external signal (chat/email/calendar/webhook/event, the dev trackers kanban-md/GitHub/Linear, or the web app) into a Task/trigger; the pool is the source of truth. (`06` §6, generalized in `10` §3)
+- **Sink** – a control-plane **egress** adapter that delivers a run's outcome (notify/deliver/reply/web) after harvest, reading the event log + artifacts. NOT the in-sandbox egress broker (`05` §5.3). (`10` §5)
+- **I/O plane** – the layer that gives mitos a world-facing input/output: connectors in, sinks out, the web app as one of each. (`10`)
 
 ---
 
@@ -453,7 +453,7 @@ unclassifiable is not permission (`15 §2.1`).
 2. The event log is the source of truth: state, trace, replay, audit, billing.
 3. Capability is the atom; pipeline is composition; both are markdown-authored.
 4. Enforce authority at the sandbox boundary, not via a harness protocol.
-5. Secrets never enter the sandbox — the broker injects them per policy.
+5. Secrets never enter the sandbox – the broker injects them per policy.
 6. Strong isolation scales with distrust (T0→T2); untrusted ⇒ remote µVM.
 7. Harness-agnostic; the orchestrator never names a harness.
 8. Hermetic by default; mitos owns memory, not the harness.

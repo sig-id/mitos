@@ -1,4 +1,4 @@
-# 17 — Handheld decision connector (esp-notify)
+# 17 – Handheld decision connector (esp-notify)
 
 Status: Mitos backend implemented and tested, 2026-09-20, including real Codex
 and Claude native question/approval round trips. Physical esp-notify board

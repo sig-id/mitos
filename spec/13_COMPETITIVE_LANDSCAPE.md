@@ -1,4 +1,4 @@
-# 13 — Competitive Landscape
+# 13 – Competitive Landscape
 
 A **descriptive** map of the agent-framework / agent-runtime space as of
 late June 2026, scoped to what each player **is** and how it overlaps with
@@ -9,7 +9,7 @@ wedge), `08` (facilitator), and `09` (sequencing).
 
 Where a claim here depends on a mitos concept, it cites the owning spec; where
 it depends on a third party, it cites the source. RFC 2119 keywords are not
-used here — this is a map, not a contract.
+used here – this is a map, not a contract.
 
 ---
 
@@ -17,7 +17,7 @@ used here — this is a map, not a contract.
 
 For each player: **what it is**, **what first-class concepts it exposes**,
 **overlap with mitos** (concept-by-concept), and **what it is not** (where mitos's
-specified surface extends beyond it). The set of players is deliberately short —
+specified surface extends beyond it). The set of players is deliberately short –
 it covers the adjacent categories (framework, hosted runner, marketplace) rather
 than every prompt-wrapper.
 
@@ -27,7 +27,7 @@ facilitator, proof page, completed-work monetization).
 
 ---
 
-## 1. Vercel Eve — filesystem-first durable agent framework
+## 1. Vercel Eve – filesystem-first durable agent framework
 
 - **Source:** `github.com/vercel/eve`, npm `eve`, `npx eve@latest init`.
   Open source, **Apache-2.0**. Launched late June 2026 (Vercel Ship London);
@@ -43,7 +43,7 @@ facilitator, proof page, completed-work monetization).
 A TypeScript framework where **the filesystem is the framework**: an `agent/`
 folder is the deploy unit, and the framework discovers and wires its contents at
 build time into durable workflows. Conceptually the Next.js move applied to
-agents — convention over config, file-based routing as authoring.
+agents – convention over config, file-based routing as authoring.
 
 ### 1.2 First-class concepts inside `agent/`
 
@@ -61,7 +61,7 @@ agents — convention over config, file-based routing as authoring.
 
 Runtime: durable sessions/workflows compiled from the folder. Durability is an
 **event log with deterministic replay** (Workflow SDK): progress persists as
-events; state is reconstructed by replaying them — the same mechanism as
+events; state is reconstructed by replaying them – the same mechanism as
 `01 §4`'s `fold(events)`, built for resumption. One sandbox per agent, adapter
 pattern (Vercel Sandbox, Docker, microsandbox, just-bash). Built-in approvals
 (pause without compute). **Agent Runs** dashboard, zero-config: sessions,
@@ -77,7 +77,7 @@ continuity (Slack → web).
 | I/O plane: connectors in / sinks out (`10`) | `channels/` + `connections/` | near-identical surface; Eve ships Slack out of the box |
 | compute plane: T2 µVM, deny-all egress, RO snapshot (`01 §6`, `05`) | per-agent sandbox (Vercel Sandbox / Sandbox0) | same primitive; Eve's trust story is single-tenant / own-workload, no cross-tenant isolation requirement |
 | application manifest + OCI packaging (`12`) | the `agent/` folder **is** the deploy unit | Eve is simpler and lighter; mitos is more formal (`app_id`, entrypoints, default I/O bindings, service composition) |
-| event log = state + audit + proof + billing ledger (`01 §8.2`) | workflow event log + deterministic replay; Agent Runs dashboard | closer than this map assumed: Eve's durability is also event-sourced-with-replay, and Agent Runs renders much of what a proof page renders — but **operator-facing**. The cleanest statement of the gap: **same write side** (execution as event log), **different read side** — Eve's log has one reader (the deployer: resume + telemetry); mitos's log is specified for many readers across trust boundaries (buyer→proof, platform→meter, seller→attribution, auditor→audit; `02 §1`) |
+| event log = state + audit + proof + billing ledger (`01 §8.2`) | workflow event log + deterministic replay; Agent Runs dashboard | closer than this map assumed: Eve's durability is also event-sourced-with-replay, and Agent Runs renders much of what a proof page renders – but **operator-facing**. The cleanest statement of the gap: **same write side** (execution as event log), **different read side** – Eve's log has one reader (the deployer: resume + telemetry); mitos's log is specified for many readers across trust boundaries (buyer→proof, platform→meter, seller→attribution, auditor→audit; `02 §1`) |
 
 ### 1.4 What Eve is **not**
 
@@ -97,13 +97,13 @@ continuity (Slack → web).
 
 Vercel-owned products that border the §3 uncontested list, without occupying it:
 
-- **Vercel Connect** — delegated user/team credentials for eve tools. Borders
+- **Vercel Connect** – delegated user/team credentials for eve tools. Borders
   seller-key custody (`01 §8.5`) but is deployer-scoped delegation, not a broker
   that attaches/withholds a *seller's* credential against a *buyer's* run.
-- **Vercel Marketplace + consumption billing** — existing storefront and
+- **Vercel Marketplace + consumption billing** – existing storefront and
   metering machinery. Borders metered public endpoints (`08`) but today meters
   infra usage to the deployer, not completed jobs to strangers.
-- **Agent Runs** — borders the proof page's rendering surface (§1.3), for the
+- **Agent Runs** – borders the proof page's rendering surface (§1.3), for the
   operator only.
 
 The distance from these surfaces to "publish your eve agent as a paid endpoint"
@@ -137,7 +137,7 @@ it is mapped. Additions here should be players that occupy an adjacent
 
 ## 3. Where mitos's specified surface is, today, uncontested
 
-Restated from the specs above as a fact, not a plan — these are the parts of the
+Restated from the specs above as a fact, not a plan – these are the parts of the
 mitos design for which no mapped player offers an equivalent surface:
 
 - **Cross-tenant paid completed work:** metered public endpoint + settlement
@@ -156,8 +156,8 @@ defensible forever. Updates to this map go here, not in `02` or `08`.
 
 Revision note (2026-07-02): Eve's event-log durability + Agent Runs now cover
 much of the *rendering* of a proof page for a deployer's own runs (§1.3). The
-items above hold because they are **cross-tenant** — evidence, custody, and
-settlement between strangers — not because the telemetry is hard. Direction
+items above hold because they are **cross-tenant** – evidence, custody, and
+settlement between strangers – not because the telemetry is hard. Direction
 consequences recorded in `02 §1`/`02 §8 R5`, `03 §10.1`, `09 §2`, `10 §8`.
 
 ---
