@@ -6,8 +6,7 @@ is to preserve a responsibility through failed attempts, replacement agents, and
 changes of client, with explicit authority and verified results.
 
 Start with the [product specification](spec/product/01_PRODUCT.md) for the purpose,
-market, and intended experience. The [specification index](spec/README.md) links to
-six system contracts and the architecture decisions. These are normative targets;
+market, and intended experience. The [specification guide](spec/README.md) explains their authority and organization. These are normative targets;
 [delivery and conformance](spec/system/06_DELIVERY_AND_CONFORMANCE.md) distinguishes
 current behavior from remaining work.
 

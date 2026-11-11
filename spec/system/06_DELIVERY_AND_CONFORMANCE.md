@@ -109,6 +109,6 @@ test ledger. Historical sample JSON is not a normative requirement.
 
 Implementations MUST preserve existing compatible behavior until an explicit
 migration is accepted. Architectural changes MUST update their owning specification
-and ADR. Product claims MUST follow demonstrated capabilities. The product and
-system catalogs MUST remain independently consecutive, with one owner for each
+and ADR. Product claims MUST follow demonstrated capabilities. Product and
+system documents MUST remain independently numbered consecutively, with one owner for each
 contract rather than overlapping documents that silently disagree.
