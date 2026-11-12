@@ -27,11 +27,17 @@ service activations do not yet create graph templates.
    criteria, and either extends the graph or accepts the evidenced result. Worker
    exit status is not a verifier verdict. Completion is labelled agent-reviewed.
 
-The left work tree selects goals and agents. The graph also supports zoom, collapse
-and a list view. Selecting an agent opens its output in a wide reader, which can
+The left work tree selects goals and agents. One Planner entry groups planning
+rounds into a chronological history; the graph shows worker assignments and their
+dependencies. Replaced assignments are available through **Show replaced work**.
+The graph also supports zoom, collapse and a list view. Selecting an agent opens its output in a wide reader, which can
 expand to the full content area. Planner proposals become readable summaries and
 expandable assignments; raw data is available separately. Attempt history opens
-saved output and files in place, with technical execution pages under Diagnostics. Only the selected graph is polled each second; summary status is
+saved output and files in place, with technical execution pages under Diagnostics.
+**View result** opens a full-width reader for accepted worker reports and saved
+deliverables, with patch and workspace downloads. File previews come from the
+checksum-verified archive and change manifest, never a mutable worker directory.
+Only the selected graph is polled each second; summary status is
 refreshed every five seconds. Hidden tabs pause polling and connection failures
 back off. Reports are fetched on demand after an attempt finishes.
 
@@ -226,7 +232,10 @@ worker outcome introduces a relevant trigger. Its stdin has the normal applicati
 input plus `graph.context`, a JSON string containing bounded goal/task facts,
 result summaries, artifact references, policy, and triggers. Settled worker output
 and report artifacts are delivered through the existing immutable dependency-input
-mechanism. Workers never need to know this controller protocol.
+mechanism. The automatic planner prioritizes worker reports and receives saved
+patches and manifests for unaccepted results when they fit the dependency limits
+(each supplementary file is capped at 1 MiB). It inspects this evidence before
+requesting further review. Workers never need to know this controller protocol.
 
 The controller may use any planning technology. It writes **`graph-proposal.json`**
 in its workspace with an object containing `operations` and `explanation`. Mitos

@@ -13,9 +13,12 @@
  <section id="graph-current" hidden>
   <header class="graph-heading"><div><div class="graph-title-row"><h2 id="graph-title"></h2><span id="graph-status" class="graph-badge"></span></div><p id="graph-progress" class="muted"></p></div><div class="actions"><button id="graph-review" class="primary">Review result</button><details class="graph-menu"><summary aria-label="Work actions">•••</summary><div><button id="graph-replan">Replace planner</button><button id="graph-stop">Stop work</button></div></details></div></header>
   <div id="graph-message" class="graph-message" role="status" hidden></div>
+  <section id="graph-result" class="graph-result" aria-label="Work result" hidden></section>
   <div class="graph-body">
    <section class="graph-map" aria-label="Execution graph">
     <div class="graph-map-tools"><div class="graph-toggle" role="group" aria-label="Work layout"><button id="graph-mode-map" aria-pressed="true">Graph</button><button id="graph-mode-list" aria-pressed="false">List</button></div><div class="graph-map-controls"><button id="graph-zoom-out" aria-label="Zoom out">−</button><span id="graph-zoom" aria-live="polite">100%</span><button id="graph-zoom-in" aria-label="Zoom in">+</button><button id="graph-fit">Fit</button></div></div>
+    <div id="graph-planner-summary" class="graph-planner-summary" hidden></div>
+    <label class="graph-history-toggle"><input id="graph-show-history" type="checkbox">Show replaced work</label>
     <div id="graph-viewport" class="graph-viewport" tabindex="0" aria-label="Work graph. Scroll to pan; select a node for details."><div id="graph-scale"><div id="graph-stage"></div></div></div>
     <div id="graph-list-view" hidden></div>
     <footer class="graph-legend"><span><i class="legend-edge"></i>Dependency</span><span><i class="legend-edge scope"></i>Part of goal</span><span id="graph-node-count"></span></footer>

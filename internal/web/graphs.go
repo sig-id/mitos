@@ -3,7 +3,9 @@ package web
 import (
 	"errors"
 	"io"
+	"mime"
 	"net/http"
+	"path"
 	"strconv"
 
 	"mitos/internal/studio"
@@ -90,6 +92,27 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}/files", func(w http.ResponseWriter, r *http.Request) {
+		files, err := s.engine.Store.GraphRunFiles(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, files)
+	})
+	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}/file", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("path")
+		body, err := s.engine.Store.GraphRunFile(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"), name)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(name)}))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(body)
+	})
+
 	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.Store.GraphRun(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
 		if err != nil {

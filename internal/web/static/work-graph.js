@@ -12,6 +12,7 @@
  const date = value => new Date(value).toLocaleString();
  const storageKey = `mitos.graph.pending.${server}.${project}`;
  let optionsLoaded = false, apps = [], graphs = [], nextPage = '', graphID = new URLSearchParams(location.search).get('graph') || '';
+ let showHistory=false;
  let selectedAttempt='', renderedReaderKey='', readerStates=new Map();
  let selected = new URLSearchParams(location.search).get('node') || '', snapshot, graph, selectedTab = 'details';
  let snapshotRequest=0,snapshotApplied=0,summarySignature='',loadedMore=false;
@@ -55,7 +56,22 @@
  function title(m) { return m.spec.brief.title || (m.spec.kind === 'scope' ? 'Goal' : 'Untitled step'); }
  function kind(m) { return m.spec.kind === 'scope' ? 'scope' : m.controller_for?.startsWith('decision:') ? 'decision' : m.controller_for ? 'planner' : 'step'; }
  function kindLabel(m) { return {scope:'Goal', planner:'Planner', decision:'Decision', step:'Agent'}[kind(m)]; }
- function displayState(id) { if(graph?.members[id]?.spec.kind==='scope'&&reviewable(id))return 'review';return snapshot?.nodes[id]?.state || graph?.members[id]?.state || 'queued'; }
+ function plannerRounds(){return Object.keys(graph.members).filter(id=>kind(graph.members[id])==='planner').sort((a,b)=>(graph.members[a].attempts?.length?0:1)-(graph.members[b].attempts?.length?0:1)||(snapshot.nodes[a]?.created_at||'').localeCompare(snapshot.nodes[b]?.created_at||'')||a.localeCompare(b))}
+ function latestPlanner(){const rounds=plannerRounds();return rounds.at(-1)}
+ function renderPlanner(){
+  const box=$('graph-planner-summary'),rounds=plannerRounds();box.hidden=!rounds.length;if(!rounds.length)return;
+  const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':'Waiting for agents';
+  box.replaceChildren(node('strong','✦ Planner'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,async()=>{await selectNode(id);selectedTab='planning';detailSignature='';renderInspector()},'graph-planner-history'),button('Latest update',()=>selectNode(id)));
+ }
+ $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
+ function closeResult(){ $('graph-result').hidden=true;$('graph-current').classList.remove('showing-result'); }
+ async function openResult(){
+  if(!graph)return;
+  $('graph-current').classList.add('showing-result');$('graph-result').hidden=false;
+  await window.MitosGraphResult.open({graph:structuredClone(graph),nodes:snapshot.nodes,request,container:$('graph-result'),onClose:()=>{closeResult();scrollWorkTo($('graph-current'))}});
+  if(!$('graph-result').hidden)scrollWorkTo($('graph-result'));
+ }
+ function displayState(id) { if(id===graph?.root_task)return overall();if(graph?.members[id]?.spec.kind==='scope'&&reviewable(id))return 'review';return snapshot?.nodes[id]?.state || graph?.members[id]?.state || 'queued'; }
  function overall() {
   if (graph.status === 'cancelled' && Object.values(snapshot.nodes).some(n=>!n.settled)) return 'stopping';
   if (graph.status !== 'active') return graph.status;
@@ -110,7 +126,7 @@
  const treeClosed=new Set(); let treeSignature='';
  function renderTree() {
   const tree=$('work-tree'); if(!tree)return;
-  const sig=JSON.stringify([graphs,graphID,selected,graph?.members,snapshot?.nodes,[...treeClosed]]);if(sig===treeSignature)return;treeSignature=sig;
+  const sig=JSON.stringify([graphs,graphID,selected,showHistory,graph?.members,snapshot?.nodes,[...treeClosed]]);if(sig===treeSignature)return;treeSignature=sig;
   const focus=document.activeElement?.dataset.treeKey;tree.replaceChildren();
   for(const row of graphs){
    const current=row.id===graphID, expanded=current&&!treeClosed.has(row.id), counts=row.counts||{};
@@ -121,14 +137,14 @@
    if(current)choose.setAttribute('aria-current','page');
    const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.running?'running':counts.failed||counts.needs_attention?'needs_attention':counts.queued?'queued':'idle';
    heading.append(toggle,choose);item.append(heading,node('small',labels[status]||status,'work-tree-status '+status));
-   if(expanded&&graph){const list=node('ul');const append=(parent,container)=>{for(const [id,m]of Object.entries(graph.members).filter(([,m])=>m.spec.parent===parent)){const li=node('li'),b=button(title(m),()=>selectNode(id),'work-tree-node');b.dataset.treeKey=id;b.title=kindLabel(m)+': '+title(m)+' · '+(labels[displayState(id)]||displayState(id));if(selected===id)b.setAttribute('aria-current','page');const dot=node('span',undefined,'work-tree-dot '+displayState(id));dot.setAttribute('aria-label',labels[displayState(id)]||displayState(id));b.prepend(dot);li.append(b);if(Object.values(graph.members).some(c=>c.spec.parent===id)){const nested=node('ul');append(id,nested);li.append(nested)}container.append(li)}};append(graph.root_task,list);if(!list.children.length)list.append(node('li',graph.policy.automatic?'Preparing planner…':'Not started','work-tree-empty'));item.append(list)}
+   if(expanded&&graph){const list=node('ul');const append=(parent,container)=>{for(const [id,m]of Object.entries(graph.members).filter(([,m])=>m.spec.parent===parent&&kind(m)!=='planner'&&(showHistory||!m.replacement))){const li=node('li'),b=button(title(m),()=>selectNode(id),'work-tree-node');b.dataset.treeKey=id;b.title=kindLabel(m)+': '+title(m)+' · '+(labels[displayState(id)]||displayState(id));if(selected===id)b.setAttribute('aria-current','page');const dot=node('span',undefined,'work-tree-dot '+displayState(id));dot.setAttribute('aria-label',labels[displayState(id)]||displayState(id));b.prepend(dot);li.append(b);if(Object.values(graph.members).some(c=>c.spec.parent===id)){const nested=node('ul');append(id,nested);li.append(nested)}container.append(li)}};const planner=latestPlanner();if(planner){const li=node('li'),b=button('✦ Planner',()=>selectNode(planner),'work-tree-node');b.dataset.treeKey='planner';if(selected&&kind(graph.members[selected])==='planner')b.setAttribute('aria-current','page');li.append(b);list.append(li)}append(graph.root_task,list);if(!list.children.length)list.append(node('li',graph.policy.automatic?'Preparing planner…':'Not started','work-tree-empty'));item.append(list)}
    tree.append(item);
   }
   if(!graphs.length)tree.append(node('p','No work yet','work-tree-empty'));
   if(focus)tree.querySelector(`[data-tree-key="${CSS.escape(focus)}"]`)?.focus({preventScroll:true});
  }
  async function chooseGraph(id, keepNode = false) {
-  epoch++; graphID = id; if (!keepNode) selected = ''; selectedAttempt=''; readerStates.clear(); renderedReaderKey=''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
+  closeResult();epoch++; graphID = id;showHistory=false;$('graph-show-history').checked=false; if (!keepNode) selected = ''; selectedAttempt=''; readerStates.clear(); renderedReaderKey=''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
   $('graph-compose').hidden = true; $('graph-current').hidden = true; $('graph-inspector').hidden = true; updateURL();
   await refreshSelected();
  }
@@ -150,7 +166,7 @@
   const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.controller_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
   $('graph-progress').textContent = `${finished} of ${workers.length} steps complete` + (graph.policy.controller_application ? ' · Planner managed' : ' · Not started');
   $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.controller_application || graph.status !== 'active';
-  renderMessage(); renderMap(); renderInspector(); renderActivity(); renderTree();
+  renderMessage(); renderPlanner(); renderMap(); renderInspector(); renderActivity(); renderTree();
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
  function renderMessage() {
@@ -159,18 +175,19 @@
   if (Date.parse(graph.limits.deadline) <= Date.now() && graph.status === 'active') { box.textContent = 'The work reached its time limit. Results are preserved; no new steps will start.'; box.hidden = false; }
   else if (errors.length) { const reasons = {controller_proposal_missing:'The planner did not produce a work proposal.',controller_proposal_invalid:'The planner returned a proposal the runtime could not read.',controller_proposal_stale_or_rejected:'The planner’s proposal no longer matches the current work.',controller_execution_needs_review:'The planner stopped before producing a verified proposal.',controller_allowance_exhausted:'The planning allowance has been used.',controller_context_limit:'This graph exceeds the planner’s context limit.'}; box.append(node('span', reasons[errors[0].error] || errors[0].error.replaceAll('_',' ')),button('Inspect planner',() => selectNode(errors[0].controller_task || graph.root_task))); box.hidden = false; }
   else if (!graph.policy.controller_application && Object.values(graph.expansions).some(x => !x.outcome) && Object.keys(graph.members).length === 1) { box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary')); box.hidden = false; }
-  else if (graph.status === 'accepted') { box.textContent = graph.policy.automatic ? 'Work complete · Agent-reviewed results are saved. Select a step to read its output and changes.' : 'Work complete. The graph and its results are preserved.'; box.hidden = false; }
+  else if (graph.status === 'accepted') { box.textContent = graph.policy.automatic ? 'Work complete · Open View result to read the saved reports and deliverables.' : 'Work complete. The graph and its results are preserved.'; box.hidden = false; }
   else if (Object.values(graph.decisions || {}).some(d => d.outcome === 'selected')) { const d = Object.values(graph.decisions).find(d => d.outcome === 'selected'); box.append(node('span','A decision is ready to apply.'),button('Review decision',() => selectNode(d.task_id))); box.hidden = false; }
  }
  function visibleNodes() {
   const members = graph.members;
   for (const id of Object.keys(members)) if (!order.includes(id)) order.push(id);
-  const visible = order.filter(id => { let at = members[id]?.spec.parent, seen = new Set(); while (at && !seen.has(at)) { if (collapsed.has(at)) return false; seen.add(at); at = members[at]?.spec.parent; } return !!members[id]; });
+  const visible = order.filter(id => {if(kind(members[id])==='planner'||(!showHistory&&members[id]?.replacement))return false; let at = members[id]?.spec.parent, seen = new Set(); while (at && !seen.has(at)) { if (collapsed.has(at)) return false; seen.add(at); at = members[at]?.spec.parent; } return !!members[id]; });
   return visible;
  }
  function layout(ids) {
+  const membersVisible=id=>graph.members[id]&&kind(graph.members[id])!=='planner'&&(showHistory||!graph.members[id].replacement);
   const shown = new Set(ids), incoming = new Map(ids.map(id => [id,new Set()])), edges = [];
-  const representative = id => { let at = id, result = id, seen = new Set(); while (at && !seen.has(at)) { if (shown.has(at)) result = at; if (collapsed.has(at)) return at; seen.add(at); at = graph.members[at]?.spec.parent; } return shown.has(id) ? id : result; };
+  const representative = id => {if(!membersVisible(id))return null;let at = id, result = id, seen = new Set(); while (at && !seen.has(at)) { if (shown.has(at)) result = at; if (collapsed.has(at)) return at; seen.add(at); at = graph.members[at]?.spec.parent; } return shown.has(id) ? id : result; };
   for (const id of ids) {
    const m = graph.members[id]; if (m.spec.parent && shown.has(m.spec.parent)) { edges.push({from:m.spec.parent,to:id,type:'containment'}); incoming.get(id).add(m.spec.parent); }
    for (const dependency of m.spec.brief.scheduling?.deps || []) { const from = representative(dependency.from); if (shown.has(from) && from !== id) { edges.push({from,to:id,type:'dependency'}); incoming.get(id).add(from); } }
@@ -200,21 +217,21 @@
    existing.delete(id); card.style.left = p.x + 'px'; card.style.top = p.y + 'px'; card.style.height = '132px'; card.dataset.status = status; card.dataset.kind = kind(m); card.setAttribute('aria-pressed',String(id === selected)); card.setAttribute('aria-label',`${title(m)} · ${kindLabel(m)} · ${labels[status] || status}`);
    const contentKey = JSON.stringify([title(m),status,kind(m),snapshot.nodes[id]?.executor,m.attempts?.length,m.spec.required,m.sealed]);
    if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',planner:'✦',decision:'◈',step:'○'}[kind(m)]),document.createTextNode(kindLabel(m))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',m.spec.kind === 'scope' ? (m.accepted ? 'Result ready' : graph.policy.automatic ? 'Agent managed' : 'Not started') : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.controller_for ? 'Planner' : '')); card.replaceChildren(top,node('strong',title(m),'graph-node-title'),footer); }
-   const count = Object.values(graph.members).filter(child => child.spec.parent === id).length;
+   const count = Object.values(graph.members).filter(child => child.spec.parent === id && kind(child)!=='planner' && (showHistory||!child.replacement)).length;
    if (m.spec.kind === 'scope' && count) { const toggle = button(collapsed.has(id) ? '+' : '−',() => { if (collapsed.has(id)) collapsed.delete(id); else { collapsed.add(id); if (selected && descendants(graph,id).includes(selected) && selected !== id) selectNode(id); } renderMap(); },'graph-collapse'); toggle.setAttribute('aria-expanded',String(!collapsed.has(id))); toggle.setAttribute('aria-label',(collapsed.has(id)?'Expand ':'Collapse ')+title(m)); toggle.style.left = (p.x+224)+'px'; toggle.style.top = (p.y+118)+'px'; stage.append(toggle); }
   }
   for (const card of existing.values()) card.remove();
   const list = $('graph-list-view'); list.replaceChildren(); for (const id of ids) { const m = graph.members[id], row = button('',() => selectNode(id),'graph-list-row'); row.setAttribute('aria-pressed',String(id === selected)); const text = node('span',title(m)); text.append(node('small',kindLabel(m)+(snapshot.nodes[id]?.executor?' · '+snapshot.nodes[id].executor:''))); row.append(text,badge(displayState(id))); list.append(row); }
-  $('graph-node-count').textContent = ids.length + ' of ' + Object.keys(graph.members).length + ' nodes';
-  applyZoom(); if (firstLayout) { firstLayout = false; requestAnimationFrame(fit); }
+  $('graph-node-count').textContent = ids.filter(id=>graph.members[id].spec.kind!=='scope').length+' assignments'+(Object.values(graph.members).some(m=>m.replacement)&&!showHistory?' · replaced work hidden':'');
+  applyZoom(); if (firstLayout) { firstLayout = false; requestAnimationFrame(()=>fit(false)); }
  }
  function applyZoom() { $('graph-stage').style.transform = `scale(${zoom})`; $('graph-scale').style.width = dimensions.width*zoom+'px'; $('graph-scale').style.height = dimensions.height*zoom+'px'; $('graph-zoom').textContent = Math.round(zoom*100)+'%'; }
  function setZoom(value) { const viewport = $('graph-viewport'), cx=(viewport.scrollLeft+viewport.clientWidth/2)/zoom,cy=(viewport.scrollTop+viewport.clientHeight/2)/zoom; zoom=Math.max(.45,Math.min(1.6,value)); applyZoom(); viewport.scrollLeft=cx*zoom-viewport.clientWidth/2; viewport.scrollTop=cy*zoom-viewport.clientHeight/2; }
- function fit() { const viewport = $('graph-viewport'); if (!viewport.clientWidth) return; zoom=Math.max(.8,Math.min(1,viewport.clientWidth/dimensions.width,viewport.clientHeight/dimensions.height)); applyZoom(); viewport.scrollLeft=0; viewport.scrollTop=0; }
+ function fit(all=true) { const viewport = $('graph-viewport'); if (!viewport.clientWidth) return; zoom=Math.max(all ? .15 : .8,Math.min(1,viewport.clientWidth/dimensions.width,viewport.clientHeight/dimensions.height)); applyZoom(); viewport.scrollLeft=0; viewport.scrollTop=0; }
  $('graph-fit').onclick=fit; $('graph-zoom-in').onclick=()=>setZoom(zoom+.15); $('graph-zoom-out').onclick=()=>setZoom(zoom-.15);
  function setLayout(list) { listMode=list; $('graph-viewport').hidden=list; $('graph-list-view').hidden=!list; $('graph-mode-map').setAttribute('aria-pressed',String(!list)); $('graph-mode-list').setAttribute('aria-pressed',String(list)); document.querySelector('.graph-map-controls').hidden=list; }
  $('graph-mode-map').onclick=()=>setLayout(false); $('graph-mode-list').onclick=()=>setLayout(true);
- async function selectNode(id) { if (!id || !graph.members[id]) return; selected=id; selectedAttempt=''; selectedTab=graph.members[id].current_run_id?'output':'details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
+ async function selectNode(id) { if (!id || !graph.members[id]) return;closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=graph.members[id].current_run_id?'output':'details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
  function captureReader(){
   if(!renderedReaderKey)return;
   const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifact:box.querySelector('[aria-label="Output artifact"]')?.value,open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});
@@ -224,11 +241,11 @@
  $('graph-inspector-close').onclick=()=>{selected='';epoch++;detailSignature='';$('graph-inspector').hidden=true;document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');updateURL();renderMap();renderTree()};
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
-  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',title(m)),badge(displayState(selected)));
+  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Planner · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
   if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.state==='parked')actions.append(link('Inspect execution','/runs/'+encodeURIComponent(m.current_run_id)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
-  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of[['details','Details'],['output','Output'],['attempts','Attempts']]){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
+  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(kind(m)==='planner'?[['output','Output'],['planning','History'],['details','Details']]:[['details','Details'],['output','Output'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
   if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
@@ -240,7 +257,7 @@
     const unresolved=Object.values(graph.expansions).filter(x=>!x.outcome);if(unresolved.length){box.append(node('h4','Planning'));for(const x of unresolved)box.append(node('p',x.error?x.error.replaceAll('_',' '):x.controller_task?'Planner is considering the next steps.':'Waiting for steps to be defined.'))}
     if(!reviewable(selected)&&graph.status==='active')box.append(node('h4','Before completion'),node('p','Required steps must be accepted and execution settled before reviewing this goal.','muted'));
    }
-  }else if(selectedTab==='output'){renderOutput(box,m,selectedAttempt||m.current_run_id)}else{renderAttempts(box,m)}
+  }else if(selectedTab==='planning'){renderPlanningHistory(box)}else if(selectedTab==='output'){renderOutput(box,m,selectedAttempt||m.current_run_id)}else{renderAttempts(box,m)}
   restoreReader();
  }
  function renderDecision(box,d){box.append(node('h4','Decision'),node('p',d.outcome==='selected'?'A candidate has been selected. Review its changes before applying.':d.reason?.replaceAll('_',' ')||d.outcome));if(d.answer)box.append(node('p','Selected candidate '+(Number(d.answer.choice)+1)));for(const [index,candidate]of(d.candidates||[]).entries()){const details=node('details');details.open=String(index)===d.answer?.choice;details.append(node('summary',`${index+1}. ${candidate.explanation}`));const ul=node('ul');for(const op of candidate.operations)ul.append(node('li',(op.kind.replaceAll('_',' '))+': '+(op.spec?.brief?.title||graph.members[op.task]?.spec.brief.title||op.rationale||'')));details.append(ul);box.append(details)}if(d.outcome==='selected')box.append(button('Apply selected changes',()=>openAction('apply-decision',d.key),'primary'));if(!['applied','dismissed'].includes(d.outcome))box.append(button('Dismiss decision',()=>openAction('dismiss-decision',d.key)));}
@@ -256,6 +273,10 @@
    if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Planner proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifact||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));restoreReader();}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
    if(files.length){const details=node('details');details.dataset.readKey='artifacts';details.append(node('summary','Files & downloads'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
+ }
+ function renderPlanningHistory(box){
+  box.append(node('p','One planner role, called again as results arrive. Each round preserves its own proposal and evidence.','muted'));
+  for(const [i,id]of plannerRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id)));box.append(row)}
  }
  function renderAttempts(box,m){
   if(!m.attempts?.length){box.append(node('p','This agent has not started yet.','muted'));return}
@@ -283,7 +304,7 @@
   else context.append(node('p','Retains the decision record and closes its outstanding planning obligation.'));
   $('graph-action-dialog').showModal();
  }
- $('graph-review').onclick=()=>graph.status==='accepted'?selectNode(graph.root_task):openAction('accept',graph.root_task);
+ $('graph-review').onclick=()=>graph.status==='accepted'?openResult():openAction('accept',graph.root_task);
  $('graph-replan').onclick=()=>openAction('replan');$('graph-stop').onclick=()=>openAction('cancel');
  $('graph-action-form').onsubmit=async event=>{
   event.preventDefault();const form=event.target,submit=$('graph-action-submit');submit.disabled=true;form.querySelector('.form-error').textContent='';

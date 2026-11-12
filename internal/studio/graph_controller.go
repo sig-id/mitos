@@ -229,6 +229,13 @@ func (e *Engine) reconcileGraphControllers() error {
 									names = append(names, a.Name)
 								}
 							}
+							if g.Policy.Automatic && len(names) > 1 {
+								if slices.Contains(names, "report.md") {
+									names = []string{"report.md"}
+								} else {
+									names = names[:1]
+								}
+							}
 							if len(names) > 0 && r.Status != "parked" {
 								guard := r.Status
 								if guard == "done" && m.Accepted == nil {
@@ -244,6 +251,9 @@ func (e *Engine) reconcileGraphControllers() error {
 					}
 					facts = append(facts, f)
 					reads[tid] = GraphRead{m.Revision, m.FactRevision}
+				}
+				if g.Policy.Automatic {
+					s.addPlannerEvidence(&g, dependencies)
 				}
 				raw, _ := json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json in the workspace with operations and explanation. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."})
 				if g.Policy.Automatic {
@@ -318,4 +328,36 @@ func (e *Engine) graphControllerError(id, key, task, reason string) error {
 		g.Expansions[key].Failures++
 	}
 	return s.commit("", "effect", "graph_controller_blocked", change{Graph: &graphChange{Graph: g}})
+}
+
+// Caller holds the store lock. Reports retain priority over supplementary files.
+func (s *Store) addPlannerEvidence(g *WorkGraph, deps []workpool.Dependency) {
+	count := 0
+	var size int64
+	for _, dep := range deps {
+		m := g.Members[dep.From]
+		r := s.runs[m.CurrentRunID]
+		for _, a := range r.Artifacts {
+			if slices.Contains(dep.Artifacts, a.Name) {
+				count++
+				size += a.Bytes
+			}
+		}
+	}
+	for i := range deps {
+		m := g.Members[deps[i].From]
+		if m.Accepted != nil {
+			continue
+		}
+		r := s.runs[m.CurrentRunID]
+		for _, name := range []string{"changes.patch", "changes.json"} {
+			for _, a := range r.Artifacts {
+				if a.Name == name && a.Bytes <= 1<<20 && count < dependencyFiles && size+a.Bytes <= dependencyBytes {
+					deps[i].Artifacts = append(deps[i].Artifacts, name)
+					count++
+					size += a.Bytes
+				}
+			}
+		}
+	}
 }

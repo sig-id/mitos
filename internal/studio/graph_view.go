@@ -50,10 +50,11 @@ func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary
 }
 
 type GraphNodeView struct {
-	State    string   `json:"state"`
-	Executor string   `json:"executor,omitempty"`
-	Settled  bool     `json:"settled"`
-	Waiting  []string `json:"waiting,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	State     string    `json:"state"`
+	Executor  string    `json:"executor,omitempty"`
+	Settled   bool      `json:"settled"`
+	Waiting   []string  `json:"waiting,omitempty"`
 }
 type GraphView struct {
 	Graph      WorkGraph                `json:"graph"`
@@ -136,7 +137,12 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 			}
 		}
 		copy.Members[id] = &member
-		n := GraphNodeView{State: s.graphDisplayState(g, m), Settled: s.graphSettled(m)}
+		n := GraphNodeView{CreatedAt: g.CreatedAt, State: s.graphDisplayState(g, m), Settled: s.graphSettled(m)}
+		if len(m.Attempts) > 0 {
+			if r := s.runs[m.Attempts[0]]; r != nil {
+				n.CreatedAt = r.CreatedAt
+			}
+		}
 		if m.Executor != nil {
 			n.Executor = m.Executor.Application.Name
 		}

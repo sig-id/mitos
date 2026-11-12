@@ -30,6 +30,11 @@ if '--output-schema' in sys.argv:
   for i in range(2):
    plan['steps'].append({'id':'work'+str(i),'title':['Implement change','Review change'][i],'assignment':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'criteria':'Produce evidence for the answer.','agent':['mitos.engineer','mitos.reviewer'][i],'role':'Answer specialist' if i else '', 'instructions':'Check the answer carefully.' if i else '', 'after':['work0'] if i else [],'replaces':''})
  else:
+  inputs=json.loads(prompt.split('\nSaved upstream evidence (read these files):\n')[1].split('\nWork only')[0])
+  assert len(inputs)==2
+  for item in inputs:
+   assert pathlib.Path(item['directory'],'changes.patch').exists()
+   assert pathlib.Path(item['directory'],'changes.json').exists()
   assert len(workers)==2
   for f in workers:
    assert f['state']=='done',str(f)
@@ -111,6 +116,34 @@ print('native execution log')
 			}
 			if m.Executor.Application.Agent.Specialization != nil {
 				generated = true
+			}
+		}
+	}
+
+	for _, m := range g.Members {
+		if m.Spec.Brief.Title == "Implement change" {
+			files, err := e.Store.GraphRunFiles(g.ID, m.Spec.ID, m.CurrentRunID)
+			if err != nil || len(files) != 1 || files[0].Path != "answer.txt" {
+				t.Fatalf("saved files: %v %v", files, err)
+			}
+			body, err := e.Store.GraphRunFile(g.ID, m.Spec.ID, m.CurrentRunID, "answer.txt")
+			if err != nil || string(body) != "42\n" {
+				t.Fatalf("saved deliverable: %q %v", body, err)
+			}
+			for _, path := range []string{"../answer.txt", "/etc/passwd", "hello.txt"} {
+				if _, err = e.Store.GraphRunFile(g.ID, m.Spec.ID, m.CurrentRunID, path); err == nil {
+					t.Fatalf("unauthorized result path %s", path)
+				}
+			}
+			if _, err = e.Store.GraphRunFile(g.ID, g.RootTask, m.CurrentRunID, "answer.txt"); err == nil {
+				t.Fatal("result task/run binding ignored")
+			}
+			if err = os.WriteFile(filepath.Join(e.Store.Dir(), "workspaces", m.CurrentRunID, "workspace", "answer.txt"), []byte("mutated"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			body, err = e.Store.GraphRunFile(g.ID, m.Spec.ID, m.CurrentRunID, "answer.txt")
+			if err != nil || string(body) != "42\n" {
+				t.Fatal("result read mutable workspace")
 			}
 		}
 	}
