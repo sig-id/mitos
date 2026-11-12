@@ -13,6 +13,7 @@
  const storageKey = `mitos.graph.pending.${server}.${project}`;
  let optionsLoaded = false, apps = [], graphs = [], nextPage = '', graphID = new URLSearchParams(location.search).get('graph') || '';
  let showHistory=false;
+ let workView=["work","workflow","result"].includes(new URLSearchParams(location.search).get("view"))?new URLSearchParams(location.search).get("view"):"work",resultViewKey="",conversationKey="",openingResult=false;
  let selectedAttempt='', renderedReaderKey='', readerStates=new Map();
  let selected = new URLSearchParams(location.search).get('node') || '', snapshot, graph, selectedTab = 'details';
  let snapshotRequest=0,snapshotApplied=0,summarySignature='',loadedMore=false;
@@ -64,13 +65,38 @@
   box.replaceChildren(node('strong','✦ Planner'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,async()=>{await selectNode(id);selectedTab='planning';detailSignature='';renderInspector()},'graph-planner-history'),button('Latest update',()=>selectNode(id)));
  }
  $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
- function closeResult(){ $('graph-result').hidden=true;$('graph-current').classList.remove('showing-result'); }
- async function openResult(initial){
-  if(!graph)return;
-  $('graph-current').classList.add('showing-result');$('graph-result').hidden=false;
-  await window.MitosGraphResult.open({graph:structuredClone(graph),nodes:snapshot.nodes,request,container:$('graph-result'),initial,onClose:()=>{closeResult();scrollWorkTo($('graph-current'))}});
-  if(!$('graph-result').hidden)scrollWorkTo($('graph-result'));
+ function closeResult(){ resultViewKey='';$('graph-result').hidden=true;$('graph-current').classList.remove('showing-result'); }
+ function applyWorkView(){
+  $('graph-current').dataset.workView=workView;
+  $('graph-conversation').hidden=workView!=='work';
+  $('graph-followup-form').hidden=!graph||!$('graph-compose').hidden||workView==='workflow';
+  if(graph){$('graph-followup-send').disabled=graph.status!=='accepted'||!graph.result;$('followup-context').textContent=graph.result?'Your agent will use this result and its saved evidence.':'You can send a follow-up when the result is ready.';}
+  if(workView!=='result')closeResult();
+  else if(graph&&!openingResult&&resultViewKey!==graph.id+':'+graph.revision)openResult();
  }
+ document.addEventListener('mitos-view',event=>{if(['work','workflow','result'].includes(event.detail)){workView=event.detail;applyWorkView()}});
+ async function openResult(initial){
+  if(!graph)return;openingResult=true;workView='result';resultViewKey=graph.id+':'+graph.revision;
+  if(window.MitosProjectNav.current()!=='result')window.MitosProjectNav.select('result');
+  $('graph-current').dataset.workView='result';$('graph-conversation').hidden=true;$('graph-current').classList.add('showing-result');$('graph-result').hidden=false;applyWorkView();
+  await window.MitosGraphResult.open({graph:structuredClone(graph),nodes:snapshot.nodes,request,container:$('graph-result'),initial,onClose:()=>window.MitosProjectNav.select('workflow')});
+  openingResult=false;if(!$('graph-result').hidden)scrollWorkTo($('graph-result'));
+ }
+ function answerPreview(result){const paragraphs=result.markdown.split(/\n\s*\n/).filter(p=>!/^#/.test(p));return paragraphs.slice(0,2).join('\n\n').replace(/\[([^\]]+)\]\(mitos:[^)]+\)/g,'$1').slice(0,1200)}
+ async function renderConversation(){
+  const key=graph.id+':'+graph.revision+':'+overall();if(key===conversationKey)return;conversationKey=key;const id=graph.id,box=$('graph-conversation');
+  const user=node('article',undefined,'conversation-message user');user.append(node('strong','You'),node('p',graph.members[graph.root_task].spec.brief.intent,'prose'));
+  const agent=node('article',undefined,'conversation-message agent');agent.append(node('strong','Mitos'));
+  if(graph.result){agent.append(window.MitosFormat.markdown(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
+  else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
+  if(graph.status==='active'&&!graph.policy.automatic)agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
+  box.replaceChildren(user,agent);
+  if(graph.predecessor){try{const prior=await request(endpoint(graph.predecessor));if(graph?.id!==id)return;const history=node('details',undefined,'conversation-history');history.append(node('summary','Earlier in this conversation'),node('p',prior.members[prior.root_task].spec.brief.intent,'prose'));if(prior.result)history.append(window.MitosFormat.markdown(answerPreview(prior.result)));history.append(button('Open earlier result',async()=>{await chooseGraph(prior.id);openResult()}));box.prepend(history)}catch(e){if(graph?.id===id)box.prepend(node('p','Earlier conversation unavailable: '+e.message,'muted'))}}
+ }
+ $('graph-followup-form').onsubmit=async event=>{
+  event.preventDefault();const form=event.target,send=$('graph-followup-send');send.disabled=true;form.querySelector('.form-error').textContent='';
+  try{if(!graph?.result||graph.status!=='accepted')throw Error('Wait for the current result before sending a follow-up.');const body={key:crypto.randomUUID(),project_id:project,goal:$('graph-followup').value.trim(),from_graph:graph.id,from_revision:graph.revision};const next=await sendMutation('/api/graphs/automatic',body,'create');$('graph-followup').value='';await loadSummaries(true);await chooseGraph(next.id)}catch(e){form.querySelector('.form-error').textContent=e.message}finally{send.disabled=graph?.status!=='accepted'}
+ };
  function displayState(id) { if(id===graph?.root_task)return overall();if(graph?.members[id]?.spec.kind==='scope'&&reviewable(id))return 'review';return snapshot?.nodes[id]?.state || graph?.members[id]?.state || 'queued'; }
  function overall() {
   if (graph.status === 'cancelled' && Object.values(snapshot.nodes).some(n=>!n.settled)) return 'stopping';
@@ -104,7 +130,7 @@
   $('graph-planner-note').textContent=library.ready ? `${library.agents.length} agent roles · ${library.runtime}` : library.reason;
  }
  function scrollWorkTo(element) { const view=$('work-view'); view.scrollTop += element.getBoundingClientRect().top-view.getBoundingClientRect().top-16; }
- function compose() { if($('work-view').hidden)document.querySelector('[data-view=work]').click(); $('graph-compose').hidden = false; $('graph-compose-close').hidden = !graph; $('graph-current').hidden = true; $('graph-prompt').focus({preventScroll:true}); scrollWorkTo($('graph-compose')); }
+ function compose() { window.MitosProjectNav.select('work');$('graph-followup-form').hidden=true; $('graph-compose').hidden = false; $('graph-compose-close').hidden = !graph; $('graph-current').hidden = true; $('graph-prompt').focus({preventScroll:true}); scrollWorkTo($('graph-compose')); }
  $('new-work').addEventListener('click', compose);
  $('graph-compose-close').onclick = () => { $('graph-compose').hidden = true; $('graph-current').hidden = !graph; };
  $('graph-create-form').onsubmit = async event => {
@@ -128,15 +154,16 @@
   const tree=$('work-tree'); if(!tree)return;
   const sig=JSON.stringify([graphs,graphID,selected,showHistory,graph?.members,snapshot?.nodes,[...treeClosed]]);if(sig===treeSignature)return;treeSignature=sig;
   const focus=document.activeElement?.dataset.treeKey;tree.replaceChildren();
-  for(const row of graphs){
+  const ordered=[],visited=new Set();const appendRows=(row,depth)=>{if(visited.has(row.id))return;visited.add(row.id);ordered.push({...row,depth});for(const child of graphs.filter(g=>g.predecessor===row.id).sort((a,b)=>a.created_at.localeCompare(b.created_at)))appendRows(child,depth+1)};for(const row of graphs.filter(g=>!graphs.some(p=>p.id===g.predecessor)))appendRows(row,0);for(const row of graphs)appendRows(row,0);
+  for(const row of ordered){
    const current=row.id===graphID, expanded=current&&!treeClosed.has(row.id), counts=row.counts||{};
-   const item=node('div',undefined,'work-tree-item'),heading=node('div',undefined,'work-tree-heading');
+   const item=node('div',undefined,'work-tree-item'+(row.depth?' work-tree-followup':'')),heading=node('div',undefined,'work-tree-heading');
    const toggle=button(expanded?'▾':'▸',async()=>{if(current){if(treeClosed.has(row.id))treeClosed.delete(row.id);else treeClosed.add(row.id);renderTree()}else{treeClosed.delete(row.id);await chooseGraph(row.id)}},'work-tree-toggle');
    toggle.setAttribute('aria-label',(expanded?'Collapse ':'Expand ')+(row.title||'Work'));toggle.setAttribute('aria-expanded',String(expanded));toggle.dataset.treeKey='toggle:'+row.id;
    const choose=button(row.title||'Untitled work',async()=>{treeClosed.delete(row.id);if(current){await selectNode(graph.root_task)}else await chooseGraph(row.id);if($('work-view').hidden)document.querySelector('[data-view=work]').click()},'work-tree-goal');choose.title=row.title;choose.dataset.treeKey=row.id;
    if(current)choose.setAttribute('aria-current','page');
    const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.running?'running':counts.failed||counts.needs_attention?'needs_attention':counts.queued?'queued':'idle';
-   heading.append(toggle,choose);item.append(heading,node('small',labels[status]||status,'work-tree-status '+status));
+   if(row.depth)choose.title='Follow-up: '+(row.title||'Work');heading.append(toggle,choose);item.append(heading,node('small',labels[status]||status,'work-tree-status '+status));
    if(expanded&&graph){const list=node('ul');const append=(parent,container)=>{for(const [id,m]of workflowOrder().map(id=>[id,graph.members[id]]).filter(([,m])=>m.spec.parent===parent)){const li=node('li'),b=button(title(m),()=>selectNode(id),'work-tree-node');b.dataset.treeKey=id;b.title=kindLabel(m)+': '+title(m)+' · '+(labels[displayState(id)]||displayState(id));if(selected===id)b.setAttribute('aria-current','page');const dot=node('span',undefined,'work-tree-dot '+displayState(id));dot.setAttribute('aria-label',labels[displayState(id)]||displayState(id));b.prepend(dot);li.append(b);if(Object.values(graph.members).some(c=>c.spec.parent===id)){const nested=node('ul');append(id,nested);li.append(nested)}container.append(li)}};const planner=latestPlanner();if(planner){const li=node('li'),b=button('✦ Planner',()=>selectNode(planner),'work-tree-node');b.dataset.treeKey='planner';if(selected&&kind(graph.members[selected])==='planner')b.setAttribute('aria-current','page');li.append(b);list.append(li)}append(graph.root_task,list);if(!list.children.length)list.append(node('li',graph.policy.automatic?'Preparing planner…':'Not started','work-tree-empty'));item.append(list)}
    tree.append(item);
   }
@@ -144,7 +171,7 @@
   if(focus)tree.querySelector(`[data-tree-key="${CSS.escape(focus)}"]`)?.focus({preventScroll:true});
  }
  async function chooseGraph(id, keepNode = false) {
-  closeResult();epoch++; graphID = id;showHistory=false;$('graph-show-history').checked=false; if (!keepNode) selected = ''; selectedAttempt=''; readerStates.clear(); renderedReaderKey=''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
+  closeResult();resultViewKey='';conversationKey='';if(!keepNode){workView='work';window.MitosProjectNav.select('work')}epoch++; graphID = id;showHistory=false;$('graph-show-history').checked=false; if (!keepNode) selected = ''; selectedAttempt=''; readerStates.clear(); renderedReaderKey=''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
   $('graph-compose').hidden = true; $('graph-current').hidden = true; $('graph-inspector').hidden = true; updateURL();
   await refreshSelected();
  }
@@ -166,7 +193,7 @@
   const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.controller_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
   $('graph-progress').textContent = `${finished} of ${workers.length} steps complete` + (graph.policy.controller_application ? ' · Planner managed' : ' · Not started');
   $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.controller_application || graph.status !== 'active';
-  renderMessage(); renderPlanner(); renderMap(); renderInspector(); renderActivity(); renderTree();
+  renderMessage(); renderPlanner(); renderMap(); renderInspector(); renderActivity(); renderTree();renderConversation();applyWorkView();document.dispatchEvent(new CustomEvent("mitos-graph",{detail:graph}));
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
  function renderMessage() {
@@ -238,7 +265,7 @@
  $('graph-fit').onclick=fit; $('graph-zoom-in').onclick=()=>setZoom(zoom+.15); $('graph-zoom-out').onclick=()=>setZoom(zoom-.15);
  function setLayout(list) { listMode=list; $('graph-viewport').hidden=list; $('graph-list-view').hidden=!list; $('graph-mode-map').setAttribute('aria-pressed',String(!list)); $('graph-mode-list').setAttribute('aria-pressed',String(list)); document.querySelector('.graph-map-controls').hidden=list; }
  $('graph-mode-map').onclick=()=>setLayout(false); $('graph-mode-list').onclick=()=>setLayout(true);
- async function selectNode(id) { if (!id || !graph.members[id]) return;closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=graph.members[id].current_run_id?'output':'details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
+ async function selectNode(id) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select('workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=graph.members[id].current_run_id?'output':'details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
  function captureReader(){
   if(!renderedReaderKey)return;
   const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifact:box.querySelector('[aria-label="Output artifact"]')?.value,open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});

@@ -1,6 +1,12 @@
 import json,pathlib,sys,time
 prompt=sys.stdin.read();time.sleep(.4)
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
+if 'Previous conversation and saved evidence:' in prompt:
+ prior=json.loads(prompt.split('Previous conversation and saved evidence:\n')[1].split('\nThese are prior results')[0])
+ assert '42' in prior['prior_work']['result']['markdown']
+ assert prior['saved_sources']
+ for source in prior['saved_sources']:assert pathlib.Path(source['directory'],'report.md').exists()
+
 if '--output-schema' in sys.argv:
  ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
@@ -14,6 +20,7 @@ if '--output-schema' in sys.argv:
    assert f['state']=='done',str(f)
    plan['accept'].append({'task':f['id'],'rationale':'Read the saved native report and reviewed its evidence.'})
  plan['result']={'title':'Answer','markdown':'The answer is **42**.\n\n- [ ] Example open finding.\n\n[Answer file](mitos://'+workers[0]['id']+'/answer.txt) and [source](mitos://'+workers[0]['id']+'/README.md#L1).','source_tasks':[f['id'] for f in workers]} if workers else {'title':'','markdown':'','source_tasks':[]}
+ if workers:plan['result']['items']=[{'kind':'changes','title':'Review implementation','task':workers[0]['id'],'path':'changes.patch','url':''},{'kind':'link','title':'Example pull request','task':'','path':'','url':'https://example.com/pull/1'}]
  out.write_text(json.dumps(plan))
 else:
  if 'Check upstream patch and evidence.' in prompt:

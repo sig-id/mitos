@@ -13,6 +13,7 @@
  <section id="graph-current" hidden>
   <header class="graph-heading"><div><div class="graph-title-row"><h2 id="graph-title"></h2><span id="graph-status" class="graph-badge"></span></div><p id="graph-progress" class="muted"></p></div><div class="actions"><button id="graph-review" class="primary">Review result</button><details class="graph-menu"><summary aria-label="Work actions">•••</summary><div><button id="graph-replan">Replace planner</button><button id="graph-stop">Stop work</button></div></details></div></header>
   <div id="graph-message" class="graph-message" role="status" hidden></div>
+  <section id="graph-conversation" class="graph-conversation"></section>
   <section id="graph-result" class="graph-result" aria-label="Work result" hidden></section>
   <div class="graph-body">
    <section class="graph-map" aria-label="Execution graph">
@@ -27,6 +28,7 @@
   </div>
   <details class="graph-activity"><summary>Recent activity <span id="graph-activity-count"></span></summary><ol id="graph-activity-list"></ol></details>
  </section>
+ <form id="graph-followup-form" class="graph-followup" hidden><label for="graph-followup">Message your agent</label><textarea id="graph-followup" rows="2" required minlength="3" maxlength="10000" placeholder="What would you like to do next? For example, open a GitHub issue for each gap…"></textarea><div class="graph-create-controls"><span id="followup-context" class="muted"></span><button id="graph-followup-send" class="primary" type="submit">Send</button></div><p class="form-error" role="alert"></p></form>
  <p id="graph-announcement" class="sr-only" role="status" aria-live="polite"></p>
 </section>
 <dialog id="graph-action-dialog"><form id="graph-action-form"><div class="dialog-heading"><h2 id="graph-action-title"></h2><button type="button" data-close aria-label="Close">×</button></div><div id="graph-action-context"></div><label id="graph-evidence-label">Evidence or result reference<textarea name="evidence" rows="2" maxlength="4000"></textarea></label><label>Review notes<textarea name="rationale" rows="3" required maxlength="4000"></textarea></label><p class="form-error" role="alert"></p><button class="primary" type="submit" id="graph-action-submit">Confirm</button></form></dialog>

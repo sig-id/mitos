@@ -15,11 +15,11 @@
   if(location){line=Number(location[1]);end=Number(location[2]||line);value=value.slice(0,location.index)}else value=value.split('#')[0];
   const candidates=task?entries.filter(e=>e.member.spec.id===task):context?[context.entry,...entries.filter(e=>e!==context.entry)]:entries;
   for(const entry of candidates){
+   if(entry.run.artifacts?.some(a=>a.name===value))return {path:value,entry,artifact:true,line,end};
    const paths=[value.replace(/^\.\//,'')];
    if(context?.entry===entry&&context.path){const folder=context.path.slice(0,context.path.lastIndexOf('/')+1);try{paths.unshift(new URL(value,'https://saved.invalid/'+folder).pathname.slice(1))}catch{}}
    const file=entry.files.find(f=>paths.includes(f.path)||value.endsWith('/'+f.path));
    if(file)return {...file,entry,line,end};
-   if(entry.run.artifacts?.some(a=>a.name===value))return {path:value,entry,artifact:true,line,end};
   }
  }
  // Link known snapshot paths in prose, table cells and inline code. Never rewrite
@@ -66,7 +66,7 @@
      const version=++previewGeneration;
      if(location.kind==='result'){
       controls(graph.result?'':'Final answer missing');
-      if(graph.result)body.replaceChildren(markup(graph.result.markdown));
+      if(graph.result){body.replaceChildren(markup(graph.result.markdown));const items=el('div',undefined,'graph-result-items');for(const item of graph.result.items||[]){if(item.kind==='link'){const a=el('a',item.title,'result-item');a.href=item.url;a.target='_blank';a.rel='noopener noreferrer';items.append(a)}else{const file=resolveFile('mitos://'+item.task+'/'+item.path,entries);if(file)items.append(button(item.title,()=>open(file)));else items.append(el('span',item.title+' · saved file unavailable','muted'))}}if(items.children.length)body.append(items);}
       else body.replaceChildren(el('p','This older work completed without a final answer to the goal. Its worker reports and evidence are preserved below. A reviewer’s report is not a substitute for that answer.'));
       return;
      }
@@ -76,7 +76,7 @@
       if(file.line){
        const pre=el('pre',undefined,'graph-source-lines'),lang=window.MitosFormat.language(text),lines=text.split('\n');pre.tabIndex=0;
        lines.forEach((line,i)=>{const row=el('span',undefined,'graph-source-line');row.dataset.line=String(i+1);row.append(el('span',String(i+1),'graph-line-number'),window.MitosFormat.highlight(line,lang));if(i+1>=file.line&&i+1<=file.end)row.classList.add('cited');pre.append(row,document.createTextNode('\n'))});body.replaceChildren(pre);const target=pre.querySelector('.cited');if(target)pre.scrollTop=Math.max(0,target.offsetTop-pre.offsetTop-70);
-      }else body.replaceChildren(/\.(md|txt)$/i.test(file.path)?markup(text,file):window.MitosFormat.code(text));
+      }else body.replaceChildren(file.path.endsWith('.patch')&&window.MitosDiff?window.MitosDiff.preview(text):/\.(md|txt)$/i.test(file.path)?markup(text,file):window.MitosFormat.code(text));
      }catch(e){if(current()&&version===previewGeneration)body.replaceChildren(el('p',e.message,'muted'))}
     }
     async function navigate(next){history.push(location);location=next;await show();reader.scrollIntoView({block:'start'})}
@@ -84,7 +84,7 @@
     for(const entry of entries){
      const group=el('details',undefined,'graph-result-source');group.append(el('summary',entry.member.spec.brief.title));
      const links=el('div',undefined,'graph-deliverable-links');
-     for(const name of ['report.md','changes.patch','workspace.tar.gz'])if(entry.run.artifacts?.some(a=>a.name===name))links.append(name==='report.md'?button('Read worker report',()=>open({path:name,entry,artifact:true})):download(name==='changes.patch'?'Download patch':'Download workspace',artifact(entry.run,name)));
+     for(const name of ['report.md','changes.patch','workspace.tar.gz'])if(entry.run.artifacts?.some(a=>a.name===name))links.append(name==='report.md'?button('Read worker report',()=>open({path:name,entry,artifact:true})):name==='changes.patch'?button('Review changes',()=>open({path:name,entry,artifact:true})):download('Download workspace',artifact(entry.run,name)));
      group.append(links);
      const search=el('input');search.type='search';search.placeholder='Find a saved file…';search.setAttribute('aria-label','Find a saved file in '+entry.member.spec.brief.title);
      const list=el('div',undefined,'graph-deliverable-links graph-saved-files');const render=()=>{const matching=entry.files.filter(f=>f.path.toLowerCase().includes(search.value.toLowerCase())).sort((a,b)=>a.path.localeCompare(b.path));list.replaceChildren(...matching.slice(0,100).map(f=>button(f.path,()=>open({...f,entry}))));if(matching.length>100)list.append(el('p','Showing 100 of '+matching.length+' files. Search to narrow the list.','muted'))};search.oninput=render;render();group.append(search,list);if(entry.problem)group.append(el('p',entry.problem,'muted'));evidence.append(group);

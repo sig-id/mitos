@@ -176,6 +176,30 @@ print('native execution log')
 	if _, err = e.Store.PublishResult(g.ID, answer); !errors.Is(err, ErrConflict) {
 		t.Fatal("overwrote published answer")
 	}
+
+	continuationReq := AutomaticGoal{Key: "continue-answer", ProjectID: req.ProjectID, Goal: "Use the previous answer for the next task", FromGraph: g.ID, FromRevision: published.Revision}
+	staleContinuation := continuationReq
+	staleContinuation.Key = "stale-continuation"
+	staleContinuation.FromRevision--
+	if _, err = e.StartAutomaticGoal(staleContinuation); !errors.Is(err, ErrConflict) {
+		t.Fatal("stale continuation accepted")
+	}
+	continuation, err := e.StartAutomaticGoal(continuationReq)
+	if err != nil || continuation.Predecessor != g.ID || continuation.GoalRevision != g.GoalRevision+1 {
+		t.Fatalf("continuation: %v", err)
+	}
+	replayContinuation, err := e.StartAutomaticGoal(continuationReq)
+	if err != nil || replayContinuation.ID != continuation.ID {
+		t.Fatal("continuation was duplicated")
+	}
+	var prior FollowupContext
+	if err = json.Unmarshal([]byte(continuation.Members[continuation.RootTask].Spec.Context), &prior); err != nil || prior.Result.Markdown != published.Result.Markdown {
+		t.Fatal("previous result was not frozen")
+	}
+	notes, err := e.prepareFollowup(Run{GraphAttempt: &GraphAttempt{GraphID: continuation.ID}}, t.TempDir())
+	if err != nil || !strings.Contains(notes, "Recovered answer") || !strings.Contains(notes, "workspace.tar.gz") {
+		t.Fatalf("saved evidence handoff: %s %v", notes, err)
+	}
 	if _, err = os.Stat(filepath.Join(e.Root, "answer.txt")); !os.IsNotExist(err) {
 		t.Fatal("agent modified original project")
 	}

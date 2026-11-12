@@ -8,16 +8,17 @@ import (
 
 // Summary reads never clone transcripts, graph receipts or executor configuration.
 type GraphSummary struct {
-	ID        string         `json:"id"`
-	ProjectID string         `json:"project_id"`
-	RootTask  string         `json:"root_task"`
-	Title     string         `json:"title"`
-	Status    string         `json:"status"`
-	Revision  int64          `json:"revision"`
-	Members   int            `json:"members"`
-	Counts    map[string]int `json:"counts"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	Predecessor string         `json:"predecessor,omitempty"`
+	ID          string         `json:"id"`
+	ProjectID   string         `json:"project_id"`
+	RootTask    string         `json:"root_task"`
+	Title       string         `json:"title"`
+	Status      string         `json:"status"`
+	Revision    int64          `json:"revision"`
+	Members     int            `json:"members"`
+	Counts      map[string]int `json:"counts"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary, string) {
@@ -44,7 +45,7 @@ func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary
 				counts[s.graphDisplayState(g, m)]++
 			}
 		}
-		out = append(out, GraphSummary{ID: id, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
+		out = append(out, GraphSummary{ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
 	}
 	return out, next
 }

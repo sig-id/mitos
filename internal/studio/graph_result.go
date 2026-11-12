@@ -1,21 +1,32 @@
 package studio
 
 import (
+	"io/fs"
+	"net/url"
 	"strings"
 	"time"
 )
 
 // FinalAnswer is authored for the original goal, separately from review receipts.
+type ResultItem struct {
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+	Task  string `json:"task"`
+	Path  string `json:"path"`
+	URL   string `json:"url"`
+}
 type FinalAnswer struct {
-	Title       string   `json:"title"`
-	Markdown    string   `json:"markdown"`
-	SourceTasks []string `json:"source_tasks"`
+	Items       []ResultItem `json:"items,omitempty"`
+	Title       string       `json:"title"`
+	Markdown    string       `json:"markdown"`
+	SourceTasks []string     `json:"source_tasks"`
 }
 type ResultSource struct {
 	Task string `json:"task"`
 	Run  string `json:"run"`
 }
 type GraphResult struct {
+	Items     []ResultItem   `json:"items,omitempty"`
 	Title     string         `json:"title"`
 	Markdown  string         `json:"markdown"`
 	Sources   []ResultSource `json:"sources"`
@@ -41,6 +52,28 @@ func bindGraphResult(g *WorkGraph, answer FinalAnswer, author string) (*GraphRes
 		seen[id] = true
 		result.Sources = append(result.Sources, ResultSource{Task: id, Run: m.Accepted.RunID})
 	}
+	if len(answer.Items) > 48 {
+		return nil, graphError("too many result items")
+	}
+	for _, item := range answer.Items {
+		if strings.TrimSpace(item.Title) == "" || len(item.Title) > 240 {
+			return nil, graphError("result item needs a bounded title")
+		}
+		switch item.Kind {
+		case "file", "changes":
+			if !seen[item.Task] || !fs.ValidPath(item.Path) || item.Path == "." || len(item.Path) > 2048 || item.URL != "" {
+				return nil, graphError("result file must reference a saved source")
+			}
+		case "link":
+			u, err := url.Parse(item.URL)
+			if err != nil || len(item.URL) > 4096 || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || item.Task != "" || item.Path != "" {
+				return nil, graphError("result link must be an HTTP URL")
+			}
+		default:
+			return nil, graphError("unknown result item kind")
+		}
+	}
+	result.Items = append([]ResultItem(nil), answer.Items...)
 	return result, nil
 }
 

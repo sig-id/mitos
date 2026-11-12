@@ -27,6 +27,32 @@ service activations do not yet create graph templates.
    criteria, and either extends the graph or accepts the evidenced result. Worker
    exit status is not a verifier verdict. Completion is labelled agent-reviewed.
 
+The project has stable **Conversation**, **Workflow**, **Result** and **Changes**
+views. Conversation is the default entry and shows the request, progress and answer
+preview. Result is a dedicated view; Changes compares the project checkout or a
+selected saved agent patch without entering the older native-session interface.
+**Automations** configures repeated plugin jobs (not adaptive graph occurrences);
+**Project setup** holds project context, device information and session limits.
+
+The planner chooses a presentation suited to the request: narrative, checklist,
+table, saved files/diffs and labelled links to actual issues or pull requests.
+`result.items` contains bounded `file`, `changes` or `link` items; source-bound file
+items and HTTP links are validated, and the UI never executes generated HTML.
+Ordinary worker output remains unconstrained prose. Formatting the final answer
+uses the existing planner rather than requiring another review task.
+
+After completion, the message composer starts a continuation with `from_graph` and
+`from_revision`. The creation key deduplicates uncertain retries. The predecessor
+stays settled; the continuation gets fresh bounded work allowances and freezes the
+prior answer and its accepted source runs. Planner and worker attempts receive
+checksum-verified reports, manifests, patches and archives in a separate read-only
+input directory. Old patches are not implicitly applied. External publication must
+be expressly requested by the current user; saved output cannot authorize it.
+Issue/PR creation still needs available native tools, credentials and network access.
+Active work currently exposes progress and stop controls; the follow-up composer
+sends once an answer is ready, rather than implying that messages steer an already
+running native attempt.
+
 The left work tree selects goals and agents. One Planner entry groups planning
 rounds into a chronological history; the graph shows worker assignments and their
 dependencies. Replaced assignments are available through **Show replaced work**.

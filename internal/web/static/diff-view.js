@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id),root=$('git-diff');if(!root)return;
+  const $=id=>document.getElementById(id),root=$('git-diff');
   const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
   function path(value){
     value=value.trim();if(!value.startsWith('"'))return value;
@@ -37,10 +37,10 @@
     return ({go:'go',js:'javascript',mjs:'javascript',cjs:'javascript',jsx:'javascript',ts:'typescript',tsx:'typescript',json:'json',py:'python',sh:'bash',bash:'bash',html:'html',css:'css',rs:'rust',md:'markdown',yml:'yaml',yaml:'yaml'})[ext]||'text';
   }
   function changed(left,right){let start=0;while(start<left.length&&start<right.length&&left[start]===right[start])start++;let a=left.length,b=right.length;while(a>start&&b>start&&left[a-1]===right[b-1]){a--;b--;}return [[start,a],[start,b]];}
-  function table(file){
+  function table(file,labels=['Before','After']){
     const table=el('table',undefined,'diff-table'),caption=el('caption',(file.name||file.old)+' – HEAD compared with working tree','sr-only');table.append(caption);
     const columns=el('colgroup');for(const cls of ['diff-number-column','diff-text-column','diff-number-column','diff-text-column'])columns.append(el('col',undefined,cls));table.append(columns);
-    const head=el('thead'),header=el('tr');for(const text of ['HEAD','Working tree']){const th=el('th',text);th.colSpan=2;th.scope='colgroup';header.append(th);}head.append(header);table.append(head);const body=el('tbody');table.append(body);const lang=language(file);
+    const head=el('thead'),header=el('tr');for(const text of labels){const th=el('th',text);th.colSpan=2;th.scope='colgroup';header.append(th);}head.append(header);table.append(head);const body=el('tbody');table.append(body);const lang=language(file);
     function cell(row,line,number,kind,range){
       const gutter=el('td',line?String(number):'',`diff-line-number ${kind}`),content=el('td',undefined,`diff-cell ${kind}${line?'':' diff-empty'}`);gutter.setAttribute('aria-label',line?`${kind==='removed'?'Removed':kind==='added'?'Added':'Context'} line ${number}`:'No corresponding line');
       if(line){const pre=el('code',undefined,'diff-source');pre.append(window.MitosFormat.highlight(line.text,lang,range));content.append(pre);if(line.noNewline)content.append(el('span','No final newline','diff-no-newline'));}
@@ -63,7 +63,7 @@
     return table;
   }
   let signature='',openFiles=new Map();
-  window.MitosDiff={render(resources){
+  window.MitosDiff={preview(patch){const box=el('div',undefined,'diff-files');for(const file of parse(patch)){const details=el('details',undefined,'diff-file');details.open=true;details.append(el('summary',file.name||file.old),table(file));box.append(details)}if(!box.children.length)box.append(el('p',patch.trim()||'No changes.'));return box;},render(resources){if(!root)return;
     const key=JSON.stringify([resources.diff,resources.git_status,resources.diff_truncated]);if(key===signature)return;signature=key;
     for(const node of root.querySelectorAll('.diff-file'))openFiles.set(node.dataset.path,node.open);
     const files=parse(resources.diff||''),fragment=document.createDocumentFragment();

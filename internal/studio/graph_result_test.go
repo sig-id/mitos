@@ -30,3 +30,20 @@ func TestFinalAnswerRequiresAcceptedSources(t *testing.T) {
 		}
 	}
 }
+
+func TestFinalAnswerPresentationItems(t *testing.T) {
+	g := WorkGraph{Members: map[string]*GraphMember{"worker": {Spec: GraphSpec{Kind: "application"}, Accepted: &GraphAcceptance{RunID: "run"}}}}
+	base := FinalAnswer{Title: "Implementation", Markdown: "Updated the implementation.", SourceTasks: []string{"worker"}}
+	for _, item := range []ResultItem{{Kind: "file", Title: "Report", Task: "worker", Path: "report.md"}, {Kind: "changes", Title: "Changes", Task: "worker", Path: "changes.patch"}, {Kind: "link", Title: "PR 1", URL: "https://example.com/pull/1"}} {
+		base.Items = []ResultItem{item}
+		if _, err := bindGraphResult(&g, base, "planner:test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, item := range []ResultItem{{Kind: "html", Title: "Unsafe"}, {Kind: "link", Title: "Unsafe", URL: "javascript:alert(1)"}, {Kind: "file", Title: "Outside", Task: "worker", Path: "../secret"}, {Kind: "changes", Title: "Wrong source", Task: "missing", Path: "changes.patch"}, {Kind: "link", Title: "Credentials", URL: "https://user:secret@example.com"}} {
+		base.Items = []ResultItem{item}
+		if _, err := bindGraphResult(&g, base, "planner:test"); err == nil {
+			t.Fatalf("accepted invalid item %+v", item)
+		}
+	}
+}
