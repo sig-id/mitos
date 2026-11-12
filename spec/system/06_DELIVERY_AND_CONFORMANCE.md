@@ -204,6 +204,65 @@ human decisions through the same read model. Test bounded reads and backpressure
 with declared fleet/graph sizes; synthetic large graphs do not establish equivalent
 concurrent-process capacity.
 
+## Application-server delivery gates
+
+These gates extend the local milestones; they do not assert hosted readiness. The
+current build has no PostgreSQL runtime adapter, general remote worker protocol, or
+complete multi-tenant application API. Acegoat is a design consumer in a separate
+repository. The initial slice MAY proceed alongside local delivery; it MUST NOT
+claim unrelated M1–M5 or G1–G5 guarantees. One home authority with remote workers does
+not require multi-server aggregation, but does require the relevant M2–M4 custody,
+receipt and enforcement guarantees and M5 remote-placement checks.
+
+### S1 – Headless structured work
+
+Admit a structured-input task without a Git repository, workspace or PTY, execute it
+through common Task/Run admission and accept an exact typed result under declared
+policy. Verify independent application/API version negotiation and unsupported-version
+refusal. Keep the existing local startup and engineering workflow usable without a
+database service, broker or remote worker. Publish actual adapter capabilities.
+
+### S2 – Hosted persistence and application boundary
+
+Implement the PostgreSQL runtime adapter with the same atomic transition, receipt,
+outbox and recovery guarantees as local persistence. Define schema migration,
+backup/restore and receipt retention behavior before deployment. Test crash recovery
+at commit boundaries and refusal of changed payloads under a reused request ID.
+
+A separate application fixture MUST save a message and dispatch intent atomically,
+admit a Mitos Task, consume its accepted result, and publish one durable reply. Inject
+crashes before/after admission and before/after application publication; replay MUST
+retain one logical task and one published reply. No cross-service transaction or
+direct runtime-table access may be assumed. Verify authenticated tenant isolation for
+reads, writes, context, artifacts, notifications and receipts, plus capacity fairness
+and enforcement of configured tenant limits.
+
+### S3 – Replaceable remote workers
+
+Run S2 through a separately deployed worker using the versioned claim/context/
+checkpoint/result contract. Inject worker crash, expired lease, duplicate results,
+lost acceptance receipt, server restart and missed MQTT notification. Recovery MUST
+find pending work, reconcile committed results, and reject a late replaced worker's
+mutation. Demonstrate enforceable revocation or settlement before conflicting work
+starts; a timer alone is insufficient. An external-action fixture MUST lose its
+response and reconcile the original operation without blindly repeating it.
+
+### S4 – Dormant responsibilities and conversation consistency
+
+Demonstrate a personal-agent responsibility coordinating independent background
+negotiations. A negotiation MUST checkpoint and release capacity while waiting for
+an answer. Race the answer with wait registration, restart, and coordinator replacement;
+there MUST be no lost wake-up or duplicate application. Serialize personal-conversation
+updates and reject or reconsider results based on superseded preferences. Verify that
+candidate and company context stays within its authorized thread and that only
+permitted outcomes reach the personal conversation.
+
+Measure bounded storage/read behavior and scheduler progress at declared numbers of
+tenants, dormant responsibilities and active workers. Large numbers of dormant
+records MUST NOT be advertised as equivalent concurrent execution capacity. These
+fixtures establish reusable runtime behavior; Acegoat owns its domain acceptance tests
+and integration release independently.
+
 ## Product acceptance
 
 The local operating-system milestone requires M1–M4, G1–G5, and one complete engineering

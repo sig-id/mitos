@@ -15,6 +15,17 @@ and [native observations](system/05_INTERFACES_AND_INTEGRATIONS.md#native-agent-
 [G1–G5](system/06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) define
 implementation order and acceptance; this design is not a shipped graph runtime.
 
+## Application-server reading path
+
+[ADR 0005](ADRs/0005_APPLICATION_SERVER_RUNTIME.md) records the extension from local
+agent OS to a shared runtime for independent application backends. Read the
+[Acegoat use case](product/01_PRODUCT.md#application-backend-use-case-acegoat),
+[ownership and deployment](system/01_ARCHITECTURE.md#application-server-deployment),
+[application/worker contract](system/05_INTERFACES_AND_INTEGRATIONS.md#application-and-worker-server-contract),
+and [S1–S4 delivery gates](system/06_DELIVERY_AND_CONFORMANCE.md#application-server-delivery-gates).
+Acegoat remains in its own repository; hosted capabilities are targets, not shipped
+features. Local deployment retains its lightweight defaults.
+
 ## Authority
 
 Product and system specifications are normative, including requirements not yet

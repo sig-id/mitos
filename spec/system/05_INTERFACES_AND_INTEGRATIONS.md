@@ -26,6 +26,58 @@ drafts, with pairing, rotation, revocation, and revision checks. It MUST NOT imp
 arbitrary launch, terminal access, or unrestricted artifacts. Voice and notification
 interaction require separate authorized confirmation before resolution.
 
+## Application and worker server contract
+
+This is a target contract, not a declaration of existing endpoints. Application and
+worker protocols MUST be independently versioned and capability-negotiated. Clients
+MUST reject unsupported operations. The application interface MUST support idempotent
+work admission, status and result reads, cancellation, durable input/event submission,
+and receipt reconciliation with bounded cursor-based reads.
+
+Remote application access MUST authenticate service principals with scoped, revocable
+grants; browser/device pairing is not the only authentication mode. Tenant and project
+scope MUST be validated for every operation, context read, artifact, event, and receipt.
+Caller-supplied identity fields MUST NOT establish authority. Admission MUST enforce
+per-tenant capacity and declared budgets as well as global pool limits. Credentials
+and private context MUST NOT leak through another tenant's logs or notifications.
+
+The worker protocol MUST support capability registration, eligible work claims,
+authorized context retrieval, progress, lease renewal, checkpoint submission, result
+submission and durable acceptance receipts. Each attempt MUST bind task, Run, worker
+incarnation, authority generation, immutable input versions, acceptance policy and
+limits. A successful claim MUST be durably committed before execution is authorized.
+Mutations MUST validate the current binding and deduplicate stable request identities;
+results MUST revalidate consumed context versions and current permissions. Stale
+results remain inspectable evidence but MUST NOT publish an accepted result.
+
+Lease expiry withdraws authority to commit; it does not prove a worker has stopped.
+Replacement MUST obey the runtime's resource-custody rules. External actions MUST
+pass through an enforcement boundary that validates current authority and persists a
+stable operation identity before dispatch. An ambiguous action outcome MUST retain
+its reconciliation hold across worker replacement. Direct worker credentials that
+outlive revocation cannot establish safe automatic replacement.
+
+Context MAY be served by an application-owned API using an attempt-scoped delegated
+grant. The application remains the authority for domain visibility. Context references
+MUST bind versions and permissions, and revocation MUST be enforced at retrieval and
+publication. Checkpoints MUST be portable application state with declared schema and
+provenance; they MUST NOT promise transfer of hidden model or framework state.
+
+MQTT work notifications carry bounded references, not confidential conversation
+payloads. Shared subscriptions MAY distribute wake notifications among compatible
+workers; the claim API determines ownership. Missed notifications MUST be recovered
+by bounded scans of durable eligible work. Broker acknowledgment is not a work claim
+or result acceptance. Results sent through MQTT require the same ingestion validation
+and durable receipt as API submissions.
+
+The application declares a serialization key for conversational work and versions
+of consumed preferences or profile data. Admission MUST serialize conflicting work;
+result publication MUST revalidate versions across the application/runtime boundary.
+Independent background tasks MAY run concurrently. Waiting MUST durably register its
+wake condition and checkpoint before releasing worker capacity, without losing an
+answer arriving during registration. Wake-up creates or resumes an authorized attempt
+under current policy; it does not revive an expired worker grant.
+
 ## Adaptive graph and controller interface
 
 The target `work-graph/v1` profile defines semantic operations below, not currently
@@ -115,7 +167,7 @@ than a new transport protocol. HTTP operations, artifact transfer, and terminal
 streams retain their existing roles. In-process calls MAY use the same handlers
 without a broker round trip.
 
-Each server MUST have a configured broker endpoint and an isolated namespace scoped
+Each server using MQTT MUST have a configured broker endpoint and an isolated namespace scoped
 by stable server, project, and mailbox IDs. Commands, events, and receipts MUST use
 distinct topic classes. Independent servers MAY use different brokers; sharing a
 broker MUST NOT share authority. Cross-server delivery requires an explicitly
@@ -149,8 +201,9 @@ authority. One current coordinator generation owns a responsibility; shared
 subscriptions MUST NOT elect coordinators or bypass runtime fencing. Arrival order
 and reconnect order MUST NOT substitute for revision checks and causal references.
 
-The journal remains authoritative. Broker persistence supplements delivery; durable
-admission and handling require Mitos receipts.
+The configured runtime persistence remains authoritative (the journal in the current
+implementation). Broker persistence supplements delivery; durable admission and
+handling require Mitos receipts.
 
 The initial implementation uses Paho v0.23.0 and a configured external broker.
 Topics are `mitos/v1/{destination}/{project}/{mailbox}/{kind}`. JSON envelopes are

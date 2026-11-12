@@ -177,6 +177,34 @@ native mobile applications, and remote worker placement are not implied by that
 existing device interface. The combined view across several paired servers is a
 required product capability, not a claim about the current local browser build.
 
+### Application backend use case: Acegoat
+
+Mitos also targets operation as the agent runtime behind independently developed
+applications. Acegoat is the first design use case: a separate product and repository
+whose backend uses Mitos for durable agent work. Acegoat remains in architectural
+design; this use case does not claim a deployed integration.
+
+Acegoat owns applicant and company identities, profiles, personal agents, conversation
+threads, negotiation policy, and its customer interface. Mitos owns the execution of
+their responsibilities: Tasks, Runs, scheduling, waiting, replacement, authority,
+and acceptance. A personal agent retains its identity and responsibilities while no
+worker is running. A negotiation can wait for an applicant's answer without occupying
+a worker, then resume under current permissions and preferences.
+
+Local personal use and hosted application use MUST share runtime semantics. The
+local product MUST remain usable without PostgreSQL, an MQTT broker, or remote
+workers when those integrations are not enabled. Hosted applications MUST NOT require
+Mitos's browser workspace, coding roles, Git repositories, or terminal sessions.
+Application-specific acceptance policy MAY automate ordinary results; human approval
+is required when the declared policy or authority boundary requires it.
+
+The integration MUST allow Acegoat and Mitos to release independently through
+versioned APIs. Acegoat MUST NOT fork Mitos's scheduler or maintain a competing task
+lifecycle. Recruitment concepts remain in Acegoat; reusable runtime requirements
+belong in Mitos. [Architecture](../system/01_ARCHITECTURE.md#application-server-deployment)
+and [server delivery gates](../system/06_DELIVERY_AND_CONFORMANCE.md#application-server-delivery-gates)
+define this target and its limits.
+
 ## 6. Everyday use
 
 For a substantial change, the user opens a project, reviews its context, and sets
@@ -219,6 +247,8 @@ not yet share all these guarantees. [Delivery and conformance](../system/06_DELI
 separates the existing baseline from the remaining work. Mitos must earn the full
 product promise through that implementation and validation.
 
-The initial commitment is an engineering-work runtime operated on machines the
-user chooses. Hosted multi-tenant operation, a commercial marketplace, and automatic
-failover require separate product decisions after the core workflow is proven.
+The initial delivery remains an engineering-work runtime operated on machines the
+user chooses. Hosted application operation is an accepted extension with separate
+conformance gates, not a shipped capability. It reuses the same core rather than
+replacing the local product. A commercial marketplace and automatic failover remain
+outside this decision.

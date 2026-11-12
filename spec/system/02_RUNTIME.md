@@ -319,12 +319,21 @@ include the transition, attempt identity, reservations, claims, receipt, and dis
 outbox entry. Either all are visible or none are. No process may start from an
 uncommitted proposal; approval alone is not launch success.
 
-The canonical journal is authoritative; projections MUST be rebuildable. A single
-writer MUST serialize related mutations, including cross-task admission. Acknowledgment
-MUST follow durable commit. Replay MUST validate framing, version, and integrity.
-An incomplete trailing write may follow the journal's recovery procedure; corruption
-inside committed history MUST fail visibly. An append/fsync failure MUST prevent
-further mutation until recovery. JSONL replacement requires a separate ADR.
+The configured runtime store is authoritative; projections MUST be rebuildable.
+Related mutations, including cross-task admission, MUST be serialized under one
+home authority. Acknowledgment MUST follow durable commit. Recovery MUST validate
+schema versions and integrity and MUST NOT repeat external effects while rebuilding
+state. Storage failure MUST prevent acknowledgment of an uncommitted transition.
+
+The local adapter uses the canonical journal and a single writer. Replay MUST
+validate framing, version, and integrity. An incomplete trailing write may follow
+the journal's recovery procedure; corruption inside committed history MUST fail
+visibly. An append/fsync failure MUST prevent further mutation until recovery.
+[ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md) authorizes a planned hosted
+PostgreSQL adapter preserving these transition and receipt guarantees through database
+transactions. It does not replace local JSONL persistence. Database locking and
+constraints MUST prevent concurrent claims or conflicting admissions; storage
+adapter selection MUST NOT change Task/Run identity or acceptance semantics.
 
 ## Operation receipts and dispatch
 

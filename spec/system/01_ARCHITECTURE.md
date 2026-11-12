@@ -109,6 +109,68 @@ flowchart TD
 | Desktop owns A; laptop owns B | A and B operate independently; one client can present both. |
 | Remote worker placement | Home server retains authority; the worker host enforces admitted execution. |
 
+## Application server deployment
+
+Mitos MUST support a headless application-server profile sharing the local runtime's
+Task/Run, supervision, admission, receipt, and acceptance contracts. Local deployment
+is a single-operator profile with local adapters, not a separate lifecycle engine.
+An application MAY use a single Mitos home authority with remote workers; this does
+not require federation or a multi-server client.
+
+Acegoat is an independently versioned application in its own repository. Its backend
+uses the Mitos API; it MUST NOT import Go `internal` packages, write Mitos tables or
+journal records directly, or copy its scheduler. A supported client library MAY wrap
+the versioned protocol. Co-location is permitted but does not imply a shared process,
+transaction, or release cycle.
+
+| Owner | Authoritative state |
+|---|---|
+| Application backend | Users, logical agent profiles and memory, conversation threads, visibility, domain policy and business outcomes |
+| Mitos home authority | Tasks, Runs, supervisory bindings, scheduling, execution grants, claims, checkpoints, acceptance and runtime receipts |
+| Worker | Temporary execution and retained evidence under its current grant; no independent task authority |
+
+An application agent binds to a stable supervisory responsibility; it is not a
+permanent Process. A conversation thread is a domain object, not a Mitos execution
+Session. Application-to-runtime mappings MUST include tenant, home server, and stable
+object identities. A Project is a work grouping, not by itself a tenant boundary.
+
+The intended deployment is:
+
+```text
+Application UI -> Application backend -> Application database
+                         |
+                    Versioned API
+                         |
+                    Mitos server -> Runtime persistence and outbox
+                         |
+                Worker API / MQTT wake notifications
+                         |
+                  Replaceable workers
+```
+
+There MUST be one authority for each lifecycle. Application views of Mitos work are
+projections. Mitos completion and application publication are separate durable facts;
+neither side may infer the other's commit from transport success. The application
+MUST durably save its input and dispatch intent together, retry admission with the
+same request identity, and atomically deduplicate accepted results with domain updates.
+Mitos MUST commit runtime changes and outbound intent together. Recovery reconciles
+pending intents and receipts on both sides. Sharing a PostgreSQL installation does
+not establish a cross-service transaction.
+
+The local journal remains supported. A hosted PostgreSQL persistence adapter is a
+delivery target under [ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md), not an
+implemented storage option. Both adapters MUST preserve atomic transitions, durable
+receipts, replay/recovery, and one authoritative writer per object. Multi-writer
+replication and automatic authority failover are excluded.
+
+Applications MUST be able to submit structured context references and receive typed
+results without provisioning a filesystem workspace. Context remains subject to
+application visibility policy and runtime grants. Workers access authorized context,
+checkpoints and results through APIs rather than either authoritative database.
+[Interfaces](05_INTERFACES_AND_INTEGRATIONS.md#application-and-worker-server-contract)
+owns the protocol; [delivery](06_DELIVERY_AND_CONFORMANCE.md#application-server-delivery-gates)
+owns acceptance and capacity evidence.
+
 ## Multiple servers
 
 Clients MUST maintain connections by stable server identity, endpoint, display name,
@@ -118,8 +180,8 @@ MUST NOT grant access to another.
 
 Combined project, work, and decision views MUST preserve home-server identity.
 Commands MUST route to that server even when local names or IDs overlap. Each
-server retains its own journal, admission, budgets, and receipts. Aggregating views
-MUST NOT create a global scheduler or a second writer.
+server retains its own authoritative persistence, admission, budgets, and receipts.
+Aggregating views MUST NOT create a global scheduler or a second writer.
 
 If B's laptop becomes unreachable, the client MUST mark its cached state stale,
 distinguish unknown execution from confirmed stop, and keep A's connection usable.
@@ -157,9 +219,10 @@ Native conversation history MAY supplement, but MUST NOT override, runtime facts
 The runtime MUST preserve authority, budgets, claims, decisions, and uncertain
 external effects through replacement. Reported success is distinct from acceptance.
 
-Mitos retains Go and its canonical journal. Storage replacement, replicated writers,
-commercial settlement, and automatic failover require separate decisions. Details
-of admission and recovery belong to [runtime](02_RUNTIME.md); connection security,
+Mitos retains Go and its local canonical journal. The application-server profile
+adds a planned PostgreSQL adapter without replacing local persistence. Replicated
+writers, commercial settlement, and automatic failover require separate decisions.
+Details of admission and recovery belong to [runtime](02_RUNTIME.md); connection security,
 client protocols, and adapters belong to [interfaces](05_INTERFACES_AND_INTEGRATIONS.md).
 
 Asynchronous messaging across process/server boundaries MUST use MQTT 5 with a

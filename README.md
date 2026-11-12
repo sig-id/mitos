@@ -15,6 +15,16 @@ assignments and batch tasks share a canonical journal and Task/Run readers. Nati
 process execution and batch scheduling still have distinct adapters; enforced
 resource accounting and remote placement remain delivery targets.
 
+## Application server direction
+
+Mitos also targets use as the headless agent runtime behind independent application
+backends. Acegoat is the first design use case and remains a separate product and
+repository. Applications own their users, conversations and domain rules; Mitos owns
+durable work and replaceable execution through versioned APIs. Local use retains
+its lightweight defaults. PostgreSQL runtime storage, tenant isolation and remote
+worker claims are planned capabilities, not available deployment options today.
+See the [server use case and delivery path](spec/README.md#application-server-reading-path).
+
 ## Start
 
 Requires Go 1.26+, Git, and Bash on Linux. The first build downloads pinned Go

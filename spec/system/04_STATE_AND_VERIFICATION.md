@@ -1,5 +1,19 @@
 # 04 – Workspaces, verification, and knowledge
 
+## Structured application state
+
+A task MAY use immutable structured inputs and typed results without a filesystem
+workspace. Its input references, schema revisions, digests, permissions and consumed
+versions MUST be frozen at admission. Application context remains application-owned;
+Mitos retains the bindings and evidence required for acceptance and recovery.
+
+Structured checkpoints MUST bind task/attempt, schema, input versions, authority and
+accepted progress. Restoring one MUST NOT rewind budgets, grants or external-effect
+history. Acceptance MUST bind the exact structured result and declared policy, with
+automatic validation or human review as required. Filesystem capture, Git and patch
+reconstruction apply to workspace adapters, not to every task. Both execution forms
+retain the same provenance, cancellation, recovery and result-acceptance semantics.
+
 ## Workspaces and artifacts
 
 Workspaces MUST identify source, layout, owner, revision, and access policy. Shared
@@ -35,7 +49,7 @@ result digest, criteria revision, verifier, isolation posture, outcome, and arti
 Criteria precede judgment; amendments MUST be explicit, authorized, and revisioned.
 Supervisors MUST NOT weaken checks silently. Verification cannot accept later edits.
 
-Local execution MUST snapshot installed acceptance material before launch and
+Local workspace execution MUST snapshot installed acceptance material before launch and
 reconstruct the result from pristine baseline and harvested patch in a separate
 directory. Verification uses saved material, not worker-modified checks. Changes
 intersecting `oracle_paths` park acceptance for resolution. Commands within the
