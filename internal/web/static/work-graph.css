@@ -19,3 +19,24 @@
 @media(max-width:760px){.work-navigation{max-height:240px;overflow:auto}.work-tree-goal,.work-tree-node{font-size:15px}}
 
 @media(max-width:640px){.work-navigation{grid-column:1/-1;width:100%;max-height:160px}.work-navigation .rail-title{display:flex;margin:4px 6px}.os-rail:has(.work-navigation){max-height:42dvh}}
+
+/* Give output reading equal weight to navigating the graph. */
+.graph-body:has(.graph-inspector:not([hidden])){grid-template-columns:minmax(300px,.9fr) minmax(560px,1.1fr)}
+.graph-inspector{padding:24px;max-height:72vh;font-size:16px;line-height:1.65}
+.graph-inspector-heading{gap:12px}.graph-reader-controls{display:flex;align-items:center;gap:12px}.graph-reader-controls #graph-inspector-expand{font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:5px}
+.graph-inspector .actions:empty{display:none}.graph-inspector p,.graph-inspector .analysis-prose{font-size:16px;line-height:1.75}.graph-inspector .analysis-prose{max-width:90ch}
+.graph-inspector .analysis-prose h3{font-size:23px}.graph-inspector .analysis-prose h4{font-size:20px}.graph-inspector .analysis-prose h5,.graph-inspector .analysis-prose h6{font-size:17px}
+.graph-inspector .analysis-prose :is(h3,h4,h5,h6){margin:24px 0 10px;color:var(--text)}
+.graph-inspector .analysis-prose :is(ul,ol){padding-left:25px;margin:14px 0}.graph-inspector .analysis-prose li{margin:7px 0}
+.graph-inspector .analysis-prose a{color:var(--blue);text-decoration:underline}.graph-inspector .analysis-prose code{background:#2a2535;padding:2px 5px;border-radius:3px;color:#d5c4f5}
+.graph-inspector .analysis-prose blockquote{margin:16px 0;padding:2px 16px;border-left:3px solid #64757a}
+.graph-inspector .analysis-prose table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;margin:16px 0}.graph-inspector .analysis-prose :is(th,td){border:1px solid #455260;padding:8px 12px;text-align:left}
+.graph-inspector .analysis-code{font-size:14px;line-height:1.7;margin:0;padding:10px;max-height:480px;overflow:auto;tab-size:2}
+.graph-inspector .analysis-code code{background:none;padding:0;color:inherit}.graph-inspector .analysis-code-block{padding:0;margin:16px 0;border:1px solid var(--line)}.graph-inspector .analysis-code-language{padding:6px 12px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.graph-inspector .syntax-number{color:#e6b57b}
+.graph-body.reading-mode:has(.graph-inspector:not([hidden])){grid-template-columns:minmax(0,1fr)}.graph-body.reading-mode:has(.graph-inspector:not([hidden])) .graph-map{display:none}.graph-body.reading-mode .graph-inspector{max-height:none;overflow:visible}
+.graph-output-section{border:1px solid #3e4a55;border-radius:7px;padding:14px 18px;margin:16px 0}.graph-inspector .graph-output-section>summary{font-size:16px;font-weight:600;color:var(--text);overflow-wrap:anywhere}.graph-output-section[open]>summary{margin-bottom:14px}
+.graph-plan-output>h4{font-size:17px;color:var(--text);margin:24px 0 12px}.graph-plan-output h5{font-size:15px;margin:18px 0 6px}.graph-output-agent{color:var(--accent);text-transform:capitalize}.graph-output-callout{border-left:3px solid var(--accent);padding:10px 15px;background:#28342a}
+.graph-json-children{padding-left:12px;min-width:0}.graph-json-row{margin:12px 0;overflow-wrap:anywhere}.graph-json-row>strong{color:var(--blue)}.graph-json-value{white-space:pre-wrap}
+.graph-attempt-card{display:grid;gap:14px;border:1px solid var(--line);border-radius:8px;padding:18px;margin:18px 0}.graph-attempt-heading,.graph-attempt-summary{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.graph-attempt-summary{margin:18px 0}.graph-attempt-card>button{justify-self:start}.graph-attempt-card>details{border-top:1px solid var(--line);padding-top:12px}.graph-attempt-card>details>a{display:block;margin-top:12px}
+@media(max-width:1200px){.graph-body:has(.graph-inspector:not([hidden])){grid-template-columns:1fr}.graph-inspector{order:-1;max-height:none}}
+@media(max-width:640px){.graph-inspector{padding:18px}.graph-output-section{padding:12px}.graph-inspector .graph-tabs{gap:18px}.graph-inspector .analysis-code{font-size:13px}}

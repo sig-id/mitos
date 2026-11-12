@@ -28,7 +28,10 @@ service activations do not yet create graph templates.
    exit status is not a verifier verdict. Completion is labelled agent-reviewed.
 
 The left work tree selects goals and agents. The graph also supports zoom, collapse
-and a list view. Only the selected graph is polled each second; summary status is
+and a list view. Selecting an agent opens its output in a wide reader, which can
+expand to the full content area. Planner proposals become readable summaries and
+expandable assignments; raw data is available separately. Attempt history opens
+saved output and files in place, with technical execution pages under Diagnostics. Only the selected graph is polled each second; summary status is
 refreshed every five seconds. Hidden tabs pause polling and connection failures
 back off. Reports are fetched on demand after an attempt finishes.
 

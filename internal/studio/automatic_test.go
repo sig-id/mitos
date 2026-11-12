@@ -215,9 +215,10 @@ pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(jso
 	}
 }
 func TestAutomaticStopHarvestsPartialOutput(t *testing.T) {
-	e, req := automaticScriptEngine(t, `import sys,time
+	e, req := automaticScriptEngine(t, `import sys,time,pathlib
 sys.stdin.read()
 print('Started native planner',flush=True)
+pathlib.Path("started.txt").write_text("ready")
 time.sleep(60)
 `)
 	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "stop-native", ProjectID: req.ProjectID, Goal: "Stop a running planner"})
@@ -234,11 +235,13 @@ time.sleep(60)
 			}
 		}
 		if runID != "" {
-			break
+			if _, err := os.Stat(filepath.Join(e.Store.Dir(), "workspaces", runID, "workspace", "started.txt")); err == nil {
+				break
+			}
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	if runID == "" {
+	if _, err := os.Stat(filepath.Join(e.Store.Dir(), "workspaces", runID, "workspace", "started.txt")); err != nil {
 		t.Fatal("planner never started")
 	}
 	time.Sleep(150 * time.Millisecond)

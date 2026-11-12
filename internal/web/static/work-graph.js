@@ -7,11 +7,12 @@
  const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
  const button = (text, fn, cls = '') => { const b = node('button', text, cls); b.type = 'button'; b.onclick = () => Promise.resolve().then(fn).catch(showError); return b; };
  const link = (text, href) => { const a = node('a', text, 'text-link'); a.href = href; return a; };
- const labels = { idle:'Not started', queued:'Queued', running:'Working', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
+ const labels = { finished:'Finished', idle:'Not started', queued:'Queued', running:'Working', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
  const badge = status => node('span', labels[status] || status, 'graph-badge ' + status);
  const date = value => new Date(value).toLocaleString();
  const storageKey = `mitos.graph.pending.${server}.${project}`;
  let optionsLoaded = false, apps = [], graphs = [], nextPage = '', graphID = new URLSearchParams(location.search).get('graph') || '';
+ let selectedAttempt='', renderedReaderKey='', readerStates=new Map();
  let selected = new URLSearchParams(location.search).get('node') || '', snapshot, graph, selectedTab = 'details';
  let snapshotRequest=0,snapshotApplied=0,summarySignature='',loadedMore=false;
  let epoch = 0, alive = true, polling = false, tick = 0, failureCount = 0, snapshotSignature = '', detailSignature = '';
@@ -127,7 +128,7 @@
   if(focus)tree.querySelector(`[data-tree-key="${CSS.escape(focus)}"]`)?.focus({preventScroll:true});
  }
  async function chooseGraph(id, keepNode = false) {
-  epoch++; graphID = id; if (!keepNode) selected = ''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
+  epoch++; graphID = id; if (!keepNode) selected = ''; selectedAttempt=''; readerStates.clear(); renderedReaderKey=''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
   $('graph-compose').hidden = true; $('graph-current').hidden = true; $('graph-inspector').hidden = true; updateURL();
   await refreshSelected();
  }
@@ -213,11 +214,17 @@
  $('graph-fit').onclick=fit; $('graph-zoom-in').onclick=()=>setZoom(zoom+.15); $('graph-zoom-out').onclick=()=>setZoom(zoom-.15);
  function setLayout(list) { listMode=list; $('graph-viewport').hidden=list; $('graph-list-view').hidden=!list; $('graph-mode-map').setAttribute('aria-pressed',String(!list)); $('graph-mode-list').setAttribute('aria-pressed',String(list)); document.querySelector('.graph-map-controls').hidden=list; }
  $('graph-mode-map').onclick=()=>setLayout(false); $('graph-mode-list').onclick=()=>setLayout(true);
- async function selectNode(id) { if (!id || !graph.members[id]) return; selected=id; selectedTab='details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
- $('graph-inspector-close').onclick=()=>{selected='';epoch++;detailSignature='';$('graph-inspector').hidden=true;updateURL();renderMap();renderTree()};
+ async function selectNode(id) { if (!id || !graph.members[id]) return; selected=id; selectedAttempt=''; selectedTab=graph.members[id].current_run_id?'output':'details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
+ function captureReader(){
+  if(!renderedReaderKey)return;
+  const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifact:box.querySelector('[aria-label="Output artifact"]')?.value,open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});
+ }
+ function restoreReader(){const saved=readerStates.get(renderedReaderKey);if(!saved)return;for(const d of $('graph-node-detail').querySelectorAll('details[data-read-key]'))if(d.dataset.readKey in saved.open)d.open=saved.open[d.dataset.readKey];$('graph-inspector').scrollTop=saved.scroll;}
+ $('graph-inspector-expand').onclick=()=>{const body=document.querySelector('.graph-body'),expanded=body.classList.toggle('reading-mode');$('graph-inspector-expand').textContent=expanded?'Show graph':'Expand';$('graph-inspector-expand').setAttribute('aria-pressed',String(expanded));scrollWorkTo($('graph-inspector'))};
+ $('graph-inspector-close').onclick=()=>{selected='';epoch++;detailSignature='';$('graph-inspector').hidden=true;document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');updateURL();renderMap();renderTree()};
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
-  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status]); if(signature===detailSignature)return;detailSignature=signature;box.replaceChildren(node('h3',title(m)),badge(displayState(selected)));
+  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',title(m)),badge(displayState(selected)));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
   if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.state==='parked')actions.append(link('Inspect execution','/runs/'+encodeURIComponent(m.current_run_id)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
@@ -233,23 +240,35 @@
     const unresolved=Object.values(graph.expansions).filter(x=>!x.outcome);if(unresolved.length){box.append(node('h4','Planning'));for(const x of unresolved)box.append(node('p',x.error?x.error.replaceAll('_',' '):x.controller_task?'Planner is considering the next steps.':'Waiting for steps to be defined.'))}
     if(!reviewable(selected)&&graph.status==='active')box.append(node('h4','Before completion'),node('p','Required steps must be accepted and execution settled before reviewing this goal.','muted'));
    }
-  }else if(selectedTab==='output'){renderOutput(box,m)}else{renderAttempts(box,m)}
+  }else if(selectedTab==='output'){renderOutput(box,m,selectedAttempt||m.current_run_id)}else{renderAttempts(box,m)}
+  restoreReader();
  }
  function renderDecision(box,d){box.append(node('h4','Decision'),node('p',d.outcome==='selected'?'A candidate has been selected. Review its changes before applying.':d.reason?.replaceAll('_',' ')||d.outcome));if(d.answer)box.append(node('p','Selected candidate '+(Number(d.answer.choice)+1)));for(const [index,candidate]of(d.candidates||[]).entries()){const details=node('details');details.open=String(index)===d.answer?.choice;details.append(node('summary',`${index+1}. ${candidate.explanation}`));const ul=node('ul');for(const op of candidate.operations)ul.append(node('li',(op.kind.replaceAll('_',' '))+': '+(op.spec?.brief?.title||graph.members[op.task]?.spec.brief.title||op.rationale||'')));details.append(ul);box.append(details)}if(d.outcome==='selected')box.append(button('Apply selected changes',()=>openAction('apply-decision',d.key),'primary'));if(!['applied','dismissed'].includes(d.outcome))box.append(button('Dismiss decision',()=>openAction('dismiss-decision',d.key)));}
  async function runDetail(m,runID){const key=runID+':'+m.fact_revision; if(cachedRuns.has(key))return cachedRuns.get(key);const value=await request(endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID));cachedRuns.set(key,value);return value;}
- function renderOutput(box,m){
-  if(!m.current_run_id){box.append(node('p',m.spec.kind==='scope'?'Select an agent or step to read its output.':'Output will appear when this step runs.','muted'));return}
+ function renderOutput(box,m,runID=m.current_run_id){
+  if(!runID){box.append(node('p',m.spec.kind==='scope'?'Select an agent or step to read its output.':'Output will appear when this step runs.','muted'));return}
   const holder=node('div');holder.append(node('p','Loading output…','muted'));box.append(holder);const token=epoch,chosen=selected;
-  runDetail(m,m.current_run_id).then(async run=>{
+  runDetail(m,runID).then(async run=>{
    if(token!==epoch||selected!==chosen||selectedTab!=='output'||!holder.isConnected)return;
-   holder.replaceChildren();const files=run.artifacts||[];if(run.summary&&!files.some(a=>a.name==='report.md'))holder.append(node('p',run.summary));
+   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)),badge(m.accepted?.run_id===run.id?'accepted':run.status==='done'?'finished':run.status));if(run.stage&&run.status==='running')attemptHeader.append(node('span',run.stage,'muted'));holder.append(attemptHeader);const files=run.artifacts||[];if(run.summary&&!files.some(a=>a.name==='report.md'))holder.append(node('p',run.summary));
    const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);const report=readable.find(a=>/report\.md$/.test(a.name))||[...readable].reverse().find(a=>/output\.txt$/.test(a.name))||readable[0];
    if(!report){holder.append(node('p',run.status==='running'?'The executor is running. Saved output appears after the current step finishes.':'No text output was saved.','muted'));}
-   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');for(const a of readable)select.append(new Option(a.name,a.name));select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosFormat?(name.endsWith('.json')||name.endsWith('.patch')?window.MitosFormat.code(text):window.MitosFormat.markdown(text)):node('pre',text));}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
-   if(files.length){const details=node('details');details.append(node('summary','All artifacts'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
+   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Planner proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifact||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));restoreReader();}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
+   if(files.length){const details=node('details');details.dataset.readKey='artifacts';details.append(node('summary','Files & downloads'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
  }
- function renderAttempts(box,m){if(!m.attempts?.length){box.append(node('p','No execution attempts yet.','muted'));return}for(const [index,id]of m.attempts.entries()){const row=node('article',undefined,'record');row.append(node('strong','Attempt '+(index+1)),link('Open execution →','/runs/'+encodeURIComponent(id)));if(id===m.current_run_id)row.append(node('p','Current · '+(labels[displayState(m.spec.id)]||m.state),'muted'));box.append(row)}}
+ function renderAttempts(box,m){
+  if(!m.attempts?.length){box.append(node('p','This agent has not started yet.','muted'));return}
+  box.append(node('p','Each attempt keeps its own output and files.','muted'));
+  for(const [index,id]of m.attempts.entries()){
+   const row=node('article',undefined,'graph-attempt-card'),heading=node('div',undefined,'graph-attempt-heading');heading.append(node('strong','Attempt '+(index+1)));if(id===m.current_run_id)heading.append(badge(displayState(m.spec.id)));row.append(heading);
+   const meta=node('p','Loading status…','muted');row.append(meta);const token=epoch;
+   runDetail(m,id).then(run=>{if(token!==epoch||!row.isConnected)return;if(id!==m.current_run_id)heading.append(badge(run.status==='done'?'finished':run.status));meta.textContent=(Date.parse(run.started_at)>0?'Started '+date(run.started_at):'Queued')+(Date.parse(run.finished_at)>0?' · Finished '+date(run.finished_at):'');}).catch(error=>{if(row.isConnected)meta.textContent=error.message});
+   row.append(button('View output & files',()=>{selectedAttempt=id;selectedTab='output';detailSignature='';renderInspector()},'primary'));
+   const diagnostic=node('details');diagnostic.dataset.readKey='diagnostics:'+id;diagnostic.append(node('summary','Diagnostics'),link('Technical execution details','/runs/'+encodeURIComponent(id)));row.append(diagnostic);box.append(row);
+  }
+ }
+
  function renderActivity(){const entries=(graph.triggers||[]).slice(-12).reverse();$('graph-activity-count').textContent=entries.length?'· '+entries.length:'';const list=$('graph-activity-list');list.replaceChildren();for(const tr of entries){const li=node('li');li.append(node('span',graph.members[tr.task_id]?title(graph.members[tr.task_id]):'Step'),document.createTextNode(tr.kind.replaceAll('_',' ')+(tr.outcome?' · considered':' · awaiting planning')));list.append(li)}if(!entries.length)list.append(node('li','Goal created · '+date(graph.created_at)));}
  function openAction(type,target=graph.root_task){
   actionSnapshot=structuredClone(graph);actionType=type;actionTarget=target;const form=$('graph-action-form');form.reset();form.querySelector('.form-error').textContent='';const context=$('graph-action-context');context.replaceChildren();

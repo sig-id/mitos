@@ -354,8 +354,17 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
+	stageErr := e.Store.Transition(r.ID, "agent_started", "running", "Agent working", "Codex is executing the assignment. Its report and files are saved when this attempt finishes.")
+	if stageErr != nil {
+		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = e.provider.Stop(cleanup, session)
+		stop()
+	}
+	// A concurrent stop may reject the stage update. Still harvest the process's
+	// output and changes before returning the transition error.
 	<-session.Done()
 	output, runErr := session.Result()
+	runErr = errors.Join(runErr, stageErr)
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err = e.provider.Stop(stopCtx, session); err != nil {
