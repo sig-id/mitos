@@ -87,11 +87,11 @@
   const key=graph.id+':'+graph.revision+':'+overall();if(key===conversationKey)return;conversationKey=key;const id=graph.id,box=$('graph-conversation');
   const user=node('article',undefined,'conversation-message user');user.append(node('strong','You'),node('p',graph.members[graph.root_task].spec.brief.intent,'prose'));
   const agent=node('article',undefined,'conversation-message agent');agent.append(node('strong','Mitos'));
-  if(graph.result){agent.append(window.MitosFormat.markdown(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
+  if(graph.result){agent.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
   else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
   if(graph.status==='active'&&!graph.policy.automatic)agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
   box.replaceChildren(user,agent);
-  if(graph.predecessor){try{const prior=await request(endpoint(graph.predecessor));if(graph?.id!==id)return;const history=node('details',undefined,'conversation-history');history.append(node('summary','Earlier in this conversation'),node('p',prior.members[prior.root_task].spec.brief.intent,'prose'));if(prior.result)history.append(window.MitosFormat.markdown(answerPreview(prior.result)));history.append(button('Open earlier result',async()=>{await chooseGraph(prior.id);openResult()}));box.prepend(history)}catch(e){if(graph?.id===id)box.prepend(node('p','Earlier conversation unavailable: '+e.message,'muted'))}}
+  if(graph.predecessor){try{const prior=await request(endpoint(graph.predecessor));if(graph?.id!==id)return;const history=node('details',undefined,'conversation-history');history.append(node('summary','Earlier in this conversation'),node('p',prior.members[prior.root_task].spec.brief.intent,'prose'));if(prior.result)history.append(window.MitosMarkdown.view(answerPreview(prior.result)));history.append(button('Open earlier result',async()=>{await chooseGraph(prior.id);openResult()}));box.prepend(history)}catch(e){if(graph?.id===id)box.prepend(node('p','Earlier conversation unavailable: '+e.message,'muted'))}}
  }
  $('graph-followup-form').onsubmit=async event=>{
   event.preventDefault();const form=event.target,send=$('graph-followup-send');send.disabled=true;form.querySelector('.form-error').textContent='';
@@ -288,7 +288,7 @@
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
    const deps=m.spec.brief.scheduling?.deps||[];if(deps.length){box.append(node('h4','Depends on'));for(const dep of deps){box.append(button((graph.members[dep.from]?title(graph.members[dep.from]):dep.from)+(snapshot.nodes[selected].waiting?.includes(dep.from)?' · waiting':''),()=>selectNode(dep.from),'graph-dependency-link'))}}
    if(m.replacement)box.append(node('h4','Replacement'),button(title(graph.members[m.replacement]),()=>selectNode(m.replacement),'graph-dependency-link'));
-   if(m.accepted)box.append(node('h4','Accepted result'),window.MitosFormat?window.MitosFormat.markdown(m.accepted.rationale):node('p',m.accepted.rationale),node('p',m.accepted.evidence,'muted'));
+   if(m.accepted)box.append(node('h4','Accepted result'),window.MitosFormat?window.MitosMarkdown.view(m.accepted.rationale):node('p',m.accepted.rationale),node('p',m.accepted.evidence,'muted'));
    const decision=Object.values(graph.decisions||{}).find(d=>d.task_id===selected);if(decision)renderDecision(box,decision);
    if(m.spec.kind==='scope'){
     const unresolved=Object.values(graph.expansions).filter(x=>!x.outcome);if(unresolved.length){box.append(node('h4','Planning'));for(const x of unresolved)box.append(node('p',x.error?x.error.replaceAll('_',' '):x.controller_task?'Planner is considering the next steps.':'Waiting for steps to be defined.'))}

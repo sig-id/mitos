@@ -174,6 +174,21 @@ include an idempotency key, runtime, optional model and message. The latest requ
 can be replayed without launching another process. Settings saves require the file
 hash or preferences revision captured when the proposal was prepared.
 
+Markdown documents use the shared light-DOM `<mitos-markdown>` component.
+`MitosMarkdown.view(text, {filename, link})` creates a read-only document with
+Preview/Source controls; omitting `filename` uses a compact view for conversation
+fragments. `MitosMarkdown.editor(text, {filename})` adds Edit/Preview/Split modes,
+formatting tools, line numbers and cursor/dirty status. Its `value` property sets
+loaded content; native textarea input events bubble normally. A handled, cancelable
+`markdown-save` event connects Ctrl/Cmd+S to the owning page's save action.
+
+Existing forms opt in with `textarea[data-markdown="Instructions.md"]`. Enhancement
+retains the same textarea, name, ID, constraints and native undo history. Form reset
+and dialog opening synchronize externally loaded values. The component uses the
+same safe Markdown parser for all previews; it never evaluates authored HTML.
+File-link callbacks remain attached when switching modes. JSON editors, terminal
+input and short chat composers remain plain inputs rather than Markdown documents.
+
 ## Registered controller integrations
 
 Advanced API clients can still register deterministic controller applications with

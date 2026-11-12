@@ -35,7 +35,7 @@
     if(meta)summary.append(el('span',meta,'analysis-badge'));details.append(summary);
     return details;
   }
-  const prose=window.MitosFormat.markdown, code=window.MitosFormat.code;
+  const prose=window.MitosMarkdown.view, code=window.MitosFormat.code;
   function formattedOutput(text,id){
     const box=el('div',undefined,'analysis-formatted-output');
     for(const [index,block] of window.MitosFormat.mixed(text).entries()){

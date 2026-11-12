@@ -56,6 +56,7 @@
       const line=lines[i];if(!line.trim()){i++;continue;}
       const fence=line.match(/^\s*(`{3,}|~{3,})([\w+-]*)/);
       if(fence){const content=[];i++;while(i<lines.length&&!lines[i].trim().startsWith(fence[1]))content.push(lines[i++]);if(i<lines.length)i++;box.append(code(content.join('\n'),fence[2]||undefined));continue;}
+      if(/^\s*<!--/.test(line)){while(i<lines.length&&!lines[i].includes('-->'))i++;i++;continue;}
       const heading=line.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
       if(heading){append('h'+Math.min(heading[1].length+2,6),heading[2]);i++;continue;}
       if(/^\s*(?:---+|\*\*\*+)\s*$/.test(line)){box.append(el('hr'));i++;continue;}

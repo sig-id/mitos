@@ -1,7 +1,7 @@
 (() => {
  'use strict';
  const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n};
- const prose=text=>window.MitosFormat.markdown(String(text||''));
+ const prose=text=>window.MitosMarkdown.view(String(text||''));
  const list=value=>Array.isArray(value)?value:[];
  const label=value=>typeof value==='string'?value:'';
  function disclosure(title,key,open=false){const d=el('details',undefined,'graph-output-section');d.dataset.readKey=key;d.open=open;d.append(el('summary',title));return d}
@@ -30,7 +30,7 @@
  }
  window.MitosGraphOutput={render(text,{planner=false,name='',resolve=()=>''}={}){
   let value,parsed=false;try{value=JSON.parse(text);parsed=true}catch{}
-  if(!parsed)return name.endsWith('.patch')?window.MitosFormat.code(text,'diff'):name.endsWith('.txt')?window.MitosFormat.code(text,'text'):window.MitosFormat.markdown(text);
+  if(!parsed)return name.endsWith('.patch')?window.MitosFormat.code(text,'diff'):name.endsWith('.txt')?window.MitosFormat.code(text,'text'):window.MitosMarkdown.view(text,{filename:name||'Output.md'});
   const box=el('div',undefined,'graph-structured-output');
   if(planner&&value&&typeof value==='object'&&typeof value.explanation==='string'&&(Array.isArray(value.steps)||Array.isArray(value.operations)))box.append(plan(value,resolve));else box.append(structured(value));
   const raw=disclosure('Raw data','raw');let loaded=false;raw.addEventListener('toggle',()=>{if(raw.open&&!loaded){loaded=true;raw.append(window.MitosFormat.code(text,'json'))}});box.append(raw);return box;

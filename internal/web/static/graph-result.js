@@ -26,7 +26,7 @@
  // fenced source, external links or paths that are not in a retained snapshot.
  function linkFiles(content,entries,context,open){
   const walk=document.createTreeWalker(content,NodeFilter.SHOW_TEXT),texts=[];
-  while(walk.nextNode())if(!walk.currentNode.parentElement.closest('pre,a,button'))texts.push(walk.currentNode);
+  while(walk.nextNode())if(!walk.currentNode.parentElement.closest('pre,a,button,.md-toolbar,.md-source,.md-status'))texts.push(walk.currentNode);
   const pattern=/\[([^\]\n]+)\]\(([^)\n]+)\)|(?:[\w.-]+\/)+[\w.-]+(?:(?::|#L?)\d+(?:[-:]L?\d+)?)?|\b[\w.-]+\.(?:md|txt|json|go|py|js|log)(?:(?::|#L?)\d+(?:[-:]L?\d+)?)?/g;
   for(const node of texts){const text=node.textContent,fragment=document.createDocumentFragment();let start=0;for(const m of text.matchAll(pattern)){const file=resolveFile(m[2]||m[0],entries,context);if(!file)continue;fragment.append(document.createTextNode(text.slice(start,m.index)),button(m[1]||m[0],()=>open(file)));start=m.index+m[0].length}if(start){fragment.append(document.createTextNode(text.slice(start)));node.replaceWith(fragment)}}
  }
@@ -60,7 +60,7 @@
     let previewGeneration=0,history=[],location={kind:'result'};
     const open=file=>navigate({kind:'file',file});
     const options=context=>({link:(target,label)=>{const file=resolveFile(target,entries,context);return file?button(label,()=>open(file)):null}});
-    function markup(text,context){const rendered=window.MitosFormat.markdown(text,options(context));linkFiles(rendered,entries,context,open);return rendered}
+    function markup(text,context){const rendered=window.MitosMarkdown.view(text,{...options(context),filename:context?.path||'Result.md'});linkFiles(rendered,entries,context,open);return rendered}
     function controls(title,url){readerHeading.replaceChildren();if(title)readerHeading.append(el('h3',title));const actions=el('div',undefined,'actions');if(history.length)actions.append(button('Back',()=>{location=history.pop();show()}));if(location.kind!=='result'&&graph.result)actions.append(button('Final answer',()=>navigate({kind:'result'})));if(url)actions.append(download('Download file',url));readerHeading.append(actions);readerHeading.hidden=!title&&!actions.children.length}
     async function show(){
      const version=++previewGeneration;

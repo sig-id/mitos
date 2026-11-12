@@ -56,3 +56,9 @@ separately checks the installed authenticated Codex on a temporary one-file proj
 folders, filtering, editable suggested names, invalid paths, stale response
 protection, keyboard entry, mobile layout, and opening projects from both the
 project and terminal pages. It uses an isolated temporary directory and server.
+
+`npm run test:markdown --prefix tools/terminal-eval` checks the shared light-DOM
+`<mitos-markdown>` viewer/editor: formatting, native undo/redo, selection across
+Edit/Preview/Split modes, line numbers, form values/reset, save shortcuts, safe
+rendering, evidence callbacks, dynamic form enhancement, and responsive layout.
+It runs without a server or model calls.
