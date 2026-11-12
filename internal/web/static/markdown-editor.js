@@ -6,7 +6,7 @@
  class MitosMarkdown extends HTMLElement {
   constructor(){super();this._options={};this._mode='preview';this._baseline='';this._built=false}
   connectedCallback(){if(!this._built)this._mode=this.getAttribute('mode')||(this.hasAttribute('editable')?'edit':'preview');this._build();this.refresh();this._observeSize()}
-  disconnectedCallback(){this._resize?.disconnect();cancelAnimationFrame(this._frame)}
+  disconnectedCallback(){this._resize?.disconnect();cancelAnimationFrame(this._frame);cancelAnimationFrame(this._layoutFrame)}
   get value(){return this._input?.value??this._value??''}
   set value(v){v=String(v??'');this._value=v;if(!this._built){this._build()}if(this._input.value!==v)this._input.value=v;this._baseline=v;this.refresh()}
   get mode(){return this._mode}
@@ -24,18 +24,17 @@
    this._name=node('span',this.getAttribute('filename')||'Markdown','md-filename');this._toolbar.append(this._name);
    this._modes=new Map();const editing=this.hasAttribute('editable');
    for(const [key,label]of editing?[['edit','Edit'],['preview','Preview'],['split','Split']]:[['preview','Preview'],['source','Source']]){const b=this._button(label,()=>{const start=this._input.selectionStart,end=this._input.selectionEnd;this.mode=key;if(key==='edit'||key==='split'){this._input.focus({preventScroll:true});this._input.setSelectionRange(start,end)}});b.dataset.mode=key;this._toolbar.append(b);this._modes.set(key,b)}
-   this._copy=this._button('Copy',async()=>{try{await navigator.clipboard.writeText(this.value);this._announce.textContent='Markdown copied.'}catch{this._announce.textContent='Copy unavailable. Select the source text to copy it.'}});this._toolbar.append(this._copy);
    this._format=node('div',undefined,'md-format');this._format.setAttribute('role','group');this._format.setAttribute('aria-label','Markdown formatting');
    const formats=[['B','Bold','bold'],['I','Italic','italic'],['H','Heading','heading'],['Link','Insert link','link'],['Code','Code block','code'],['List','Bullet list','list'],['☑','Checklist','task']];
    for(const [label,title,kind]of formats){const b=this._button(label,()=>this._formatSelection(kind));b.title=title;b.setAttribute('aria-label',title);b.addEventListener('mousedown',event=>event.preventDefault());this._format.append(b)}
-   this._panes=node('div',undefined,'md-panes');this._source=node('div',undefined,'md-source');this._gutter=node('div',undefined,'md-gutter');this._gutter.setAttribute('aria-hidden','true');this._numbers=node('pre');this._gutter.append(this._numbers);
+   this._panes=node('div',undefined,'md-panes');this._source=node('div',undefined,'md-source');this._gutter=node('div',undefined,'md-gutter');this._gutter.setAttribute('aria-hidden','true');this._numbers=node('div',undefined,'md-line-numbers');this._gutter.append(this._numbers);this._measure=node('div',undefined,'md-measure');this._measure.setAttribute('aria-hidden','true');
    if(existing)this.style.setProperty('--md-editor-height',Math.max(140,Math.min(480,existing.rows*24+32))+'px');
-   this._input=existing||node('textarea');this._input.value=initial;this._input.classList.add('md-input');this._input.wrap='off';this._input.spellcheck=false;this._input.readOnly=!editing;
+   this._input=existing||node('textarea');this._input.value=initial;this._input.classList.add('md-input');this._input.wrap='soft';this._input.spellcheck=false;this._input.readOnly=!editing;
    if(!this._input.hasAttribute('aria-label')&&!this._input.id)this._input.setAttribute('aria-label',(this.getAttribute('filename')||'Markdown')+' source');
    this._input.id ||= 'markdown-source-'+(++sequence);this._input.setAttribute('aria-describedby',this._input.id+'-status');
-   this._source.append(this._gutter,this._input);this._preview=node('div',undefined,'md-preview');this._preview.tabIndex=0;this._preview.setAttribute('role','region');this._preview.setAttribute('aria-label','Markdown preview');this._panes.append(this._source,this._preview);
-   this._footer=node('div',undefined,'md-status');this._footer.id=this._input.id+'-status';this._announce=node('span',undefined,'md-announcement');this._announce.setAttribute('role','status');
-   this.append(this._toolbar,this._format,this._panes,this._footer,this._announce);
+   this._source.append(this._gutter,this._input,this._measure);this._preview=node('div',undefined,'md-preview');this._preview.tabIndex=0;this._preview.setAttribute('role','region');this._preview.setAttribute('aria-label','Markdown preview');this._panes.append(this._source,this._preview);
+   this._footer=node('div',undefined,'md-status');this._footer.id=this._input.id+'-status';
+   this.append(this._toolbar,this._format,this._panes,this._footer);
    this._input.addEventListener('invalid',()=>{this.mode='edit'});
    this._input.addEventListener('input',()=>{this._updateStatus();cancelAnimationFrame(this._frame);this._frame=requestAnimationFrame(()=>this._renderPreview())});
    for(const event of ['click','keyup','select','focus'])this._input.addEventListener(event,()=>this._updateStatus());
@@ -64,9 +63,18 @@
   refresh({saved=false}={}){if(!this._built)return;if(saved)this._baseline=this.value;this._renderPreview();this._updateStatus()}
   _updateStatus(){
    if(!this._footer)return;
-   const value=this.value,lines=value.split('\n').length;if(this._lines!==lines){this._lines=lines;this._numbers.textContent=Array.from({length:lines},(_,i)=>i+1).join('\n')}
+   const value=this.value,lines=value.split('\n').length;this._scheduleGutter();
    const before=value.slice(0,this._input.selectionStart||0),line=before.split('\n').length,column=before.length-before.lastIndexOf('\n');
    this._footer.textContent=(this.hasAttribute('editable')?(this.dirty?'Unsaved changes':'Markdown')+' · Ln '+line+', Col '+column:'Read only')+' · '+lines+' '+(lines===1?'line':'lines');
+  }
+  _scheduleGutter(){cancelAnimationFrame(this._layoutFrame);this._layoutFrame=requestAnimationFrame(()=>this._layoutGutter())}
+  _layoutGutter(){
+   const width=this._input.clientWidth,value=this.value;if(!width||this._source.hidden||this._measuredWidth===width&&this._measuredValue===value)return;
+   this._measuredWidth=width;this._measuredValue=value;this._measure.style.width=width+'px';
+   this._measure.replaceChildren(...value.split('\n').map(line=>node('div',line||'\u200b')));
+   const heights=[...this._measure.children].map(line=>line.getBoundingClientRect().height);
+   this._numbers.replaceChildren(...heights.map((height,i)=>{const line=node('span',String(i+1));line.style.height=height+'px';return line}));
+   this._numbers.style.transform=`translateY(${-this._input.scrollTop}px)`;
   }
   _formatSelection(kind){
    if(!this.hasAttribute('editable'))return;const t=this._input;let from=t.selectionStart,to=t.selectionEnd,selection=t.value.slice(from,to),replacement='',offset=0,length=selection.length;
@@ -78,7 +86,7 @@
    if(!document.execCommand('insertText',false,replacement)){t.setRangeText(replacement,from,to,'end');t.dispatchEvent(new Event('input',{bubbles:true}))}
    t.setSelectionRange(from+offset,from+offset+length);this.refresh();
   }
-  _observeSize(){if(this._compact)return;this._resize?.disconnect();this._resize=new ResizeObserver(entries=>{this.classList.toggle('md-narrow',entries[0].contentRect.width<680)});this._resize.observe(this)}
+  _observeSize(){if(this._compact)return;this._resize?.disconnect();this._resize=new ResizeObserver(entries=>{this.classList.toggle('md-narrow',this.clientWidth<680);this._scheduleGutter()});this._resize.observe(this);this._resize.observe(this._input)}
  }
  customElements.define('mitos-markdown',MitosMarkdown);
  const view=(text,options={})=>document.createElement('mitos-markdown').configure(String(text??''),options);

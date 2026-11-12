@@ -22,3 +22,4 @@ summary.goal-heading{display:list-item;list-style-position:inside}
 @media(max-width:640px){.setup-file-heading{flex-wrap:wrap}.setup-comparison{grid-template-columns:1fr}.setup-default-dialog{padding:16px}.setup-default-summary dl{grid-template-columns:1fr;gap:6px}.setup-default-summary dd{margin-bottom:12px}}
 .setup-source-editor{margin:16px 0}.setup-source-editor textarea{min-height:340px;font:15px/1.7 ui-monospace,monospace;width:100%}.setup-manual[open]{border-top:0;margin-top:0;padding-top:0}.setup-execution-summary>button{margin-top:12px}
 .setup-file>.setup-manual{border:0;padding-top:0;margin:0 0 20px}
+.setup-save-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}.setup-edit-surface>mitos-markdown{--md-editor-height:420px}

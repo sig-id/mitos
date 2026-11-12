@@ -2,7 +2,7 @@
  'use strict';
  const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n};
  const button=(label,fn,cls='')=>{const b=el('button',label,cls);b.type='button';b.onclick=fn;return b};
- function sourceEditor(title,value){const box=window.MitosMarkdown.editor(value,{filename:title});return {box,value:()=>box.value,set:v=>{box.value=v}}}
+ function sourceEditor(title,value){const box=window.MitosMarkdown.editor(value,{filename:title,mode:'preview'});return {box,value:()=>box.value,set:v=>{box.value=v}}}
  function runtimeFields(value,defaults,global,installations=[]){
   const form=el('div',undefined,'setup-fields');const field=(title,input,hint)=>{const label=el('label',title);label.append(input);if(hint)label.append(el('small',hint,'muted'));form.append(label);return input};
   const runtime=el('select');runtime.setAttribute('aria-label',global?'Default runtime':'Project runtime');runtime.append(new Option(global?'Codex':'Use my default ('+(defaults.runtime||'Codex')+')',global?'codex':''));if(!global)runtime.append(new Option('Codex','codex'));for(const r of installations.filter(r=>r.kind==='agent'&&r.installed&&r.id!=='codex')){const option=new Option(r.name+' – automatic task adapter unavailable',r.id);option.disabled=true;runtime.append(option)}runtime.value=value.runtime||(global?'codex':'');field('Runtime',runtime);
@@ -28,13 +28,24 @@
    const feedback=el('p','','setup-feedback');feedback.setAttribute('role','status');
    root.replaceChildren(heading,feedback);
    if(!personal){const defaults=button('My defaults',async()=>{const dialog=el('dialog',undefined,'setup-default-dialog'),close=button('Close',()=>dialog.close(),'setup-dialog-close'),content=el('div');dialog.append(close,content);document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();await surface(content,'defaults')});heading.append(defaults)}
-   let conversation={status:'idle',messages:[]},proposal=null,comparing=false,reset=false,hydrated=false;
+   let conversation={status:'idle',messages:[]},proposal=null,comparing=false,reset=false,hydrated=false,loadedKey='',loadedDocument='',loadedPreferences=null;
    const layout=el('div',undefined,'setup-agent-layout'),file=el('section',undefined,'setup-card setup-file'),assistant=el('aside',undefined,'setup-card setup-assistant');layout.append(file,assistant);root.append(layout);
    const fileHeading=el('div',undefined,'setup-file-toolbar'),fileState=el('strong'),actions=el('div',undefined,'setup-file-actions'),compare=button('Compare with saved',()=>{comparing=!comparing;drawDocument()}),apply=button(personal?'Save proposed defaults':'Apply to '+name,applyProposal,'primary');actions.append(compare,apply);fileHeading.append(fileState,actions);
-   const contents=el('div',undefined,'setup-document-content'),manual=el('details',undefined,'setup-manual');manual.append(el('summary',personal?'Edit defaults':'Edit Markdown'));file.append(fileHeading,manual,contents);manual.addEventListener('toggle',()=>{contents.hidden=manual.open;drawDocument()});
+   const contents=el('div',undefined,'setup-document-content'),manual=el('div',undefined,'setup-edit-surface');file.append(fileHeading,manual,contents);
    let editor,fields,guidance;
-   if(personal){guidance=sourceEditor('Personal guidance',setup.defaults.guidance||'');fields=runtimeFields(setup.defaults,{},true,installations);manual.append(guidance.box,fields.box,el('p','These are defaults for automatic work. At present its execution adapter supports Codex. The setup assistant runtime is chosen separately.','muted'));const save=button('Save my defaults',async()=>{save.disabled=true;try{setup.defaults=await api('/api/preferences',{...fields.value(),guidance:guidance.value()},'PUT');await reloadSetup();proposal=null;manual.open=false;drawDocument();feedback.textContent='Personal defaults saved.'}catch(e){showError(e)}finally{save.disabled=false}});manual.append(save);(guidance||editor).box.addEventListener('markdown-save',event=>{event.preventDefault();save.click()})}
-   else{editor=sourceEditor(name,seed(setup));manual.append(editor.box);const save=button('Save '+name,async()=>{save.disabled=true;try{setup=await api(base+'/instructions',{file_hash:setup.file_hash,document:editor.value()},'PUT');proposal=null;editor.box.refresh({saved:true});manual.open=false;executionSummary();drawDocument();feedback.textContent=name+' saved. New work will use these instructions.'}catch(e){showError(e)}finally{save.disabled=false}});manual.append(save);(guidance||editor).box.addEventListener('markdown-save',event=>{event.preventDefault();save.click()})}
+   if(personal){guidance=sourceEditor('Personal guidance',setup.defaults.guidance||'');fields=runtimeFields(setup.defaults,{},true,installations);manual.append(guidance.box,fields.box)}
+   else{editor=sourceEditor(name,seed(setup));manual.append(editor.box)}
+   const save=button(personal?'Save my defaults':'Save '+name,async()=>{save.disabled=true;try{
+    if(personal){setup.defaults=await api('/api/preferences',{...fields.value(),guidance:guidance.value()},'PUT')}
+    else{setup=await api(base+'/instructions',{file_hash:setup.file_hash,document:editor.value()},'PUT')}
+    await reloadSetup();proposal=null;comparing=false;loadedKey='';drawDocument();feedback.textContent=personal?'Personal defaults saved.':name+' saved. New work will use these instructions.';feedback.classList.remove('error');
+   }catch(e){showError(e)}finally{save.disabled=false}});
+   const discard=button('Discard edits',()=>{if(personal){guidance.set(loadedPreferences.guidance||'');replaceFields(loadedPreferences)}else editor.set(loadedDocument);drawDocument()});
+   const saveActions=el('div',undefined,'setup-save-actions');saveActions.append(save,discard);manual.append(saveActions);
+   (guidance||editor).box.addEventListener('markdown-save',event=>{event.preventDefault();(loadedKey.startsWith('proposal:')&&!apply.hidden?apply:save).click()});
+   manual.addEventListener('input',()=>drawDocument());
+   function replaceFields(values){const next=runtimeFields(values,{},true,installations);fields.box.replaceWith(next.box);fields=next}
+   function dirty(){if(!loadedKey)return false;return personal?guidance.box.dirty||['runtime','model','minutes','attempts'].some(k=>(fields.value()[k]||'')!==(loadedPreferences?.[k]||(k==='runtime'?'codex':''))):editor.box.dirty}
    assistant.append(el('h3',personal?'Shape your defaults':'Set up with an agent'),el('p',personal?'Describe how you prefer agents to work.':'Describe this project and how you want agents to work. Review the proposed file, then apply it.','muted'));
    const messages=el('div',undefined,'setup-messages');messages.setAttribute('role','log');messages.setAttribute('aria-label','Setup conversation');assistant.append(messages);
    const form=el('form',undefined,'setup-chat-form'),prompt=el('textarea');prompt.rows=4;prompt.maxLength=8000;prompt.setAttribute('aria-label',personal?'Describe your defaults':'Describe project setup');prompt.placeholder=personal?'Keep replies concise. Prefer model …':'This is a safety-critical PLC project. Require tests and a review before opening PRs.';
@@ -55,10 +66,19 @@
    function showError(e){feedback.textContent=e.message;feedback.classList.add('error')}
    async function reloadSetup(){setup=await api(base+'/setup');if(editor)editor.set(seed(setup));if(fields){const next=runtimeFields(setup.defaults,{},true,installations);fields.box.replaceWith(next.box);fields=next;guidance.set(setup.defaults.guidance||'')}if(!personal)executionSummary()}
    function drawDocument(){
-    const changed=personal?!!proposal?.preferences:typeof proposal?.document==='string';apply.hidden=!changed||manual.open;compare.hidden=!changed||manual.open;fileState.textContent=manual.open?'Editing saved '+(personal?'defaults':'file'):changed?'Proposed changes':personal?'Saved defaults':setup.exists?'Saved file':'Draft · not saved yet';compare.textContent=comparing?'Show proposed':'Compare with saved';
-    contents.replaceChildren();contents.classList.toggle('setup-comparison',comparing&&changed);
-    const render=(old)=>personal?defaultSummary(old?setup.defaults:proposal.preferences):window.MitosMarkdown.view(old?seed(setup):proposal.document,{filename:name});
-    if(comparing&&changed){const before=el('section'),after=el('section');before.append(el('h3','Saved'),render(true));after.append(el('h3','Proposed'),render(false));contents.append(before,after)}else contents.append(render(!changed));
+    const changed=personal?!!proposal?.preferences:typeof proposal?.document==='string',key=changed?'proposal:'+conversation.key+':'+(personal?JSON.stringify(proposal.preferences):proposal.document):'saved:'+(personal?setup.defaults.revision:setup.file_hash);
+    if(key!==loadedKey&&!dirty()){
+     loadedKey=key;
+     if(personal){loadedPreferences={...(changed?proposal.preferences:setup.defaults),revision:changed?conversation.revision:setup.defaults.revision};guidance.set(loadedPreferences.guidance||'');replaceFields(loadedPreferences)}
+     else{loadedDocument=changed?proposal.document:seed(setup);editor.set(loadedDocument)}
+    }
+    const pending=changed&&key!==loadedKey,editingProposal=changed&&!pending;
+    apply.hidden=!editingProposal;compare.hidden=!changed;save.hidden=editingProposal;discard.hidden=!dirty();
+    fileState.textContent=pending?'Proposal ready · your edits are preserved':editingProposal?'Proposed changes':personal?'My defaults':setup.exists?'Project instructions':'Draft · not saved yet';
+    compare.textContent=comparing?'Back to document':'Compare with saved';manual.hidden=comparing&&changed;contents.hidden=!manual.hidden;
+    if(!manual.hidden){contents.replaceChildren();return}
+    contents.classList.add('setup-comparison');contents.replaceChildren();
+    const before=el('section'),after=el('section');before.append(el('h3','Saved'),personal?defaultSummary(setup.defaults):window.MitosMarkdown.view(seed(setup),{filename:name}));after.append(el('h3','Proposed'),personal?defaultSummary(proposal.preferences):window.MitosMarkdown.view(editingProposal?editor.value():proposal.document,{filename:name}));contents.append(before,after);
    }
    function drawConversation(){
     messages.replaceChildren();for(const m of conversation.messages||[]){const item=el('div',undefined,'setup-message '+m.role);item.append(el('strong',m.role==='user'?'You':'Setup assistant'),markup(m.text));messages.append(item)}
@@ -69,7 +89,7 @@
    let timer;
    async function poll(){if(!root.isConnected||token!==generation)return;try{acceptConversation(await api(base+'/setup/conversation?target='+target));if(conversation.status==='running')timer=setTimeout(poll,1000)}catch(e){showError(e);timer=setTimeout(poll,3000)}}
    form.onsubmit=async event=>{event.preventDefault();if(!prompt.value.trim())return;send.disabled=true;feedback.textContent='';feedback.classList.remove('error');try{const c=await api(base+'/setup/conversation',{key:crypto.randomUUID(),prompt:prompt.value,target,runtime:runtime.value,model:model.value.trim(),reset});reset=false;prompt.value='';acceptConversation(c);clearTimeout(timer);timer=setTimeout(poll,1000)}catch(e){showError(e);send.disabled=!supported.length}};
-   async function applyProposal(){apply.disabled=true;try{if(personal){setup.defaults=await api('/api/preferences',{...proposal.preferences,revision:conversation.revision},'PUT')}else{setup=await api(base+'/instructions',{file_hash:conversation.file_hash,document:proposal.document},'PUT')}await reloadSetup();proposal=null;comparing=false;drawDocument();feedback.classList.remove('error');feedback.textContent=personal?'Personal defaults saved.':name+' saved. New work will use these instructions.'}catch(e){showError(e)}finally{apply.disabled=false}}
+   async function applyProposal(){apply.disabled=true;try{if(personal){setup.defaults=await api('/api/preferences',{...fields.value(),guidance:guidance.value(),revision:conversation.revision},'PUT')}else{setup=await api(base+'/instructions',{file_hash:conversation.file_hash,document:editor.value()},'PUT')}await reloadSetup();proposal=null;comparing=false;loadedKey='';drawDocument();feedback.classList.remove('error');feedback.textContent=personal?'Personal defaults saved.':name+' saved. New work will use these instructions.'}catch(e){showError(e)}finally{apply.disabled=false}}
    if(setup.settings_error)showError(new Error('AGENTS.md execution settings need attention: '+setup.settings_error));drawDocument();await poll();
   }
   await surface(container,'project');

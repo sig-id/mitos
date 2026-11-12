@@ -122,7 +122,7 @@ Project setup opens the repository's `AGENTS.md` (or existing lowercase `agents.
 as one readable document, with a setup conversation alongside it. The user describes
 changes; the assistant asks focused questions or proposes the complete revised file.
 The user can compare saved/proposed versions, refine the proposal, and apply it.
-Manual Markdown editing remains available under a disclosure. Saving is a normal
+The file is edited directly through the shared Edit/Preview/Split component. Saving is a normal
 working-tree edit, never a commit, push or GitHub action. Existing file hashes reject
 stale proposals; symlinks, special files and ambiguous duplicate names are refused.
 The old section-editing API remains compatible, but the page no longer requires a
@@ -178,7 +178,8 @@ Markdown documents use the shared light-DOM `<mitos-markdown>` component.
 `MitosMarkdown.view(text, {filename, link})` creates a read-only document with
 Preview/Source controls; omitting `filename` uses a compact view for conversation
 fragments. `MitosMarkdown.editor(text, {filename})` adds Edit/Preview/Split modes,
-formatting tools, line numbers and cursor/dirty status. Its `value` property sets
+formatting tools, soft wrapping, aligned line numbers and cursor/dirty status.
+Source and preview panes have equal fixed heights and cannot be resized independently. Its `value` property sets
 loaded content; native textarea input events bubble normally. A handled, cancelable
 `markdown-save` event connects Ctrl/Cmd+S to the owning page's save action.
 
