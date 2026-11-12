@@ -31,15 +31,16 @@ type RuntimePreferences struct {
 	Guidance string `json:"guidance"`
 }
 type ProjectSetup struct {
-	Warning   string             `json:"warning,omitempty"`
-	FileName  string             `json:"file_name"`
-	FileHash  string             `json:"file_hash"`
-	Exists    bool               `json:"exists"`
-	Document  string             `json:"document"`
-	Sections  SetupSections      `json:"sections"`
-	Project   RuntimePreferences `json:"project"`
-	Defaults  RuntimePreferences `json:"defaults"`
-	Effective RuntimePreferences `json:"effective"`
+	Warning       string             `json:"warning,omitempty"`
+	FileName      string             `json:"file_name"`
+	FileHash      string             `json:"file_hash"`
+	Exists        bool               `json:"exists"`
+	Document      string             `json:"document"`
+	Sections      SetupSections      `json:"sections"`
+	Project       RuntimePreferences `json:"project"`
+	Defaults      RuntimePreferences `json:"defaults"`
+	Effective     RuntimePreferences `json:"effective"`
+	SettingsError string             `json:"settings_error,omitempty"`
 }
 type FrozenSetup struct {
 	Document string `json:"document"`
@@ -142,7 +143,7 @@ func splitSetup(document string) (SetupSections, int, int, error) {
 }
 func validatePreferences(v RuntimePreferences) error {
 	if v.Runtime != "" && v.Runtime != "codex" {
-		return errors.New("automatic work currently supports Codex; Pi is available only for native sessions")
+		return errors.New("automatic work currently supports Codex only; other installed runtimes can be used where their adapters support the requested action")
 	}
 	if len(v.Model) > 200 || strings.ContainsAny(v.Model, "\x00\r\n") || strings.HasPrefix(v.Model, "-") || v.Minutes < 0 || v.Minutes > 43200 || v.Attempts < 0 || v.Attempts > 2048 || len(v.Guidance) > 16000 || strings.ContainsRune(v.Guidance, 0) {
 		return errors.New("invalid runtime preference or limit")
@@ -285,7 +286,15 @@ func (e *Engine) ProjectSetup(id string) (ProjectSetup, error) {
 	if err != nil {
 		return ProjectSetup{}, err
 	}
-	return ProjectSetup{Warning: warning, FileName: name, FileHash: hash, Exists: exists, Document: document, Sections: sections, Project: local, Defaults: global, Effective: effectivePreferences(global, local)}, nil
+	effective := effectivePreferences(global, local)
+	policy, policyErr := documentPolicy(document)
+	settingsError := ""
+	if policyErr != nil {
+		settingsError = policyErr.Error()
+	} else {
+		effective = effectivePreferences(effective, policy)
+	}
+	return ProjectSetup{Warning: warning, FileName: name, FileHash: hash, Exists: exists, Document: document, Sections: sections, Project: local, Defaults: global, Effective: effective, SettingsError: settingsError}, nil
 }
 func (e *Engine) SaveInstructions(id string, req InstructionsEdit) (ProjectSetup, error) {
 	p, err := e.Desk.Project(id)
@@ -335,6 +344,9 @@ func (e *Engine) SaveInstructions(id string, req InstructionsEdit) (ProjectSetup
 		}
 		if len(next) > setupLimit || strings.ContainsRune(next, 0) {
 			return errors.New("instructions must fit in 64 KiB without NUL bytes")
+		}
+		if _, err := documentPolicy(next); err != nil {
+			return err
 		}
 		if _, _, _, err := splitSetup(next); err != nil {
 			return err
@@ -389,6 +401,9 @@ func (e *Engine) freezeSetup(id string) (*FrozenSetup, error) {
 	v, err := e.ProjectSetup(id)
 	if err != nil {
 		return nil, err
+	}
+	if v.SettingsError != "" {
+		return nil, errors.New(v.SettingsError)
 	}
 	if err := validatePreferences(v.Effective); err != nil {
 		return nil, err

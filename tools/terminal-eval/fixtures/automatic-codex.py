@@ -1,5 +1,16 @@
 import json,pathlib,sys,time
-prompt=sys.stdin.read();time.sleep(.4)
+prompt=sys.argv[sys.argv.index('--')+1] if '--' in sys.argv else sys.stdin.read();time.sleep(.4)
+if 'You are the Mitos setup assistant.' in prompt:
+ ctx=json.loads(prompt.split('Setup conversation:\n')[1])
+ if ctx['target']=='defaults':
+  reply={'message':'Your personal defaults are ready for review.','preferences':{'runtime':'codex','model':'fixture-global-model','minutes':120,'attempts':96,'guidance':'Keep personal responses concise.'}}
+ elif len(ctx['messages'])==1:
+  reply={'message':'Should every change require review?'}
+ else:
+  reply={'message':'Added review guidance and explicit execution settings.','document':'# Answer project\n\nUse **saved evidence**. Require review before publishing.\n\n```mitos\n{"model":"fixture-project-model","minutes":45}\n```\n'}
+ if '--output-last-message' in sys.argv:pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(reply))
+ else: print(json.dumps(reply))
+ sys.exit(0)
 assert pathlib.Path('AGENTS.md').exists() or pathlib.Path('agents.md').exists()
 if '--model' in sys.argv:assert sys.argv[sys.argv.index('--model')+1]=='fixture-project-model'
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])

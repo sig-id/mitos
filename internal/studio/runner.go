@@ -21,20 +21,21 @@ import (
 )
 
 type Engine struct {
-	Messages  *messaging.Service
-	Desk      *desk.Manager
-	provider  compute.Provider
-	Store     *Store
-	Apps      []Application
-	Root      string
-	mu        sync.Mutex
-	cancel    map[string]context.CancelFunc
-	ctx       context.Context
-	stop      context.CancelFunc
-	wg        sync.WaitGroup
-	actions   sync.Mutex
-	libraryMu sync.Mutex
-	setupMu   sync.Mutex
+	Messages   *messaging.Service
+	Desk       *desk.Manager
+	provider   compute.Provider
+	Store      *Store
+	Apps       []Application
+	Root       string
+	mu         sync.Mutex
+	cancel     map[string]context.CancelFunc
+	ctx        context.Context
+	stop       context.CancelFunc
+	wg         sync.WaitGroup
+	actions    sync.Mutex
+	libraryMu  sync.Mutex
+	setupMu    sync.Mutex
+	setupChats map[string]context.CancelFunc
 }
 
 func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
@@ -131,7 +132,9 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	return e, nil
 }
 func (e *Engine) Close() {
+	e.setupMu.Lock()
 	e.stop()
+	e.setupMu.Unlock()
 	if e.Messages != nil {
 		e.Messages.Close()
 	}

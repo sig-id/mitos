@@ -57,6 +57,40 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, d)
 	})
 
+	mux.HandleFunc("GET /api/projects/{project}/setup/conversation", func(w http.ResponseWriter, r *http.Request) {
+		c, err := s.engine.SetupConversation(r.PathValue("project"), r.URL.Query().Get("target"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, c)
+	})
+	mux.HandleFunc("POST /api/projects/{project}/setup/conversation", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.SetupAsk
+		if !graphBody(w, r, &req) {
+			return
+		}
+		c, err := s.engine.AskSetup(r.PathValue("project"), req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 202, c)
+	})
+	mux.HandleFunc("POST /api/projects/{project}/setup/conversation/stop", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Target string `json:"target"`
+		}
+		if !graphBody(w, r, &req) {
+			return
+		}
+		if err := s.engine.CancelSetupConversation(r.PathValue("project"), req.Target); err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"stopped": true})
+	})
+
 	mux.HandleFunc("GET /api/preferences", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.Preferences("")
 		if err != nil {

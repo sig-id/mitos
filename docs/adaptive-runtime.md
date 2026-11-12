@@ -118,38 +118,61 @@ integrations, but manual graph editing is no longer part of the normal Work page
 
 ## Project instructions and execution preferences
 
-Project setup edits three Markdown sections with Preview/Edit/Split modes: project
-context, risk and budget guidance, and Git/review workflow. They are written into a
-marked block in the repository's `AGENTS.md`. Existing text outside that block is
-preserved byte for byte; an existing lowercase `agents.md` is used without creating
-a second file. The full document has its own editor. File hashes reject stale saves
-and detected external edits; symlinks, nonregular files and ambiguous duplicate
-instruction files are refused. Saving instructions creates a normal repository
-change; it does not commit or publish it.
+Project setup opens the repository's `AGENTS.md` (or existing lowercase `agents.md`)
+as one readable document, with a setup conversation alongside it. The user describes
+changes; the assistant asks focused questions or proposes the complete revised file.
+The user can compare saved/proposed versions, refine the proposal, and apply it.
+Manual Markdown editing remains available under a disclosure. Saving is a normal
+working-tree edit, never a commit, push or GitHub action. Existing file hashes reject
+stale proposals; symlinks, special files and ambiguous duplicate names are refused.
+The old section-editing API remains compatible, but the page no longer requires a
+Mitos-specific section structure.
 
-Personal Markdown preferences and default runtime/model/time/attempt settings stay
-in the server data directory. Project execution overrides live there too. Empty
-project values inherit personal defaults; empty global values use the native model,
-a 120-minute deadline and 96 attempts. Numeric time and attempt limits are enforced
-by the graph runtime. Monetary budgets, risk labels and other prose are instructions,
-not metered spending or permission boundaries. Automatic execution currently supports
-Codex; Pi's existing native-session/context adapters are not an automatic planner
-adapter. Model IDs are passed explicitly to Codex when configured.
+The assistant uses installed runtime discovery. Codex, Claude Code and Pi have
+read-only setup adapters; other installed runtimes are listed with their actual
+capability. Setup runtime/model selection is independent of automatic task execution,
+which currently supports Codex only. A setup reply cannot save settings itself.
+Conversations and pending proposals persist in the server data directory, survive a
+browser reload, and appear interrupted after a server restart. They have bounded
+history/output, a cancellation endpoint and an eight-minute reply timeout.
 
-New automatic goals, continuations and explicitly started old goals freeze their
+“My defaults” is separate from the project file and supports the same conversational
+proposal/review flow. Personal guidance, runtime/model and numeric defaults are
+stored in the server's `preferences.json`, never in the repository. The project setup
+assistant does not receive personal guidance; the personal-default assistant receives
+no project document and runs outside the project directory.
+
+An optional fenced `mitos` block in AGENTS.md contains deterministic execution
+settings, for example:
+
+```mitos
+{"runtime":"codex","model":"","minutes":120,"attempts":96}
+```
+
+Only these explicit structured values affect execution. The parser rejects unknown
+keys, unsupported runtimes, malformed/duplicate blocks and out-of-range values.
+Minutes may be 1–43200; attempts 1–2048. Missing/zero numeric values and blank strings
+inherit earlier local project overrides, then personal defaults, then the native model,
+120 minutes and 96 attempts. The page exposes effective values and notes legacy
+local overrides. Markdown risk labels, Git/review policy and monetary budgets remain
+instructions, not spending enforcement or permission to publish. The assistant must
+not invent numeric limits from qualitative descriptions.
+
+New automatic goals, continuations and explicitly started old goals freeze the
 effective setup. The full project document and personal guidance enter the planner's
-prompt. Every attempt materializes the same root instructions in its workspace
-baseline, alongside normal nested instruction files; later project edits do not alter
-that goal. This setup overlay is part of the retained attempt baseline, not an agent
-change to the source project. The setup is excluded from lightweight status polling.
-If no instructions file exists, existing saved project context and Git guidance seed
-the setup; saving the shared sections creates the file.
+prompt. Every attempt receives the same root instructions in its workspace baseline,
+alongside normal nested instruction files; later edits do not change existing work.
+If no file exists, legacy saved context/Git guidance seeds a draft until the user saves.
 
-`GET /api/projects/{project}/setup` returns the document, hash, sections and effective
-preferences. `PUT /api/projects/{project}/instructions` accepts `file_hash` and either
-`sections` or `document`. `GET/PUT /api/preferences` reads or saves personal defaults;
-`PUT /api/projects/{project}/preferences` saves project overrides. Preference writes
-require the current `revision`. Changes apply to new work only.
+`GET /api/projects/{project}/setup` returns the document, file hash and effective
+settings. `PUT /api/projects/{project}/instructions` accepts `file_hash` and either
+`document` or legacy `sections`. Personal preferences use `GET/PUT /api/preferences`
+with a revision check. Legacy overrides use `PUT /api/projects/{project}/preferences`.
+Setup conversation endpoints are `GET/POST /api/projects/{project}/setup/conversation`
+and `POST .../conversation/stop`; their target is `project` or `defaults`. POST requests
+include an idempotency key, runtime, optional model and message. The latest request
+can be replayed without launching another process. Settings saves require the file
+hash or preferences revision captured when the proposal was prepared.
 
 ## Registered controller integrations
 
