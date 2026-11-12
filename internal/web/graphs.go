@@ -31,6 +31,56 @@ func graphBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 func (s *Server) graphRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
+		s.render(w, r, s.base("agents", "Agent library", "agents"), 200)
+	})
+	mux.HandleFunc("GET /api/agent-library", func(w http.ResponseWriter, r *http.Request) {
+		library, err := s.engine.AgentLibrary()
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, library)
+	})
+	mux.HandleFunc("POST /api/agent-library", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.AgentEdit
+		if !graphBody(w, r, &req) {
+			return
+		}
+		d, err := s.engine.SaveAgent(req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, d)
+	})
+
+	mux.HandleFunc("GET /api/graphs/agents", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.AutomaticAgents()) })
+	mux.HandleFunc("POST /api/graphs/automatic", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.AutomaticGoal
+		if !graphBody(w, r, &req) {
+			return
+		}
+		g, err := s.engine.StartAutomaticGoal(req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 201, g)
+	})
+	mux.HandleFunc("POST /api/graphs/{id}/automatic", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.AutomaticStart
+		if !graphBody(w, r, &req) {
+			return
+		}
+		g, err := s.engine.StartExistingAutomatic(r.PathValue("id"), req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, g)
+	})
+
 	mux.HandleFunc("GET /api/graphs/applications", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.GraphApplications()) })
 	mux.HandleFunc("GET /api/graphs/{id}/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.Store.GraphView(r.PathValue("id"), r.URL.Query().Get("node"))
@@ -50,7 +100,7 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("GET /api/graphs/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "controller_proposals": true, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "capacity": 2})
+		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "automatic_goal_planning": true, "native_agent_runtimes": []string{"codex"}, "editable_agent_library": true, "agent_specialization": true, "controller_proposals": true, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "capacity": 2})
 	})
 	mux.HandleFunc("GET /api/graphs", func(w http.ResponseWriter, r *http.Request) {
 		limit := 50

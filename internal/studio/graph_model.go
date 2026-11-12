@@ -33,6 +33,7 @@ type GraphLimits struct {
 	Deadline        time.Time `json:"deadline"`
 }
 type GraphPolicy struct {
+	Automatic             bool     `json:"automatic,omitempty"`
 	Mode                  string   `json:"mode"` // defined, adaptive, hybrid
 	Applications          []string `json:"applications"`
 	AllowArguments        bool     `json:"allow_arguments"`
@@ -40,15 +41,16 @@ type GraphPolicy struct {
 	DecisionApplication   string   `json:"decision_application,omitempty"`
 }
 type GraphSpec struct {
-	ID         string   `json:"id"` // proposal-local reference at creation
-	Parent     string   `json:"parent,omitempty"`
-	Kind       string   `json:"kind"` // scope or application
-	Required   bool     `json:"required"`
-	Criteria   string   `json:"criteria"`
-	Acceptance string   `json:"acceptance"` // operator or application
-	Brief      Brief    `json:"brief"`
-	Arguments  []string `json:"arguments,omitempty"` // append to registered argv only by policy
-	Context    string   `json:"context,omitempty"`
+	Agent      *AgentSelection `json:"agent,omitempty"`
+	ID         string          `json:"id"` // proposal-local reference at creation
+	Parent     string          `json:"parent,omitempty"`
+	Kind       string          `json:"kind"` // scope or application
+	Required   bool            `json:"required"`
+	Criteria   string          `json:"criteria"`
+	Acceptance string          `json:"acceptance"` // operator or application
+	Brief      Brief           `json:"brief"`
+	Arguments  []string        `json:"arguments,omitempty"` // append to registered argv only by policy
+	Context    string          `json:"context,omitempty"`
 }
 type GraphExecutor struct {
 	Application Application `json:"application"`
@@ -81,6 +83,8 @@ type GraphAcceptance struct {
 	Manifest     string    `json:"manifest"`
 }
 type GraphExpansion struct {
+	LastError      string               `json:"last_error,omitempty"`
+	Failures       int                  `json:"failures,omitempty"`
 	ID             string               `json:"id"`
 	Scope          string               `json:"scope"`
 	Generation     int64                `json:"generation"`

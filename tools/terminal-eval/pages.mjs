@@ -26,7 +26,7 @@ try{
  const event=await api('/api/service-events',{name:'inspection.ready',idempotency_key:'event',payload:{message:'Fixture'}});
  const lifecycle=await api('/api/services/inspect/lifecycle',{action:'stop',idempotency_key:'stop'});
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});page=await browser.newPage({viewport:{width:1500,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- const routes=['/','/inbox','/connections',`/projects/${project.id}`,'/work','/overview','/decisions','/tasks','/services','/apps','/apps/workspace-inventory','/new','/autonomy',`/runs/${parked.id}`,`/runs/${done.id}/report`,`/services/events/${event.seq}`,`/services/lifecycle/${lifecycle.seq}`,`/workspace?project=${project.id}`,`/workspace?project=${project.id}&session=${session.id}&view=terminal`,`/workspace?project=${project.id}&view=changes`,`/workspace?project=${project.id}&view=resources`];
+ const routes=['/','/inbox','/connections','/devices','/agents',`/projects/${project.id}`,'/work','/overview','/decisions','/tasks','/services','/apps','/apps/workspace-inventory','/new','/autonomy',`/runs/${parked.id}`,`/runs/${done.id}/report`,`/services/events/${event.seq}`,`/services/lifecycle/${lifecycle.seq}`,`/workspace?project=${project.id}`,`/workspace?project=${project.id}&session=${session.id}&view=terminal`,`/workspace?project=${project.id}&view=changes`,`/workspace?project=${project.id}&view=resources`];
  if(process.env.MITOS_SCREENSHOT_DIR)await mkdir(process.env.MITOS_SCREENSHOT_DIR,{recursive:true});
  for(const width of [1500,390]){
   await page.setViewportSize({width,height:width===390?844:1000});

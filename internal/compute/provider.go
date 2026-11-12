@@ -23,6 +23,8 @@ type Session interface {
 	OutputOffset() uint64
 }
 type Command struct {
+	// NativeEnv is resolved at launch, never serialized or persisted.
+	NativeEnv []string `json:"-"`
 	Directory string
 	Argv      []string
 	Input     []byte

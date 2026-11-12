@@ -1,8 +1,11 @@
 # 07 – Agent definitions and the library
 
-Status: normative design, `agent-definition/v1`; runtime integration pending.
-The bundled [default library](../../agents/README.md) is authored data, not proof
-of a working planner, registered executor, or automatic launch capability.
+Status: normative design, `agent-definition/v1`; local Codex workflow implemented as a subset.
+The bundled [default library](../../agents/README.md) now runs through the native
+Codex adapter, with automatic planning, graph-scoped specialization, and editable
+worker revisions. This does not claim full profile conformance: multi-runtime
+negotiation, knowledge/skill attachment, deprecation, and promotion remain future
+work. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow).
 
 ## Purpose and ownership
 

@@ -11,44 +11,64 @@ The project **Work** page creates these graphs from a free-text goal and display
 their evolution. Existing native sessions remain under **Sessions & earlier work**;
 service activations do not yet create graph templates.
 
-## Work page
+## Automatic workflow
 
-1. Describe a goal. Choose a planner, or **I’ll add the steps** for manual control.
-   Optional success criteria and executor grants are set before creation.
-2. Watch goal, planner, decision, and application nodes evolve. Solid edges show
-   dependencies; dashed edges show containment. Select a node for its assignment,
-   saved output, artifacts, and attempts. Collapse scopes, zoom, or use list view.
-3. Add steps, inspect failures, retry eligible attempts, replace the planner, or
-   stop work. Changes use the backend's revision checks and idempotency keys.
-4. Review a settled result against its criteria and supply evidence. Closing
-   planning and accepting the root is explicit; an empty queue is not completion.
+1. Open a project and describe a goal. **Start work** atomically creates a bounded
+   graph with a planning obligation. Codex uses its existing local authentication.
+2. A read-only planner chooses agents from the library and proposes assignments,
+   dependencies, retries or replacements. A task-specific role can specialize a
+   base definition without changing invocation, policy or permissions.
+3. The scheduler admits real Codex attempts into its existing two-slot work pool.
+   Workers run in fresh workspace copies. Bound upstream reports and patches are
+   supplied as input; clean patches are applied before launch. Conflicting patches
+   are reported to the worker for reconciliation. Originals remain untouched.
+4. Workers return ordinary text. Reports, logs, changes and workspace archives are
+   saved separately. The planner reads these artifacts, evaluates the goal and
+   criteria, and either extends the graph or accepts the evidenced result. Worker
+   exit status is not a verifier verdict. Completion is labelled agent-reviewed.
 
-The page polls one selected graph's lightweight status projection each second and
-summary lists every five seconds. Polling pauses in hidden tabs and backs off on
-connection errors. Output is fetched only for the selected step and artifact;
-saved output is available after the executor finishes. This is not live PTY output.
-A lost mutation response is retained in session storage for exact-key reconciliation,
-including after reload. A stale review must be reopened against the latest state.
+The left work tree selects goals and agents. The graph also supports zoom, collapse
+and a list view. Only the selected graph is polled each second; summary status is
+refreshed every five seconds. Hidden tabs pause polling and connection failures
+back off. Reports are fetched on demand after an attempt finishes.
 
-The initial UI creation limits are 64 tasks, 96 attempts, 24 planning calls, and a
-two-hour deadline. They bound this activation; advanced limits and graph operations
-remain available through the API. The graph editor supports adding application
-steps and dependencies, not every operation in the runtime wire schema.
+**Agent library** provides persistent create/edit operations. Edits require an
+expected revision; every admitted attempt freezes the selected definition,
+additional instructions, runtime executable, and digest. New custom agents become
+available to subsequent goals. A running graph retains its original allowed agent
+IDs, while new assignments resolve the latest published revision of those IDs.
 
-## Planner setup
+`POST /api/graphs/automatic` accepts `{key, project_id, goal}`. Creation deduplicates
+before runtime checks. `POST /api/graphs/{id}/automatic` accepts `{key, revision}`
+to explicitly start an untouched old goal. Merely opening an old graph never starts
+it. `GET /api/graphs/agents` reports runtime readiness and library summaries.
+`GET /api/agent-library` reads definitions; `POST /api/agent-library` publishes a
+worker revision with `{key, id, revision, name, description, instructions}` (empty
+`id` creates an agent). The built-in control planner is not editable through this API.
 
-Register a controller application using the protocol described below and set
-`"graph_controller": true` in its `app.json`. Restart the server to discover the
-manifest. This flag advertises a compatible planner in the Work page; it is not an
-additional authority grant. Existing API clients may continue explicitly binding
-registered controllers without the flag. Ordinary worker applications are never
-automatically presented as planners.
+Goal limits are 64 tasks, 96 attempts, 24 planner calls, two retries per worker and
+a two-hour deadline. Rejected planner proposals get at most two repair calls using
+the rejection reason. Runtime/authentication failures remain visible for inspection;
+the system does not repeatedly retry invalid credentials. Stopping uses process-group
+cancellation and preserves harvested output. Server restart parks interrupted runs;
+explicit retry/replanning is available after recovery.
 
-The controller receives `graph.context` on stdin and writes `graph-proposal.json`
-with proposed operations and an explanation. It may wrap an agent CLI, use a model,
-or run deterministic code. An installed interactive Codex terminal alone is not a
-registered graph controller. Without a compatible planner, the page offers manual
-steps and links to **Applications → Set up graph planning**.
+The implementation currently supports the installed Codex CLI. No API key is copied
+into graph records, prompts or library definitions. Native configuration is resolved
+at launch. This remains trusted local execution with Codex's read-only/workspace-write
+sandbox settings; Mitos does not advertise strong provider confinement. It does not
+publish, merge or write changes back to the original project automatically.
+
+Lost mutation responses retain their original idempotency key for reconciliation,
+including after reload. Existing deterministic graph APIs remain available for
+integrations, but manual graph editing is no longer part of the normal Work page.
+
+## Registered controller integrations
+
+Advanced API clients can still register deterministic controller applications with
+`graph_controller: true` in `app.json`. These receive `graph.context` on stdin and
+write `graph-proposal.json` as described below. They are independent of the built-in
+automatic Codex planner and are not required to use the product.
 
 ## Implemented behavior
 

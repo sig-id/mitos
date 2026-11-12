@@ -59,19 +59,18 @@ Open a project directory from **Projects** using the folder picker, then describ
 your goal in **Work**. Browse folders on the server, filter the current folder, or
 enter a path directly. The project name defaults to the selected folder name and
 can be changed before opening.
-Choose a configured planner to create steps as evidence arrives, or choose **I’ll
-add the steps** to organize work yourself. Success criteria and executor choices
-are available before starting.
+Select **Start work**. Mitos plans the goal automatically, chooses agents from the
+library, and creates specialized roles when needed. No manual steps or executor
+configuration are required. Codex must be installed and signed in on the workstation.
 
-The graph shows the goal, planning calls, worker steps, dependencies, and their
-current states. Select a node to inspect its assignment, formatted output,
-artifacts, or attempts. Expand and collapse goals, pan and zoom, or switch to a
-list. Progress updates preserve your selection and view. **Review result** becomes
-available when required steps are accepted and execution is settled; the goal is
-complete only after your explicit review.
+Work appears as a tree in the left sidebar. The graph shows the goal, planning
+calls, agents, dependencies, and current states. Select an agent to inspect its
+assignment, formatted report, logs, changes, or attempts. The planner reviews saved
+evidence before completing a goal; process exit alone never accepts worker output.
+Changes stay in workspace copies, with patches and complete workspace artifacts.
+Older untouched goals require **Start automatic work**; viewing them does not launch
+anything. See [automatic workflow](docs/adaptive-runtime.md#automatic-workflow).
 
-Automatic graph planning requires a registered application marked
-`graph_controller: true`; see [planner setup](docs/adaptive-runtime.md#planner-setup).
 Installed interactive agent terminals are separate executors. **Sessions & earlier
 work → New native session** retains their assignment, supervision inbox, reports,
 and replacement workflow. Submitted session reports require explicit human review;
@@ -79,8 +78,10 @@ that acceptance covers the saved report, not unverified repository changes.
 
 **Services** activates project applications on request or on an interval. **Resources**
 shows workspace and execution information. **Inbox** collects pending report reviews,
-process inspections, and batch decisions. **Connections** shows the local server's
-identity and actual capabilities.
+process inspections, and batch decisions. **Devices** shows where work runs. **Agent library** lets you create and edit worker
+roles; revisions are saved and running attempts retain their original definitions.
+**Plugins** lists installed command tools. Run history and scheduler details are
+under **Diagnostics**.
 
 **Context & setup** retains project analysis and profile editing. Terminals retain
 input, resize, scrollback, interrupt, stop, resume, fork, and handover. Earlier
@@ -132,14 +133,14 @@ the programmatic interface; `/api/graphs/capabilities` reports the implemented
 adapter and remaining integrations. Native PTY sessions and services retain their
 separate lifecycle.
 
-## Agent library design
+## Agent library
 
-The [agent-library specification](spec/system/07_AGENT_LIBRARY.md) defines automatic
-agent selection and task-specific role creation. The [default library](agents/README.md)
-contains eight adaptable definitions ported from Chief Wiggum. They are authored
-packages, not yet registered executors: automatic planning from installed agent
-runtimes still needs implementation. The current manual graph interface does not
-satisfy that target workflow.
+The [default library](agents/README.md) ships eight adaptable definitions ported from
+Chief Wiggum. The native Codex adapter loads these definitions, freezes them for each
+attempt, and supports graph-scoped specializations. Custom worker definitions can be
+added or edited in **Agent library**; subsequent goals make them available to the
+planner. The full [agent-library specification](spec/system/07_AGENT_LIBRARY.md)
+additionally describes future runtime negotiation, knowledge and publication features.
 
 ## Optional decision models
 

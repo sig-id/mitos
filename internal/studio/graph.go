@@ -41,7 +41,7 @@ func validateGraphLimits(l GraphLimits, now time.Time) error {
 	return nil
 }
 func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *GraphExecutor, error) {
-	if !validGraphKey(spec.ID) || len(spec.Criteria) == 0 || len(spec.Criteria) > 10000 || len(spec.Context) > 16000 {
+	if !validGraphKey(spec.ID) || len(spec.Criteria) == 0 || len(spec.Criteria) > 10000 || len(spec.Context) > graphContextLimit(g) {
 		return spec, nil, graphError("task needs bounded identity, criteria and context")
 	}
 	if spec.Acceptance != "operator" && spec.Acceptance != "application" {
@@ -84,7 +84,22 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	if !ok {
 		return spec, nil, graphError("application is no longer registered")
 	}
-	if !app.Builtin {
+	if app.Agent != nil {
+		if !g.Policy.Automatic || len(spec.Arguments) != 0 {
+			return spec, nil, graphError("native agents require automatic policy and cannot override invocation")
+		}
+		if err := specializeAgent(app.Agent, spec.Agent, g.ID); err != nil {
+			return spec, nil, err
+		}
+		if app.Agent.Specialization != nil {
+			app.Name = app.Agent.Specialization.Role
+		}
+		if app.Agent.Definition.Kind != "planner" {
+			spec.Acceptance = "operator"
+		}
+		b.Ownership.Paths = []string{"."}
+	}
+	if !app.Builtin && app.Agent == nil {
 		if _, err := compileApplication(app); err != nil {
 			return spec, nil, err
 		}
@@ -127,7 +142,9 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	return spec, frozen, nil
 }
 func (e *Engine) CreateGraph(req CreateGraph) (WorkGraph, error) {
-	digest := graphDigest(req)
+	return e.createGraph(req, graphDigest(req))
+}
+func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) {
 	if req.Profile != GraphProfile || !validGraphKey(req.Key) || req.ProjectID == "" || req.GoalRevision < 1 || !validGraphKey(req.Activation) {
 		return WorkGraph{}, graphError("profile, request key, project, goal revision and activation are required")
 	}
@@ -293,7 +310,7 @@ func validateGraph(g *WorkGraph) error {
 			if dep.Guard != "done" && dep.Guard != "failed" && dep.Guard != "cancelled" && dep.Guard != "candidate_available" {
 				return graphError("dependencies must declare accepted done, failed, cancelled or candidate_available guard")
 			}
-			if dep.Guard == "candidate_available" && m.Spec.Acceptance != "application" {
+			if dep.Guard == "candidate_available" && m.Spec.Acceptance != "application" && !(g.Policy.Automatic && m.Executor != nil && m.Executor.Application.Agent != nil) {
 				return graphError("candidate edges require an application verifier")
 			}
 		}

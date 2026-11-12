@@ -19,6 +19,7 @@ import (
 // Application is the small, local manifest dialect implemented by this build.
 // Published OCI manifests and agentic orchestration remain separate integrations.
 type Application struct {
+	Agent           *AgentBinding         `json:"agent,omitempty"`
 	GraphController bool                  `json:"graph_controller,omitempty"`
 	DecisionModel   *decisionmodel.Config `json:"decision_model,omitempty"`
 	Compute         *compute.Request      `json:"compute,omitempty"`

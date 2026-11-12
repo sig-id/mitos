@@ -3,7 +3,7 @@
 <body data-project="{{.Project.ID}}" data-server="{{.Home.ID}}" data-section="{{.Section}}" data-task="{{.TaskID}}">
 <a class="skip" href="#main">Skip to work</a>
 <div class="os-shell">{{template "navigation" .Navigation}}<main id="main">
-<header class="project-header"><div><p id="breadcrumb">{{if .Project.ID}}Project{{else}}Your workspace{{end}}</p><h1>{{if .Project.ID}}{{.Project.Name}}{{else if eq .Section "inbox"}}Inbox{{else if eq .Section "connections"}}Connections{{else}}Projects{{end}}</h1></div><div class="header-actions"><span class="home-server">Home: {{.Home.Name}} <span class="dot"></span></span>{{if .Project.ID}}<button id="new-work" class="primary">New work</button>{{else}}<button id="open-project-main" class="primary">Open project</button>{{end}}</div></header>
+<header class="project-header"><div><p id="breadcrumb">{{if .Project.ID}}Project{{else}}Your workspace{{end}}</p><h1>{{if .Project.ID}}{{.Project.Name}}{{else if eq .Section "inbox"}}Inbox{{else if eq .Section "connections"}}Devices{{else}}Projects{{end}}</h1></div><div class="header-actions"><span class="home-server">Home: {{.Home.Name}} <span class="dot"></span></span>{{if .Project.ID}}<button id="new-work" class="primary">New work</button>{{else}}<button id="open-project-main" class="primary">Open project</button>{{end}}</div></header>
 <div id="connection-warning" class="notice" role="status" hidden></div><div id="action-error" class="notice error" role="alert" hidden></div>
 {{if .Project.ID}}
 <nav class="project-tabs" aria-label="Project views"><button data-view="work" aria-current="page">Work</button><button data-view="services">Services</button><button data-view="resources">Resources</button><a href="/workspace?project={{.Project.ID}}">Context &amp; setup</a></nav>

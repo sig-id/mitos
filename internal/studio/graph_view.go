@@ -75,6 +75,9 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 		return "cancelled"
 	}
 	if m.Spec.Kind == "scope" {
+		if g.Policy.ControllerApplication == "" && len(g.Members) == 1 {
+			return "idle"
+		}
 		if m.Sealed {
 			return "review"
 		}
@@ -121,6 +124,9 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		member.Spec.Arguments = nil
 		if id != selected && id != g.RootTask {
 			member.Spec.Brief.Intent = ""
+			if member.Spec.Agent != nil {
+				member.Spec.Agent = &AgentSelection{Role: member.Spec.Agent.Role}
+			}
 			member.Spec.Criteria = ""
 			if m.Accepted != nil {
 				accepted := *m.Accepted

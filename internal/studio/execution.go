@@ -29,6 +29,9 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	if r.ExecutionKind == "graph_decision" {
 		return e.executeGraphDecision(ctx, r)
 	}
+	if r.GraphAttempt != nil && r.GraphAttempt.Executor.Application.Agent != nil {
+		return e.performAgent(ctx, r)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

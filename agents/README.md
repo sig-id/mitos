@@ -1,9 +1,10 @@
 # Default agent library
 
 These are reusable agent definitions for the [agent-library design](../spec/system/07_AGENT_LIBRARY.md).
-They are versioned source packages, **not currently loaded or launched by the server**.
-Automatic goal planning, runtime binding and on-demand specialization still need
-implementation. Installing these files alone will not make a dormant graph execute.
+They are embedded in the server and used by the automatic Codex workflow. Add or
+edit worker roles in **Agent library**; the server preserves revisions and freezes
+definitions for admitted attempts. The planner can create task-specific specializations
+within a graph. Existing dormant goals still require an explicit start.
 
 | Definition | Intended contribution |
 |---|---|

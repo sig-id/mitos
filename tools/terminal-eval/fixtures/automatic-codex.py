@@ -1,0 +1,26 @@
+import json,pathlib,sys,time
+prompt=sys.stdin.read();time.sleep(.4)
+out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
+if '--output-schema' in sys.argv:
+ ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ plan={'explanation':'Evidence meets the goal.','steps':[],'accept':[],'retry':[],'complete':bool(workers)}
+ if not workers:
+  for i in range(2):
+   plan['steps'].append({'id':'work'+str(i),'title':['Implement change','Review change'][i],'assignment':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'criteria':'Produce evidence for the answer.','agent':['mitos.engineer','mitos.reviewer'][i],'role':'Answer specialist' if i else '', 'instructions':'Check the answer carefully.' if i else '', 'after':['work0'] if i else [],'replaces':''})
+ else:
+  assert len(workers)==2
+  for f in workers:
+   assert f['state']=='done',str(f)
+   plan['accept'].append({'task':f['id'],'rationale':'Read the saved native report and reviewed its evidence.'})
+ out.write_text(json.dumps(plan))
+else:
+ if 'Check upstream patch and evidence.' in prompt:
+  inputs=json.loads(prompt.split('\nSaved upstream evidence (read these files):\n')[1].split('\nWork only')[0])
+  assert len(inputs)==1, inputs
+  assert '42' in pathlib.Path(inputs[0]['directory'],'changes.patch').read_text()
+  assert pathlib.Path('answer.txt').read_text().strip()=='42'
+ else:
+  pathlib.Path('answer.txt').write_text('42\n')
+ out.write_text('# Result\n\nThe answer is **42**.\n\nEvidence checked.')
+print('native execution log')

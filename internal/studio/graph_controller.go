@@ -71,6 +71,19 @@ func (e *Engine) reconcileGraphControllers() error {
 				}
 				continue
 			}
+			if snapshot.Policy.Automatic {
+				var plan AutomaticPlan
+				err = DecodeGraphJSON(body, &plan)
+				if err == nil {
+					err = e.applyAutomaticPlan(snapshot, key, r, plan)
+				}
+				if err != nil {
+					if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "Planner could not apply its proposal: "+err.Error()); err != nil {
+						return err
+					}
+				}
+				continue
+			}
 			var plan GraphPlan
 			if err = DecodeGraphJSON(body, &plan); err != nil {
 				if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "controller_proposal_invalid"); err != nil {
@@ -110,6 +123,22 @@ func (e *Engine) reconcileGraphControllers() error {
 		old := s.graphs[id]
 		if old.Status != "active" || old.Policy.ControllerApplication == "" || !time.Now().Before(old.Limits.Deadline) {
 			continue
+		}
+		if old.Policy.Automatic {
+			waiting := false
+			for _, m := range old.Members {
+				if m.Spec.Kind == "application" && m.ControllerFor == "" && !m.CancelRequested && m.Replacement == "" {
+					if m.CurrentRunID != "" && !s.graphSettled(m) {
+						waiting = true
+					}
+					if m.CurrentRunID == "" && s.tasks[m.Spec.ID] != nil && s.graphReadiness(s.tasks[m.Spec.ID]).Ready {
+						waiting = true
+					}
+				}
+			}
+			if waiting {
+				continue
+			}
 		}
 		g := graphClone(*old)
 		changed := false
@@ -200,7 +229,7 @@ func (e *Engine) reconcileGraphControllers() error {
 									names = append(names, a.Name)
 								}
 							}
-							if len(names) > 0 {
+							if len(names) > 0 && r.Status != "parked" {
 								guard := r.Status
 								if guard == "done" && m.Accepted == nil {
 									guard = "candidate_available"
@@ -209,17 +238,32 @@ func (e *Engine) reconcileGraphControllers() error {
 							}
 						}
 					}
+					f.Spec.Context = ""
+					if f.Spec.Agent != nil {
+						f.Spec.Agent = &AgentSelection{Role: f.Spec.Agent.Role}
+					}
 					facts = append(facts, f)
 					reads[tid] = GraphRead{m.Revision, m.FactRevision}
 				}
 				raw, _ := json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json in the workspace with operations and explanation. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."})
-				if len(raw) > 16000 {
+				if g.Policy.Automatic {
+					library := e.AutomaticAgents()["agents"]
+					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "facts": facts, "agent_library": library, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.ControllerCalls - g.ControllerCalls, "instruction": automaticPlannerInstructions, "previous_error": x.LastError})
+				}
+				if len(raw) > graphContextLimit(&g) {
 					x.Error = "controller_context_limit"
 					changed = true
 					break
 				}
 				tid := newID("task")
 				spec := GraphSpec{ID: tid, Parent: x.Scope, Kind: "application", Required: false, Criteria: "Produce a valid graph proposal within policy", Acceptance: "application", Context: string(raw), Brief: Brief{Title: "Plan the next work", Intent: "Read the graph context and propose a bounded amendment. Write graph-proposal.json; leave normal analysis in your native output.", AppID: g.Policy.ControllerApplication, TimeoutMinutes: 5}}
+				if g.Policy.Automatic {
+					spec.Brief.Title = "Plan goal"
+					if g.ControllerCalls > 0 {
+						spec.Brief.Title = "Review progress"
+					}
+					spec.Brief.Intent = "Read current evidence and choose the next assignments or review the completed goal."
+				}
 				spec.Brief.Scheduling.Deps = dependencies
 				normalized, executor, err := e.resolveGraphSpec(&g, spec)
 				if err != nil {
@@ -266,5 +310,12 @@ func (e *Engine) graphControllerError(id, key, task, reason string) error {
 	}
 	g := graphClone(*old)
 	g.Expansions[key].Error = reason
+	if g.Policy.Automatic && strings.HasPrefix(reason, "Planner could not apply") && g.ControllerCalls < g.Limits.ControllerCalls && g.Expansions[key].Failures < 2 {
+		g.Expansions[key].Error = ""
+		g.Expansions[key].ControllerTask = ""
+		g.Revision++
+		g.Expansions[key].LastError = reason
+		g.Expansions[key].Failures++
+	}
 	return s.commit("", "effect", "graph_controller_blocked", change{Graph: &graphChange{Graph: g}})
 }

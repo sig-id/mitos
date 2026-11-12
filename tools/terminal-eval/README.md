@@ -45,10 +45,12 @@ the page screenshots.
 
 `npm run test:graphs --prefix tools/terminal-eval` exercises free-text goal creation,
 planner-generated steps, dependency edges, output formatting, stable zoom and
-selection, scope collapse, list view, final acceptance, mobile scrolling,
-reconnection, exact-key recovery after a lost creation response, manual steps,
-and navigation between a graph and its execution attempts. It launches isolated
-Python planner/worker fixtures; no model calls or running demo changes are made.
+selection, the sidebar work tree, automatic result acceptance, mobile scrolling,
+reconnection, exact-key recovery after a lost creation response, explicit start of
+old goals, Devices/Plugins navigation, and agent-library create/edit persistence.
+It launches an isolated native-CLI fixture; no model calls or demo changes are made.
+`MITOS_TEST_NATIVE_CODEX=1 go test ./internal/studio -run TestAutomaticInstalledCodex`
+separately checks the installed authenticated Codex on a temporary one-file project.
 
 `npm run test:picker --prefix tools/terminal-eval` checks folder navigation, hidden
 folders, filtering, editable suggested names, invalid paths, stale response

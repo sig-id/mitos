@@ -1,0 +1,8 @@
+{{define "agent-library"}}
+<section id="agent-library" data-server="{{.Navigation.Home.ID}}">
+ <div class="page-heading"><div><h1>Agent library</h1><p>Choose what agents know and how they work. The planner picks the right agents for each goal.</p></div><button id="agent-new" class="primary">New agent</button></div>
+ <p id="agent-library-status" class="muted" role="status">Loading agents…</p>
+ <div id="agent-library-list" class="project-grid"></div>
+</section>
+<dialog id="agent-editor"><form id="agent-editor-form"><div class="dialog-heading"><h2 id="agent-editor-title">New agent</h2><button type="button" id="agent-editor-close" aria-label="Close">×</button></div><label>Name<input name="name" required minlength="2" maxlength="100" placeholder="Accessibility reviewer"></label><label>When to use this agent<textarea name="description" required minlength="3" maxlength="2000" rows="2" placeholder="Review interfaces for accessibility and keyboard use."></textarea></label><label>Instructions<textarea name="instructions" required minlength="3" maxlength="32000" rows="12" placeholder="Describe the agent’s expertise, approach, and the evidence it should produce."></textarea></label><p class="muted">Changes apply to future assignments. Work already running keeps its original instructions.</p><p class="form-error" role="alert"></p><button type="submit" class="primary">Save agent</button></form></dialog>
+{{end}}

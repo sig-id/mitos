@@ -21,18 +21,19 @@ import (
 )
 
 type Engine struct {
-	Messages *messaging.Service
-	Desk     *desk.Manager
-	provider compute.Provider
-	Store    *Store
-	Apps     []Application
-	Root     string
-	mu       sync.Mutex
-	cancel   map[string]context.CancelFunc
-	ctx      context.Context
-	stop     context.CancelFunc
-	wg       sync.WaitGroup
-	actions  sync.Mutex
+	Messages  *messaging.Service
+	Desk      *desk.Manager
+	provider  compute.Provider
+	Store     *Store
+	Apps      []Application
+	Root      string
+	mu        sync.Mutex
+	cancel    map[string]context.CancelFunc
+	ctx       context.Context
+	stop      context.CancelFunc
+	wg        sync.WaitGroup
+	actions   sync.Mutex
+	libraryMu sync.Mutex
 }
 
 func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
@@ -144,7 +145,7 @@ func (e *Engine) App(id string) (Application, bool) {
 			return a, true
 		}
 	}
-	return Application{}, false
+	return e.agentApplication(id)
 }
 
 func Within(root, path string) bool {

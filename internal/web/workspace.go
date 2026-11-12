@@ -31,7 +31,7 @@ func (s *Server) operatingPage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/inbox" {
 		p.Section = "inbox"
 	}
-	if r.URL.Path == "/connections" {
+	if r.URL.Path == "/connections" || r.URL.Path == "/devices" {
 		p.Section = "connections"
 	}
 	p.Navigation = s.navigation(p.Section, p.Project.ID)
@@ -43,6 +43,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{project}", s.operatingPage)
 	mux.HandleFunc("GET /inbox", s.operatingPage)
 	mux.HandleFunc("GET /connections", s.operatingPage)
+	mux.HandleFunc("GET /devices", s.operatingPage)
 	mux.HandleFunc("GET /api/apps", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.Apps) })
 	mux.HandleFunc("GET /api/server", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.Store.Home()) })
 	mux.HandleFunc("GET /api/workspace-home", func(w http.ResponseWriter, r *http.Request) {
