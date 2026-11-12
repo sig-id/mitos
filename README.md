@@ -132,6 +132,15 @@ the programmatic interface; `/api/graphs/capabilities` reports the implemented
 adapter and remaining integrations. Native PTY sessions and services retain their
 separate lifecycle.
 
+## Agent library design
+
+The [agent-library specification](spec/system/07_AGENT_LIBRARY.md) defines automatic
+agent selection and task-specific role creation. The [default library](agents/README.md)
+contains eight adaptable definitions ported from Chief Wiggum. They are authored
+packages, not yet registered executors: automatic planning from installed agent
+runtimes still needs implementation. The current manual graph interface does not
+satisfy that target workflow.
+
 ## Optional decision models
 
 Command applications can add `decision_model` to choose whether to start a segment

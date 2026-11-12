@@ -106,12 +106,19 @@ reconstructing the project from terminal histories. Reliable completion and redu
 coordination effort matter more than the number of agents running at once.
 
 The default experience begins with a goal and bounded authority to discover the
-work needed. Users MAY instead supply a complete plan or reusable recipe. Mitos MUST
-support fixed steps, agent-discovered steps, and adaptive
-work constrained by mandatory checks through the same work model. The user chooses
-when work is activated independently of who plans it and which executors perform it.
-Scheduled work may therefore use a supervisor, and a multi-worker task may follow a
-fully deterministic plan.
+work needed. Mitos MUST automatically plan, select agents from the
+[agent library](../system/07_AGENT_LIBRARY.md), and create task-specific specialists
+when existing roles do not fit. No already-running agent instance is required.
+Users MUST NOT need to add steps, choose example application executors, or configure
+worker criteria and groups to start ordinary work. A missing compatible runtime or
+credential is a concrete setup issue, not a manual graph-editing task.
+
+Defined recipes, fixed obligations and application-authored plans remain supported
+through the same runtime contracts. They are advanced authoring options, not a
+required user workflow or a reason to expose step construction on the default work
+page. The user chooses when work is activated independently of who plans it and
+which executors perform it. Scheduled work may use adaptive planning, and mandatory
+checks can constrain agent-discovered work without a rigid graph of all future steps.
 
 Users MUST be able to inspect the current plan, changes to it and their causes,
 required results, active attempts, and specific reasons for waiting. Automatic

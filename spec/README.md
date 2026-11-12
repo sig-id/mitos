@@ -13,7 +13,16 @@ graphs as evidence arrives, including lessons from Chief Wiggum. Start with
 [controllers and agent templates](system/03_ORCHESTRATION.md#adaptive-controllers)
 and [native observations](system/05_INTERFACES_AND_INTEGRATIONS.md#native-agent-observation-contract).
 [G1–G5](system/06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) define
-implementation order and acceptance; this design is not a shipped graph runtime.
+implementation order and acceptance; the local adapter implements only the subset
+listed in the delivery baseline.
+
+## Agent-library reading path
+
+[Agent definitions and the library](system/07_AGENT_LIBRARY.md) defines reusable
+roles, on-demand specialists, scoped knowledge/memory and immutable execution
+bindings. [ADR 0006](ADRs/0006_AGENT_LIBRARY.md) records the Chief Wiggum adaptation.
+The [default library](../agents/README.md) includes eight authored definitions;
+registration and automatic agent execution are not implemented by those files.
 
 ## Application-server reading path
 

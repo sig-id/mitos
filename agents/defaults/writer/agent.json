@@ -1,0 +1,95 @@
+{
+  "profile": "agent-definition/v1",
+  "id": "mitos.writer",
+  "revision": 1,
+  "name": "Writer",
+  "description": "Create clear, accurate documentation or synthesis for the requested audience.",
+  "kind": "worker",
+  "match": {
+    "use_for": [
+      "Documentation changes",
+      "User guides and technical explanations",
+      "Summarizing verified work and open issues"
+    ],
+    "avoid_for": [
+      "Presenting planned features as shipped",
+      "Publishing to an external audience without authorization"
+    ]
+  },
+  "instructions": {
+    "path": "instructions.md",
+    "sha256": "338f20da5c4477edbbf9639d574b945ef8290103f0484f7f97d36f0ab748a620"
+  },
+  "runtime": {
+    "requires": [
+      "native_output"
+    ],
+    "preferences": []
+  },
+  "skills": [],
+  "knowledge": [],
+  "context": {
+    "required": [
+      "assignment",
+      "constraints"
+    ],
+    "optional": [
+      "project_context",
+      "selected_artifacts",
+      "prior_findings",
+      "assignment_memory"
+    ],
+    "max_characters": 64000,
+    "overflow": "summarize_optional"
+  },
+  "memory": {
+    "scope": "assignment",
+    "publication": "propose"
+  },
+  "capabilities": {
+    "required": [],
+    "optional": [
+      "workspace.read",
+      "workspace.write",
+      "artifact.read",
+      "artifact.write"
+    ]
+  },
+  "limits": {
+    "timeout_seconds": 1800,
+    "max_turns": 80
+  },
+  "specialization": {
+    "allow": [
+      "name",
+      "description",
+      "instructions",
+      "knowledge",
+      "skills",
+      "runtime.preferences",
+      "runtime.requires",
+      "context.optional",
+      "context.required",
+      "capabilities.required",
+      "capabilities.optional",
+      "limits"
+    ],
+    "required_capabilities": "retain",
+    "optional_capabilities": "narrow",
+    "max_instruction_bytes": 24000
+  },
+  "evidence": [
+    "The requested document or summary",
+    "Source references and explicit distinctions between shipped, proposed and unverified behavior"
+  ],
+  "provenance": {
+    "origin": "adapted",
+    "source_project": "Chief Wiggum",
+    "source_revision": "f11e476037819b9cd15ad00cc16bfd0956481aed",
+    "source_paths": [
+      "lib/agents/general/documentation-writer.md",
+      "lib/agents/general/task-summarizer.md"
+    ],
+    "license": "MIT"
+  }
+}

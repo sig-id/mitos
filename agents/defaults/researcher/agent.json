@@ -1,0 +1,95 @@
+{
+  "profile": "agent-definition/v1",
+  "id": "mitos.researcher",
+  "revision": 1,
+  "name": "Researcher",
+  "description": "Investigate questions and assemble traceable findings from available source material.",
+  "kind": "worker",
+  "match": {
+    "use_for": [
+      "Repository or document investigation",
+      "Requirements and implementation gap analysis",
+      "Gathering evidence before a decision"
+    ],
+    "avoid_for": [
+      "Making unrequested implementation changes",
+      "Treating an opinion as verified domain knowledge"
+    ]
+  },
+  "instructions": {
+    "path": "instructions.md",
+    "sha256": "b824976c271c1ee0a9c1289ad32a54d1d2a29f761bfdb26ede7796eb67e976b9"
+  },
+  "runtime": {
+    "requires": [
+      "native_output"
+    ],
+    "preferences": []
+  },
+  "skills": [],
+  "knowledge": [],
+  "context": {
+    "required": [
+      "assignment",
+      "constraints"
+    ],
+    "optional": [
+      "project_context",
+      "selected_artifacts",
+      "prior_findings",
+      "assignment_memory"
+    ],
+    "max_characters": 64000,
+    "overflow": "summarize_optional"
+  },
+  "memory": {
+    "scope": "assignment",
+    "publication": "propose"
+  },
+  "capabilities": {
+    "required": [],
+    "optional": [
+      "workspace.read",
+      "network.read",
+      "artifact.read",
+      "artifact.write"
+    ]
+  },
+  "limits": {
+    "timeout_seconds": 1800,
+    "max_turns": 80
+  },
+  "specialization": {
+    "allow": [
+      "name",
+      "description",
+      "instructions",
+      "knowledge",
+      "skills",
+      "runtime.preferences",
+      "runtime.requires",
+      "context.optional",
+      "context.required",
+      "capabilities.required",
+      "capabilities.optional",
+      "limits"
+    ],
+    "required_capabilities": "retain",
+    "optional_capabilities": "narrow",
+    "max_instruction_bytes": 24000
+  },
+  "evidence": [
+    "Findings with source locations or artifact references",
+    "Unknowns and competing explanations"
+  ],
+  "provenance": {
+    "origin": "adapted",
+    "source_project": "Chief Wiggum",
+    "source_revision": "f11e476037819b9cd15ad00cc16bfd0956481aed",
+    "source_paths": [
+      "lib/agents/general/domain-expert.md",
+      "lib/agents/product/plan-mode.md"
+    ],
+    "license": "MIT"
+  }
+}

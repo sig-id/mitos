@@ -112,7 +112,10 @@ before advertising this profile. Existing receipt digests MUST NOT be reinterpre
 Execution inputs MUST reference a registered adapter/schema revision, an exact executor
 or bounded selector, assignment or typed arguments, context/input bindings, acceptance
 policy, workspace/resource requirements, and limits. Agent-template specialization
-references its immutable base revision and changes. Generated scripts and tool sequences
+references its immutable base revision and changes.
+The [agent-library profile](07_AGENT_LIBRARY.md#interface-and-delivery-requirements)
+owns definition discovery, registration, specialization and binding reads. Definition
+publication is distinct from executable adapter installation and from process launch. Generated scripts and tool sequences
 MUST bind content digests as execution input. An adapter's schema permits invocation
 arguments; it does not imply permission for all representable operations.
 

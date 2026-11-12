@@ -46,6 +46,11 @@ or optional obligation, input bindings, acceptance contract, execution specifica
 and policy references. The execution specification identifies an executor selector over registered adapter
 revisions, typed invocation inputs or assignment, required provider capabilities,
 resources, and limits. Admission resolves the selector and freezes the exact executor.
+Agent execution also binds the exact definition, specialization and context receipt
+from the [agent library](07_AGENT_LIBRARY.md#binding-and-results). Generated definitions
+and the tasks referencing them MUST commit atomically; rejected proposals leave no
+selectable orphan definition. This is a negotiated extension, not an operation
+implemented by the current local graph adapter.
 An agent assignment is executable input, not a substitute for these fields. Free-text roles MUST NOT create permissions or executor restrictions.
 
 Executable work, including planning, decision inference, and verification, MUST have

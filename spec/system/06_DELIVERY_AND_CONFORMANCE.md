@@ -15,6 +15,7 @@ journal; their execution adapters still have different admission and scheduling 
 | Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general coordinator fencing remain incomplete. |
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
+| Agent library | Eight authored default definitions, JSON authoring schema, provenance and native Markdown instructions | Library registration, compatible runtime binding, automatic goal planning and on-demand specialist admission remain design targets; bundled data is not a running planner. |
 | Adaptive graphs | Local application adapter: atomic graph amendments, shared Task/Run queue, frozen specs, obligation/closure checks, registered controllers, fenced candidate decisions, native output evidence | PTY admission, cross-graph imports, graph service templates, autonomous root acceptance, and complete G1–G5 conformance remain. See the [backend contract](../../docs/adaptive-runtime.md). |
 | Decision inference | Optional System One (Jev/Laya-compatible) and OpenAI Decisions Choice adapters; journaled segment/recovery gates, probability thresholds, bounded calls, cancellation fencing | Batch hooks plus separately journaled graph candidate choices; no predicate/score hooks, model spend enforcement, or automatic replay of unknown inference. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
@@ -166,8 +167,10 @@ loops and prove that attempts/replacement do not reset responsibility allowances
 
 ### G4 – Adaptive controllers and native-agent observations
 
-Implement deterministic and agent planners, optional typed decisions, template
-specialization, event cursors, generation fencing, and native-output adapters.
+Implement deterministic and agent planners, optional typed decisions, the
+[agent library](07_AGENT_LIBRARY.md), frozen specialization/context, event cursors,
+generation fencing, and native-output adapters. Cover library revisions, scoped
+discovery, generated specialists and compatible runtime resolution.
 Acceptance MUST generate previously unspecified tasks from new evidence and run them
 through G1–G3. Use an agent fixture with ordinary prose and native events, with no
 PASS/FAIL/FIX tags or graph API syntax; preserve the source and show the interpreted
@@ -194,8 +197,11 @@ MUST get distinct graphs and cannot consume unrelated previous-cycle results.
 Graph-wide skip/queue/replace policy MUST be tested independently of per-task limits.
 Stop/restart must settle the whole declared scope before admitting its replacement.
 
-The end-to-end journey MUST start with a goal without a prewritten task pipeline,
-discover parallel work, adapt an agent template, choose domain/Git operations from
+The end-to-end journey MUST start with a goal without manual step construction or
+example executor selection. Use the default library, generate a specialist when
+no exact role fits, and distinguish missing runtime/authentication from busy capacity.
+Without a prewritten task pipeline it MUST discover parallel work, adapt an agent
+template, choose domain/Git operations from
 evidence, insert a previously unspecified recovery task, replace a controller,
 restart the server, and accept an exact result. Repeat a defined-plan case without
 model calls and a hybrid case whose mandatory check the planner cannot remove.

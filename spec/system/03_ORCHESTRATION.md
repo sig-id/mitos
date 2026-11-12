@@ -102,13 +102,15 @@ The existing batch hook profile remains narrower and retains its own contract in
 
 ### Agent templates, context, and domain adaptation
 
-An agent template MAY supply base instructions, a harness/model selector, skills,
-context sources, tool capabilities, and defaults. The planner MAY specialize it for
-a particular assignment: role, task instructions, selected knowledge and artifacts,
-allowed tools within the grant, and limits within the remaining allowance. A fixed
-catalog of roles or one template per workflow step MUST NOT be required. A template
-revision plus its specialization and resolved configuration MUST be recorded in the
-Attempt. Changes affecting an admitted contract require replacement; additional
+The [agent-library contract](07_AGENT_LIBRARY.md) owns reusable definitions,
+specialization, knowledge/context and binding semantics. Controllers MUST select
+suitable library definitions or create graph-scoped specialists within policy;
+they MUST NOT require users to assemble ordinary worker steps. A suitable role can
+have many fresh instances; no idle instance is required before admitting new work.
+Creation does not install a runtime, enlarge capacity or confer additional authority.
+
+Definition revision, specialization and resolved runtime/context MUST be frozen in
+the Attempt. Changes affecting an admitted contract require replacement; additional
 context or guidance within that contract follows ordinary observation/steering rules.
 Template changes cannot silently alter existing attempts or mandatory acceptance.
 
