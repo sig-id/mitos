@@ -38,7 +38,7 @@
   }
   function changed(left,right){let start=0;while(start<left.length&&start<right.length&&left[start]===right[start])start++;let a=left.length,b=right.length;while(a>start&&b>start&&left[a-1]===right[b-1]){a--;b--;}return [[start,a],[start,b]];}
   function table(file){
-    const table=el('table',undefined,'diff-table'),caption=el('caption',(file.name||file.old)+' — HEAD compared with working tree','sr-only');table.append(caption);
+    const table=el('table',undefined,'diff-table'),caption=el('caption',(file.name||file.old)+' – HEAD compared with working tree','sr-only');table.append(caption);
     const columns=el('colgroup');for(const cls of ['diff-number-column','diff-text-column','diff-number-column','diff-text-column'])columns.append(el('col',undefined,cls));table.append(columns);
     const head=el('thead'),header=el('tr');for(const text of ['HEAD','Working tree']){const th=el('th',text);th.colSpan=2;th.scope='colgroup';header.append(th);}head.append(header);table.append(head);const body=el('tbody');table.append(body);const lang=language(file);
     function cell(row,line,number,kind,range){
