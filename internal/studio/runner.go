@@ -34,6 +34,7 @@ type Engine struct {
 	wg        sync.WaitGroup
 	actions   sync.Mutex
 	libraryMu sync.Mutex
+	setupMu   sync.Mutex
 }
 
 func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {

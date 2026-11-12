@@ -374,7 +374,7 @@
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshSelected().catch(()=>{})});
  window.addEventListener('pagehide',()=>{alive=false;epoch++});
  async function start(){
-  try{await Promise.all([loadOptions(),loadSummaries(true)]);if(graphID){await chooseGraph(graphID,true)}else if(graphs.length&&!new URLSearchParams(location.search).has('task')){await chooseGraph(graphs[0].id)}else compose();if(pending)showError(new Error('A previous request has no confirmed response. Reconcile it before starting another action.'));}
+  try{await Promise.all([loadOptions(),loadSummaries(true)]);if(graphID){await chooseGraph(graphID,true)}else if(graphs.length&&!new URLSearchParams(location.search).has('task')){await chooseGraph(graphs[0].id)}else {const initialView=window.MitosProjectNav.current();compose();if(initialView!=='work')window.MitosProjectNav.select(initialView)}if(pending)showError(new Error('A previous request has no confirmed response. Reconcile it before starting another action.'));}
   catch(error){showError(error);$('graph-planner-note').textContent='Could not load the graph service. Reconnect to try again.';}
   finally{poll()}
  }

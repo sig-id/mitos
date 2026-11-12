@@ -108,6 +108,7 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 	// Build the lightweight projection BEFORE cloning; large histories never enter
 	// a status response. Selection controls assignment details, not status coverage.
 	copy := *g
+	copy.Setup = nil
 	copy.Expansions = map[string]*GraphExpansion{}
 	for key, x := range g.Expansions {
 		v := *x

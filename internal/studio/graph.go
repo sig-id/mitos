@@ -88,6 +88,9 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 		if !g.Policy.Automatic || len(spec.Arguments) != 0 {
 			return spec, nil, graphError("native agents require automatic policy and cannot override invocation")
 		}
+		if g.Setup != nil {
+			app.Agent.Model = g.Setup.Model
+		}
 		if err := specializeAgent(app.Agent, spec.Agent, g.ID); err != nil {
 			return spec, nil, err
 		}
@@ -189,7 +192,7 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 	if len(req.Tasks) == 0 || len(req.Tasks) > req.Limits.Tasks {
 		return WorkGraph{}, graphError("initial membership exceeds task allowance")
 	}
-	g := WorkGraph{Profile: GraphProfile, ID: newID("graph"), Home: e.Store.Home().ID, ProjectID: req.ProjectID, Workspace: project.Directory, RootTask: "", GoalRevision: req.GoalRevision, Revision: 1, PolicyRevision: 1, ControllerGeneration: 1, Activation: req.Activation, Predecessor: req.Predecessor, Policy: req.Policy, Limits: req.Limits, Members: map[string]*GraphMember{}, Expansions: map[string]*GraphExpansion{}, Receipts: map[string]GraphReceipt{}, Decisions: map[string]*GraphDecision{}, Status: "active", CreatedAt: now, UpdatedAt: now}
+	g := WorkGraph{Setup: req.setup, Profile: GraphProfile, ID: newID("graph"), Home: e.Store.Home().ID, ProjectID: req.ProjectID, Workspace: project.Directory, RootTask: "", GoalRevision: req.GoalRevision, Revision: 1, PolicyRevision: 1, ControllerGeneration: 1, Activation: req.Activation, Predecessor: req.Predecessor, Policy: req.Policy, Limits: req.Limits, Members: map[string]*GraphMember{}, Expansions: map[string]*GraphExpansion{}, Receipts: map[string]GraphReceipt{}, Decisions: map[string]*GraphDecision{}, Status: "active", CreatedAt: now, UpdatedAt: now}
 	refs := map[string]string{}
 	for _, spec := range req.Tasks {
 		if !validGraphKey(spec.ID) || refs[spec.ID] != "" {

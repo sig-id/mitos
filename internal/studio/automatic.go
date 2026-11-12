@@ -30,6 +30,7 @@ type AgentSelection struct {
 // Binding freezes the portable definition and task specialization with the native
 // runtime identity. Credentials are resolved anew and are never in this record.
 type AgentBinding struct {
+	Model          string            `json:"model,omitempty"`
 	Definition     agents.Definition `json:"definition"`
 	Runtime        string            `json:"runtime"`
 	Executable     string            `json:"executable"`
@@ -165,7 +166,14 @@ func (e *Engine) StartAutomaticGoal(req AutomaticGoal) (WorkGraph, error) {
 		context = string(raw)
 		revision = prior.GoalRevision + 1
 	}
-	return e.createGraph(CreateGraph{Profile: GraphProfile, Key: req.Key, ProjectID: req.ProjectID, GoalRevision: revision, Predecessor: req.FromGraph, Activation: "automatic", Policy: policy, Limits: automaticLimits(), Tasks: []GraphSpec{{ID: "goal", Kind: "scope", Context: context, Required: true, Criteria: req.Goal, Acceptance: "operator", Brief: Brief{Title: title, Intent: req.Goal}}}}, digest)
+	setup, err := e.freezeSetup(req.ProjectID)
+	if err != nil {
+		return WorkGraph{}, err
+	}
+	limits := automaticLimits()
+	limits.Deadline = time.Now().UTC().Add(time.Duration(setup.Minutes) * time.Minute)
+	limits.Attempts = setup.Attempts
+	return e.createGraph(CreateGraph{setup: setup, Profile: GraphProfile, Key: req.Key, ProjectID: req.ProjectID, GoalRevision: revision, Predecessor: req.FromGraph, Activation: "automatic", Policy: policy, Limits: limits, Tasks: []GraphSpec{{ID: "goal", Kind: "scope", Context: context, Required: true, Criteria: req.Goal, Acceptance: "operator", Brief: Brief{Title: title, Intent: req.Goal}}}}, digest)
 }
 
 type AutomaticStart struct {
@@ -202,6 +210,10 @@ func (e *Engine) StartExistingAutomatic(id string, req AutomaticStart) (WorkGrap
 	if err != nil {
 		return WorkGraph{}, err
 	}
+	setup, err := e.freezeSetup(prior.ProjectID)
+	if err != nil {
+		return WorkGraph{}, err
+	}
 	s := e.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -222,7 +234,10 @@ func (e *Engine) StartExistingAutomatic(id string, req AutomaticStart) (WorkGrap
 	g.Policy = policy
 	g.PolicyRevision++
 	g.Revision++
+	g.Setup = setup
 	g.Limits = automaticLimits()
+	g.Limits.Deadline = time.Now().UTC().Add(time.Duration(setup.Minutes) * time.Minute)
+	g.Limits.Attempts = setup.Attempts
 	g.Members[g.RootTask].Sealed = false
 	g.Expansions = map[string]*GraphExpansion{"initial": {ID: "initial", Scope: g.RootTask, Generation: g.ControllerGeneration, Deadline: g.Limits.Deadline}}
 	g.Receipts[req.Key] = GraphReceipt{Key: req.Key, Digest: digest, Revision: g.Revision, At: time.Now().UTC()}
@@ -302,6 +317,16 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
+	setupGraph, err := e.Store.Graph(r.GraphAttempt.GraphID)
+	if err != nil {
+		return err
+	}
+	if setupGraph.Setup != nil {
+		before, err = workspacefs.WithInstructions(before, setupGraph.Setup.FileName, []byte(setupGraph.Setup.Document))
+		if err != nil {
+			return err
+		}
+	}
 	history, err := workspacefs.Prepare(ctx, base, before)
 	if err != nil {
 		return err
@@ -342,6 +367,8 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return graphErr
 	}
 	prompt += "\nCurrent user request (the only authority for external actions):\n" + currentGraph.Members[currentGraph.RootTask].Spec.Brief.Intent + priorNotes
+	prompt += currentGraph.Setup.prompt()
+	prompt += "\nRead AGENTS.md (or agents.md) and applicable nested instructions before working.\n"
 	prompt += inputNotes
 	if b.Specialization != nil {
 		prompt += "\nTask-specific role: " + b.Specialization.Role + "\n" + b.Specialization.Instructions
@@ -357,6 +384,9 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		args = append(args, "--output-schema", schema)
 		prompt = automaticPlannerInstructions + "\n" + prompt
 		args[3] = "read-only"
+	}
+	if b.Model != "" {
+		args = append(args, "--model", b.Model)
 	}
 	args = append(args, "-")
 	launch, err := compileApplication(Application{})

@@ -57,6 +57,58 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, d)
 	})
 
+	mux.HandleFunc("GET /api/preferences", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Preferences("")
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("PUT /api/preferences", func(w http.ResponseWriter, r *http.Request) {
+		var v studio.RuntimePreferences
+		if !graphBody(w, r, &v) {
+			return
+		}
+		saved, err := s.engine.SavePreferences("", v)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, saved)
+	})
+	mux.HandleFunc("GET /api/projects/{project}/setup", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.ProjectSetup(r.PathValue("project"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("PUT /api/projects/{project}/instructions", func(w http.ResponseWriter, r *http.Request) {
+		var v studio.InstructionsEdit
+		if !graphBody(w, r, &v) {
+			return
+		}
+		saved, err := s.engine.SaveInstructions(r.PathValue("project"), v)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, saved)
+	})
+	mux.HandleFunc("PUT /api/projects/{project}/preferences", func(w http.ResponseWriter, r *http.Request) {
+		var v studio.RuntimePreferences
+		if !graphBody(w, r, &v) {
+			return
+		}
+		saved, err := s.engine.SavePreferences(r.PathValue("project"), v)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, saved)
+	})
 	mux.HandleFunc("GET /api/graphs/agents", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.AutomaticAgents()) })
 	mux.HandleFunc("POST /api/graphs/automatic", func(w http.ResponseWriter, r *http.Request) {
 		var req studio.AutomaticGoal

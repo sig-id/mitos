@@ -1,5 +1,7 @@
 import json,pathlib,sys,time
 prompt=sys.stdin.read();time.sleep(.4)
+assert pathlib.Path('AGENTS.md').exists() or pathlib.Path('agents.md').exists()
+if '--model' in sys.argv:assert sys.argv[sys.argv.index('--model')+1]=='fixture-project-model'
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if 'Previous conversation and saved evidence:' in prompt:
  prior=json.loads(prompt.split('Previous conversation and saved evidence:\n')[1].split('\nThese are prior results')[0])

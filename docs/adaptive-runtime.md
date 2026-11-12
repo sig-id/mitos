@@ -116,6 +116,41 @@ Lost mutation responses retain their original idempotency key for reconciliation
 including after reload. Existing deterministic graph APIs remain available for
 integrations, but manual graph editing is no longer part of the normal Work page.
 
+## Project instructions and execution preferences
+
+Project setup edits three Markdown sections with Preview/Edit/Split modes: project
+context, risk and budget guidance, and Git/review workflow. They are written into a
+marked block in the repository's `AGENTS.md`. Existing text outside that block is
+preserved byte for byte; an existing lowercase `agents.md` is used without creating
+a second file. The full document has its own editor. File hashes reject stale saves
+and detected external edits; symlinks, nonregular files and ambiguous duplicate
+instruction files are refused. Saving instructions creates a normal repository
+change; it does not commit or publish it.
+
+Personal Markdown preferences and default runtime/model/time/attempt settings stay
+in the server data directory. Project execution overrides live there too. Empty
+project values inherit personal defaults; empty global values use the native model,
+a 120-minute deadline and 96 attempts. Numeric time and attempt limits are enforced
+by the graph runtime. Monetary budgets, risk labels and other prose are instructions,
+not metered spending or permission boundaries. Automatic execution currently supports
+Codex; Pi's existing native-session/context adapters are not an automatic planner
+adapter. Model IDs are passed explicitly to Codex when configured.
+
+New automatic goals, continuations and explicitly started old goals freeze their
+effective setup. The full project document and personal guidance enter the planner's
+prompt. Every attempt materializes the same root instructions in its workspace
+baseline, alongside normal nested instruction files; later project edits do not alter
+that goal. This setup overlay is part of the retained attempt baseline, not an agent
+change to the source project. The setup is excluded from lightweight status polling.
+If no instructions file exists, existing saved project context and Git guidance seed
+the setup; saving the shared sections creates the file.
+
+`GET /api/projects/{project}/setup` returns the document, hash, sections and effective
+preferences. `PUT /api/projects/{project}/instructions` accepts `file_hash` and either
+`sections` or `document`. `GET/PUT /api/preferences` reads or saves personal defaults;
+`PUT /api/projects/{project}/preferences` saves project overrides. Preference writes
+require the current `revision`. Changes apply to new work only.
+
 ## Registered controller integrations
 
 Advanced API clients can still register deterministic controller applications with
