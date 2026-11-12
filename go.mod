@@ -1,6 +1,6 @@
 module mitos
 
-go 1.26.0
+go 1.26.11
 
 require github.com/creack/pty v1.1.24
 
@@ -13,6 +13,6 @@ require (
 require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/rs/xid v1.4.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

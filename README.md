@@ -27,7 +27,7 @@ See the [server use case and delivery path](spec/README.md#application-server-re
 
 ## Start
 
-Requires Go 1.26+, Git, and Bash on Linux. The first build downloads pinned Go
+Requires Go 1.26.11+, Git, and Bash on Linux. The first build downloads pinned Go
 dependencies. Serving the workspace needs no Node build, database service, or CDN;
 browser assets are vendored.
 
@@ -261,3 +261,8 @@ for bounds and remaining capabilities.
 Use `just check` for source changes. Documentation changes should preserve local
 links, consecutive numbering, and the distinction between requirements and shipped
 capabilities. Update the owning specification and ADR when architecture changes.
+
+## License
+
+Mitos is licensed under the [MIT License](LICENSE). Bundled third-party components
+retain their accompanying license notices.

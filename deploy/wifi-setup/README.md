@@ -45,20 +45,15 @@ or provision the `device/setup_url` NVS key using `tools/provision.py --setup-ur
 in esp-notify. The provisioned value wins over the firmware default. Existing
 Mitos URL/CA/pairing are independent of this sender URL.
 
-## Temporary deployment used for board testing
+## Temporary testing deployments
 
-On 2026-09-22 the user authorized temporary Cloudflare publication. A Quick Tunnel
-for the standalone localhost server was started:
+For board testing, start the standalone static server on `127.0.0.1:8747`, then
+run `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8747`. Open
+`/wifi-setup/` on the HTTPS hostname printed by the tunnel. Forward only the
+standalone static sender; keep the Mitos backend on its separate listener.
 
-`https://myself-novel-approval-reef.trycloudflare.com/wifi-setup/`
-
-The tunnel exposes the static sender only, not the running Mitos backend. The
-2026.9.1 `cloudflared-linux-amd64` binary was verified against its release asset
-SHA-256 `03f1f25d1cc93b9ad6c60569d44060bc4f17ed97075760ed8cfca4b12dcd68cc`.
-Its command is `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8747`.
-This random hostname lasts only while the local tunnel is running; it is not a
-permanent Cloudflare Pages deployment. Its lifecycle depends on this computer.
-Use a stable Pages/custom-domain deployment for the released product.
+The temporary hostname lasts only while the tunnel is running. Use a stable
+Pages or custom-domain deployment for the released product.
 
 The page caches versioned assets for offline use. First visit requires connectivity;
 a previously cached copy can operate without reaching Mitos or the static host.
