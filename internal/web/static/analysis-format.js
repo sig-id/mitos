@@ -1,11 +1,13 @@
 (() => {
   'use strict';
   const el=(tag,text,cls)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
-  function inline(text){
+  function inline(text,options={}){
     const out=document.createDocumentFragment();
-    for(const token of text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))/g)){
-      const link=token.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-      if(link){const a=el('a',link[1]);a.href=link[2];a.target='_blank';a.rel='noopener noreferrer';out.append(a);}
+    for(const token of text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g)){
+      const link=token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      const resolved=link&&options.link?.(link[2],link[1]);
+      if(resolved){out.append(resolved);continue;}
+      if(link&&/^https?:\/\//i.test(link[2])){const a=el('a',link[1]);a.href=link[2];a.target='_blank';a.rel='noopener noreferrer';out.append(a);}
       else if(token.startsWith('`')&&token.endsWith('`'))out.append(el('code',token.slice(1,-1)));
       else if(token.startsWith('**')&&token.endsWith('**'))out.append(el('strong',token.slice(2,-2)));
       else if(token.startsWith('*')&&token.endsWith('*')&&token.length>2)out.append(el('em',token.slice(1,-1)));
@@ -47,9 +49,9 @@
     }
     append(value.slice(start),start);return body;
   }
-  function markdown(text){
+  function markdown(text,options={}){
     const box=el('div',undefined,'analysis-prose'),lines=text.trim().split('\n');let i=0;
-    const append=(tag,text)=>{const node=el(tag);node.append(inline(text));box.append(node);return node;};
+    const append=(tag,text)=>{const node=el(tag);node.append(inline(text,options));box.append(node);return node;};
     while(i<lines.length){
       const line=lines[i];if(!line.trim()){i++;continue;}
       const fence=line.match(/^\s*(`{3,}|~{3,})([\w+-]*)/);
@@ -59,12 +61,12 @@
       if(/^\s*(?:---+|\*\*\*+)\s*$/.test(line)){box.append(el('hr'));i++;continue;}
       if(line.includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||'')){
         const table=el('table'),head=el('thead'),body=el('tbody');
-        const row=(source,tag)=>{const tr=el('tr');for(const cell of source.replace(/^\s*\||\|\s*$/g,'').split('|')){const td=el(tag);td.append(inline(cell.trim()));tr.append(td);}return tr;};
+        const row=(source,tag)=>{const tr=el('tr');for(const cell of source.replace(/^\s*\||\|\s*$/g,'').split('|')){const td=el(tag);td.append(inline(cell.trim(),options));tr.append(td);}return tr;};
         head.append(row(line,'th'));i+=2;while(i<lines.length&&lines[i].includes('|'))body.append(row(lines[i++],'td'));table.append(head,body);box.append(table);continue;
       }
-      if(/^\s*>/.test(line)){const content=[];while(i<lines.length&&/^\s*>/.test(lines[i]))content.push(lines[i++].replace(/^\s*>\s?/,''));const quote=el('blockquote');quote.append(markdown(content.join('\n')));box.append(quote);continue;}
+      if(/^\s*>/.test(line)){const content=[];while(i<lines.length&&/^\s*>/.test(lines[i]))content.push(lines[i++].replace(/^\s*>\s?/,''));const quote=el('blockquote');quote.append(markdown(content.join('\n'),options));box.append(quote);continue;}
       const list=line.match(/^\s*(?:([-+*])|(\d+)[.)])\s+(.+)$/);
-      if(list){const ul=el(list[2]?'ol':'ul');while(i<lines.length){const item=lines[i].match(/^\s*(?:[-+*]|\d+[.)])\s+(.+)$/);if(!item)break;const li=el('li');li.append(inline(item[1]));ul.append(li);i++;}box.append(ul);continue;}
+      if(list){const ul=el(list[2]?'ol':'ul');while(i<lines.length){const item=lines[i].match(/^\s*(?:[-+*]|\d+[.)])\s+(.+)$/);if(!item)break;const li=el('li');const task=item[1].match(/^\[([ xX])\]\s+(.*)$/);if(task){const check=el('input');check.type='checkbox';check.checked=task[1].toLowerCase()==='x';check.disabled=true;check.setAttribute('aria-label',check.checked?'Completed':'Open finding');li.className='markdown-checklist-item';li.append(check,inline(task[2],options));}else li.append(inline(item[1],options));ul.append(li);i++;}box.append(ul);continue;}
       const paragraph=[line];i++;while(i<lines.length&&lines[i].trim()&&!/^\s*(?:#{1,6}\s|`{3,}|~{3,}|>|[-+*]\s|\d+[.)]\s)/.test(lines[i]))paragraph.push(lines[i++]);append('p',paragraph.join('\n'));
     }
     return box;

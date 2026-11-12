@@ -54,9 +54,7 @@ func (s *Store) GraphRunFile(graph, task, run, path string) ([]byte, error) {
 			break
 		}
 	}
-	if digest == "" {
-		return nil, ErrNotFound
-	}
+	// Unchanged source files are also readable from the checksum-verified archive.
 	archive, err := s.Artifact(run, "workspace.tar.gz")
 	if err != nil {
 		return nil, err
@@ -86,10 +84,45 @@ func (s *Store) GraphRunFile(graph, task, run, path string) ([]byte, error) {
 			return nil, err
 		}
 		sum := sha256.Sum256(body)
-		if int64(len(body)) != header.Size || hex.EncodeToString(sum[:]) != digest {
+		if int64(len(body)) != header.Size || (digest != "" && hex.EncodeToString(sum[:]) != digest) {
 			return nil, errors.New("saved file does not match its manifest")
 		}
 		return body, nil
+	}
+	return nil, errors.New("workspace file limit exceeded")
+}
+
+// GraphRunWorkspaceFiles lists regular files from the retained archive so source
+// citations can resolve without granting access to the live filesystem.
+func (s *Store) GraphRunWorkspaceFiles(graph, task, run string) ([]workspacefs.Change, error) {
+	if _, err := s.GraphRun(graph, task, run); err != nil {
+		return nil, err
+	}
+	data, err := s.Artifact(run, "workspace.tar.gz")
+	if err != nil {
+		return nil, err
+	}
+	zipped, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer zipped.Close()
+	reader := tar.NewReader(io.LimitReader(zipped, workspacefs.DefaultLimits.Bytes+(20<<20)))
+	files := []workspacefs.Change{}
+	for count := 0; count < workspacefs.DefaultLimits.Files; count++ {
+		h, err := reader.Next()
+		if err == io.EOF {
+			return files, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if h.Typeflag == tar.TypeReg && fs.ValidPath(h.Name) && h.Name != "." && h.Size >= 0 && h.Size <= workspacefs.DefaultLimits.Bytes {
+			files = append(files, workspacefs.Change{Path: h.Name, Kind: "snapshot"})
+		}
+	}
+	if _, err = reader.Next(); err == io.EOF {
+		return files, nil
 	}
 	return nil, errors.New("workspace file limit exceeded")
 }

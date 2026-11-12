@@ -111,6 +111,7 @@ type GraphReceipt struct {
 	At       time.Time         `json:"at"`
 }
 type WorkGraph struct {
+	Result               *GraphResult               `json:"result,omitempty"`
 	Profile              string                     `json:"profile"`
 	ID                   string                     `json:"id"`
 	Home                 string                     `json:"home"`

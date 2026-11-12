@@ -13,6 +13,7 @@ if '--output-schema' in sys.argv:
   for f in workers:
    assert f['state']=='done',str(f)
    plan['accept'].append({'task':f['id'],'rationale':'Read the saved native report and reviewed its evidence.'})
+ plan['result']={'title':'Answer','markdown':'The answer is **42**.\n\n- [ ] Example open finding.\n\n[Answer file](mitos://'+workers[0]['id']+'/answer.txt) and [source](mitos://'+workers[0]['id']+'/README.md#L1).','source_tasks':[f['id'] for f in workers]} if workers else {'title':'','markdown':'','source_tasks':[]}
  out.write_text(json.dumps(plan))
 else:
  if 'Check upstream patch and evidence.' in prompt:
@@ -22,5 +23,5 @@ else:
   assert pathlib.Path('answer.txt').read_text().strip()=='42'
  else:
   pathlib.Path('answer.txt').write_text('42\n')
- out.write_text('# Result\n\nThe answer is **42**.\n\nEvidence checked.')
+ out.write_text('# Result\n\nThe answer is **42**.\n\nEvidence checked. See [source file](README.md#L1), `answer.txt`, and answer.txt.')
 print('native execution log')

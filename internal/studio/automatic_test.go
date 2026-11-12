@@ -39,6 +39,7 @@ if '--output-schema' in sys.argv:
   for f in workers:
    assert f['state']=='done',str(f)
    plan['accept'].append({'task':f['id'],'rationale':'Read the saved native report and reviewed its evidence.'})
+ plan['result']={'title':'Answer','markdown':'The answer is **42**.\n\n- [ ] Example open finding.\n\n[Answer file](mitos://'+workers[0]['id']+'/answer.txt) and [source](mitos://'+workers[0]['id']+'/hello.txt#L1).','source_tasks':[f['id'] for f in workers]} if workers else {'title':'','markdown':'','source_tasks':[]}
  out.write_text(json.dumps(plan))
 else:
  if 'Check upstream patch and evidence.' in prompt:
@@ -120,6 +121,9 @@ print('native execution log')
 		}
 	}
 
+	if g.Result == nil || g.Result.Title != "Answer" || !strings.Contains(g.Result.Markdown, "42") || len(g.Result.Sources) != 2 {
+		t.Fatalf("missing final answer: %+v", g.Result)
+	}
 	for _, m := range g.Members {
 		if m.Spec.Brief.Title == "Implement change" {
 			files, err := e.Store.GraphRunFiles(g.ID, m.Spec.ID, m.CurrentRunID)
@@ -130,7 +134,11 @@ print('native execution log')
 			if err != nil || string(body) != "42\n" {
 				t.Fatalf("saved deliverable: %q %v", body, err)
 			}
-			for _, path := range []string{"../answer.txt", "/etc/passwd", "hello.txt"} {
+			source, err := e.Store.GraphRunFile(g.ID, m.Spec.ID, m.CurrentRunID, "hello.txt")
+			if err != nil || len(source) == 0 {
+				t.Fatalf("unchanged source unavailable: %v", err)
+			}
+			for _, path := range []string{"../answer.txt", "/etc/passwd", "missing.txt"} {
 				if _, err = e.Store.GraphRunFile(g.ID, m.Spec.ID, m.CurrentRunID, path); err == nil {
 					t.Fatalf("unauthorized result path %s", path)
 				}
@@ -149,6 +157,24 @@ print('native execution log')
 	}
 	if workers != 2 || !generated {
 		t.Fatal("missing worker or specialization")
+	}
+
+	// An older accepted graph can receive its missing answer without rerunning work.
+	e.Store.mu.Lock()
+	e.Store.graphs[g.ID].Result = nil
+	e.Store.mu.Unlock()
+	answer := PublishGraphResult{Revision: g.Revision, FinalAnswer: FinalAnswer{Title: "Recovered answer", Markdown: "The answer is 42.", SourceTasks: []string{g.Result.Sources[0].Task}}}
+	stale := answer
+	stale.Revision--
+	if _, err = e.Store.PublishResult(g.ID, stale); !errors.Is(err, ErrConflict) {
+		t.Fatal("stale result publication accepted")
+	}
+	published, err := e.Store.PublishResult(g.ID, answer)
+	if err != nil || published.Status != "accepted" || published.Attempts != g.Attempts || published.Revision != g.Revision+1 || published.Result.Markdown != answer.Markdown {
+		t.Fatalf("publication changed work lifecycle: %v", err)
+	}
+	if _, err = e.Store.PublishResult(g.ID, answer); !errors.Is(err, ErrConflict) {
+		t.Fatal("overwrote published answer")
 	}
 	if _, err = os.Stat(filepath.Join(e.Root, "answer.txt")); !os.IsNotExist(err) {
 		t.Fatal("agent modified original project")
@@ -308,6 +334,7 @@ if '--output-schema' in sys.argv:
  if not workers:p['steps']=[{'id':'worker','title':'Produce answer','assignment':'Produce an answer','criteria':'Report 42','agent':'mitos.generalist','role':'','instructions':'','after':[],'replaces':''}]
  elif workers[0]['state']=='failed':p['retry']=[workers[0]['id']]
  else:p['accept']=[{'task':workers[0]['id'],'rationale':'The saved report contains 42.'}];p['complete']=True
+ if p['complete']:p['result']={'title':'Answer','markdown':'The answer is 42.','source_tasks':[workers[0]['id']]}
  out.write_text(json.dumps(p))
 else:
  flag=pathlib.Path(__file__+'.attempted')

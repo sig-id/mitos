@@ -34,9 +34,27 @@ The graph also supports zoom, collapse and a list view. Selecting an agent opens
 expand to the full content area. Planner proposals become readable summaries and
 expandable assignments; raw data is available separately. Attempt history opens
 saved output and files in place, with technical execution pages under Diagnostics.
-**View result** opens a full-width reader for accepted worker reports and saved
-deliverables, with patch and workspace downloads. File previews come from the
-checksum-verified archive and change manifest, never a mutable worker directory.
+**View result** opens the goal's saved final answer, separately from planner
+acceptance notes and worker reviews. Automatic completion requires a bounded
+`result` with a title, Markdown answer and accepted worker `source_tasks`; the
+runtime freezes those sources to their accepted run IDs. The planner synthesizes
+the answer to the original request from existing evidence. For audits, this means
+concrete findings, requirements, evidence and limitations, rather than review status.
+Older accepted graphs without an answer say so; an operator can publish a missing
+answer or a corrected revision through `POST /api/graphs/{id}/result` with the expected graph revision,
+title, Markdown and source task IDs. Publication does not rerun or reaccept work.
+
+Worker reports, patches and workspaces remain under supporting evidence. Saved-file
+citations, including inline code paths and source line references, open inside the
+reader with back navigation. `mitos://TASK_ID/path#L123` pins an answer citation to
+its accepted source run. Relative report links resolve against that report's saved
+workspace. Both changed files and unchanged source files are read from the
+checksum-verified archive; changed files also match their change-manifest digest.
+No link reads the current project or mutable worker directory. Markdown checklists
+show the authored finding state; audit completion does not mark gaps fixed.
+
+The work tree and graph use the same dependency order, with stable ordering for
+parallel assignments.
 Only the selected graph is polled each second; summary status is
 refreshed every five seconds. Hidden tabs pause polling and connection failures
 back off. Reports are fetched on demand after an attempt finishes.

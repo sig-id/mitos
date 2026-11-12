@@ -83,6 +83,18 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, g)
 	})
 
+	mux.HandleFunc("POST /api/graphs/{id}/result", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.PublishGraphResult
+		if !graphBody(w, r, &req) {
+			return
+		}
+		g, err := s.engine.Store.PublishResult(r.PathValue("id"), req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, g)
+	})
 	mux.HandleFunc("GET /api/graphs/applications", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.engine.GraphApplications()) })
 	mux.HandleFunc("GET /api/graphs/{id}/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.Store.GraphView(r.PathValue("id"), r.URL.Query().Get("node"))
@@ -93,7 +105,11 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, v)
 	})
 	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}/files", func(w http.ResponseWriter, r *http.Request) {
-		files, err := s.engine.Store.GraphRunFiles(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
+		list := s.engine.Store.GraphRunFiles
+		if r.URL.Query().Get("scope") == "workspace" {
+			list = s.engine.Store.GraphRunWorkspaceFiles
+		}
+		files, err := list(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
 		if err != nil {
 			graphFailure(w, err)
 			return
