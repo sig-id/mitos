@@ -1,0 +1,6 @@
+{{define "project-picker"}}
+<p class="muted">Choose a folder on {{.Name}}</p>
+<div class="folder-location"><label for="project-directory" class="sr-only">Folder path</label><input id="project-directory" name="directory" required placeholder="Folder path" spellcheck="false" autocomplete="off"><button type="button" id="folder-go">Go</button></div>
+<div class="folder-browser"><div class="folder-toolbar"><button type="button" id="folder-up" aria-label="Parent folder">↑</button><button type="button" id="folder-home">Home</button><button type="button" id="folder-workspace">Project location</button><label class="folder-hidden"><input id="folder-hidden" type="checkbox">Hidden folders</label></div><nav id="folder-breadcrumbs" aria-label="Folder location"></nav><label for="folder-filter" class="sr-only">Filter folders</label><input id="folder-filter" type="search" placeholder="Find a folder here…"><div id="folder-list" role="group" aria-label="Folders"></div><p id="folder-status" role="status" class="muted"></p><p id="folder-error" role="alert" class="folder-error"></p></div>
+<label for="project-name">Project name<input id="project-name" name="name" maxlength="100" placeholder="Folder name"></label>
+{{end}}

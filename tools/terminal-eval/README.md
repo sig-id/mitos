@@ -49,3 +49,8 @@ selection, scope collapse, list view, final acceptance, mobile scrolling,
 reconnection, exact-key recovery after a lost creation response, manual steps,
 and navigation between a graph and its execution attempts. It launches isolated
 Python planner/worker fixtures; no model calls or running demo changes are made.
+
+`npm run test:picker --prefix tools/terminal-eval` checks folder navigation, hidden
+folders, filtering, editable suggested names, invalid paths, stale response
+protection, keyboard entry, mobile layout, and opening projects from both the
+project and terminal pages. It uses an isolated temporary directory and server.

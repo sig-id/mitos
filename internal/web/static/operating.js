@@ -48,7 +48,6 @@
   const grid=el('div',undefined,'project-grid');for(const row of home.projects){const card=link('','/projects/'+row.project.id,'project-card');card.append(el('h2',row.project.name),el('small',home.server.name),el('small',row.project.directory),el('p',projectCounts(row.counts)));if(row.unbound)card.append(el('small',`${row.unbound} earlier sessions`));grid.append(card)}content.append(grid);
  }
  $('open-project').onclick=e=>{e.preventDefault();dialog('project-dialog')};if(new URLSearchParams(location.search).get('open')==='project')dialog('project-dialog');$('open-project-main')?.addEventListener('click',()=>dialog('project-dialog'));
- $('project-form').elements.directory.oninput=e=>{const f=$('project-form');if(!f.elements.name.dataset.edited)f.elements.name.value=e.target.value.replace(/\/$/,'').split('/').at(-1)||'';};$('project-form').elements.name.oninput=e=>e.target.dataset.edited='true';
  $('project-form').onsubmit=e=>{e.preventDefault();const f=e.target;submit(f,async()=>{const p=await api('/api/projects',{name:f.elements.name.value,directory:f.elements.directory.value});location.href='/projects/'+p.id})};
  function currentTask(){return snapshot?.work.tasks.find(t=>t.id===selected)}
  function selectTask(id){if($('earlier-work'))$('earlier-work').open=true;selected=id;detailTab='assignment';signature='';const u=new URL(location);u.searchParams.delete('graph');u.searchParams.delete('node');u.searchParams.set('task',id);history.replaceState(null,'',u);refreshProject().catch(showError)}

@@ -39,6 +39,7 @@ func (s *Server) operatingPage(w http.ResponseWriter, r *http.Request) {
 	_ = s.templates.ExecuteTemplate(w, "operating", p)
 }
 func (s *Server) workspaceRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/directories", s.directories)
 	mux.HandleFunc("GET /projects/{project}", s.operatingPage)
 	mux.HandleFunc("GET /inbox", s.operatingPage)
 	mux.HandleFunc("GET /connections", s.operatingPage)

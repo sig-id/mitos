@@ -55,7 +55,10 @@ between client access, server ownership, and execution placement.
 
 ## Use the workspace
 
-Open a project directory from **Projects**, then describe your goal in **Work**.
+Open a project directory from **Projects** using the folder picker, then describe
+your goal in **Work**. Browse folders on the server, filter the current folder, or
+enter a path directly. The project name defaults to the selected folder name and
+can be changed before opening.
 Choose a configured planner to create steps as evidence arrives, or choose **I’ll
 add the steps** to organize work yourself. Success criteria and executor choices
 are available before starting.

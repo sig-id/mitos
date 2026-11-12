@@ -236,13 +236,16 @@ func (m *Manager) Project(id string) (Project, error) {
 	return m.projectLocked(id)
 }
 func (m *Manager) CreateProject(name, directory string) (Project, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || len(name) > 100 {
-		return Project{}, errors.New("project name must be 1–100 characters")
-	}
 	directory, err := m.ResolveDirectory(directory)
 	if err != nil {
 		return Project{}, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = filepath.Base(directory)
+	}
+	if len(name) > 100 {
+		return Project{}, errors.New("project name must be 1–100 characters")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

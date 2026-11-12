@@ -19,18 +19,7 @@
       finally { button.disabled = false; }
     });
   }
-  const projectDirectory = $('project-directory'), projectName = $('project-name');
-  let projectNameEdited = false;
-  function suggestProjectName() {
-    if (projectNameEdited) return;
-    const path = projectDirectory.value.replace(/\/+$/, '');
-    projectName.value = path.split('/').pop() || (projectDirectory.value.startsWith('/') ? '/' : '');
-  }
-  projectName.addEventListener('input', () => { projectNameEdited = projectName.value !== ''; });
-  projectDirectory.addEventListener('input', suggestProjectName);
-  projectDirectory.addEventListener('change', suggestProjectName);
-  suggestProjectName();
-  form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/workspace?project=${p.id}&setup=true`; });
+  form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/projects/${p.id}`; });
   form('session-form', async b => { if(b.role==='coordinator'){await window.MitosSupervision.startSetup(b);return;} const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
   form('topic-form', async (b,f) => { b.paths = b.paths.split('\n').map(x=>x.trim()).filter(Boolean); await api(projectAPI('topics'), b); f.reset(); $('topic-dialog').close(); await topics(); });
   let agentCatalog = [], agentSelection = 0, selectedInstallation;
