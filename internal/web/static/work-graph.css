@@ -11,8 +11,8 @@
 #work-tree{display:block;min-width:0}.work-tree-item{margin-bottom:8px}.work-tree-heading{display:flex;align-items:center;min-width:0;gap:2px}
 .work-tree-toggle{flex:none;width:26px;padding:7px 2px;background:transparent;border:0;color:var(--muted)}
 .work-tree-goal,.work-tree-node{min-width:0;text-align:left;background:transparent;border:0;color:inherit;font-size:14px;line-height:1.4;padding:8px;border-radius:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.work-tree-goal{flex:1;font-weight:600}.work-tree-goal[aria-current],.work-tree-node[aria-current]{background:#293e38;color:#d5e9c5}
-.work-tree-status{display:block;padding:0 8px 3px 36px;color:var(--muted);font-size:12px}.work-tree-status.running{color:#bad99d}.work-tree-status.needs_attention{color:#e6ba79}
+.work-tree-goal{flex:1;font-weight:600;display:flex;align-items:center;gap:8px}.work-tree-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.work-tree-goal[aria-current],.work-tree-node[aria-current]{background:#293e38;color:#d5e9c5}
+.work-tree-status{flex:0 0 14px;width:14px;text-align:center;color:var(--muted);font-size:15px;line-height:1}.work-tree-status.accepted,.work-tree-status.finished{color:#bad99d}.work-tree-status.running,.work-tree-status.planning{color:#9dc4ff}.work-tree-status.queued,.work-tree-status.blocked,.work-tree-status.review,.work-tree-status.needs_attention{color:#e6ba79}.work-tree-status.failed{color:#f3aaa2}
 #work-tree ul{list-style:none;margin:3px 0 0 19px;padding:0 0 0 8px;border-left:1px solid #3b454d;min-width:0}#work-tree li{min-width:0}
 .work-tree-node{width:100%;display:flex;align-items:center;gap:7px}.work-tree-dot{flex:none;display:inline-block;width:7px;height:7px;border-radius:50%;background:#7c8995}.work-tree-dot.running{background:#bbdba2;box-shadow:0 0 0 3px #bbdba222}.work-tree-dot.accepted{background:#70b5a0}.work-tree-dot.failed,.work-tree-dot.needs_attention{background:#dc8e76}
 .work-tree-empty{font-size:13px;color:var(--muted);padding:6px}.work-tree-more{width:100%;font-size:13px}
