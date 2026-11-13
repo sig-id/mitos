@@ -8,16 +8,17 @@ import (
 // Attention joins native approval runs back to the work that is waiting on them.
 // It is a read projection; resolving a card still uses the canonical decision API.
 type Attention struct {
-	Blocking   bool          `json:"blocking"`
-	ID         string        `json:"id"`
-	Title      string        `json:"title"`
-	ProjectID  string        `json:"project_id,omitempty"`
-	GraphID    string        `json:"graph_id,omitempty"`
-	TaskID     string        `json:"task_id,omitempty"`
-	OwnerRunID string        `json:"owner_run_id,omitempty"`
-	Reason     string        `json:"reason"`
-	Resolver   string        `json:"resolver"`
-	Card       decision.Card `json:"card"`
+	InputProfile string        `json:"input_profile"`
+	Blocking     bool          `json:"blocking"`
+	ID           string        `json:"id"`
+	Title        string        `json:"title"`
+	ProjectID    string        `json:"project_id,omitempty"`
+	GraphID      string        `json:"graph_id,omitempty"`
+	TaskID       string        `json:"task_id,omitempty"`
+	OwnerRunID   string        `json:"owner_run_id,omitempty"`
+	Reason       string        `json:"reason"`
+	Resolver     string        `json:"resolver"`
+	Card         decision.Card `json:"card"`
 }
 
 func (s *Store) attention() []Attention {
@@ -27,7 +28,7 @@ func (s *Store) attention() []Attention {
 			continue
 		}
 		d := r.Decision
-		a := Attention{Blocking: true, ID: d.ID, Title: r.Brief.Title, ProjectID: r.Brief.ProjectID, OwnerRunID: r.ID, Reason: d.Context.BlockedBy, Resolver: "human", Card: *d}
+		a := Attention{Blocking: true, ID: d.ID, Title: r.Brief.Title, ProjectID: r.Brief.ProjectID, OwnerRunID: r.ID, Reason: d.Context.BlockedBy, Resolver: "human", Card: *d, InputProfile: d.InputProfile()}
 		if d.Source != nil {
 			session := s.agentSessions[d.Source.SessionID]
 			a.Blocking = s.agentRequests[d.Source.SessionID+"/"+d.Source.RequestID].Request.Method != "mitos/asyncQuestion"

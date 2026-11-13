@@ -29,10 +29,27 @@ try{
  for(const width of [1500,390]){await page.setViewportSize({width,height:900});const size=await page.evaluate(()=>({w:innerWidth,scroll:document.documentElement.scrollWidth}));assert.ok(size.scroll<=size.w+1);if(process.env.MITOS_SCREENSHOT_DIR){await mkdir(process.env.MITOS_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,`notifications-${width}.png`)})}}
  await page.getByRole('dialog').getByRole('button',{name:'Allow once',exact:true}).click();await wait(async()=>!(await api('/api/workspace-home')).attention.length);await page.locator('.attention-banner').waitFor({state:'hidden'});
  const answer=await api(`/api/agent-sessions/${session.session.session_id}/requests/${pending.request_id}`,undefined,'GET',session.token);assert.equal(answer.state,'accepted');
+ // Free-text controls must be driven by the serialized input profile for every adapter.
+ for(const [index,kind] of ['codex','claude','async'].entries()){
+  const active=kind==='claude'?await api('/api/agent-sessions',{adapter:'claude',title:'Claude clarification',workspace:repo,project_id:'',desk_session_id:''}):session;
+  const question='Clarify '+kind+' requirements';
+  const native=kind==='claude'?{session_id:'claude-thread',tool_use_id:'clarification',hook_event_name:'PreToolUse',tool_name:'AskUserQuestion',cwd:repo,tool_input:{questions:[{question,header:'Requirements',options:[{label:'Brief',description:'Brief answer'},{label:'Detailed',description:'Detailed answer'}]}]}}:{id:10+index,method:kind==='async'?'mitos/asyncQuestion':'item/tool/requestUserInput',params:{threadId:'t',turnId:'u',questions:[{id:'q',question}]}};
+  const pendingText=await api(`/api/agent-sessions/${active.session.session_id}/requests`,native,'POST',active.token);
+  const home=await api('/api/workspace-home'),notice=home.attention.find(a=>a.card.question===question);
+  assert.equal(notice.input_profile,'text');assert.equal(notice.blocking,kind!=='async');
+  await page.setViewportSize({width:index===1?390:1500,height:900});
+  if(!await page.getByRole('dialog',{name:'Notifications'}).isVisible())await page.getByRole('button',{name:/Notifications/}).click();
+  const card=page.locator('#notice-'+notice.id);await card.getByLabel('Your answer').waitFor();
+  const text='Reviewed '+kind+' requirements';await card.getByLabel('Your answer').fill(text);
+  await card.getByRole('button',{name:'Send answer',exact:true}).click();
+  await wait(async()=>!(await api('/api/workspace-home')).attention.some(a=>a.id===notice.id));
+  const delivered=await api(`/api/agent-sessions/${active.session.session_id}/requests/${pendingText.request_id}`,undefined,'GET',active.token);
+  assert.equal(delivered.state,'accepted');assert.ok(JSON.stringify(delivered.body).includes(text),'native response lost text answer');
+ }
  await page.goto(base+`/projects/${project.id}?view=resources`);await page.getByRole('heading',{name:'Decisions API & approvals'}).waitFor();
  await page.getByLabel('Automatic handling',{exact:true}).selectOption('decision');await page.getByLabel('Approval boundaries',{exact:true}).fill('Allow read-only GitHub PR inspection.');await page.getByLabel('Decision provider',{exact:true}).selectOption('direct');await page.getByLabel('API protocol',{exact:true}).selectOption('systemone');await page.getByLabel('Endpoint URL',{exact:true}).fill(`http://127.0.0.1:${provider.address().port}`);await page.getByLabel('Decision model',{exact:true}).fill('fixture');
  await page.getByRole('button',{name:'Test API connection',exact:true}).click();await page.getByText('Connected. The provider returned a valid decision.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Save autonomy & approvals',exact:true}).click();await page.getByText('Saved. Approval handling is now Decisions API review.',{exact:true}).waitFor();await page.reload();await page.getByRole('heading',{name:'Decisions API & approvals'}).waitFor();assert.equal(await page.getByLabel('Automatic handling',{exact:true}).inputValue(),'decision');assert.equal(await page.getByLabel('Decision model',{exact:true}).inputValue(),'fixture');
  for(const width of [1500,390]){await page.setViewportSize({width,height:1000});await page.getByRole('heading',{name:'Decisions API & approvals'}).scrollIntoViewIfNeeded();if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,`decisions-setup-${width}.png`)});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1))}
- assert.deepEqual(errors,[]);console.log('PASS: notifications at desktop/mobile widths, direct approval round trip, Inbox summaries, provider test, save and reload');
+ assert.deepEqual(errors,[]);console.log('PASS: notifications at desktop/mobile widths, direct approval and Codex/Claude/async text-answer round trips, Inbox summaries, provider test, save and reload');
 }finally{await browser?.close();server.kill('SIGTERM');await exited;provider.close();await rm(temp,{recursive:true,force:true})}
