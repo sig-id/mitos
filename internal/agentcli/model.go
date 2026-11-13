@@ -73,6 +73,7 @@ type Installation struct {
 }
 
 type Request struct {
+	Bridge           bool        `json:"bridge,omitempty"`
 	Key              string      `json:"key,omitempty"`
 	Criteria         string      `json:"criteria,omitempty"`
 	ExpectedRevision int         `json:"expected_revision,omitempty"`
@@ -95,6 +96,8 @@ type Assignment struct {
 // Launch is internal process input. Environment values are deliberately excluded
 // from JSON and must never be persisted with the session or sent to the browser.
 type Launch struct {
+	Bridge          bool
+	BridgePrompt    string
 	NativeSessionID string
 	AgentID         string
 	AgentName       string

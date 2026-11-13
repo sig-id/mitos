@@ -28,8 +28,9 @@ type Broker interface {
 	Invalidate(context.Context, string) error
 }
 type Client struct {
-	URL, SessionID, Token string
-	HTTP                  *http.Client
+	ProjectID, DeskSessionID string
+	URL, SessionID, Token    string
+	HTTP                     *http.Client
 }
 
 func NewClient(base, id, token string) (*Client, error) {
@@ -79,7 +80,7 @@ func (c *Client) Start(ctx context.Context, adapter, title, workspace string) er
 		} `json:"session"`
 		Token string `json:"token"`
 	}
-	if err := c.call(ctx, "POST", "/api/agent-sessions", map[string]string{"adapter": adapter, "title": title, "workspace": workspace}, &out); err != nil {
+	if err := c.call(ctx, "POST", "/api/agent-sessions", map[string]string{"adapter": adapter, "title": title, "workspace": workspace, "project_id": c.ProjectID, "desk_session_id": c.DeskSessionID}, &out); err != nil {
 		return err
 	}
 	c.SessionID, c.Token = out.Session.ID, out.Token

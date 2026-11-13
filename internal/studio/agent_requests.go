@@ -10,16 +10,19 @@ import (
 )
 
 type AgentSession struct {
-	EndedThreads []string        `json:"ended_threads,omitempty"`
-	ID           string          `json:"session_id"`
-	Adapter      string          `json:"adapter"`
-	Title        string          `json:"title"`
-	Workspace    string          `json:"workspace"`
-	Operator     string          `json:"operator"`
-	Tenant       decision.Tenant `json:"tenant"`
-	TokenHash    string          `json:"token_hash,omitempty"`
-	LeaseUntil   time.Time       `json:"lease_until"`
-	Closed       bool            `json:"closed"`
+	ProjectID     string          `json:"project_id,omitempty"`
+	DeskSessionID string          `json:"desk_session_id,omitempty"`
+	RunID         string          `json:"run_id,omitempty"`
+	EndedThreads  []string        `json:"ended_threads,omitempty"`
+	ID            string          `json:"session_id"`
+	Adapter       string          `json:"adapter"`
+	Title         string          `json:"title"`
+	Workspace     string          `json:"workspace"`
+	Operator      string          `json:"operator"`
+	Tenant        decision.Tenant `json:"tenant"`
+	TokenHash     string          `json:"token_hash,omitempty"`
+	LeaseUntil    time.Time       `json:"lease_until"`
+	Closed        bool            `json:"closed"`
 }
 type AgentRequest struct {
 	SessionID   string          `json:"session_id"`
@@ -43,6 +46,10 @@ type AgentRequestView struct {
 }
 
 func (s *Store) CreateAgentSession(adapter, title, workspace string, p decision.Principal) (AgentSession, string, error) {
+	return s.CreateBoundAgentSession(adapter, title, workspace, "", "", "", p)
+}
+
+func (s *Store) CreateBoundAgentSession(adapter, title, workspace, project, sessionID, runID string, p decision.Principal) (AgentSession, string, error) {
 	if !p.Authenticated || !p.Tenant.Valid() || p.ID == "" {
 		return AgentSession{}, "", deviceError(403, "forbidden")
 	}
@@ -55,7 +62,7 @@ func (s *Store) CreateAgentSession(adapter, title, workspace string, p decision.
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	session := AgentSession{ID: newID("agent"), Adapter: adapter, Title: title, Workspace: workspace, Operator: p.ID, Tenant: p.Tenant, TokenHash: tokenHash(token), LeaseUntil: time.Now().UTC().Add(30 * time.Second)}
+	session := AgentSession{ProjectID: project, DeskSessionID: sessionID, RunID: runID, ID: newID("agent"), Adapter: adapter, Title: title, Workspace: workspace, Operator: p.ID, Tenant: p.Tenant, TokenHash: tokenHash(token), LeaseUntil: time.Now().UTC().Add(30 * time.Second)}
 	if err = s.commit("", "effect", "agent_session_started", change{AgentSession: &session}); err != nil {
 		return AgentSession{}, "", err
 	}
@@ -151,7 +158,7 @@ func (s *Store) IngestAgentRequest(id, token string, raw json.RawMessage) (Agent
 		}
 		// Each question has its own durable review run so simultaneous requests and
 		// multi-question native calls cannot overwrite another pending card.
-		r := Run{ID: c.RunID, Tenant: a.Tenant, Brief: Brief{Title: a.Title, Workspace: a.Workspace, AppID: "agent-" + a.Adapter, TimeoutMinutes: 1}, AppName: a.Adapter, Status: "parked", Stage: "Waiting for you", Summary: "The agent is waiting for your answer.", CreatedAt: now, UpdatedAt: now, Decision: &c}
+		r := Run{ID: c.RunID, ProjectID: a.ProjectID, Tenant: a.Tenant, Brief: Brief{Title: a.Title, Workspace: a.Workspace, AppID: "agent-" + a.Adapter, TimeoutMinutes: 1}, AppName: a.Adapter, Status: "parked", Stage: "Waiting for you", Summary: "The agent is waiting for your answer.", CreatedAt: now, UpdatedAt: now, Decision: &c}
 		saved.Runs = append(saved.Runs, r)
 		saved.Request.Cards[i] = c
 	}

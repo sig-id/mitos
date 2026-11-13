@@ -193,6 +193,9 @@ func (r *Registry) PrepareContinuation(request Request, mode, reference string) 
 }
 
 func (r *Registry) prepare(request Request, mode, reference string) (Launch, error) {
+	if request.Bridge && (mode != "new" || (request.AgentID != "codex" && request.AgentID != "claude")) {
+		return Launch{}, errors.New("bridge sessions support new Codex or Claude sessions only")
+	}
 	adapter, err := r.adapter(request.AgentID)
 	if err != nil {
 		return Launch{}, err
@@ -221,7 +224,7 @@ func (r *Registry) prepare(request Request, mode, reference string) (Launch, err
 	if err != nil {
 		return Launch{}, err
 	}
-	return Launch{NativeSessionID: nativeID, AgentID: d.ID, AgentName: d.Name, ProfileID: request.ProfileID, Kind: d.Kind, Executable: path, Args: args, Env: envSlice(env)}, nil
+	return Launch{Bridge: request.Bridge, BridgePrompt: request.Prompt, NativeSessionID: nativeID, AgentID: d.ID, AgentName: d.Name, ProfileID: request.ProfileID, Kind: d.Kind, Executable: path, Args: args, Env: envSlice(env)}, nil
 }
 
 func (r *Registry) List(workspace string) []Installation {

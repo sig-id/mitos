@@ -51,3 +51,44 @@ func TestCodexTerminalPreservesEarlyNotifications(t *testing.T) {
 		t.Fatal("native fallback request lost", output.String())
 	}
 }
+
+func TestCodexTerminalKeepOpenAcceptsAnotherTurn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, server := net.Pipe()
+	defer server.Close()
+	turns := make(chan int, 1)
+	go func() {
+		count := 0
+		scan := bufio.NewScanner(server)
+		for scan.Scan() {
+			var req struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			_ = json.Unmarshal(scan.Bytes(), &req)
+			switch req.Method {
+			case "initialize":
+				fmt.Fprintln(server, `{"id":1,"result":{}}`)
+			case "thread/start":
+				fmt.Fprintln(server, `{"id":2,"result":{"thread":{"id":"t"}}}`)
+			case "turn/start":
+				count++
+				fmt.Fprintf(server, "{\"id\":%d,\"result\":{}}\n", req.ID)
+				fmt.Fprintln(server, `{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"turn"}}}`)
+				if count == 2 {
+					turns <- count
+				}
+			}
+		}
+	}()
+	var output bytes.Buffer
+	if err := RunCodexTerminalOptions(ctx, nil, client, strings.NewReader("second assignment\n"), &output, t.TempDir(), "first", false, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-turns:
+	default:
+		t.Fatal("initial assignment closed the session", output.String())
+	}
+}

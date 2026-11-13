@@ -99,6 +99,9 @@ func (m *Manager) Continue(sourceID, kind string, request ContinuationRequest, s
 	if err != nil {
 		return Session{}, err
 	}
+	if source.Bridge {
+		return Session{}, errors.New("bridge continuation is not supported; start a new agent session with an explicit handoff")
+	}
 	for _, s := range m.state.Sessions {
 		if c := s.Continuation; c != nil && c.SourceID == sourceID && c.Key == request.Key {
 			if c.RequestHash != hash || c.Kind != kind {

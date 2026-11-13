@@ -91,6 +91,10 @@ func (m *Manager) prepareSessionContextLocked(p Project, s *Session, launch *age
 	if err != nil {
 		return err
 	}
+	if launch.Bridge {
+		s.AttentionTransport = "manual"
+		return nil
+	}
 	switch s.AgentID {
 	case "pi":
 		path := filepath.Join(m.dir, s.ID+"-attention.mjs")

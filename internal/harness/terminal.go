@@ -13,6 +13,10 @@ import (
 // terminals. Supported questions go to Mitos; unsupported native requests remain
 // visible with their exact payload and require an explicit local JSON response.
 func RunCodexTerminal(ctx context.Context, b Broker, server io.ReadWriteCloser, input io.Reader, output io.Writer, workspace, prompt string, plan bool) error {
+	return RunCodexTerminalOptions(ctx, b, server, input, output, workspace, prompt, plan, false)
+}
+
+func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteCloser, input io.Reader, output io.Writer, workspace, prompt string, plan, keepOpen bool) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	proxyInput, sendPipe := io.Pipe()
@@ -133,7 +137,7 @@ func RunCodexTerminal(ctx context.Context, b Broker, server io.ReadWriteCloser, 
 		return errors.New("app-server did not create a thread")
 	}
 	fmt.Fprintln(output, "Connected to Codex. Review supported requests in Mitos or on the paired device.")
-	once := prompt != ""
+	once := prompt != "" && !keepOpen
 	requestID := 3
 	for {
 		if prompt == "" {
