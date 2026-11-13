@@ -10,7 +10,10 @@ import (
 )
 
 type waiting struct {
+	questions                 []Question
 	key, thread, turn, digest string
+	async                     bool
+	steerID                   string
 	written                   bool
 	cancel                    context.CancelFunc
 }
@@ -101,6 +104,37 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 			if json.Unmarshal(line, &e) != nil {
 				return errors.New("invalid app-server JSON")
 			}
+			originalLine := line
+			async := false
+			if raw, ok := asyncRequest(e); ok {
+				line = raw
+				_ = json.Unmarshal(line, &e)
+				async = true
+			}
+			if len(e.ID) > 0 && e.Method == "" {
+				mu.Lock()
+				for rpcKey, p := range pending {
+					id, _ := json.Marshal(p.steerID)
+					if p.async && p.written && string(e.ID) == string(id) {
+						var response struct {
+							Error json.RawMessage `json:"error"`
+						}
+						_ = json.Unmarshal(line, &response)
+						state := "applied"
+						if len(response.Error) > 0 && string(response.Error) != "null" {
+							state = "application_blocked"
+						}
+						err := b.Deliver(ctx, p.key, p.digest, state)
+						p.cancel()
+						delete(pending, rpcKey)
+						if err != nil {
+							mu.Unlock()
+							return err
+						}
+					}
+				}
+				mu.Unlock()
+			}
 			if len(e.ID) > 0 && e.Method != "" {
 				normalized, err := Normalize("codex", line)
 				if err == nil {
@@ -119,7 +153,7 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 						}
 					} else {
 						requestCtx, stop := context.WithCancel(ctx)
-						p := &waiting{key: rpcKey, thread: normalized.Thread, turn: normalized.Turn, cancel: stop}
+						p := &waiting{questions: normalized.Questions, async: async, steerID: "mitos-async:" + delivery.RequestID, key: rpcKey, thread: normalized.Thread, turn: normalized.Turn, cancel: stop}
 						mu.Lock()
 						pending[rpcKey] = p
 						mu.Unlock()
@@ -133,7 +167,14 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 							if requestCtx.Err() != nil {
 								return
 							}
-							if err = write(answer.Body); err != nil {
+							body := answer.Body
+							if p.async {
+								body, err = steerAnswer(p.steerID, p.thread, p.turn, p.questions, body)
+								if err != nil {
+									return
+								}
+							}
+							if err = write(body); err != nil {
 								_ = b.Deliver(ctx, delivery.RequestID, answer.Digest, "application_blocked")
 								select {
 								case errorsOut <- err:
@@ -145,6 +186,11 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 							p.digest = answer.Digest
 							p.key = delivery.RequestID
 						}(rpcKey, p)
+						if async {
+							if _, err := clientOut.Write(append(originalLine, '\n')); err != nil {
+								return err
+							}
+						}
 						continue
 					}
 				}
@@ -190,7 +236,7 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 				}
 				mu.Unlock()
 			}
-			if _, err := clientOut.Write(append(line, '\n')); err != nil {
+			if _, err := clientOut.Write(append(originalLine, '\n')); err != nil {
 				return err
 			}
 		}

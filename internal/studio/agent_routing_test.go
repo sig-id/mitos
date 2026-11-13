@@ -87,7 +87,7 @@ func TestModelEvaluationUnknownConsumptionAndBudget(t *testing.T) {
 		t.Fatal(calls.Load())
 	}
 	e.Store.mu.Lock()
-	v := ModelEvaluation{ID: graphDigest([]any{"other", "route", 1}), Scope: "other", Status: "pending", Config: cfg, Request: request}
+	v := ModelEvaluation{ID: graphDigest([]any{"other", "route", 1}), Scope: "other", Status: "pending", Config: &cfg, Request: request}
 	err := e.Store.commit("", "effect", "model_evaluation_requested", change{ModelEvaluation: &v})
 	e.Store.mu.Unlock()
 	if err != nil {

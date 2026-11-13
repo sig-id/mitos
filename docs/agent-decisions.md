@@ -33,3 +33,21 @@ consumption and are not resent. Revising policy does not reset the call allowanc
 
 The supervision model has a separate responsibility: examine boundaries and hold or
 stop work. Neither the request router nor the coordinator establishes confinement.
+
+Automatic workers now run through Codex app-server under the compute provider's
+process ownership. Supported questions and approvals share the explicit-session
+Inbox and resolution service. The process deadline remains active while a question
+is pending. Unsupported native requests fail visibly instead of receiving invented
+answers. Final reports are captured from final agent-message items, and failed or
+interrupted turns cannot be accepted as successful attempts.
+
+The investigation route starts one bounded read-only Codex app-server investigation.
+It cannot ask recursive questions, and requested escalations are denied. Its result
+must match the original cards and current policy; uncertainty returns to the user.
+This uses the native runtime's read-only sandbox, not independent OS confinement.
+
+Structured asynchronous Codex question items create nonblocking Inbox questions.
+Their answers use turn/steer with the original active-turn precondition and become
+applied only after the source acknowledges delivery. Turn completion invalidates
+outstanding replies. Terminal input during an active turn also uses turn/steer;
+ordinary question prose is never parsed as an approval request.

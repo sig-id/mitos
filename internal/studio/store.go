@@ -182,6 +182,13 @@ func (s *Store) apply(e Event) error {
 			s.agentRoutes = map[string]AgentRoute{}
 		}
 		s.agentRoutes[c.AgentRoute.Key] = graphClone(*c.AgentRoute)
+		if request, ok := s.agentRequests[c.AgentRoute.Key]; ok {
+			for _, saved := range request.Runs {
+				if r := s.runs[saved.ID]; r != nil && r.Decision != nil && r.Decision.Resolution == nil {
+					r.Summary = "Request routed to " + c.AgentRoute.Route.Resolver + " via " + c.AgentRoute.Route.Source + ": " + c.AgentRoute.Route.Reason
+				}
+			}
+		}
 		return nil
 	}
 	if c.ModelEvaluation != nil {

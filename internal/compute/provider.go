@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 
 	workspacefs "mitos/internal/workspace"
@@ -23,6 +24,8 @@ type Session interface {
 	OutputOffset() uint64
 }
 type Command struct {
+	// Interact drives a structured stdio protocol under provider process ownership.
+	Interact func(context.Context, io.ReadWriteCloser, io.Writer) error `json:"-"`
 	// NativeEnv is resolved at launch, never serialized or persisted.
 	NativeEnv []string `json:"-"`
 	Directory string

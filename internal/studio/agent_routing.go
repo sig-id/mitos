@@ -13,6 +13,7 @@ import (
 var ErrEvaluationPending = errors.New("model evaluation is already pending")
 
 type ModelEvaluation struct {
+	Investigation  *InvestigationResult  `json:"investigation,omitempty"`
 	ID             string                `json:"id"`
 	Scope          string                `json:"scope"`
 	ProjectID      string                `json:"project_id"`
@@ -20,7 +21,7 @@ type ModelEvaluation struct {
 	PolicyRevision int                   `json:"policy_revision"`
 	Status         string                `json:"status"`
 	Reason         string                `json:"reason,omitempty"`
-	Config         decisionmodel.Config  `json:"config"`
+	Config         *decisionmodel.Config `json:"config"`
 	Request        decisionmodel.Request `json:"request"`
 	Answer         *decisionmodel.Answer `json:"answer,omitempty"`
 	At             time.Time             `json:"at"`
@@ -73,7 +74,7 @@ func (e *Engine) evaluateModel(ctx context.Context, project, scope, purpose stri
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	evaluation := ModelEvaluation{ID: id, Scope: scope, ProjectID: project, Purpose: purpose, PolicyRevision: revision, Status: "pending", Config: cfg, Request: request, At: time.Now().UTC(), Deadline: deadline}
+	evaluation := ModelEvaluation{ID: id, Scope: scope, ProjectID: project, Purpose: purpose, PolicyRevision: revision, Status: "pending", Config: &cfg, Request: request, At: time.Now().UTC(), Deadline: deadline}
 	if err := s.commit("", "effect", "model_evaluation_requested", change{ModelEvaluation: &evaluation}); err != nil {
 		s.mu.Unlock()
 		return decisionmodel.Answer{}, err

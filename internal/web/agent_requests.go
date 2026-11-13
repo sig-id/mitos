@@ -76,6 +76,7 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				s.deviceAdminError(w, r, err)
 				return
 			}
+			s.engine.QueueAgentResolution(id, token, view.RequestID)
 			writeJSON(w, 200, view)
 			return
 		default:
@@ -93,6 +94,9 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 		if err != nil {
 			s.deviceAdminError(w, r, err)
 			return
+		}
+		if view.State == "pending" {
+			s.engine.QueueAgentResolution(r.PathValue("session"), agentBearer(r), view.RequestID)
 		}
 		writeJSON(w, 200, view)
 	})

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -167,7 +168,9 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 		}
 		cmd.Dir = command.Directory
 	}
-	cmd.Stdin = bytes.NewReader(command.Input)
+	if command.Interact == nil {
+		cmd.Stdin = bytes.NewReader(command.Input)
+	}
 	base := h.spec.Base
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(cmd.Dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
 	if command.NativeEnv != nil {
@@ -176,7 +179,23 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Cancel = func() error { return killGroup(s) }
-	cmd.Stdout = &s.output
+	var protocol *protocolStream
+	if command.Interact != nil {
+		input, err := cmd.StdinPipe()
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		output, err := cmd.StdoutPipe()
+		if err != nil {
+			input.Close()
+			cancel()
+			return nil, err
+		}
+		protocol = &protocolStream{Reader: output, WriteCloser: input, readCloser: output}
+	} else {
+		cmd.Stdout = &s.output
+	}
 	cmd.Stderr = &s.output
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -186,7 +205,20 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	s.events = []Event{{Offset: 1, Type: "status", Status: "started", At: time.Now().UTC()}}
 	go func() {
 		defer cancel()
-		s.err = cmd.Wait()
+		if protocol != nil {
+			protocolErr := command.Interact(commandCtx, protocol, &s.output)
+			_ = protocol.Close()
+			_ = killGroup(s)
+			waitErr := cmd.Wait()
+			// The protocol decides successful turn completion; shutdown kills the
+			// persistent app-server only after its result has been captured.
+			s.err = protocolErr
+			if commandCtx.Err() != nil {
+				s.err = errors.Join(protocolErr, commandCtx.Err(), waitErr)
+			}
+		} else {
+			s.err = cmd.Wait()
+		}
 		_ = killGroup(s)
 		code := cmd.ProcessState.ExitCode()
 		s.mu.Lock()
@@ -377,4 +409,16 @@ func savePreparation(path string, value any) error {
 	}
 	defer directory.Close()
 	return directory.Sync()
+}
+
+// protocolStream is closed on protocol completion; CommandContext kills the
+// process group on cancellation, unblocking pipe reads as well.
+type protocolStream struct {
+	io.Reader
+	io.WriteCloser
+	readCloser io.Closer
+}
+
+func (s *protocolStream) Close() error {
+	return errors.Join(s.WriteCloser.Close(), s.readCloser.Close())
 }

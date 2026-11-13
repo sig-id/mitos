@@ -38,6 +38,7 @@ type AgentAnswer struct {
 	State  string          `json:"state"`
 }
 type AgentRequestView struct {
+	Route     *AgentRoute     `json:"route,omitempty"`
 	RequestID string          `json:"request_id"`
 	RunIDs    []string        `json:"run_ids"`
 	State     string          `json:"state"`
@@ -159,6 +160,10 @@ func (s *Store) IngestAgentRequest(id, token string, raw json.RawMessage) (Agent
 		// Each question has its own durable review run so simultaneous requests and
 		// multi-question native calls cannot overwrite another pending card.
 		r := Run{ID: c.RunID, ProjectID: a.ProjectID, Tenant: a.Tenant, Brief: Brief{Title: a.Title, Workspace: a.Workspace, AppID: "agent-" + a.Adapter, TimeoutMinutes: 1}, AppName: a.Adapter, Status: "parked", Stage: "Waiting for you", Summary: "The agent is waiting for your answer.", CreatedAt: now, UpdatedAt: now, Decision: &c}
+		if request.Method == "mitos/asyncQuestion" {
+			r.Stage = "Question pending"
+			r.Summary = "The agent may continue independent work while this clarification is pending."
+		}
 		saved.Runs = append(saved.Runs, r)
 		saved.Request.Cards[i] = c
 	}
@@ -176,6 +181,10 @@ func (s *Store) agentRequestView(key string) (AgentRequestView, error) {
 		return AgentRequestView{}, deviceError(410, "request_ended")
 	}
 	view := AgentRequestView{RequestID: request.Request.Key, State: "pending", RunIDs: []string{}, Body: json.RawMessage("null")}
+	if route, ok := s.agentRoutes[key]; ok {
+		copy := graphClone(route)
+		view.Route = &copy
+	}
 	for _, r := range request.Runs {
 		view.RunIDs = append(view.RunIDs, r.ID)
 	}
