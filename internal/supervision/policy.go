@@ -4,8 +4,6 @@ package supervision
 import (
 	"encoding/json"
 	"mitos/internal/agentpolicy"
-	"mitos/internal/agentrouting"
-	"mitos/internal/harness"
 	"os"
 	"path/filepath"
 )
@@ -18,6 +16,13 @@ func Check(p agentpolicy.Policy, workspace string, raw json.RawMessage) string {
 	}
 	var event struct {
 		Method string `json:"method"`
+		Hook   string `json:"hook_event_name"`
+		Tool   string `json:"tool_name"`
+		CWD    string `json:"cwd"`
+		Input  struct {
+			Command string `json:"command"`
+			Path    string `json:"file_path"`
+		} `json:"tool_input"`
 		Params struct {
 			Command    string          `json:"command"`
 			CWD        string          `json:"cwd"`
@@ -39,8 +44,12 @@ func Check(p agentpolicy.Policy, workspace string, raw json.RawMessage) string {
 	if event.Method == "item/started" || event.Method == "item/completed" {
 		command, directory = event.Params.Item.Command, event.Params.Item.CWD
 	}
-	if r, err := harness.Normalize("claude", raw); err == nil {
-		command, directory, _ = agentrouting.Command(r)
+	claudeFile := event.Hook == "PreToolUse" && (event.Tool == "Write" || event.Tool == "Edit")
+	if event.Hook == "PreToolUse" {
+		directory = event.CWD
+		if event.Tool == "Bash" {
+			command = event.Input.Command
+		}
 	}
 	if command != "" {
 		if rule, ok := p.Match(command, directory, workspace); ok && rule.Action == "deny" {
@@ -70,6 +79,21 @@ func Check(p agentpolicy.Policy, workspace string, raw json.RawMessage) string {
 	}
 	if len(event.Params.Additional) > 0 && string(event.Params.Additional) != "null" {
 		return "expanded permissions require review of the workspace boundary"
+	}
+	if claudeFile {
+		path := event.Input.Path
+		if path == "" {
+			return "file action is missing its workspace boundary target"
+		}
+		if !filepath.IsAbs(path) {
+			if directory == "" || !filepath.IsAbs(directory) {
+				return "relative file action is missing its absolute working directory"
+			}
+			path = filepath.Join(directory, path)
+		}
+		if !inside(path) {
+			return "file action is outside the project workspace boundary"
+		}
 	}
 	for _, change := range event.Params.Item.Changes {
 		path := change.Path

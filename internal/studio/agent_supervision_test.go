@@ -1,13 +1,19 @@
 package studio
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mitos/internal/agentcli"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/decision"
+	"mitos/internal/harness"
+	"net"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -287,5 +293,101 @@ time.sleep(60)
 	after, _ := e.Store.Graph(graph.ID)
 	if after.ControllerCalls != before.ControllerCalls || after.Status == "accepted" {
 		t.Fatal("coordinator continued through hold", before.ControllerCalls, after.ControllerCalls, after.Status)
+	}
+}
+
+func TestLargeSupervisionObservationsContinueNativeProxy(t *testing.T) {
+	for _, mode := range []string{"off", "rules", "model"} {
+		for _, kind := range []string{"commandExecution", "fileChange", "mcpToolCall"} {
+			t.Run(mode+"/"+kind, func(t *testing.T) {
+				var calls atomic.Int32
+				srv := choiceServer(t, func() string { return "allow" }, &calls)
+				defer srv.Close()
+				e, req := graphEngine(t, false)
+				e.Apps = append(e.Apps, Application{ID: "guard", DecisionModel: modelConfig(srv.URL, "before_segment")})
+				p := agentpolicy.Default()
+				p.Supervision = agentpolicy.Supervision{Mode: mode, Application: "guard", Guidance: "Keep file actions inside the project workspace", MaxCalls: 3, WorkspaceOnly: true}
+				if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+					t.Fatal(err)
+				}
+				session, token := supervisorSession(t, e, req.ProjectID)
+				item := map[string]any{"type": kind, "cwd": e.Root, "command": "echo hello"}
+				content := strings.Repeat("large result\n", 20000)
+				switch kind {
+				case "commandExecution":
+					item["aggregatedOutput"] = content
+				case "fileChange":
+					item["changes"] = []any{map[string]string{"path": "new.txt", "diff": content}}
+				case "mcpToolCall":
+					item["result"] = map[string]string{"text": content}
+					item["arguments"] = map[string]string{"path": e.Root}
+				}
+				raw, _ := json.Marshal(map[string]any{"method": "item/completed", "params": map[string]any{"item": item}})
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				client, server := net.Pipe()
+				defer server.Close()
+				input, writer := io.Pipe()
+				defer input.Close()
+				defer writer.Close()
+				next := `{"method":"thread/started","params":{"thread":{"id":"still-live"}}}`
+				go func() { defer server.Close(); fmt.Fprintf(server, "%s\n%s\n", raw, next) }()
+				var output bytes.Buffer
+				if err := harness.ProxyCodex(ctx, engineBroker{e: e, id: session.ID, token: token}, client, input, &output); err != nil {
+					t.Fatal(err)
+				}
+				if output.String() != string(raw)+"\n"+next+"\n" {
+					t.Fatal("native output changed or continuation lost")
+				}
+				if e.Store.SupervisionHeld(req.ProjectID) {
+					t.Fatal("large output held project")
+				}
+				if mode != "off" {
+					verdict := e.Store.supervisorVerdicts[session.ID+"/observation:"+graphDigest(json.RawMessage(raw))]
+					if !bytes.Equal(verdict.Evidence, raw) {
+						t.Fatal("full audit evidence lost")
+					}
+				}
+				if (calls.Load() == 1) != (mode == "model") {
+					t.Fatal("unexpected model calls", calls.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestClaudeOutsideFileCannotReceiveOperatorApproval(t *testing.T) {
+	for _, tool := range []string{"Write", "Edit"} {
+		t.Run(tool, func(t *testing.T) {
+			e, req := graphEngine(t, false)
+			p := agentpolicy.Default()
+			p.Supervision.WorkspaceOnly = true
+			if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+				t.Fatal(err)
+			}
+			session, token, err := e.Store.CreateBoundAgentSession("claude", "Claude boundary", e.Root, req.ProjectID, "", "", decision.LocalOperator())
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(map[string]any{"session_id": "s", "tool_use_id": "t", "hook_event_name": "PreToolUse", "tool_name": tool, "cwd": e.Root, "tool_input": map[string]string{"file_path": filepath.Join(t.TempDir(), "outside.txt")}})
+			request, err := e.Store.IngestAgentRequest(session.ID, token, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, _ := e.Store.Get(request.RunIDs[0])
+			if _, err = e.ResolveAs(run.ID, run.Decision.ID, "approve", "operator approval", "api", decision.LocalOperator()); err == nil {
+				t.Fatal("operator bypassed boundary before supervisor")
+			}
+			if err = e.ResolveAgentRequest(context.Background(), session.ID, token, request.RequestID); err == nil {
+				t.Fatal("outside file cleared")
+			}
+			incidents := e.Store.SupervisionIncidents(req.ProjectID)
+			if len(incidents) != 1 || incidents[0].Verdict.Outcome != "stop" {
+				t.Fatal(incidents)
+			}
+			if _, err = e.ResolveAs(run.ID, run.Decision.ID, "approve", "operator approval", "api", decision.LocalOperator()); err == nil {
+				t.Fatal("operator bypassed supervisor veto")
+			}
+		})
 	}
 }

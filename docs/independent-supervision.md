@@ -17,11 +17,19 @@ answer a question, accept a task result or bypass a command rule.
 Explicit deny rules are checked before intercepted approvals can be answered.
 Optional workspace checks resolve existing path ancestors (including symlinks),
 check reported working directories and file changes, and flag expanded filesystem
-permissions. In model mode, native requests require a current-policy clearance
+permissions. Claude Write/Edit targets are resolved against the reported working
+directory; outside targets and symlink escapes are vetoed before approval. In model mode, native requests require a current-policy clearance
 before either a person or automation can resolve them. Codex command, file-change
 and MCP-tool lifecycle events also receive independent review. Duplicate evidence
 reuses its receipt; changing policy does not reset the per-session call allowance.
-Model failures, exhausted budgets and insufficient confidence hold work.
+Native observations accept the same 1 MiB frame limit as the bridge, independently
+of the smaller approval-request limit. Deterministic checks and stored verdicts
+retain the full event. Model review excerpts large command output, file diffs and
+MCP results with explicit omission markers, preserving action metadata (including
+commands, working directories, file targets, arguments and permissions). Metadata
+that exceeds the model limit still holds work; commands and paths are never
+silently truncated. The model must hold if omitted content is needed to establish
+compliance. Model failures, exhausted budgets and insufficient confidence hold work.
 
 A non-allow verdict and incident are committed together. The project hold blocks
 queued admission, graph/coordinator progress and native session launches. Stop
