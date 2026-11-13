@@ -94,5 +94,8 @@
   }
   await surface(container,'project');
   window.MitosAgentPolicy.render(container,setup.agent_policy,base,api);
+  const coop=el('details');coop.append(el('summary','COOPERATION.md'),el('p','Optional project conventions for delegation, shared work, handoffs and escalation. Link this file from AGENTS.md for other tools. Changes apply to new coordinated work.','muted'));
+  let coopDoc=setup.cooperation;const coopEditor=sourceEditor('COOPERATION.md',coopDoc.text||''),coopStatus=el('p');coopStatus.setAttribute('role','status');
+  coop.append(coopEditor.box,button('Save COOPERATION.md',async()=>{try{coopDoc=await api(base+'/cooperation-document',{hash:coopDoc.hash,text:coopEditor.value()},'PUT');coopEditor.set(coopDoc.text);coopStatus.textContent='Saved COOPERATION.md.'}catch(e){coopStatus.textContent=e.message}}),coopStatus);container.append(coop);
  }};
 })();

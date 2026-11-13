@@ -23,6 +23,7 @@ import (
 )
 
 type Store struct {
+	cooperation            map[string]CooperationRecord
 	agentPolicies          map[string]agentpolicy.Policy
 	graphs                 map[string]*WorkGraph
 	graphCreations         map[string]graphCreation
@@ -173,6 +174,13 @@ func (s *Store) apply(e Event) error {
 		if c.CustomEvent == nil {
 			return nil
 		}
+	}
+	if c.Cooperation != nil {
+		if s.cooperation == nil {
+			s.cooperation = map[string]CooperationRecord{}
+		}
+		s.cooperation[c.Cooperation.ProjectID+"/"+c.Cooperation.Message.ID] = graphClone(*c.Cooperation)
+		return nil
 	}
 	if c.AgentPolicy != nil {
 		if s.agentPolicies == nil {
