@@ -446,8 +446,10 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
+	preview, closePreview := e.beginAgentOutput(r.ID)
+	defer closePreview()
 	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
-		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), output, dir, prompt, options)
+		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), dir, prompt, options)
 	}})
 	if err != nil {
 		return err

@@ -1,4 +1,30 @@
 import json,pathlib,sys,time
+import subprocess,tempfile
+if 'app-server' in sys.argv:
+ def send(value):
+  print(json.dumps(value),flush=True)
+ for line in sys.stdin:
+  request=json.loads(line);method=request.get('method')
+  if method=='initialize':send({'id':request['id'],'result':{}})
+  elif method=='thread/start':send({'id':request['id'],'result':{'thread':{'id':'fixture-thread'},'model':'fixture-project-model'}})
+  elif method=='turn/start':
+   send({'id':request['id'],'result':{'turn':{'id':'fixture-turn'}}})
+   params=request['params'];prompt=params['input'][0]['text']
+   if 'outputSchema' not in params:
+    send({'method':'item/agentMessage/delta','params':{'delta':'Inspecting the assignment and checking saved evidence.\n'}})
+    time.sleep(3)
+    send({'method':'item/agentMessage/delta','params':{'delta':'Preparing the answer and its report.\n'}})
+    time.sleep(3)
+   with tempfile.TemporaryDirectory() as temporary:
+    result=pathlib.Path(temporary,'result.txt')
+    args=[sys.executable,__file__,'exec','--output-last-message',str(result),'--model','fixture-project-model']
+    if 'outputSchema' in params:args+=['--output-schema','fixture-schema']
+    subprocess.run(args,input=prompt,text=True,stdout=sys.stderr,check=True)
+    text=result.read_text()
+    send({'method':'item/agentMessage/delta','params':{'delta':text}})
+    send({'method':'item/completed','params':{'item':{'id':'final','type':'agentMessage','phase':'final_answer','text':text}}})
+   send({'method':'turn/completed','params':{'turn':{'id':'fixture-turn','status':'completed'}}})
+ sys.exit(0)
 prompt=sys.argv[sys.argv.index('--')+1] if '--' in sys.argv else sys.stdin.read();time.sleep(.4)
 if 'You are the Mitos setup assistant.' in prompt:
  ctx=json.loads(prompt.split('Setup conversation:\n')[1])
