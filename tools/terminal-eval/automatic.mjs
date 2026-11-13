@@ -91,10 +91,25 @@ try{
  const previous='previous-attempt',snapshotPattern='**/api/graphs/'+graphID+'/snapshot?*',previousPath='**/api/graphs/'+graphID+'/nodes/'+worker.spec.id+'/runs/'+previous;
  await page.route(snapshotPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.members[worker.spec.id].attempts=[previous,...worker.attempts];await route.fulfill({response,json:value})});
  await page.route(previousPath,route=>route.fulfill({json:{id:previous,status:'failed',summary:'Earlier execution stopped.',created_at:g.created_at,updated_at:g.updated_at,finished_at:g.updated_at,artifacts:[]}}));
- await page.route(previousPath+'/activity',route=>route.fulfill({json:{status:'failed',created_at:g.created_at,started_at:g.created_at,updated_at:g.updated_at,finished_at:g.updated_at,requests:[],events:[]}}));
+ let previousActivityCalls=0;await page.route(previousPath+'/activity',route=>route.fulfill({json:{status:'running',created_at:g.created_at,started_at:g.created_at,updated_at:g.updated_at,requests:[],events:[{at:g.updated_at,kind:'agent_started',summary:'Activity update '+(++previousActivityCalls)}]}}));
  await page.locator('.graph-attempt-card').nth(1).waitFor();
  await page.locator('.graph-attempt-card').first().locator('summary').first().click();
  await page.locator('.graph-attempt-card').first().getByText('Earlier execution stopped.',{exact:true}).waitFor();
+ // Returning to Attempts remembers a closed panel; reopening it must survive activity responses.
+ await page.locator('.graph-attempt-card').first().locator('summary').first().click();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Assignment',exact:true}).click();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();
+ assert.equal(await page.locator('.graph-attempt-card').first().getAttribute('open'),null);
+ const activityBeforeOpen=previousActivityCalls;
+ await page.locator('.graph-attempt-card').first().locator('summary').first().click();
+ await wait(async()=>previousActivityCalls>=activityBeforeOpen+2);
+ assert.notEqual(await page.locator('.graph-attempt-card').first().getAttribute('open'),null,'activity response collapsed the reopened attempt');
+ const eventsPanel=page.locator('.graph-attempt-card').first().locator('.graph-execution-events');
+ await eventsPanel.locator('summary').click();
+ const activityBeforeRead=previousActivityCalls;
+ await wait(async()=>previousActivityCalls>=activityBeforeRead+2);
+ assert.notEqual(await eventsPanel.getAttribute('open'),null,'activity update closed execution events');
+
  if(await page.locator('.graph-attempt-card').nth(1).getAttribute('open')===null)await page.locator('.graph-attempt-card').nth(1).locator('summary').first().click();
  await page.locator('.graph-attempt-card').nth(1).locator('.analysis-prose').filter({hasText:'The answer is'}).waitFor();
  assert.equal(page.url(),beforeAttemptURL);
