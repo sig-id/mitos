@@ -8,6 +8,7 @@ import (
 	"path"
 	"strconv"
 
+	"mitos/internal/agentpolicy"
 	"mitos/internal/studio"
 )
 
@@ -105,6 +106,18 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 			return
 		}
 		saved, err := s.engine.SavePreferences("", v)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, saved)
+	})
+	mux.HandleFunc("PUT /api/projects/{project}/agent-policy", func(w http.ResponseWriter, r *http.Request) {
+		var p agentpolicy.Policy
+		if !graphBody(w, r, &p) {
+			return
+		}
+		saved, err := s.engine.SaveAgentPolicy(r.PathValue("project"), p)
 		if err != nil {
 			graphFailure(w, err)
 			return
