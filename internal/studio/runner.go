@@ -35,6 +35,7 @@ type Engine struct {
 	actions    sync.Mutex
 	libraryMu  sync.Mutex
 	setupMu    sync.Mutex
+	resolving  map[string]bool
 	setupChats map[string]context.CancelFunc
 }
 

@@ -16,6 +16,8 @@ import (
 	"mitos/agents"
 	"mitos/internal/agentcli"
 	"mitos/internal/compute"
+	"mitos/internal/decision"
+	"mitos/internal/harness"
 	"mitos/internal/workpool"
 	workspacefs "mitos/internal/workspace"
 )
@@ -386,20 +388,35 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	planner := b.Definition.Kind == "planner"
 	resultPath := filepath.Join(base, "agent-result.txt")
-	args := []string{native.Executable, "exec", "--sandbox", "workspace-write", "--ephemeral", "--skip-git-repo-check", "--color", "never", "-c", `approval_policy="never"`, "--output-last-message", resultPath}
+	args := []string{native.Executable, "app-server"}
+	options := harness.CodexOptions{Headless: true, Model: b.Model, Sandbox: "workspace-write", Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
 	if planner {
-		schema := filepath.Join(base, "plan-schema.json")
-		if err = os.WriteFile(schema, automaticSchema(), 0600); err != nil {
-			return err
-		}
-		args = append(args, "--output-schema", schema)
+		options.Sandbox = "read-only"
+		options.OutputSchema = automaticSchema()
 		prompt = automaticPlannerInstructions + "\n" + prompt
-		args[3] = "read-only"
 	}
-	if b.Model != "" {
-		args = append(args, "--model", b.Model)
+	bridge, token, err := e.Store.CreateBoundAgentSession("codex", r.Brief.Title, dir, r.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		return err
 	}
-	args = append(args, "-")
+	defer e.Store.CloseAgentSession(bridge.ID, token)
+	broker := engineBroker{e: e, id: bridge.ID, token: token}
+	beatCtx, stopBeat := context.WithCancel(ctx)
+	defer stopBeat()
+	go func() {
+		tick := time.NewTicker(5 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-beatCtx.Done():
+				return
+			case <-tick.C:
+				if e.Store.AgentHeartbeat(bridge.ID, token) != nil {
+					return
+				}
+			}
+		}
+	}()
 	launch, err := compileApplication(Application{})
 	if err != nil {
 		return err
@@ -420,7 +437,9 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
-	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, Input: []byte(prompt), NativeEnv: native.Env})
+	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), output, dir, prompt, options)
+	}})
 	if err != nil {
 		return err
 	}

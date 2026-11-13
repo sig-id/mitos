@@ -114,6 +114,9 @@ func (s *Store) ResolveChoice(id string, resolution decision.Resolution, princip
 	return s.resolveChoice(id, resolution, principal, rewind, nil)
 }
 func (s *Store) resolveChoice(id string, resolution decision.Resolution, principal decision.Principal, rewind *autonomy.Rewind, command *DeviceCommandRecord) error {
+	return s.resolveChoiceWithAutomation(id, resolution, principal, rewind, command, nil)
+}
+func (s *Store) resolveChoiceWithAutomation(id string, resolution decision.Resolution, principal decision.Principal, rewind *autonomy.Rewind, command *DeviceCommandRecord, automation *AgentRoute) error {
 	r := s.runs[id]
 	if r == nil {
 		return ErrNotFound
@@ -137,14 +140,14 @@ func (s *Store) resolveChoice(id string, resolution decision.Resolution, princip
 	if r.Decision == nil || r.Decision.ID != resolution.DecisionID {
 		return reject("stale decision", ErrConflict)
 	}
-	if resolution.Via != "console" && resolution.Via != "cli" && resolution.Via != "api" && !(resolution.Via == "esp-notify" && command != nil) {
+	if resolution.Via != "console" && resolution.Via != "cli" && resolution.Via != "api" && !(resolution.Via == "esp-notify" && command != nil) && !(resolution.Via == "automation" && automation != nil) {
 		return reject("unsupported resolution transport", ErrConflict)
 	}
 	if len(resolution.Note) > 10000 {
 		return reject("unsupported value or oversized note", ErrConflict)
 	}
 	d := r.Decision
-	if d.Source != nil && s.agentSessions[d.Source.SessionID].Operator != principal.ID {
+	if d.Source != nil && s.agentSessions[d.Source.SessionID].Operator != principal.ID && automation == nil {
 		return reject("answer not offered to this operator", ErrConflict)
 	}
 	if d.SupersededAt != nil || d.Due(time.Now()) || d.Source != nil && !s.agentSourceActive(d.Source) {

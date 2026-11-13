@@ -76,8 +76,8 @@ The terminal opens in the browser; supported questions and approvals appear in
 **Inbox**. Select an installed CLI and environment profile, then enter an assignment.
 The CLI equivalent is `./bin/mitos agent codex --workspace /path/to/project` while
 Mitos is serving. Add `--keep-open --prompt "Assignment"` to supply the initial
-assignment and keep the conversation open. Bridge continuation and mid-turn
-steering are not yet supported; ordinary native sessions remain available below.
+assignment and keep the conversation open. Codex supports live turn steering and asynchronous clarification replies.
+Bridge resume/fork is not yet supported; ordinary native sessions remain available below.
 
 Installed interactive agent terminals are separate executors. **Sessions & earlier
 work → New native session** retains their assignment, supervision inbox, reports,

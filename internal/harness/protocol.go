@@ -110,7 +110,7 @@ func Normalize(adapter string, raw json.RawMessage) (Request, error) {
 			if out.Denial == "cancel" {
 				out.Cards[0].Options[1].Consequence = "Cancel this waiting request without executing it; the harness may end the current turn."
 			}
-		case "item/tool/requestUserInput":
+		case "item/tool/requestUserInput", "mitos/asyncQuestion":
 			out.Questions = p.Questions
 		default:
 			return out, ErrUnsupported
@@ -174,6 +174,9 @@ func Normalize(adapter string, raw json.RawMessage) (Request, error) {
 			questionTexts[q.Question] = true
 			c := baseCard(raw)
 			c.Question = q.Question
+			if out.Method == "mitos/asyncQuestion" {
+				c.Context.BlockedBy = "An asynchronous clarification is pending; independent work may continue."
+			}
 			c.Kind = "choose"
 			if len(q.Options) == 0 || q.IsOther {
 				c.Kind = "supply_value"

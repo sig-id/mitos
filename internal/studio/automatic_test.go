@@ -52,7 +52,7 @@ else:
  out.write_text('# Result\n\nThe answer is **42**.\n\nEvidence checked.')
 print('native execution log')
 `
-	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+python+"\n"+script), 0700); err != nil {
+	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+python+"\n"+appServerFixture(script)), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -267,7 +267,7 @@ func automaticScriptEngine(t *testing.T, script string) (*Engine, CreateGraph) {
 		t.Skip("python3 required")
 	}
 	bin := t.TempDir()
-	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+python+"\n"+script), 0700); err != nil {
+	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+python+"\n"+appServerFixture(script)), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -391,4 +391,38 @@ else:
 			}
 		}
 	}
+}
+
+// Existing workflow fixtures describe task behavior. This wrapper exercises the
+// actual app-server wire boundary, including final items and turn acknowledgments.
+func appServerFixture(script string) string {
+	encoded, _ := json.Marshal(script)
+	return `import sys,json,io,tempfile,pathlib,contextlib
+script=` + string(encoded) + `
+wire=sys.stdin
+outwire=sys.stdout
+def send(value):
+ outwire.write(json.dumps(value)+'\n');outwire.flush()
+for line in wire:
+ req=json.loads(line);method=req.get('method','')
+ if method=='initialize':send({'id':req['id'],'result':{}})
+ elif method=='thread/start':send({'id':req['id'],'result':{'thread':{'id':'fixture-thread'},'model':'fixture'}})
+ elif method=='turn/start':
+  send({'id':req['id'],'result':{'turn':{'id':'fixture-turn'}}})
+  params=req['params'];prompt=params['input'][0]['text']
+  with tempfile.TemporaryDirectory() as tmp:
+   result=pathlib.Path(tmp,'result.txt')
+   oldargv=sys.argv;oldin=sys.stdin
+   sys.argv=[oldargv[0],'exec','--output-last-message',str(result)]
+   if 'outputSchema' in params:sys.argv+=['--output-schema','fixture-schema']
+   sys.stdin=io.StringIO(prompt)
+   try:
+    with contextlib.redirect_stdout(sys.stderr):exec(compile(script,__file__,'exec'),{'__file__':__file__})
+   finally:sys.argv=oldargv;sys.stdin=oldin
+   if result.exists():
+    text=result.read_text()
+    send({'method':'item/agentMessage/delta','params':{'delta':text}})
+    send({'method':'item/completed','params':{'threadId':'fixture-thread','turnId':'fixture-turn','item':{'id':'final','type':'agentMessage','phase':'final_answer','text':text}}})
+  send({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed'}}})
+`
 }

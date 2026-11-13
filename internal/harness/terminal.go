@@ -17,6 +17,17 @@ func RunCodexTerminal(ctx context.Context, b Broker, server io.ReadWriteCloser, 
 }
 
 func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteCloser, input io.Reader, output io.Writer, workspace, prompt string, plan, keepOpen bool) error {
+	return RunCodex(ctx, b, server, input, output, workspace, prompt, CodexOptions{Plan: plan, KeepOpen: keepOpen})
+}
+
+type CodexOptions struct {
+	Plan, KeepOpen, Headless bool
+	Model, Sandbox           string
+	OutputSchema             json.RawMessage
+	Result                   func(string) error
+}
+
+func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io.Reader, output io.Writer, workspace, prompt string, options CodexOptions) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	proxyInput, sendPipe := io.Pipe()
@@ -62,20 +73,35 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 		_, err = sendPipe.Write(append(raw, '\n'))
 		return err
 	}
+	var steering <-chan string
+	var activeThread, activeTurn string
+	steerSequence := 0
 	nextWire := func() (json.RawMessage, error) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case err := <-stopped:
-			if err == nil {
-				err = io.EOF
+		for {
+			select {
+			case text, ok := <-steering:
+				if !ok {
+					steering = nil
+					continue
+				}
+				steerSequence++
+				if err := send(map[string]any{"id": fmt.Sprintf("mitos-input:%d", steerSequence), "method": "turn/steer", "params": map[string]any{"threadId": activeThread, "expectedTurnId": activeTurn, "input": []any{map[string]any{"type": "text", "text": text}}}}); err != nil {
+					return nil, err
+				}
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case err := <-stopped:
+				if err == nil {
+					err = io.EOF
+				}
+				return nil, err
+			case line, ok := <-messages:
+				if !ok {
+					return nil, io.EOF
+				}
+				return line, nil
 			}
-			return nil, err
-		case line, ok := <-messages:
-			if !ok {
-				return nil, io.EOF
-			}
-			return line, nil
 		}
 	}
 	var backlog []json.RawMessage
@@ -120,7 +146,19 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 	if err := send(map[string]any{"method": "initialized"}); err != nil {
 		return err
 	}
-	if err := send(map[string]any{"id": 2, "method": "thread/start", "params": map[string]any{"cwd": workspace}}); err != nil {
+	threadParams := map[string]any{"cwd": workspace}
+	if options.Model != "" {
+		threadParams["model"] = options.Model
+	}
+	if options.Sandbox != "" {
+		threadParams["sandbox"] = options.Sandbox
+	}
+	if options.Headless {
+		threadParams["approvalPolicy"] = "on-request"
+		threadParams["approvalsReviewer"] = "user"
+		threadParams["ephemeral"] = true
+	}
+	if err := send(map[string]any{"id": 2, "method": "thread/start", "params": threadParams}); err != nil {
 		return err
 	}
 	raw, err := wait(2)
@@ -137,7 +175,7 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 		return errors.New("app-server did not create a thread")
 	}
 	fmt.Fprintln(output, "Connected to Codex. Review supported requests in Mitos or on the paired device.")
-	once := prompt != "" && !keepOpen
+	once := prompt != "" && !options.KeepOpen
 	requestID := 3
 	for {
 		if prompt == "" {
@@ -156,16 +194,31 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 			}
 		}
 		params := map[string]any{"threadId": thread.Thread.ID, "input": []any{map[string]any{"type": "text", "text": prompt}}}
-		if plan {
+		if len(options.OutputSchema) > 0 {
+			params["outputSchema"] = options.OutputSchema
+		}
+		if options.Plan {
 			params["collaborationMode"] = map[string]any{"mode": "plan", "settings": map[string]any{"model": thread.Model}}
 		}
 		if err = send(map[string]any{"id": requestID, "method": "turn/start", "params": params}); err != nil {
 			return err
 		}
-		if _, err = wait(requestID); err != nil {
+		started, err := wait(requestID)
+		if err != nil {
 			return err
 		}
+		var startedTurn struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		}
+		_ = json.Unmarshal(started, &startedTurn)
+		activeThread, activeTurn = thread.Thread.ID, startedTurn.Turn.ID
+		if !options.Headless && activeTurn != "" {
+			steering = userLines
+		}
 		requestID++
+		finalText := ""
 		for {
 			raw, err = read()
 			if err != nil {
@@ -176,6 +229,9 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 				return errors.New("invalid app-server event")
 			}
 			if len(event.ID) > 0 && event.Method != "" {
+				if options.Headless {
+					return fmt.Errorf("unsupported native request requires an explicit session: %s", event.Method)
+				}
 				fmt.Fprintf(output, "\nThis request requires the local console. Native request:\n%s\nEnter its JSON result, or Ctrl-C to stop:\n", raw)
 				var text string
 				select {
@@ -194,6 +250,15 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 					return err
 				}
 			}
+			if len(event.ID) > 0 && event.Method == "" {
+				var response struct {
+					Error json.RawMessage `json:"error"`
+				}
+				_ = json.Unmarshal(raw, &response)
+				if len(response.Error) > 0 && string(response.Error) != "null" {
+					fmt.Fprintln(output, "\nLive input was rejected; retry after this turn or answer the request in Inbox.")
+				}
+			}
 			if event.Method == "item/agentMessage/delta" {
 				var p struct {
 					Delta string `json:"delta"`
@@ -201,7 +266,38 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 				_ = json.Unmarshal(event.Params, &p)
 				fmt.Fprint(output, p.Delta)
 			}
+			if event.Method == "item/completed" {
+				var p struct {
+					Item struct {
+						Type     string `json:"type"`
+						Text     string `json:"text"`
+						Phase    string `json:"phase"`
+						Delivery string `json:"delivery"`
+					} `json:"item"`
+				}
+				if json.Unmarshal(event.Params, &p) == nil && p.Item.Type == "agentMessage" && p.Item.Delivery != "async" && (p.Item.Phase == "final_answer" || p.Item.Phase == "") {
+					finalText = p.Item.Text
+				}
+			}
 			if event.Method == "turn/completed" {
+				steering = nil
+				var p struct {
+					Turn struct {
+						Status string `json:"status"`
+					} `json:"turn"`
+				}
+				_ = json.Unmarshal(event.Params, &p)
+				if p.Turn.Status == "failed" || p.Turn.Status == "interrupted" {
+					return fmt.Errorf("Codex turn %s", p.Turn.Status)
+				}
+				if options.Headless && finalText == "" {
+					return errors.New("Codex completed without a final result")
+				}
+				if options.Result != nil {
+					if err := options.Result(finalText); err != nil {
+						return err
+					}
+				}
 				fmt.Fprintln(output)
 				break
 			}
