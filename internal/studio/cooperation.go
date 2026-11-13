@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"encoding/json"
 	"errors"
 	"mitos/internal/cooperation"
 	"sort"
@@ -27,17 +28,26 @@ func (e *Engine) SubmitCooperation(project string, m cooperation.Message) (Coope
 	if _, err := e.Desk.Project(project); err != nil {
 		return CooperationRecord{}, err
 	}
+	s := e.Store
+	digest := graphDigest(m)
+	key := project + "/" + m.ID
+	s.mu.RLock()
+	old, exists := s.cooperation[key]
+	s.mu.RUnlock()
+	if exists {
+		if old.Digest != digest {
+			return CooperationRecord{}, ErrConflict
+		}
+		return graphClone(old), nil
+	}
 	if m.SessionID != "" {
 		session, err := e.Desk.Session(m.SessionID)
 		if err != nil || session.ProjectID != project || session.TaskID != m.TaskID || session.Status != "running" {
 			return CooperationRecord{}, ErrConflict
 		}
 	}
-	s := e.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	digest := graphDigest(m)
-	key := project + "/" + m.ID
 	if old, ok := s.cooperation[key]; ok {
 		if old.Digest != digest {
 			return CooperationRecord{}, ErrConflict
@@ -93,4 +103,31 @@ func (s *Store) Cooperation(project string) []CooperationRecord {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out
+}
+
+// Keep the newest complete records within both limits. A single oversized record
+// becomes a marked excerpt; its complete evidence remains in the durable journal.
+func cooperationEvidence(messages []CooperationRecord) []byte {
+	if len(messages) > 16 {
+		messages = messages[len(messages)-16:]
+	}
+	for {
+		encoded, _ := json.Marshal(messages)
+		if len(encoded) <= 32<<10 {
+			return encoded
+		}
+		if len(messages) > 1 {
+			messages = messages[1:]
+			continue
+		}
+		latest := graphClone(messages[0])
+		body := []rune(latest.Message.Body)
+		if len(body) > 1024 {
+			body = body[:1024]
+		}
+		latest.Message.Body = string(body) + "\n[Evidence excerpt: full message and artifact references remain in the cooperation journal.]"
+		latest.Message.Artifacts = nil
+		encoded, _ = json.Marshal([]CooperationRecord{latest})
+		return encoded
+	}
 }
