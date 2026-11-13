@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mitos/internal/agentpolicy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ type RuntimePreferences struct {
 	Guidance string `json:"guidance"`
 }
 type ProjectSetup struct {
+	AgentPolicy   agentpolicy.Policy `json:"agent_policy"`
 	Warning       string             `json:"warning,omitempty"`
 	FileName      string             `json:"file_name"`
 	FileHash      string             `json:"file_hash"`
@@ -43,14 +45,15 @@ type ProjectSetup struct {
 	SettingsError string             `json:"settings_error,omitempty"`
 }
 type FrozenSetup struct {
-	Document string `json:"document"`
-	FileName string `json:"file_name"`
-	FileHash string `json:"file_hash"`
-	Personal string `json:"personal,omitempty"`
-	Runtime  string `json:"runtime"`
-	Model    string `json:"model,omitempty"`
-	Minutes  int    `json:"minutes"`
-	Attempts int    `json:"attempts"`
+	AgentPolicy agentpolicy.Policy `json:"agent_policy"`
+	Document    string             `json:"document"`
+	FileName    string             `json:"file_name"`
+	FileHash    string             `json:"file_hash"`
+	Personal    string             `json:"personal,omitempty"`
+	Runtime     string             `json:"runtime"`
+	Model       string             `json:"model,omitempty"`
+	Minutes     int                `json:"minutes"`
+	Attempts    int                `json:"attempts"`
 }
 type InstructionsEdit struct {
 	FileHash string         `json:"file_hash"`
@@ -294,7 +297,7 @@ func (e *Engine) ProjectSetup(id string) (ProjectSetup, error) {
 	} else {
 		effective = effectivePreferences(effective, policy)
 	}
-	return ProjectSetup{Warning: warning, FileName: name, FileHash: hash, Exists: exists, Document: document, Sections: sections, Project: local, Defaults: global, Effective: effective, SettingsError: settingsError}, nil
+	return ProjectSetup{AgentPolicy: e.Store.AgentPolicy(id), Warning: warning, FileName: name, FileHash: hash, Exists: exists, Document: document, Sections: sections, Project: local, Defaults: global, Effective: effective, SettingsError: settingsError}, nil
 }
 func (e *Engine) SaveInstructions(id string, req InstructionsEdit) (ProjectSetup, error) {
 	p, err := e.Desk.Project(id)
@@ -412,11 +415,11 @@ func (e *Engine) freezeSetup(id string) (*FrozenSetup, error) {
 	if !v.Exists {
 		document = sectionBlock(v.Sections) + "\n"
 	}
-	return &FrozenSetup{Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
+	return &FrozenSetup{AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
 }
 func (s *FrozenSetup) prompt() string {
 	if s == nil {
 		return ""
 	}
-	return fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nFull project instructions (%s, frozen for this work):\n%s\nRuntime: %s; model: %s. Work deadline: %d minutes; attempt allowance: %d. Monetary and qualitative budgets in the document are guidance, not enforced accounting.\n", s.Personal, s.FileName, s.Document, s.Runtime, s.Model, s.Minutes, s.Attempts)
+	return fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nFull project instructions (%s, frozen for this work):\n%s\nRuntime: %s; model: %s. Work deadline: %d minutes; attempt allowance: %d. Monetary and qualitative budgets in the document are guidance, not enforced accounting.\n", s.Personal, s.FileName, s.Document, s.Runtime, s.Model, s.Minutes, s.Attempts)
 }

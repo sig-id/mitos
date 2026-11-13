@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"mitos/internal/acceptance"
+	"mitos/internal/agentpolicy"
 	"mitos/internal/decision"
 	"mitos/internal/fleet"
 	"mitos/internal/messaging"
@@ -22,6 +23,7 @@ import (
 )
 
 type Store struct {
+	agentPolicies          map[string]agentpolicy.Policy
 	graphs                 map[string]*WorkGraph
 	graphCreations         map[string]graphCreation
 	messagesOut            map[string]messaging.Outbound
@@ -171,6 +173,13 @@ func (s *Store) apply(e Event) error {
 		if c.CustomEvent == nil {
 			return nil
 		}
+	}
+	if c.AgentPolicy != nil {
+		if s.agentPolicies == nil {
+			s.agentPolicies = map[string]agentpolicy.Policy{}
+		}
+		s.agentPolicies[c.AgentPolicy.ProjectID] = graphClone(c.AgentPolicy.Policy)
+		return nil
 	}
 	if c.Home != nil {
 		s.home = *c.Home
