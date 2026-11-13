@@ -35,6 +35,7 @@ func agentClient(args []string) error {
 	workspace := flags.String("workspace", ".", "Harness working directory")
 	prompt := flags.String("prompt", "", "Initial Codex prompt; exits when the turn completes")
 	executable := flags.String("executable", "", "Selected native CLI executable")
+	bindDesk := flags.Bool("bind-desk-session", false, "Bind an explicitly hosted bridge to its desk session")
 	keepOpen := flags.Bool("keep-open", false, "Keep the session open after the initial prompt")
 	plan := flags.Bool("plan", false, "Use Codex plan mode, including structured questions")
 	title := flags.String("title", "Agent request", "Title for review cards")
@@ -52,7 +53,9 @@ func agentClient(args []string) error {
 	if err != nil {
 		return err
 	}
-	client.ProjectID, client.DeskSessionID = os.Getenv("MITOS_PROJECT_ID"), os.Getenv("MITOS_SESSION_ID")
+	if *bindDesk {
+		client.ProjectID, client.DeskSessionID = os.Getenv("MITOS_PROJECT_ID"), os.Getenv("MITOS_SESSION_ID")
+	}
 	name := adapter
 	if name == "codex-proxy" {
 		name = "codex"
