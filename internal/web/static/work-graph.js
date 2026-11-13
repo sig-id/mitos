@@ -7,14 +7,14 @@
  const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
  const button = (text, fn, cls = '') => { const b = node('button', text, cls); b.type = 'button'; b.onclick = () => Promise.resolve().then(fn).catch(showError); return b; };
  const link = (text, href) => { const a = node('a', text, 'text-link'); a.href = href; return a; };
- const labels = { finished:'Finished', idle:'Not started', queued:'Queued', running:'Working', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
+ const labels = { finished:'Finished', idle:'Not started', queued:'Queued', running:'Running', in_progress:'In progress', waiting_input:'Waiting for you', resuming:'Applying answer', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
  const badge = status => node('span', labels[status] || status, 'graph-badge ' + status);
  const date = value => new Date(value).toLocaleString();
  const storageKey = `mitos.graph.pending.${server}.${project}`;
  let optionsLoaded = false, apps = [], graphs = [], nextPage = '', graphID = new URLSearchParams(location.search).get('graph') || '';
  let showHistory=false;
  let workView=["work","workflow","result"].includes(new URLSearchParams(location.search).get("view"))?new URLSearchParams(location.search).get("view"):"work",resultViewKey="",conversationKey="",openingResult=false;
- let selectedAttempt='', renderedReaderKey='', readerStates=new Map();
+ let selectedAttempt='', renderedReaderKey='', readerStates=new Map(), requestDrafts=new Map();
  let selected = new URLSearchParams(location.search).get('node') || '', snapshot, graph, selectedTab = 'details';
  let snapshotRequest=0,snapshotApplied=0,summarySignature='',loadedMore=false;
  let epoch = 0, alive = true, polling = false, tick = 0, failureCount = 0, snapshotSignature = '', detailSignature = '';
@@ -61,7 +61,7 @@
  function latestPlanner(){const rounds=plannerRounds();return rounds.at(-1)}
  function renderPlanner(){
   const box=$('graph-planner-summary'),rounds=plannerRounds();box.hidden=!rounds.length;if(!rounds.length)return;
-  const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':'Waiting for agents';
+  const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':['waiting_input','resuming'].includes(displayState(id))?labels[displayState(id)]:m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':overall()==='waiting_input'?'Waiting for your answer':'Waiting for agents';
   box.replaceChildren(node('strong','✦ Coordinator'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,()=>selectNode(id,'planning'),'graph-planner-history'),button('Latest update',()=>selectNode(id,'output')));
  }
  $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
@@ -88,6 +88,7 @@
   const user=node('article',undefined,'conversation-message user');user.append(node('strong','You'),node('p',graph.members[graph.root_task].spec.brief.intent,'prose'));
   const agent=node('article',undefined,'conversation-message agent');agent.append(node('strong','Mitos'));
   if(graph.result){agent.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
+  else if(overall()==='waiting_input'){const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input');agent.append(node('p','An agent needs your answer before it can continue.'),button('Review request',()=>selectNode(waiting,'output'),'primary'));}
   else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
   if(graph.status==='active'&&!graph.policy.automatic)agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
   box.replaceChildren(user,agent);
@@ -104,7 +105,9 @@
   if (Date.parse(graph.limits.deadline) <= Date.now()) return 'needs_attention';
   const values = Object.values(snapshot.nodes);
   if (Object.values(graph.expansions).some(x => !x.outcome && x.error) || values.some(n => ['failed','needs_attention'].includes(n.state))) return 'needs_attention';
-  if (values.some(n => n.state === 'running')) return 'running';
+  if (values.some(n => n.state === 'waiting_input')) return 'waiting_input';
+  if (values.some(n => n.state === 'resuming')) return 'resuming';
+  if (values.some(n => n.state === 'running')) return 'in_progress';
   if (reviewable(graph.root_task)) return 'review';
   if (!graph.policy.controller_application && Object.keys(graph.members).length===1) return 'idle';
   if (Object.values(graph.expansions).some(x => !x.outcome)) return 'planning';
@@ -200,6 +203,8 @@
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
  function renderMessage() {
+  const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input')||Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].pending_requests);
+  if(waiting){const box=$('graph-message');box.replaceChildren(node('span',title(graph.members[waiting])+(snapshot.nodes[waiting].state==='waiting_input'?' is waiting for your answer.':' has a pending request.')),button('Review request',()=>selectNode(waiting,'output')));box.hidden=false;return;}
   const box = $('graph-message'); box.replaceChildren(); box.hidden = true;
   const errors = Object.values(graph.expansions).filter(x => !x.outcome && x.error);
   if (Date.parse(graph.limits.deadline) <= Date.now() && graph.status === 'active') { box.textContent = 'The work reached its time limit. Results are preserved; no new steps will start.'; box.hidden = false; }
@@ -253,7 +258,7 @@
    if (!card) { card = button('',() => selectNode(id),'graph-node'); card.dataset.id = id; stage.append(card); }
    existing.delete(id); card.style.left = p.x + 'px'; card.style.top = p.y + 'px'; card.style.height = '132px'; card.dataset.status = status; card.dataset.kind = kind(m); card.setAttribute('aria-pressed',String(id === selected)); card.setAttribute('aria-label',`${title(m)} · ${kindLabel(m)} · ${labels[status] || status}`);
    const contentKey = JSON.stringify([title(m),status,kind(m),snapshot.nodes[id]?.executor,m.attempts?.length,m.spec.required,m.sealed]);
-   if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',planner:'✦',decision:'◈',step:'○'}[kind(m)]),document.createTextNode(kindLabel(m))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',m.spec.kind === 'scope' ? (m.accepted ? 'Result ready' : graph.policy.automatic ? 'Agent managed' : 'Not started') : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.controller_for ? 'Coordinator' : '')); card.replaceChildren(top,node('strong',title(m),'graph-node-title'),footer); }
+   if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',planner:'✦',decision:'◈',step:'○'}[kind(m)]),document.createTextNode(kindLabel(m))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',m.spec.kind === 'scope' ? (m.accepted ? 'Result ready' : graph.policy.automatic ? 'Overall progress' : 'Not started') : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.controller_for ? 'Coordinator' : '')); card.replaceChildren(top,node('strong',title(m),'graph-node-title'),footer); }
    const count = Object.values(graph.members).filter(child => child.spec.parent === id && kind(child)!=='planner' && (showHistory||!child.replacement)).length;
    if (m.spec.kind === 'scope' && count) { const toggle = button(collapsed.has(id) ? '+' : '−',() => { if (collapsed.has(id)) collapsed.delete(id); else { collapsed.add(id); if (selected && descendants(graph,id).includes(selected) && selected !== id) selectNode(id); } renderMap(); },'graph-collapse'); toggle.setAttribute('aria-expanded',String(!collapsed.has(id))); toggle.setAttribute('aria-label',(collapsed.has(id)?'Expand ':'Collapse ')+title(m)); toggle.style.left = (p.x+224)+'px'; toggle.style.top = (p.y+118)+'px'; stage.append(toggle); }
   }
@@ -268,22 +273,23 @@
  $('graph-fit').onclick=fit; $('graph-zoom-in').onclick=()=>setZoom(zoom+.15); $('graph-zoom-out').onclick=()=>setZoom(zoom-.15);
  function setLayout(list) { listMode=list; $('graph-viewport').hidden=list; $('graph-list-view').hidden=!list; $('graph-mode-map').setAttribute('aria-pressed',String(!list)); $('graph-mode-list').setAttribute('aria-pressed',String(list)); document.querySelector('.graph-map-controls').hidden=list; }
  $('graph-mode-map').onclick=()=>setLayout(false); $('graph-mode-list').onclick=()=>setLayout(true);
- async function selectNode(id, tab) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select('workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=tab||(graph.members[id].current_run_id?'output':'details'); detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); renderInspector(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
+ async function selectNode(id, tab) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select('workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=tab||(graph.members[id].spec.kind==='scope'?'progress':graph.members[id].current_run_id?'output':'details'); detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); renderInspector(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
  function captureReader(){
   if(!renderedReaderKey)return;
-  const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifact:box.querySelector('[aria-label="Output artifact"]')?.value,open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});
+  const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifacts:Object.fromEntries([...box.querySelectorAll('[aria-label="Output artifact"]')].map(select=>[select.dataset.runId,select.value])),open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});
  }
  function restoreReader(){const saved=readerStates.get(renderedReaderKey);if(!saved)return;for(const d of $('graph-node-detail').querySelectorAll('details[data-read-key]'))if(d.dataset.readKey in saved.open)d.open=saved.open[d.dataset.readKey];$('graph-inspector').scrollTop=saved.scroll;}
  $('graph-inspector-expand').onclick=()=>{const body=document.querySelector('.graph-body'),expanded=body.classList.toggle('reading-mode');$('graph-inspector-expand').textContent=expanded?'Show graph':'Expand';$('graph-inspector-expand').setAttribute('aria-pressed',String(expanded));scrollWorkTo($('graph-inspector'))};
  $('graph-inspector-close').onclick=()=>{selected='';epoch++;detailSignature='';$('graph-inspector').hidden=true;document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');updateURL();renderMap();renderTree()};
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
-  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
+  if(m.spec.kind==='scope'&&!['progress','details','result'].includes(selectedTab))selectedTab='progress';
+  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
-  if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.state==='parked')actions.append(link('Inspect execution','/runs/'+encodeURIComponent(m.current_run_id)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
-  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(kind(m)==='planner'?[['output','Output'],['planning','Planning rounds'],['details','Details']]:[['details','Details'],['output','Output'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
-  if(selectedTab==='details'){
+  if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
+  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(m.spec.kind==='scope'?[['progress','Progress'],['details','Request'],['result','Result']]:kind(m)==='planner'?[['output','Activity'],['planning','Planning rounds'],['details','Assignment']]:[['output','Activity'],['details','Assignment'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
+  if(selectedTab==='progress'){renderGoalProgress(box,m)}else if(selectedTab==='result'){renderGoalResult(box)}else if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
    const deps=m.spec.brief.scheduling?.deps||[];if(deps.length){box.append(node('h4','Depends on'));for(const dep of deps){box.append(button((graph.members[dep.from]?title(graph.members[dep.from]):dep.from)+(snapshot.nodes[selected].waiting?.includes(dep.from)?' · waiting':''),()=>selectNode(dep.from),'graph-dependency-link'))}}
@@ -292,58 +298,110 @@
    const decision=Object.values(graph.decisions||{}).find(d=>d.task_id===selected);if(decision)renderDecision(box,decision);
    if(m.spec.kind==='scope'){
     const unresolved=Object.values(graph.expansions).filter(x=>!x.outcome);if(unresolved.length){box.append(node('h4','Planning'));for(const x of unresolved)box.append(node('p',x.error?x.error.replaceAll('_',' '):x.controller_task?'Coordinator is considering the next steps.':'Waiting for steps to be defined.'))}
-    if(!reviewable(selected)&&graph.status==='active')box.append(node('h4','Before completion'),node('p','Required steps must be accepted and execution settled before reviewing this goal.','muted'));
    }
   }else if(selectedTab==='planning'){renderPlanningHistory(box)}else if(selectedTab==='output'){renderOutput(box,m,selectedAttempt||m.current_run_id)}else{renderAttempts(box,m)}
   restoreReader();
  }
  function renderDecision(box,d){box.append(node('h4','Decision'),node('p',d.outcome==='selected'?'A candidate has been selected. Review its changes before applying.':d.reason?.replaceAll('_',' ')||d.outcome));if(d.answer)box.append(node('p','Selected candidate '+(Number(d.answer.choice)+1)));for(const [index,candidate]of(d.candidates||[]).entries()){const details=node('details');details.open=String(index)===d.answer?.choice;details.append(node('summary',`${index+1}. ${candidate.explanation}`));const ul=node('ul');for(const op of candidate.operations)ul.append(node('li',(op.kind.replaceAll('_',' '))+': '+(op.spec?.brief?.title||graph.members[op.task]?.spec.brief.title||op.rationale||'')));details.append(ul);box.append(details)}if(d.outcome==='selected')box.append(button('Apply selected changes',()=>openAction('apply-decision',d.key),'primary'));if(!['applied','dismissed'].includes(d.outcome))box.append(button('Dismiss decision',()=>openAction('dismiss-decision',d.key)));}
  async function runDetail(m,runID){const key=runID+':'+m.fact_revision; if(cachedRuns.has(key))return cachedRuns.get(key);const value=await request(endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID));if(!['queued','running','stopping'].includes(value.status))cachedRuns.set(key,value);return value;}
- function renderOutput(box,m,runID=m.current_run_id){
-  if(!runID){box.append(node('p',m.spec.kind==='scope'?'Select an agent or step to read its output.':'Output will appear when this step runs.','muted'));return}
+ function renderOutput(box,m,runID=m.current_run_id,showAttempt=true){
+  if(!runID){box.append(node('p','This assignment is waiting to be scheduled.','muted'));return}
   const holder=node('div');holder.append(node('p','Loading output…','muted'));box.append(holder);const token=epoch,chosen=selected;
   runDetail(m,runID).then(async run=>{
-   if(token!==epoch||selected!==chosen||selectedTab!=='output'||!holder.isConnected)return;
-   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)),badge(m.accepted?.run_id===run.id?'accepted':run.status==='done'?'finished':run.status));if(run.stage&&run.status==='running')attemptHeader.append(node('span',run.stage,'muted'));holder.append(attemptHeader);const files=run.artifacts||[];holder.append(node('p','Created '+date(run.created_at),'muted'));if(run.summary&&run.status!=='running'&&!files.some(a=>a.name==='report.md'))holder.append(node('p',run.summary));
+   if(token!==epoch||selected!==chosen||!holder.isConnected)return;
+   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)));if(run.id!==m.current_run_id)attemptHeader.append(badge(run.status==='done'?'finished':run.status));if(showAttempt)holder.append(attemptHeader);const files=run.artifacts||[];const events=renderRunActivity(holder,m,run);
    const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);const report=readable.find(a=>/report\.md$/.test(a.name))||[...readable].reverse().find(a=>/output\.txt$/.test(a.name))||readable[0];
-   if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run.id)}else if(!report){holder.append(node('p','No text output was saved for this attempt.','muted'));}
-   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Coordinator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifact||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));restoreReader();window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
-   if(files.length){const details=node('details');details.dataset.readKey='artifacts';details.append(node('summary','Files & downloads'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
+   if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run)}else if(!report){holder.append(node('p',run.summary||'This attempt finished without a saved report.','muted'));}
+   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');select.dataset.runId=run.id;for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Coordinator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifacts?.[run.id]||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));restoreReader();window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
+   if(files.length){const details=node('details');details.dataset.readKey='artifacts:'+run.id;details.append(node('summary','Files & downloads'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
+   holder.append(events);
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
  }
- function renderLiveOutput(box,m,runID){
-  const section=node('section',undefined,'graph-live-output'),heading=node('h4','Live output'),status=node('p','Waiting for the agent’s first update…','muted'),content=node('pre',undefined,'graph-live-text');
+ function elapsed(value){const seconds=Math.max(0,Math.floor((Date.now()-Date.parse(value))/1000));return seconds<60?seconds+'s':seconds<3600?Math.floor(seconds/60)+'m':Math.floor(seconds/3600)+'h '+Math.floor(seconds%3600/60)+'m'}
+ function renderLiveOutput(box,m,run){
+  const section=node('section',undefined,'graph-live-output'),heading=node('h4','Live activity'),status=node('p','Connecting to agent activity…','muted'),content=node('pre',undefined,'graph-live-text');
   content.hidden=true;section.append(heading,status,content);box.append(section);
-  const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID)+'/output';
+  const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(run.id)+'/output';
   const active=()=>token===epoch&&section.isConnected;
   const update=async()=>{
    if(!active())return;
    try{
-    if(!document.hidden&&!$('work-view').hidden){
+    if(!document.hidden&&workView==='workflow'&&!section.closest('details:not([open])')){
      const output=await request(path);if(!active())return;
-     heading.textContent=output.live?'Live output':'Execution log';
-     status.textContent=output.truncated?'Showing the most recent output. The saved execution log is available after the attempt finishes.':output.text?'Agent messages appear here as they arrive. Reports and files are saved when the attempt finishes.':output.live?'Waiting for the agent’s first update…':'No execution log was saved.';
+     const at=Date.parse(output.updated_at)>0?output.updated_at:run.updated_at;
+     heading.textContent=output.live?'Live activity':'Execution log';
+     status.textContent=!output.available?'Live capture is unavailable for this attempt. Its status and requests are shown above.':output.text?'Last activity '+elapsed(at)+' ago'+(output.truncated?' · Showing recent output':''):run.status==='queued'?'Waiting to start.':'No agent messages or tool activity yet · '+elapsed(at)+' since the last status update';
+     if(output.live&&output.available&&Date.now()-Date.parse(at)>120000)status.textContent+=' · No recent activity received; the process may be waiting.';
      if(content.textContent!==output.text){const follow=content.scrollHeight-content.scrollTop-content.clientHeight<40;content.textContent=output.text;content.hidden=!output.text;if(follow)content.scrollTop=content.scrollHeight;}
      if(!output.live)return;
     }
-   }catch(error){if(!active())return;status.textContent=error.message+' Retrying…';}
+   }catch(error){if(!active())return;status.textContent='Activity connection lost. Last received output is shown. Retrying…';}
    if(active())setTimeout(update,1000);
   };
   update();
+ }
+ function renderRunActivity(box,m,run){
+  const panel=node('section',undefined,'graph-run-activity'),meta=node('p','Loading attempt status…','muted'),requests=node('div',undefined,'graph-pending-requests'),events=node('details',undefined,'graph-execution-events'),list=node('ol',undefined,'graph-event-list');
+  events.dataset.readKey='events:'+run.id;events.append(node('summary','Execution events'),list);panel.append(meta,requests);box.append(panel);
+  const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(run.id)+'/activity';let requestKey='',eventsKey='';
+  const active=()=>token===epoch&&panel.isConnected;
+  const update=async()=>{
+   if(!active())return;
+   try{
+    if(!document.hidden&&workView==='workflow'&&!panel.closest('details:not([open])')){
+     const activity=await request(path);if(!active())return;
+     meta.textContent=(activity.started_at?'Started '+date(activity.started_at):'Created '+date(activity.created_at))+(Date.parse(activity.finished_at)>0?' · Finished '+date(activity.finished_at):activity.started_at?' · Elapsed '+elapsed(activity.started_at):'');
+     const pending=activity.requests||[],key=JSON.stringify(pending);
+     if(key!==requestKey){requestKey=key;requests.replaceChildren();for(const item of pending)renderPendingRequest(requests,item);}
+     const eventKey=JSON.stringify(activity.events);
+     if(eventKey!==eventsKey){eventsKey=eventKey;list.replaceChildren();for(const event of activity.events||[]){const li=node('li');li.append(node('time',date(event.at)),node('strong',({graph_attempts_queued:'Scheduled',claims_acquired:'Execution started',advance:'Assignment admitted',run_started:'Preparing workspace',workspace_prepared:'Workspace ready',agent_started:'Agent connected',run_finished:'Finished',agent_request_received:'Answer requested',agent_answer_recorded:'Answer recorded',agent_answer_delivered:'Answer delivered'})[event.kind]||event.kind.replaceAll('_',' ')));if(event.summary)li.append(node('p',event.summary));list.append(li)}events.querySelector('summary').textContent='Execution events · '+list.childElementCount;restoreReader();}
+     if(!['queued','running','stopping','parked'].includes(activity.status)&&!pending.length)return;
+    }
+   }catch(error){if(!active())return;meta.textContent='Unable to refresh attempt status. Retrying…';}
+   if(active())setTimeout(update,1000);
+  };
+  update();return events;
+ }
+ function renderPendingRequest(box,item){
+  const d=item.decision,card=node('section',undefined,'graph-request-card');card.append(node('h4',d.choice?'Applying your answer':item.blocking?'Waiting for you':'Question from the agent'),node('p',d.question,'graph-request-question'));
+  if(item.command){card.append(node('pre',item.command,'graph-request-context'));if(item.directory)card.append(node('p','Directory: '+item.directory,'muted'));if(d.context?.attempted){const source=node('details');source.append(node('summary','Full request'),node('pre',d.context.attempted,'graph-request-context'));card.append(source)}}else if(d.context?.attempted)card.append(node('pre',d.context.attempted,'graph-request-context'));
+  if(d.context?.blocked_by)card.append(node('p',d.context.blocked_by));
+  card.append(node('p','Requested '+date(d.requested_at),'muted'));
+  if(d.choice){card.append(node('p',d.application_error||'Your answer has been recorded. Waiting for the agent to receive it.'));box.append(card);return}
+  const form=node('form'),error=node('p',undefined,'form-error');error.setAttribute('role','alert');let input;
+  if(item.input==='text'){const label=node('label','Answer');input=node('textarea');input.maxLength=d.value_schema?.maxLength||1024;input.minLength=d.value_schema?.minLength||0;input.rows=3;input.value=requestDrafts.get(d.decision_id)||'';input.oninput=()=>requestDrafts.set(d.decision_id,input.value);label.append(input);form.append(label)}
+  const choices=node('div',undefined,'graph-request-options');
+  for(const option of d.options||[]){const b=node('button');b.type='submit';b.value=option.id;b.append(node('strong',option.label),node('span',option.consequence));choices.append(b)}
+  form.append(choices,error);form.onsubmit=async event=>{event.preventDefault();const choice=event.submitter?.value;if(!choice)return;const buttons=[...choices.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);error.textContent='';try{await request('/api/runs/'+encodeURIComponent(d.run_id)+'/decisions/'+encodeURIComponent(d.decision_id),{choice,...(input?{value:input.value}:{})});requestDrafts.delete(d.decision_id);await refreshSelected();if(card.isConnected){card.replaceChildren(node('p','Answer recorded. Waiting for delivery to the agent.'));}}catch(e){error.textContent=e.message;buttons.forEach(b=>b.disabled=false)}};
+  card.append(form);box.append(card);
+ }
+ function renderGoalProgress(box){
+  box.append(node('p','The coordinator plans and reviews; agents carry out the assignments.','muted'));
+  const members=workflowOrder().filter(id=>graph.members[id].spec.kind!=='scope'&&!graph.members[id].replacement),workers=members.filter(id=>kind(graph.members[id])!=='planner');
+  box.append(node('h4','Assignments'));
+  if(!workers.length)box.append(node('p',graph.policy.automatic?'The coordinator is preparing the first assignments.':'This goal has no assignments yet.','muted'));
+  for(const id of workers){const row=node('div',undefined,'graph-goal-assignment');row.append(button(title(graph.members[id]),()=>selectNode(id),'graph-dependency-link'),badge(displayState(id)));if(snapshot.nodes[id]?.pending_requests)row.append(node('span',snapshot.nodes[id].pending_requests+' pending request'+(snapshot.nodes[id].pending_requests===1?'':'s'),'muted'));box.append(row)}
+  const current=workers.find(id=>displayState(id)==='waiting_input')||workers.find(id=>['running','resuming'].includes(displayState(id)));
+  if(current){const section=node('section',undefined,'graph-goal-current');section.append(node('h4','Current agent · '+title(graph.members[current])));box.append(section);renderOutput(section,graph.members[current]);}
+  const planner=latestPlanner();if(planner){const details=node('details',undefined,'graph-goal-coordinator');details.dataset.readKey='goal-coordinator';details.open=!current;details.append(node('summary','Latest coordinator update'));const content=node('div');details.append(content);box.append(details);let opened=false;const show=()=>{if(details.open&&!opened){opened=true;renderOutput(content,graph.members[planner]);}};details.ontoggle=show;show();}
+  if(graph.result)box.append(button('View final result',()=>openResult(),'primary'));
+ }
+ function renderGoalResult(box){
+  if(graph.result){box.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));return}
+  box.append(node('p',graph.status==='active'?'The final result is not ready yet. Progress shows the current agent activity and coordinator updates.':'This goal ended without a final result. Its agent activity and saved files remain available.'));
+  box.append(button('View progress',()=>{selectedTab='progress';detailSignature='';renderInspector()}));
  }
  function renderPlanningHistory(box){
   box.append(node('p','The coordinator plans the work and reviews agent results. Select a round to read its output.','muted'));
   for(const [i,id]of plannerRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id,'output')));box.append(row)}
  }
  function renderAttempts(box,m){
-  if(!m.attempts?.length){box.append(node('p','This agent has not started yet.','muted'));return}
-  box.append(node('p','Each attempt keeps its own output and files.','muted'));
+  if(!m.attempts?.length){box.append(node('p','No attempt has been scheduled for this assignment.','muted'));return}
   for(const [index,id]of m.attempts.entries()){
-   const row=node('article',undefined,'graph-attempt-card'),heading=node('div',undefined,'graph-attempt-heading');heading.append(node('strong','Attempt '+(index+1)));if(id===m.current_run_id)heading.append(badge(displayState(m.spec.id)));row.append(heading);
-   const meta=node('p','Loading status…','muted');row.append(meta);const token=epoch;
-   runDetail(m,id).then(run=>{if(token!==epoch||!row.isConnected)return;if(id!==m.current_run_id)heading.append(badge(run.status==='done'?'finished':run.status));meta.textContent='Created '+date(run.created_at)+(Date.parse(run.finished_at)>0?' · Finished '+date(run.finished_at):'');const files=node('div',undefined,'graph-files');for(const artifact of run.artifacts||[])files.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));if(files.childElementCount){row.append(node('strong','Saved files'),files)}else row.append(node('p',['queued','running','stopping'].includes(run.status)?'No saved files yet. Open this attempt to follow live output.':'No files were saved for this attempt.','muted'));}).catch(error=>{if(row.isConnected)meta.textContent=error.message});
-   row.append(button('Open attempt '+(index+1),()=>{selectedAttempt=id;selectedTab='output';detailSignature='';renderInspector()},'primary'));
-   const diagnostic=node('details');diagnostic.dataset.readKey='diagnostics:'+id;diagnostic.append(node('summary','Diagnostics'),link('Technical execution details','/runs/'+encodeURIComponent(id)));row.append(diagnostic);box.append(row);
+   const row=node('details',undefined,'graph-attempt-card'),heading=node('summary','Attempt '+(index+1)),content=node('div');row.dataset.readKey='attempt:'+id;
+   if(id===m.current_run_id)heading.append(badge(displayState(m.spec.id)));else runDetail(m,id).then(run=>{if(row.isConnected)heading.append(badge(run.status==='done'?'finished':run.status))}).catch(()=>{});
+   row.append(heading,content);box.append(row);row.open=m.attempts.length===1;let opened=false;
+   const show=()=>{if(row.open&&!opened){opened=true;renderOutput(content,m,id,false)}};row.ontoggle=show;show();
   }
  }
 
