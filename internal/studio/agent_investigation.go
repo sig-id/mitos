@@ -94,6 +94,16 @@ func (e *Engine) investigateAgentRequest(ctx context.Context, session AgentSessi
 		return e.agentResolutionFallback(route, request, errors.New("investigation requires operator review"))
 	}
 	for i, a := range result.Answers {
+		current, err := s.Get(request.Request.Cards[i].RunID)
+		if err != nil {
+			return err
+		}
+		if current.Decision == nil {
+			return ErrConflict
+		}
+		if current.Decision.Resolution != nil {
+			continue
+		}
 		var value json.RawMessage
 		if a.Value != nil {
 			value, _ = json.Marshal(*a.Value)
@@ -104,6 +114,16 @@ func (e *Engine) investigateAgentRequest(ctx context.Context, session AgentSessi
 	}
 	route.Route.Reason = result.Reason
 	for i, a := range result.Answers {
+		current, err := s.Get(request.Request.Cards[i].RunID)
+		if err != nil {
+			return err
+		}
+		if current.Decision == nil {
+			return ErrConflict
+		}
+		if current.Decision.Resolution != nil {
+			continue
+		}
 		var value json.RawMessage
 		if a.Value != nil {
 			value, _ = json.Marshal(*a.Value)
