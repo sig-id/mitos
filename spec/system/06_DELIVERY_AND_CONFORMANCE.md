@@ -293,3 +293,11 @@ migration is accepted. Architectural changes MUST update their owning specificat
 and ADR. Product claims MUST follow demonstrated capabilities. Product and
 system documents MUST remain independently numbered consecutively, with one owner for each
 contract rather than overlapping documents that silently disagree.
+## Sessions, routing and supervision delivery
+
+The six slices in [agent sessions and supervision](08_AGENT_SESSIONS_AND_SUPERVISION.md)
+are required targets. At design adoption, bridge CLI requests and typed batch/graph
+choices exist, but UI bridge launch, project delegated approval settings,
+COOPERATION.md snapshots, request classification, live automatic-worker requests,
+and independent model supervision are not yet integrated. Each implementation PR
+must report its validated capabilities and remaining substrate limitations.

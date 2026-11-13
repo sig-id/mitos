@@ -35,6 +35,13 @@ and [S1–S4 delivery gates](system/06_DELIVERY_AND_CONFORMANCE.md#application-s
 Acegoat remains in its own repository; hosted capabilities are targets, not shipped
 features. Local deployment retains its lightweight defaults.
 
+## Sessions, cooperation and supervision reading path
+
+[ADR 0007](ADRs/0007_SESSIONS_ROUTING_AND_SUPERVISION.md) separates coordinator,
+router and supervisor responsibilities. [Agent sessions and supervision](system/08_AGENT_SESSIONS_AND_SUPERVISION.md)
+defines six delivery slices, project preferences, the proposed COOPERATION.md
+convention, explicit model classification, and boundary enforcement limitations.
+
 ## Authority
 
 Product and system specifications are normative, including requirements not yet

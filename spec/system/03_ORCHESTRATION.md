@@ -260,6 +260,12 @@ unresolved resources.
 
 ## Human decisions
 
+Coordinator planning, request routing, and independent boundary supervision are
+separate responsibilities. Their vocabulary and delegated automated-resolution
+contract are defined in [agent sessions and supervision](08_AGENT_SESSIONS_AND_SUPERVISION.md).
+Human-only requests retain the rules below; delegated automation requires the
+explicit scope and revalidation defined by that contract.
+
 A decision MUST bind blocked work, causal request, revision, question, attempted
 action, constraints, supporting records, and choices with consequences and scope.
 It SHOULD be answerable without reading a transcript. A model MAY compose the
