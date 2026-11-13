@@ -37,11 +37,11 @@ try{
  assert.deepEqual(await page.locator('#graph-node-detail .graph-tabs button').allTextContents(),['Progress','Request','Result']);
  await page.locator('.graph-goal-current .graph-request-card').waitFor();
  await page.screenshot({path:'/tmp/mitos-goal-progress.png'});
- await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.getByRole('button',{name:'Review request',exact:true}).click();await page.screenshot({path:'/tmp/mitos-goal-progress-mobile.png'});await page.setViewportSize({width:1600,height:1040});
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.getByLabel('Work graphs',{exact:true}).getByRole('button',{name:'Review request',exact:true}).click();await page.screenshot({path:'/tmp/mitos-goal-progress-mobile.png'});await page.setViewportSize({width:1600,height:1040});
  await page.locator('.graph-node[data-kind=scope]').click();
  await page.locator('#graph-node-detail').getByRole('button',{name:'Result',exact:true}).click();
  await page.getByRole('button',{name:'View progress',exact:true}).click();
- await page.getByRole('button',{name:'Review request',exact:true}).click();
+ await page.getByLabel('Work graphs',{exact:true}).getByRole('button',{name:'Review request',exact:true}).click();
  assert.equal(page.url(),waitingURL);
  await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();
  await page.locator('.graph-attempt-card .graph-request-card').waitFor();

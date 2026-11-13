@@ -1,5 +1,6 @@
 {{define "navigation-links"}}
 <a class="brand" href="/" aria-label="Mitos overview"><img src="/static/favicon.svg" alt="" width="32" height="32"><strong>mitos</strong></a>
+<button type="button" id="notifications-toggle" aria-haspopup="dialog">Notifications <span id="notifications-count"></span></button>
 <nav aria-label="Workspace"><a href="/" {{if eq .Section "overview"}}aria-current="page"{{end}}>Overview</a><a href="/inbox" {{if eq .Section "inbox"}}aria-current="page"{{end}}>Inbox <span id="inbox-count"></span></a></nav>
 <div class="rail-title">Projects <a id="open-project" href="/?open=project" aria-label="Open a project">+</a></div>
 <nav id="projects" aria-label="Projects">{{range .Projects}}<a href="/projects/{{.ID}}" {{if eq $.ProjectID .ID}}aria-current="page"{{end}}>{{.Name}}<small>{{$.Home.Name}}</small></a>{{end}}</nav>

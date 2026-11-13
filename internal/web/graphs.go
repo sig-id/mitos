@@ -170,6 +170,7 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("POST /api/projects/{project}/decision-provider/test", s.testDecisionProvider)
 	mux.HandleFunc("PUT /api/projects/{project}/agent-policy", func(w http.ResponseWriter, r *http.Request) {
 		var p agentpolicy.Policy
 		if !graphBody(w, r, &p) {

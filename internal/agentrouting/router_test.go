@@ -38,3 +38,30 @@ func TestRulesPrecedeClassification(t *testing.T) {
 		t.Fatal("extra permission granted", got)
 	}
 }
+
+func TestDecisionReviewIsExplicitAndDenyWins(t *testing.T) {
+	raw := json.RawMessage(`{"id":1,"method":"item/commandExecution/requestApproval","params":{"threadId":"t","turnId":"u","command":"ls","cwd":"/work"}}`)
+	r, err := harness.Normalize("codex", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := agentpolicy.Default()
+	if got := Prepare(p, r, "/work"); got.Resolver != "human" {
+		t.Fatal(got)
+	}
+	p.Autonomy = "decision"
+	if err = p.Validate(); err == nil {
+		t.Fatal("provider and boundaries must be explicit")
+	}
+	if got := Prepare(p, r, "/work"); got.Resolver != "decision" {
+		t.Fatal(got)
+	}
+	p.Rules = []agentpolicy.Rule{{ID: "deny", Command: "ls", Directory: ".", Action: "deny"}}
+	if got := Prepare(p, r, "/work"); got.Resolver != "direct" || got.Choice != "deny" {
+		t.Fatal(got)
+	}
+	r.Payload = json.RawMessage(`{"params":{"command":"ls","cwd":"/work","additionalPermissions":{"network":true}}}`)
+	if got := Prepare(p, r, "/work"); got.Resolver != "human" {
+		t.Fatal("additional authority implicitly delegated", got)
+	}
+}
