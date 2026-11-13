@@ -224,7 +224,7 @@ func TestAttentionTracksOwningGraphAndClearsAfterAnswer(t *testing.T) {
 	e.Store.mu.RLock()
 	state := e.Store.graphDisplayState(&g, &GraphMember{State: "running", CurrentRunID: "owner"})
 	e.Store.mu.RUnlock()
-	if state != "waiting_for_answer" {
+	if state != "waiting_input" {
 		t.Fatal(state)
 	}
 	if _, err = e.ResolveAs(n.Card.RunID, n.ID, "deny", "", "api", decision.LocalOperator()); err != nil {
@@ -250,10 +250,10 @@ func TestAsyncAttentionDoesNotMarkWorkerBlocked(t *testing.T) {
 		t.Fatal(notices)
 	}
 	e.Store.mu.RLock()
-	waiting := e.Store.runWaitingForAnswer("owner")
+	state := e.Store.graphDisplayState(&WorkGraph{Status: "active"}, &GraphMember{State: "running", CurrentRunID: "owner"})
 	e.Store.mu.RUnlock()
-	if waiting {
-		t.Fatal("nonblocking clarification paused worker display")
+	if state != "running" {
+		t.Fatal("nonblocking clarification paused worker display", state)
 	}
 }
 

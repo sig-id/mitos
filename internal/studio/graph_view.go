@@ -51,11 +51,12 @@ func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary
 }
 
 type GraphNodeView struct {
-	CreatedAt time.Time `json:"created_at"`
-	State     string    `json:"state"`
-	Executor  string    `json:"executor,omitempty"`
-	Settled   bool      `json:"settled"`
-	Waiting   []string  `json:"waiting,omitempty"`
+	PendingRequests int       `json:"pending_requests,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	State           string    `json:"state"`
+	Executor        string    `json:"executor,omitempty"`
+	Settled         bool      `json:"settled"`
+	Waiting         []string  `json:"waiting,omitempty"`
 }
 type GraphView struct {
 	Graph      WorkGraph                `json:"graph"`
@@ -85,11 +86,22 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 		}
 		return "planning"
 	}
-	if s.runWaitingForAnswer(m.CurrentRunID) {
-		return "waiting_for_answer"
-	}
 	if m.State == "done" {
 		return "review"
+	}
+	if m.State == "running" || m.State == "parked" {
+		resuming := false
+		for _, request := range s.graphPendingRequests(m.CurrentRunID) {
+			if request.Blocking {
+				if request.Decision.Choice == "" {
+					return "waiting_input"
+				}
+				resuming = true
+			}
+		}
+		if resuming {
+			return "resuming"
+		}
 	}
 	if m.State == "parked" {
 		return "needs_attention"
@@ -143,6 +155,7 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		}
 		copy.Members[id] = &member
 		n := GraphNodeView{CreatedAt: g.CreatedAt, State: s.graphDisplayState(g, m), Settled: s.graphSettled(m)}
+		n.PendingRequests = len(s.graphPendingRequests(m.CurrentRunID))
 		if len(m.Attempts) > 0 {
 			if r := s.runs[m.Attempts[0]]; r != nil {
 				n.CreatedAt = r.CreatedAt

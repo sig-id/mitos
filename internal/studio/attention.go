@@ -53,24 +53,3 @@ func (s *Store) Attention() []Attention {
 	defer s.mu.RUnlock()
 	return graphClone(s.attention())
 }
-
-func (s *Store) runWaitingForAnswer(run string) bool {
-	if run == "" {
-		return false
-	}
-	if r := s.runs[run]; r != nil && r.Decision != nil && r.Decision.Choice == "" && r.Decision.ResolvedAt == nil && r.Status == "parked" {
-		return true
-	}
-	for _, request := range s.agentRequests {
-		if request.Invalidated || request.Request.Method == "mitos/asyncQuestion" || s.agentSessions[request.SessionID].RunID != run {
-			continue
-		}
-		for _, card := range request.Request.Cards {
-			r := s.runs[card.RunID]
-			if r != nil && r.Status == "parked" && r.Decision != nil && r.Decision.ResolvedAt == nil && r.Decision.Choice == "" {
-				return true
-			}
-		}
-	}
-	return false
-}

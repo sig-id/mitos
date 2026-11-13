@@ -296,6 +296,15 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}/activity", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Store.GraphActivity(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, v)
+	})
 	mux.HandleFunc("GET /api/graphs/{id}/nodes/{task}/runs/{run}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.Store.GraphRun(r.PathValue("id"), r.PathValue("task"), r.PathValue("run"))
 		if err != nil {
