@@ -89,3 +89,30 @@ func TestAsyncQuestionsSteerWithoutStoppingServerEvents(t *testing.T) {
 		t.Fatal(output.String())
 	}
 }
+
+func TestAsyncSuggestionsRemainInContextWithoutOverflowingQuestion(t *testing.T) {
+	title := strings.Repeat("Q", 190)
+	suggestion := strings.Repeat("Suggested option ", 30)
+	params, _ := json.Marshal(map[string]any{"threadId": "t", "turnId": "u", "item": map[string]any{"id": "async-long", "type": "agentMessage", "delivery": "async", "questions": []any{map[string]any{"title": title, "options": []string{suggestion, "Other approach"}}}}})
+	raw, ok := asyncRequest(Envelope{Method: "item/completed", Params: params})
+	if !ok {
+		t.Fatal("async event dropped")
+	}
+	request, err := Normalize("codex", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := request.Cards[0]
+	card.ID = "decision"
+	card.RunID = "run"
+	card.CausedBy = 1
+	card.Tenant = decision.LocalTenant
+	card.RequestedAt = time.Now()
+	card.DedupeKey = "request"
+	if err = card.Validate(false); err != nil {
+		t.Fatal("card rejected", err)
+	}
+	if card.Question != title || !strings.Contains(card.Context.Attempted, suggestion) || card.Kind != "supply_value" {
+		t.Fatal("title, suggestion or free text support lost")
+	}
+}
