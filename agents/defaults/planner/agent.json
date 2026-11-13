@@ -1,8 +1,8 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.planner",
-  "revision": 1,
-  "name": "Planner",
+  "revision": 2,
+  "name": "Coordinator",
   "description": "Turn a goal and evolving evidence into bounded work, selecting or creating agent roles as needed.",
   "kind": "planner",
   "match": {
@@ -18,7 +18,7 @@
   },
   "instructions": {
     "path": "instructions.md",
-    "sha256": "8e1c285af34edb4e7470862db589e5aef508639ea6197eef42cd0fcb906a61a0"
+    "sha256": "c121e32166b48c653f80508c6de35936c01f85a0efa054f9a7675183ad5385b5"
   },
   "runtime": {
     "requires": [

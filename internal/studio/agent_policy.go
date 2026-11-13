@@ -42,6 +42,12 @@ func (e *Engine) SaveAgentPolicy(project string, p agentpolicy.Policy) (agentpol
 			return p, errors.New("select an installed application with a valid decision_model")
 		}
 	}
+	p.Supervision = p.Supervision.Effective()
+	if p.Supervision.Mode == "model" {
+		if _, err := e.decisionConfig(p.Supervision.Application); err != nil {
+			return p, err
+		}
+	}
 	s := e.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()

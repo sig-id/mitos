@@ -26,7 +26,7 @@ type Notice struct {
 	ReleasedAt *time.Time     `json:"released_at,omitempty"`
 	Targets    []NoticeTarget `json:"targets"`
 }
-type Supervision struct {
+type Coordination struct {
 	Draft    *ProfileDraft  `json:"draft,omitempty"`
 	Profile  ProjectProfile `json:"profile"`
 	Sessions []Session      `json:"sessions"`
@@ -34,14 +34,14 @@ type Supervision struct {
 }
 
 func cloneNotice(n Notice) Notice { n.Targets = append([]NoticeTarget{}, n.Targets...); return n }
-func (m *Manager) Supervision(project string) (Supervision, error) {
+func (m *Manager) Coordination(project string) (Coordination, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, err := m.projectLocked(project)
 	if err != nil {
-		return Supervision{}, err
+		return Coordination{}, err
 	}
-	out := Supervision{Draft: m.latestDraftLocked(project), Profile: effectiveProfile(p), Sessions: []Session{}, Notices: []Notice{}}
+	out := Coordination{Draft: m.latestDraftLocked(project), Profile: effectiveProfile(p), Sessions: []Session{}, Notices: []Notice{}}
 	for _, s := range m.state.Sessions {
 		if s.ProjectID == project {
 			out.Sessions = append(out.Sessions, cloneSession(s))

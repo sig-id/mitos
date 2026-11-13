@@ -340,6 +340,9 @@ func (e *Engine) dispatch() {
 			if err := e.Store.expireAgentSessions(); err != nil {
 				continue
 			}
+			if err := e.reconcileSupervision(); err != nil {
+				continue
+			}
 			cycleTime := time.Now().UTC()
 			if err := e.reconcileServiceLifecycle(); err != nil {
 				continue

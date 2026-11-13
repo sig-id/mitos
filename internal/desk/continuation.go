@@ -270,8 +270,8 @@ func (m *Manager) Continue(sourceID, kind string, request ContinuationRequest, s
 	}
 	if role == "coordinator" {
 		for i := range m.state.Sessions {
-			if m.state.Sessions[i].SupervisorID == sourceID {
-				m.state.Sessions[i].SupervisorID = result.ID
+			if m.state.Sessions[i].CoordinatorID == sourceID {
+				m.state.Sessions[i].CoordinatorID = result.ID
 			}
 		}
 		if err := m.saveLocked(); err != nil {

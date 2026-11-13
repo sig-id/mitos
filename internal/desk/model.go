@@ -22,7 +22,7 @@ type Session struct {
 	ResponsibilityID   string               `json:"responsibility_id,omitempty"`
 	Generation         int                  `json:"generation,omitempty"`
 	SetupDraftID       string               `json:"setup_draft_id,omitempty"`
-	SupervisorID       string               `json:"supervisor_id,omitempty"`
+	CoordinatorID      string               `json:"coordinator_id,omitempty"`
 	Workspace          string               `json:"workspace,omitempty"`
 	WorktreeBranch     string               `json:"worktree_branch,omitempty"`
 	PolicyRevision     int                  `json:"policy_revision,omitempty"`

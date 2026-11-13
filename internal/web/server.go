@@ -128,7 +128,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("GET /overview", s.overview)
 	s.deskRoutes(mux)
-	s.supervisionRoutes(mux)
+	s.coordinationRoutes(mux)
 	s.deviceRoutes(mux)
 	s.agentRoutes(mux)
 	mux.HandleFunc("GET /web", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusSeeOther) })

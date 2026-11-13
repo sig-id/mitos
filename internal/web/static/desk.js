@@ -20,17 +20,17 @@
     });
   }
   form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/projects/${p.id}`; });
-  form('session-form', async b => { if(b.role==='coordinator'){await window.MitosSupervision.startSetup(b);return;} const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
+  form('session-form', async b => { if(b.role==='coordinator'){await window.MitosCoordination.startSetup(b);return;} const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
   form('topic-form', async (b,f) => { b.paths = b.paths.split('\n').map(x=>x.trim()).filter(Boolean); await api(projectAPI('topics'), b); f.reset(); $('topic-dialog').close(); await topics(); });
   let agentCatalog = [], agentSelection = 0, selectedInstallation;
   function sessionMode(){
-    const supervisor=$('session-role').value==='coordinator', v=selectedInstallation;
-    $('session-dialog-title').textContent=supervisor?'Set up the supervisor':'Start an agent';
-    $('session-prompt-label').textContent=supervisor?'Work goal (optional during analysis)':'Work goal';
-    $('session-form').querySelector('[type=submit]').textContent=supervisor?'Analyze project':'Start agent';
-    $('session-form').querySelector('[type=submit]').disabled=!v?.installed||(supervisor?!v?.capabilities.project_context:(v?.kind==='agent'&&!v?.capabilities.initial_prompt));
-    $('session-prompt').required=!supervisor&&v?.kind==='agent';
-    $('agent-prompt-help').textContent=supervisor?(v?.capabilities.project_context?'First, this agent analyzes the project in a separate background conversation. Review and edit its proposed context before starting work.':'This agent has no background project-analysis adapter. Choose Codex, Claude or Pi.'):(v?.kind==='agent'?(v?.capabilities.initial_prompt?'A concrete first goal is required. Starting a session begins work on that goal.':'This adapter cannot accept a work goal. Choose an agent with initial prompt support.'):'Open this application in its terminal.');
+    const coordinator=$('session-role').value==='coordinator', v=selectedInstallation;
+    $('session-dialog-title').textContent=coordinator?'Set up the coordinator':'Start an agent';
+    $('session-prompt-label').textContent=coordinator?'Work goal (optional during analysis)':'Work goal';
+    $('session-form').querySelector('[type=submit]').textContent=coordinator?'Analyze project':'Start agent';
+    $('session-form').querySelector('[type=submit]').disabled=!v?.installed||(coordinator?!v?.capabilities.project_context:(v?.kind==='agent'&&!v?.capabilities.initial_prompt));
+    $('session-prompt').required=!coordinator&&v?.kind==='agent';
+    $('agent-prompt-help').textContent=coordinator?(v?.capabilities.project_context?'First, this agent analyzes the project in a separate background conversation. Review and edit its proposed context before starting work.':'This agent has no background project-analysis adapter. Choose Codex, Claude or Pi.'):(v?.kind==='agent'?(v?.capabilities.initial_prompt?'A concrete first goal is required. Starting a session begins work on that goal.':'This adapter cannot accept a work goal. Choose an agent with initial prompt support.'):'Open this application in its terminal.');
   }
   $('session-role').addEventListener('change',sessionMode);
   async function inspectAgent() {

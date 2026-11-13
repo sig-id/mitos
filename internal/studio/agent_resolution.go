@@ -35,6 +35,12 @@ func (e *Engine) QueueAgentResolution(id, token, key string) {
 	}()
 }
 func (e *Engine) ResolveAgentRequest(ctx context.Context, id, token, key string) error {
+	if _, err := e.Store.AgentRequestStatus(id, token, key); err != nil {
+		return err
+	}
+	if err := e.superviseRequest(ctx, id, key); err != nil {
+		return err
+	}
 	route, err := e.RouteAgentRequest(ctx, id, token, key)
 	if err != nil {
 		return err
@@ -154,14 +160,14 @@ func (b engineBroker) Submit(ctx context.Context, raw json.RawMessage) (harness.
 	if err == nil {
 		b.e.QueueAgentResolution(b.id, b.token, v.RequestID)
 	}
-	return brokerDelivery(v), err
+	return brokerDelivery(v), brokerError(err)
 }
 func (b engineBroker) Get(ctx context.Context, key string) (harness.Delivery, error) {
 	v, err := b.e.Store.AgentRequestStatus(b.id, b.token, key)
 	if err == nil && v.State == "pending" {
 		b.e.QueueAgentResolution(b.id, b.token, key)
 	}
-	return brokerDelivery(v), err
+	return brokerDelivery(v), brokerError(err)
 }
 func brokerDelivery(v AgentRequestView) harness.Delivery {
 	return harness.Delivery{RequestID: v.RequestID, State: v.State, Digest: v.Digest, Body: v.Body, RunIDs: v.RunIDs}
@@ -171,4 +177,15 @@ func (b engineBroker) Deliver(ctx context.Context, key, digest, state string) er
 }
 func (b engineBroker) Invalidate(ctx context.Context, key string) error {
 	return b.e.Store.InvalidateAgentRequest(b.id, b.token, key)
+}
+
+func brokerError(err error) error {
+	var status *DeviceError
+	if errors.As(err, &status) {
+		return &harness.HTTPError{Status: status.Status}
+	}
+	return err
+}
+func (b engineBroker) Observe(ctx context.Context, raw json.RawMessage) error {
+	return b.e.ObserveAgent(ctx, b.id, b.token, raw)
 }

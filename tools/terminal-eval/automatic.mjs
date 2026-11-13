@@ -32,7 +32,7 @@ try{
  const treeOrder=await page.locator('#work-tree .work-tree-node').evaluateAll(ns=>ns.map(n=>n.dataset.treeKey).filter(k=>k!=='planner'));
  const graphOrder=await page.locator('.graph-node[data-kind=step]').evaluateAll(ns=>ns.sort((a,b)=>parseFloat(a.style.left)-parseFloat(b.style.left)||parseFloat(a.style.top)-parseFloat(b.style.top)).map(n=>n.dataset.id));assert.deepEqual(treeOrder,graphOrder,'tree does not follow workflow order');
  assert.equal(await page.locator('.graph-node[data-kind=planner]').count(),0);assert.equal(await page.locator('[data-tree-key="planner"]').count(),1);
- await page.locator('.graph-planner-history').click();await page.getByRole('button',{name:'Read this round',exact:true}).first().click();await page.locator('.graph-plan-output').waitFor();await page.getByRole('heading',{name:'Planner summary',exact:true}).waitFor();
+ await page.locator('.graph-planner-history').click();await page.getByRole('button',{name:'Read this round',exact:true}).first().click();await page.locator('.graph-plan-output').waitFor();await page.getByRole('heading',{name:'Coordinator summary',exact:true}).waitFor();
  assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>=560,'output pane is too narrow');
  assert.equal(await page.locator('.graph-structured-output details[data-read-key=raw]').getAttribute('open'),null,'raw JSON should start collapsed');
  const assignment=page.locator('.graph-plan-output details[data-read-key="step:0"]');assert.equal(await assignment.getAttribute('open'),'');await assignment.locator('summary').first().click();

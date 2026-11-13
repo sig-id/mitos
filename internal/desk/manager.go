@@ -382,3 +382,8 @@ func (m *Manager) authorLocked(project, author string) error {
 	}
 	return nil
 }
+
+func (m *Manager) projectHeld(project string) bool {
+	guard, ok := m.storage.(interface{ SupervisionHeld(string) bool })
+	return ok && guard.SupervisionHeld(project)
+}

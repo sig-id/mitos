@@ -10,8 +10,10 @@ project autonomy and delegated approvals; portable cooperation; deterministic an
 model-assisted routing; shared decision infrastructure; independent supervision.
 
 Use coordinator for the planning role, worker for an assignee, supervisor for the
-independent boundary monitor, and daemon only for a service process. Existing wire
-names remain compatible. Flow control and recovery do not constitute supervision.
+independent boundary monitor, and daemon only for a service process. Remove the obsolete project coordination `/supervision` endpoint and `desk supervision`
+command without public aliases. Use `/coordination`, `desk coordination` and
+`coordinator_id`; historical session records receive storage-only lineage migration.
+Flow control and recovery do not constitute supervision.
 
 Routing does require classification when request metadata and explicit rules do
 not determine the route. Use the existing typed decision adapters for that bounded

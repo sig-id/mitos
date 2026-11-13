@@ -147,6 +147,29 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, map[string]any{"version": cooperation.Version, "messages": s.engine.Store.Cooperation(r.PathValue("project")), "effects": "Recorded proposals and evidence; approval and task acceptance require runtime resolution."})
 	})
+	mux.HandleFunc("GET /api/projects/{project}/supervision/incidents", func(w http.ResponseWriter, r *http.Request) {
+		project := r.PathValue("project")
+		if _, err := s.engine.Desk.Project(project); err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"held": s.engine.Store.SupervisionHeld(project), "incidents": s.engine.Store.SupervisionIncidents(project), "coverage": "Intercepted bridge requests and Codex command/file/tool events. Owned processes can be stopped; native events are observations, and same-user execution is not host confinement."})
+	})
+	mux.HandleFunc("POST /api/projects/{project}/supervision/incidents/{incident}/resolve", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Note      string `json:"note"`
+			Confirmed bool   `json:"confirmed_stopped"`
+		}
+		if !graphBody(w, r, &in) {
+			return
+		}
+		v, err := s.engine.ResolveSupervision(r.PathValue("project"), r.PathValue("incident"), in.Note, in.Confirmed)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
 	mux.HandleFunc("PUT /api/projects/{project}/agent-policy", func(w http.ResponseWriter, r *http.Request) {
 		var p agentpolicy.Policy
 		if !graphBody(w, r, &p) {

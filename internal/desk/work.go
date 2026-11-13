@@ -186,8 +186,8 @@ func (m *Manager) bindWorkLocked(p Project, s *Session, options startOptions) er
 			return fmt.Errorf("%w: stop and settle the previous executor before replacement", ErrConflict)
 		}
 	}
-	if assignment.RequestedBy == "" && s.SupervisorID != "" {
-		assignment.RequestedBy = s.SupervisorID
+	if assignment.RequestedBy == "" && s.CoordinatorID != "" {
+		assignment.RequestedBy = s.CoordinatorID
 	}
 	parentID, goalID := "", assignment.GoalID
 	if assignment.RequestedBy != "" && assignment.RequestedBy != "operator" {

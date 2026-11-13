@@ -51,3 +51,8 @@ Their answers use turn/steer with the original active-turn precondition and beco
 applied only after the source acknowledges delivery. Turn completion invalidates
 outstanding replies. Terminal input during an active turn also uses turn/steer;
 ordinary question prose is never parsed as an approval request.
+
+Independent supervision runs before resolution and can veto an otherwise eligible
+route. See [configuration, incident handling and coverage](independent-supervision.md).
+With supervision enabled, an explicit denied operation opens a stop incident instead
+of merely delivering a declined answer.

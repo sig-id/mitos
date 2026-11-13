@@ -60,7 +60,7 @@ func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installa
 		return Session{}, errors.New("provide a goal before starting an agent; use project setup to draft context first")
 	}
 	if request.Role == "coordinator" && !installation.Capabilities.InitialPrompt {
-		return Session{}, errors.New("choose an agent that can receive supervisor instructions")
+		return Session{}, errors.New("choose an agent that can receive coordinator instructions")
 	}
 	if installation.Kind == "agent" && installation.Capabilities.InitialPrompt {
 		request.Prompt = sessionContext(p, request.Role) + "\nOperator objective:\n" + originalPrompt
@@ -70,7 +70,7 @@ func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installa
 		if err != nil || task.ProjectID != p.ID {
 			return Session{}, errors.New("task must belong to this project")
 		}
-		request.Prompt += fmt.Sprintf("\nDurable task: %s (revision %d)\nAssignment: %s\nCompletion criteria (revision %d): %s\nRead desk work for current supervision messages and previously submitted evidence. A report is not accepted completion.\n", task.ID, task.Revision, task.Intent, task.CriteriaRevision, task.Criteria)
+		request.Prompt += fmt.Sprintf("\nDurable task: %s (revision %d)\nAssignment: %s\nCompletion criteria (revision %d): %s\nRead desk work for current coordination messages and previously submitted evidence. A report is not accepted completion.\n", task.ID, task.Revision, task.Intent, task.CriteriaRevision, task.Criteria)
 	}
 	launch, err := m.Agents.Prepare(request)
 	if err != nil {
@@ -89,7 +89,7 @@ func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installa
 		name = launch.AgentName + " · " + strings.TrimPrefix(id("new"), "new_")[:6]
 	}
 	if role == "coordinator" && originalPrompt == "" {
-		name = "Project supervisor"
+		name = "Project coordinator"
 		pending = false
 	}
 	return m.startLocked(p.ID, name, role, launch.AgentName, serverURL, launch, startOptions{DraftID: draftID, NamePending: pending, Assignment: request.Assignment, Prompt: originalPrompt, Request: &requestForReceipt})
@@ -128,6 +128,9 @@ func (m *Manager) start(project, name, role, command, serverURL string, launch a
 }
 
 func (m *Manager) startLocked(project, name, role, command, serverURL string, launch agentcli.Launch, options startOptions) (Session, error) {
+	if m.projectHeld(project) {
+		return Session{}, errors.New("project held by independent supervision")
+	}
 	assignment := options.Assignment
 	if !validText(name, 100) || len(command) > 4096 || strings.ContainsRune(command, 0) {
 		return Session{}, errors.New("provide a session name and a command of at most 4096 bytes")
@@ -244,12 +247,12 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	instructions := filepath.Join(m.dir, s.ID+".md")
 	text := fmt.Sprintf("# Mitos project %s\n\nRole: %s. Working directory: %s.\nUse mitos desk topics to discover relevant topics; read details with mitos desk topic ID.\nUse mitos desk post --topic ID --revision N --body TEXT, follow --topic ID, and jobs.\nUse mitos desk build -- ARGS for a coordinated Cargo build. Builds serialize; joining is explicit with mitos desk join JOB_ID. A joined result does not automatically validate your later edits.\nUse mitos desk resources to inspect the shared directory and current process activity.\nCoordinate shared-file and Git changes through topics. CLI commands outside managed jobs are cooperative and are not intercepted.\nThe coordinator maintains the plan, publishes topic summaries, and asks the operator for choices outside the brief. It has no additional runtime permissions.\n", p.Name, role, s.Workspace)
 	text += "\nFleet tools: mitos desk agents, inspect-agent --agent ID, sessions, start-session --agent ID --prompt TEXT, send-prompt --prompt TEXT SESSION_ID, and stop-session SESSION_ID. Use --goal ID --task ID --handoff-topic TOPIC_ID on start-session to retain assignment lineage. Native CLI sub-agents are separate from Mitos sessions.\nUse the topic board to report completion with evidence, blockers, or requests for more agents. Before handing off, write your own continuation prompt in a topic: objective, current state, evidence, remaining work, and relevant files. Pass that topic to the next session; a topic reference does not inject its content automatically.\nUse mitos desk resume-session, fork-session, and handover-session with --mode native or context. Use --handoff-topic ID to snapshot your handoff notes. A task-bound handover stops and settles the source before starting its replacement; legacy unbound handovers start the replacement first. A fork leaves the source running. Read MITOS_HANDOVER when present. Record your exact native conversation ID with mitos desk link-session --native-session ID SESSION_ID when it is not already recorded.\nMitos currently supplies fleet tools, not an autonomous scheduler. Terminal prompts are input bytes and are not proof that an agent accepted a direction.\n"
-	text = sessionContext(p, role) + "\nActual session workspace: " + s.Workspace + "\nSupervisor: " + s.SupervisorID + "\n\n" + text
+	text = sessionContext(p, role) + "\nActual session workspace: " + s.Workspace + "\nCoordinator: " + s.CoordinatorID + "\n\n" + text
 	if err = os.WriteFile(instructions, []byte(text), 0600); err != nil {
 		return m.startFailedLocked(s.ID, err)
 	}
 	binary, _ := os.Executable()
-	cmd.Env = append(cmd.Env, "MITOS_COORDINATION="+instructions, "MITOS_BIN="+binary, "MITOS_SCRATCH="+scratch, "MITOS_SUPERVISOR_ID="+s.SupervisorID, "MITOS_WORKSPACE="+s.Workspace)
+	cmd.Env = append(cmd.Env, "MITOS_COORDINATION="+instructions, "MITOS_BIN="+binary, "MITOS_SCRATCH="+scratch, "MITOS_COORDINATOR_ID="+s.CoordinatorID, "MITOS_WORKSPACE="+s.Workspace)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.Rows, Cols: s.Cols})
 	if err != nil {
@@ -344,8 +347,8 @@ func (m *Manager) waitTerminal(id string, cmd *exec.Cmd, t *terminal) {
 		s.Detail = readErr.Error()
 	}
 	var notice *Notice
-	if s.SupervisorID != "" && !m.closed {
-		notice = m.notifyLocked(s.ProjectID, fmt.Sprintf("Agent %s (%s) %s with exit code %d. Inspect its topic-board evidence and terminal before accepting the result; process exit is not task verification.", s.Name, s.ID, s.Status, code), s.SupervisorID)
+	if s.CoordinatorID != "" && !m.closed {
+		notice = m.notifyLocked(s.ProjectID, fmt.Sprintf("Agent %s (%s) %s with exit code %d. Inspect its topic-board evidence and terminal before accepting the result; process exit is not task verification.", s.Name, s.ID, s.Status, code), s.CoordinatorID)
 	}
 	if m.saveLocked() == nil {
 		m.deliverNoticeLocked(notice)

@@ -104,6 +104,11 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 			if json.Unmarshal(line, &e) != nil {
 				return errors.New("invalid app-server JSON")
 			}
+			if observer, ok := b.(Observer); ok && ObservationRelevant(line) {
+				if err := observer.Observe(ctx, line); err != nil {
+					return err
+				}
+			}
 			originalLine := line
 			async := false
 			if raw, ok := asyncRequest(e); ok {
@@ -160,6 +165,12 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 						go func(key string, p *waiting) {
 							answer, err := Wait(requestCtx, b, delivery.RequestID)
 							if err != nil {
+								if requestCtx.Err() == nil {
+									select {
+									case errorsOut <- err:
+									default:
+									}
+								}
 								return
 							}
 							mu.Lock()

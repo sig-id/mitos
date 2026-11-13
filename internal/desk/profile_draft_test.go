@@ -23,7 +23,7 @@ func draftManager(t *testing.T, analysis string) (*Manager, Project) {
 	if err = os.WriteFile(fixture, []byte(analysis), 0600); err != nil {
 		t.Fatal(err)
 	}
-	m.Agents, err = agentcli.New(nil, agentcli.Config{Applications: []agentcli.Definition{{ID: "analyst", Name: "Analyst fixture", Kind: "agent", Executables: []string{shell}, Args: []string{"-c", `printf 'GOAL:%s\n' "$@"; while read -r line; do :; done`, "supervisor"}, ContextArgs: []string{fixture}, Prompt: "positional"}}, Profiles: []agentcli.Profile{{ID: "account", Name: "Selected account", AgentID: "analyst", Env: map[string]string{"ANALYSIS_ACCOUNT": "TEST_ANALYSIS_ACCOUNT"}}}}, append(os.Environ(), "TEST_ANALYSIS_ACCOUNT=account-marker", "MITOS_SESSION_ID=parent-must-not-leak"))
+	m.Agents, err = agentcli.New(nil, agentcli.Config{Applications: []agentcli.Definition{{ID: "analyst", Name: "Analyst fixture", Kind: "agent", Executables: []string{shell}, Args: []string{"-c", `printf 'GOAL:%s\n' "$@"; while read -r line; do :; done`, "coordinator"}, ContextArgs: []string{fixture}, Prompt: "positional"}}, Profiles: []agentcli.Profile{{ID: "account", Name: "Selected account", AgentID: "analyst", Env: map[string]string{"ANALYSIS_ACCOUNT": "TEST_ANALYSIS_ACCOUNT"}}}}, append(os.Environ(), "TEST_ANALYSIS_ACCOUNT=account-marker", "MITOS_SESSION_ID=parent-must-not-leak"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestProfileDraftReviewBeforeStartingAndRetry(t *testing.T) {
 		t.Fatal("unreviewed draft replaced profile", saved)
 	}
 	if _, err = m.ReviewAndStartProfileDraft(p.ID, d.ID, *d.Profile, 0, "http://localhost"); err == nil {
-		t.Fatal("supervisor admitted without goal")
+		t.Fatal("coordinator admitted without goal")
 	}
 	approved := *d.Profile
 	approved.Goal = "Add malformed-input tests"

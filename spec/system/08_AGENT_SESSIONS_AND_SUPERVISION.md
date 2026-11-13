@@ -16,9 +16,12 @@ enforcement boundary.
 | Supervisor | Independently examines actions and observations against project boundaries and can deny or stop work |
 | Daemon | A long-lived service process; not a model role |
 
-Legacy API fields named `planner`, `controller`, or `supervision` retain wire
-compatibility. Documentation and new UI MUST distinguish coordination, recovery
-control, and independent boundary supervision. The coordinator MUST NOT be the
+The obsolete project `/supervision` coordination endpoint and `desk supervision`
+command are removed. Coordination uses `/coordination`, `desk coordination`, and
+`coordinator_id`; no public compatibility aliases remain. Persisted execution
+identifiers such as `mitos.planner` still identify saved historical work.
+Documentation and UI MUST distinguish coordination, recovery control, and
+independent boundary supervision. The coordinator MUST NOT be the
 sole judge of whether its own actions comply with policy.
 
 ## 1. Explicit single-agent sessions
@@ -158,3 +161,14 @@ classification routing and fallback; real decision-service integration; and
 independent incident/hold/stop behavior. Tests MUST cover stale replies, conflicting
 resolutions, revocation, model failure, replay, and supervisor stop races where those
 behaviors are introduced. Unsupported capabilities remain explicit.
+
+Initial delivery is tracked in issues [#2](https://github.com/sig-id/mitos/issues/2),
+[#3](https://github.com/sig-id/mitos/issues/3), [#4](https://github.com/sig-id/mitos/issues/4),
+[#5](https://github.com/sig-id/mitos/issues/5), [#6](https://github.com/sig-id/mitos/issues/6)
+and [#7](https://github.com/sig-id/mitos/issues/7), respectively. The implementation
+uses project-scoped incidents and holds. The first supervisor reviews intercepted
+requests and Codex command/file/tool events, not every host effect; see the
+[operational coverage](../../docs/independent-supervision.md). Physical confinement,
+continuous host auditing and a separate general-LLM supervisor backend remain outside
+this initial implementation. The supervisor model currently uses the bounded
+Decisions API Choice adapter.

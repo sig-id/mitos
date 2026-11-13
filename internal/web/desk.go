@@ -14,13 +14,13 @@ import (
 )
 
 type deskPage struct {
-	Navigation  navigation
-	Projects    []desk.Project
-	Project     desk.Project
-	Sessions    []desk.Session
-	Session     desk.Session
-	Supervising bool
-	Root        string
+	Navigation   navigation
+	Projects     []desk.Project
+	Project      desk.Project
+	Sessions     []desk.Session
+	Session      desk.Session
+	Coordinating bool
+	Root         string
 }
 
 func (s *Server) deskPage(w http.ResponseWriter, r *http.Request) {
@@ -55,9 +55,9 @@ func (s *Server) deskPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	p.Supervising = r.URL.Query().Get("session") == "" || p.Session.Role == "coordinator"
+	p.Coordinating = r.URL.Query().Get("session") == "" || p.Session.Role == "coordinator"
 	if r.URL.Query().Get("view") == "terminal" {
-		p.Supervising = false
+		p.Coordinating = false
 	}
 	p.Navigation = s.navigation("project", p.Project.ID)
 	var b bytes.Buffer
@@ -150,7 +150,7 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 			deskResult(w, nil, err)
 			return
 		}
-		v, err := m.StartAgent(r.PathValue("project"), b, "http://"+r.Host)
+		v, err := s.engine.StartAgentSession(r.PathValue("project"), b, "http://"+r.Host)
 		deskResult(w, v, err)
 	})
 	mux.HandleFunc("GET /api/sessions/{session}", func(w http.ResponseWriter, r *http.Request) {

@@ -21,6 +21,36 @@ type Delivery struct {
 	Body      json.RawMessage `json:"body"`
 	RunIDs    []string        `json:"run_ids"`
 }
+type Observer interface {
+	Observe(context.Context, json.RawMessage) error
+}
+
+func ObservationRelevant(raw json.RawMessage) bool {
+	var e struct {
+		Method string `json:"method"`
+		Params struct {
+			Item struct {
+				Type string `json:"type"`
+			} `json:"item"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(raw, &e) != nil || (e.Method != "item/started" && e.Method != "item/completed") {
+		return false
+	}
+	switch e.Params.Item.Type {
+	case "commandExecution", "fileChange", "mcpToolCall":
+		return true
+	}
+	return false
+}
+func (c *Client) Observe(ctx context.Context, raw json.RawMessage) error {
+	copy := *c
+	httpClient := *c.HTTP
+	httpClient.Timeout = 125 * time.Second
+	copy.HTTP = &httpClient
+	return copy.call(ctx, "POST", c.base()+"/observe", raw, nil)
+}
+
 type Broker interface {
 	Submit(context.Context, json.RawMessage) (Delivery, error)
 	Get(context.Context, string) (Delivery, error)
