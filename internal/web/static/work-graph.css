@@ -52,10 +52,35 @@
 .markdown-checklist-item{list-style:none;position:relative;padding-left:30px;margin:18px 0!important}.markdown-checklist-item>input{position:absolute;left:0;top:4px;width:17px;height:17px;opacity:1;accent-color:var(--accent)}
 .graph-source-lines{position:relative;max-height:65vh;overflow:auto;white-space:pre;font-size:14px;line-height:1.7;background:#11161b;padding:16px 0}.graph-source-line{display:inline-block;min-width:100%;scroll-margin:60px}.graph-source-line.cited{background:#41462e}.graph-line-number{display:inline-block;width:60px;user-select:none;color:var(--muted);text-align:right;margin-right:20px}.graph-result-content button,#graph-node-detail .analysis-prose button{display:inline;padding:0;border:0;background:none;color:var(--blue);text-decoration:underline;font:inherit;text-align:left;cursor:pointer}
 #graph-current[data-work-view=work]>.graph-body,#graph-current[data-work-view=work]>.graph-activity,#graph-current[data-work-view=work]>#graph-message{display:none}#graph-current[data-work-view=workflow]>#graph-conversation{display:none}
-.graph-conversation{max-width:1050px;margin:0 auto}.conversation-message{width:fit-content;max-width:85%;min-width:0;margin:20px 0;padding:16px 20px;border:1px solid var(--line);border-radius:18px;line-height:1.75;overflow-wrap:anywhere}.conversation-message.user{margin-left:auto;background:#25312e;border-bottom-right-radius:4px}.conversation-message.agent{margin-right:auto;background:var(--panel);border-bottom-left-radius:4px}.conversation-message>strong{color:var(--muted);font-size:14px}.conversation-message .analysis-prose{font-size:16px;line-height:1.8}.conversation-history{padding:18px;border-bottom:1px solid var(--line);line-height:1.7}.graph-followup{max-width:1050px;margin:28px auto 0;padding:20px;background:var(--panel);border:1px solid var(--line);border-radius:10px}.graph-followup textarea{width:100%;font-size:16px;resize:vertical}.graph-result-items{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}.graph-result-items>a{padding:12px 18px;border:1px solid var(--line);border-radius:6px;color:var(--blue)}
-@media(max-width:640px){.conversation-message{max-width:92%;padding:12px 16px}}
+/* Keep the conversation, its heading, and composer on one reading column. */
+#work-view:has(#graph-current[data-work-view=work]:not([hidden])){display:flex;flex-direction:column}
+#graph-work:has(>#graph-current[data-work-view=work]:not([hidden])){display:flex;flex-direction:column;flex:1 0 auto;width:100%;max-width:760px;margin:0 auto}
+#graph-work:has(>#graph-current[data-work-view=work]:not([hidden])) .graph-browser{margin-bottom:14px}
+#graph-current[data-work-view=work]>.graph-heading{align-items:flex-start;flex-direction:row;gap:12px;margin-bottom:24px}
+#graph-current[data-work-view=work] .graph-title-row h2{font-size:18px;line-height:1.45}
+#graph-current[data-work-view=work] .graph-heading p{font-size:12px}
+#work-view:has(#graph-current[data-work-view=work]:not([hidden]))>.earlier-work{width:100%;max-width:760px;margin:20px auto 0;padding-top:12px;flex:none}
+.graph-conversation{max-width:760px;margin:0 auto;padding-bottom:24px}
+.conversation-message{width:fit-content;max-width:88%;min-width:0;margin:0 0 16px;padding:12px 16px;border:1px solid var(--line);border-radius:16px;line-height:1.65;overflow-wrap:anywhere}
+.conversation-message.user{max-width:80%;margin-left:auto;background:#25312e;border-bottom-right-radius:4px}
+.conversation-message.agent{margin-right:auto;background:var(--panel);border-bottom-left-radius:4px}
+.conversation-message>strong{display:block;margin-bottom:4px;color:var(--muted);font-size:12px}
+.conversation-message>p,.conversation-message .prose{font-size:15px;line-height:1.65}
+.conversation-message .analysis-prose{font-size:15px;line-height:1.75}
+.conversation-message>button{margin-top:12px;font-size:14px}
+.conversation-history{padding:14px 0;margin-bottom:20px;border-bottom:1px solid var(--line);line-height:1.7}
+.graph-followup{width:100%;max-width:760px;margin:20px auto 0;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:14px;position:sticky;bottom:0;z-index:3;box-shadow:0 4px 16px #0002}
+#graph-work:has(>#graph-current[data-work-view=work]:not([hidden]))>.graph-followup{margin-top:auto}
+.graph-followup-input{display:flex;align-items:flex-end;gap:10px;min-width:0}
+.graph-followup textarea{display:block;flex:1;min-width:0;width:100%;min-height:44px;max-height:240px;margin:0;padding:10px 2px;border:0;border-radius:4px;background:transparent;font-size:15px;line-height:24px;resize:vertical}
+.graph-followup-input>button{flex:none;margin-bottom:4px;padding:7px 16px;font-size:14px}
+.graph-followup #followup-context{margin:6px 0 0;font-size:12px;line-height:1.5}
+.graph-followup .form-error:empty{display:none}
+.graph-followup .form-error:not(:empty){margin-top:8px}
+.graph-result-items{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}
+.graph-result-items>a{padding:12px 18px;border:1px solid var(--line);border-radius:6px;color:var(--blue)}
+@media(max-width:640px){.conversation-message{max-width:94%;padding:10px 12px}.conversation-message.user{max-width:88%}.graph-followup textarea{font-size:16px}.graph-followup-input{gap:8px}.graph-followup-input>button{padding:7px 12px}}
 .work-tree-followup{margin-left:14px;border-left:1px solid var(--line);padding-left:8px}
-.graph-followup{position:sticky;bottom:12px;z-index:3;box-shadow:0 -8px 25px #101418b3}
 
 .graph-live-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;padding:16px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font:14px/1.6 monospace}
 

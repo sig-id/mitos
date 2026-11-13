@@ -8,12 +8,13 @@
  const heading=el('header'),list=el('div'),error=el('p');error.setAttribute('role','status');heading.append(el('h2','Notifications'),button('Close',()=>drawer.close()));drawer.append(heading,error,list);document.body.append(drawer);
  const banner=el('aside',undefined,'attention-banner');banner.setAttribute('aria-label','Work needs attention');banner.hidden=true;document.body.append(banner);
  const live=el('div',undefined,'notification-live');live.setAttribute('role','status');live.setAttribute('aria-live','polite');document.body.append(live);
- let actions=[],reviews=[],projects=[],signature='',server='',busy=false,alive=true,seen=new Set(),storageKey='';
+ let actions=[],reviews=[],projects=[],signature='',server='',busy=false,alive=true,seen=new Set(),dismissed=new Set(),bannerKeys=[],storageKey='';
  async function api(path,body){const response=await fetch(path,{method:body===undefined?'GET':'POST',cache:'no-store',headers:{'Content-Type':'application/json','X-Mitos-Server':server},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});const value=await response.json();if(!response.ok)throw Error(value.error||'Request failed');return value}
  const reviewURL=d=>d.graph_id?`/projects/${d.project_id}?graph=${d.graph_id}`:d.task_id?`/projects/${d.project_id}?task=${d.task_id}&tab=result`:'/runs/'+d.run_id;
  const workURL=a=>a.graph_id?`/projects/${a.project_id}?graph=${a.graph_id}&node=${a.task_id}&view=workflow`:'/runs/'+a.card.run_id;
  const name=a=>projects.find(p=>p.project.id===a.project_id)?.project.name||'Workspace';
- function open(id){draw(id);if(!drawer.open)drawer.showModal();if(id)document.getElementById('notice-'+id)?.scrollIntoView({block:'nearest'})}
+ function dismissBanner(){for(const key of bannerKeys)dismissed.add(key);banner.hidden=true;try{localStorage.setItem(storageKey+'.dismissed',JSON.stringify([...dismissed]))}catch{}}
+ function open(id){dismissBanner();draw(id);if(!drawer.open)drawer.showModal();if(id)document.getElementById('notice-'+id)?.scrollIntoView({block:'nearest'})}
  toggle.onclick=()=>open();
  function draw(focus){
   const drafts=new Map([...list.querySelectorAll('textarea[data-answer]')].map(n=>[n.dataset.answer,{value:n.value,focused:n===document.activeElement,start:n.selectionStart,end:n.selectionEnd}]));const expanded=new Set([...list.querySelectorAll('.notification-card details[open]')].map(n=>n.closest('article').id));
@@ -37,15 +38,19 @@
  async function refresh(){
   try{
    const home=await api('/api/workspace-home');server=home.server.id;projects=home.projects;
-   if(!storageKey){storageKey='mitos.notifications.'+server;try{seen=new Set(JSON.parse(localStorage.getItem(storageKey)||'[]'))}catch{}}
+   if(!storageKey){storageKey='mitos.notifications.'+server;try{seen=new Set(JSON.parse(localStorage.getItem(storageKey)||'[]'))}catch{}try{dismissed=new Set(JSON.parse(localStorage.getItem(storageKey+'.dismissed')||'[]'))}catch{}}
    const next=JSON.stringify([home.attention,home.decisions]);if(next===signature)return;signature=next;actions=home.attention||[];reviews=(home.decisions||[]).filter(d=>d.needs_review!==false);
    const notices=[...actions.filter(a=>a.resolver==='human').map(a=>({id:a.id,title:a.title,body:a.card.question})),...reviews.map(d=>({id:d.graph_id||d.task_id||d.run_id,title:d.title,body:d.question}))];
    for(const n of notices){if(seen.has(n.id))continue;seen.add(n.id);live.textContent=n.title+': '+n.body;if('Notification' in window&&Notification.permission==='granted'&&document.visibilityState!=='visible'){const notification=new Notification(n.title,{body:n.body,tag:n.id});notification.onclick=()=>{window.focus();open(n.id);notification.close()}}}
    try{localStorage.setItem(storageKey,JSON.stringify([...seen].slice(-500)))}catch{}
    document.getElementById('notifications-count').textContent=notices.length||'';
-   const relevant=actions.filter(a=>a.resolver==='human').sort((a,b)=>Number(b.project_id===document.body.dataset.project)-Number(a.project_id===document.body.dataset.project));
-   const relevantReviews=[...reviews].sort((a,b)=>Number(b.project_id===document.body.dataset.project)-Number(a.project_id===document.body.dataset.project));
-   banner.hidden=!relevant.length&&!relevantReviews.length;banner.replaceChildren();if(relevant.length)banner.append(el('strong',relevant.some(a=>a.blocking)?'Waiting for you':'Your input requested'),el('span',relevant.length===1?relevant[0].title:`${relevant.length} requests need your answer`),button('Review request',()=>open(relevant[0].id)));else if(relevantReviews.length)banner.append(el('strong','Review ready'),el('span',relevantReviews[0].title),link('Review result',reviewURL(relevantReviews[0])));
+   const reviewKey=d=>'review:'+(d.graph_id||d.task_id||d.run_id)+':'+d.question;
+   bannerKeys=[...actions.filter(a=>a.resolver==='human').map(a=>'request:'+a.id),...reviews.map(reviewKey)];
+   const activeKeys=new Set(bannerKeys);dismissed=new Set([...dismissed].filter(key=>activeKeys.has(key)));try{localStorage.setItem(storageKey+'.dismissed',JSON.stringify([...dismissed]))}catch{}
+   const relevant=actions.filter(a=>a.resolver==='human'&&!dismissed.has('request:'+a.id)).sort((a,b)=>Number(b.project_id===document.body.dataset.project)-Number(a.project_id===document.body.dataset.project));
+   const relevantReviews=reviews.filter(d=>!dismissed.has(reviewKey(d))).sort((a,b)=>Number(b.project_id===document.body.dataset.project)-Number(a.project_id===document.body.dataset.project));
+   banner.hidden=!relevant.length&&!relevantReviews.length;banner.replaceChildren();if(relevant.length)banner.append(el('strong',relevant.some(a=>a.blocking)?'Waiting for you':'Your input requested'),el('span',relevant.length===1?relevant[0].title:`${relevant.length} requests need your answer`),button('Review request',()=>open(relevant[0].id)));else if(relevantReviews.length){const review=link('Review result',reviewURL(relevantReviews[0]));review.addEventListener('click',dismissBanner);banner.append(el('strong','Review ready'),el('span',relevantReviews[0].title),review)}
+   if(!banner.hidden){const close=button('×',()=>{dismissBanner();toggle.focus({preventScroll:true})});close.className='attention-dismiss';close.setAttribute('aria-label','Dismiss notification');close.title='Dismiss notification';banner.append(close)}
    if(drawer.open&&!busy)draw();document.dispatchEvent(new CustomEvent('mitos-attention',{detail:actions}));
   }catch(e){if(drawer.open)error.textContent='Notifications could not refresh. '+e.message}
  }
