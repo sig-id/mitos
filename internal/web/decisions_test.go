@@ -7,14 +7,11 @@ import (
 	"testing"
 
 	"mitos/internal/decision"
-	"mitos/internal/studio"
 )
 
 func TestDecisionJSONAndConsoleShareOneResolution(t *testing.T) {
 	server, engine := testServer(t)
-	if err := studio.SeedDemo(engine.Store); err != nil {
-		t.Fatal(err)
-	}
+	seedPendingRun(t, engine)
 	listed := request(server, "GET", "/api/decisions", "", false)
 	var cards []decision.Card
 	if listed.Code != 200 || json.Unmarshal(listed.Body.Bytes(), &cards) != nil || len(cards) == 0 {

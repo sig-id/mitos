@@ -39,6 +39,8 @@ type Server struct {
 	demo          bool
 }
 type page struct {
+	RunSource, RunProjectName                              string
+	RunLogs                                                []runLog
 	Navigation                                             navigation
 	Attempts                                               []studio.Run
 	ServiceLifecycles                                      []studio.ServiceLifecycleView
@@ -102,6 +104,13 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 			return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
 		},
 		"eventTitle": func(s string) string { return strings.ReplaceAll(s, "_", " ") },
+		"eventData": func(e studio.Event) string {
+			var b bytes.Buffer
+			if json.Indent(&b, e.Data, "", "  ") != nil {
+				return string(e.Data)
+			}
+			return b.String()
+		},
 		"eventSummary": func(e studio.Event) string {
 			var d struct {
 				Summary string `json:"summary"`
@@ -201,7 +210,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	mux.HandleFunc("GET /api/decisions", func(w http.ResponseWriter, r *http.Request) {
 		cards := []decision.Card{}
 		for _, run := range s.engine.Store.List() {
-			if run.Status == "parked" && run.Decision != nil && run.Decision.Choice == "" {
+			if !run.Sample && run.Status == "parked" && run.Decision != nil && run.Decision.Choice == "" {
 				cards = append(cards, *run.Decision)
 			}
 		}
@@ -340,9 +349,12 @@ func (s *Server) base(view, title, section string) page {
 	}
 	p.Pools = s.engine.Store.Pools()
 	p.Runs = s.engine.Store.List()
-	p.Total = len(p.Runs)
 	var elapsed time.Duration
 	for _, r := range p.Runs {
+		if r.Sample {
+			continue
+		}
+		p.Total++
 		if r.Active() {
 			p.Active = append(p.Active, r)
 			p.Live = view == "overview" || view == "decisions"
@@ -394,6 +406,12 @@ func redirect(w http.ResponseWriter, r *http.Request, url string) {
 }
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	p := s.base("overview", "Overview", "overview")
+	p.Runs = nil
+	for _, run := range s.engine.Store.List() {
+		if !run.Sample {
+			p.Runs = append(p.Runs, run)
+		}
+	}
 	s.render(w, r, p, 200)
 }
 func (s *Server) work(w http.ResponseWriter, r *http.Request) {
@@ -484,12 +502,13 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	p.Run = run
 	p.Task, _ = s.engine.Store.Task(run.TaskID)
 	p.Navigation.ProjectID = run.Brief.ProjectID
+	s.runContext(&p)
 	for _, id := range p.Task.Runs {
 		if attempt, err := s.engine.Store.Get(id); err == nil {
 			p.Attempts = append(p.Attempts, attempt)
 		}
 	}
-	p.Live = run.Active()
+	p.Live = !run.Sample && run.Active()
 	s.render(w, r, p, 200)
 }
 func (s *Server) report(w http.ResponseWriter, r *http.Request) {

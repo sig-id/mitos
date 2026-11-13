@@ -1,18 +1,20 @@
 {{define "run"}}<div class="page-heading run-heading">
 <div>
 {{if .Task.GraphID}}<a class="back-link" href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}">← Work graph</a>{{else}}<a class="back-link" href="/work">← All work</a>{{end}}
-<div class="title-badges">{{template "badge" .Run}}{{if .Run.Sample}}<span class="sample-label">Example run</span>{{end}}<span class="mono">{{short .Run.ID}}</span>
+<div class="title-badges">{{if .Run.Sample}}<span class="sample-label">Demo record · no execution</span>{{else}}{{template "badge" .Run}}{{end}}<span class="mono">{{short .Run.ID}}</span>
 </div>
 <h1>{{.Run.Brief.Title}}</h1>
-<p>{{.Run.AppName}} <span class="separator">/</span> Started {{when .Run.CreatedAt}}</p>
+<p>{{.Run.AppName}} <span class="separator">/</span> {{if .Run.Sample}}Example created{{else}}Requested{{end}} {{when .Run.CreatedAt}}</p>
 </div>
-<div class="actions">{{if .Task.GraphID}}<a class="button" href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}">Manage step</a>{{else if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form hx-boost="true" action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
+{{if not .Run.Sample}}<div class="actions">{{if .Task.GraphID}}<a class="button" href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}">Manage step</a>{{else if and .Run.Terminal .Task.ContinuousEpoch}}<a class="button" href="/services">Manage service</a>{{else if .Run.Terminal}}<form hx-boost="true" action="/runs/{{.Run.ID}}/retry" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "retry"}}Run again</button>
 </form>{{else}}<form hx-boost="true" action="/runs/{{.Run.ID}}/cancel" method="post" hx-disabled-elt="find button">
 <button class="button" type="submit">{{icon "stop"}}Stop work</button>
 </form>{{end}}<a class="button primary" href="/runs/{{.Run.ID}}/report">Open report {{icon "arrow"}}</a>
+</div>{{end}}
 </div>
-</div>
+{{if .Run.Sample}}<section class="panel padded sample-explanation"><h2>This is demo history, not an agent failure</h2><p>Mitos created this illustrative record when an empty data directory was started with <code>--demo</code>. No person submitted this task, no agent ran it, and it belongs to no project.</p><p>The events below are synthetic examples. There are no agent replies, execution logs, or reasoning traces because nothing was executed. No restart or approval is needed.</p></section>{{end}}
+<section class="panel padded run-origin"><h2>Where this work came from</h2><dl class="facts"><div><dt>Launch source</dt><dd>{{.RunSource}}</dd></div><div><dt>Project</dt><dd>{{if and .Run.Brief.ProjectID (not .Run.Sample)}}<a href="/projects/{{.Run.Brief.ProjectID}}">{{.RunProjectName}}</a>{{else}}{{.RunProjectName}}{{end}}</dd></div><div><dt>Executor</dt><dd>{{if .Run.Sample}}None{{else}}{{.Run.AppName}} · <code>{{.Run.Brief.AppID}}</code>{{end}}</dd></div></dl>{{if not .Run.Sample}}<h3>Original request</h3><p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}No request text was recorded beyond the title above.{{end}}</p>{{if .Run.GraphAttempt}}<h3>Completion criteria</h3><p class="brief-content">{{.Run.GraphAttempt.Criteria}}</p>{{end}}<p><a href="#execution-output">Output and logs</a> · <a href="#execution-activity">Activity details</a></p>{{end}}</section>
 {{with .Run.Condition}}<section class="panel padded"><h2>Service condition</h2><p>{{.Status}}{{if .Detail}} · {{.Detail}}{{end}}</p>{{range .Facts}}<p>{{.Kind}}{{if .Name}} · {{.Name}}{{end}} · {{if .Passed}}passed{{else}}not met{{end}}</p>{{end}}</section>{{end}}
 {{with .Run.Health}}<section class="panel padded"><h2>Service health</h2><p>{{.Config.Type}} · {{.Status}}{{if .Action}} · requested action: {{.Action}}{{end}}</p>{{with .Check}}<p>Check {{.Number}}: {{.Outcome}}{{if .Detail}} · {{.Detail}}{{end}}</p>{{end}}{{if .HeartbeatAt}}<p>Last heartbeat: {{.HeartbeatAt}} · sequence {{.HeartbeatSequence}}</p>{{end}}{{if .Detail}}<p>{{.Detail}}</p>{{end}}</section>{{end}}
 {{with .Task.ServiceLifecycle}}<section class="panel padded"><h2>Service restart source</h2><p><a href="/services/lifecycle/{{.Seq}}">{{.RootID}} · operation {{.Seq}}</a></p></section>{{end}}
@@ -21,23 +23,21 @@
 {{with .Task.ServiceCycle}}<section class="panel padded"><h2>Service cycle</h2><p>{{.ID}} · catalog revision {{.Revision}}</p>{{if .DependsOn}}<p>Required services: {{range .DependsOn}}{{.}} {{end}}</p>{{end}}{{range $.Task.ServiceDependencyEvidence}}<p>{{.ServiceID}} succeeded: <a href="/runs/{{.RunID}}">prerequisite run</a> · event {{.Seq}}</p>{{end}}</section>{{end}}
 {{with .Task.ServiceReplacement}}<p class="notice">This task replaces <a href="/runs/{{.RunID}}">previous service work</a>. Execution waits for shutdown, harvest, and release of its claims.</p>{{end}}
 {{if .Task.ContinuousEpoch}}<p class="notice">This task belongs to a continuous service. While enabled, the service replaces stopped or finished tasks after its restart delay. <a href="/services">Disable the service</a> to stop its managed work.</p>{{end}}
-{{if and .Run.Decision (eq .Run.Status "parked") (eq .Run.Decision.Choice "")}}<div class="run-decision">{{template "decisioncard" .Run}}</div>{{end}}
+{{if and (not .Run.Sample) .Run.Decision (eq .Run.Status "parked") (eq .Run.Decision.Choice "")}}<div class="run-decision">{{template "decisioncard" .Run}}</div>{{end}}
 {{if and .Run.ClaimConflicts (eq .Run.Status "queued")}}<section class="panel padded"><h2>Waiting for shared work</h2><p>This work will start when the conflicting claims are released.</p><ul>{{range .Run.ClaimConflicts}}<li><a class="text-link" href="/runs/{{.RunID}}">{{.Kind}}: {{.Resource}}</a></li>{{end}}</ul></section>{{end}}
 {{if .Run.Claim}}{{if and (not .Run.Claim.ReleasedAt) (or (eq .Run.Status "parked") .Run.Terminal)}}<section class="panel padded"><h2>Previous execution needs inspection</h2><p>Its ownership and resource claims are still held. Inspect the previous processes and stop them before releasing these claims.</p><form hx-boost="true" action="/runs/{{.Run.ID}}/claims/release" method="post" hx-disabled-elt="find button"><input type="hidden" name="confirmed_stopped" value="true"><button class="button" type="submit">I inspected and stopped the previous processes</button></form></section>{{end}}{{end}}
-<div class="outcome-strip {{.Run.Status}}">
+{{if not .Run.Sample}}<div class="outcome-strip {{.Run.Status}}">
 <span class="outcome-icon">{{if .Run.Verified}}{{icon "check"}}{{else if eq .Run.Status "failed"}}{{icon "decision"}}{{else}}{{icon "work"}}{{end}}</span>
 <div>
 <strong>{{.Run.Stage}}</strong>
 <p>{{.Run.Summary}}</p>
-</div>{{if .Run.Verified}}<span class="pill">Acceptance passed</span>{{end}}</div>
+</div>{{if .Run.Verified}}<span class="pill">Acceptance passed</span>{{end}}</div>{{end}}
 <div class="detail-grid">
 <section>
-<section class="panel padded">
-<p class="eyebrow">Assignment</p>
+{{if not .Run.Sample}}<section class="panel padded">
+<p class="eyebrow">Execution details</p>
 {{if .Task.ID}}<p>Task {{.Task.Status}} · <a class="text-link" href="/tasks">{{.Task.Scheduling.Pool}} pool</a></p>{{end}}
 <a class="text-link" href="/api/runs/{{.Run.ID}}/evidence" hx-boost="false">Structured fleet evidence</a>
-<h3>{{.Run.Brief.Title}}</h3>
-<p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}Run the application’s default entrypoint against this workspace.{{end}}</p>
 <dl class="facts">
 <div>
 <dt>Workspace</dt>
@@ -60,14 +60,15 @@
 <a class="text-link" href="/runs/{{.Run.ParentID}}">View attempt {{icon "arrow"}}</a>
 </dd>
 </div>{{end}}</dl>
-</section>
-<details class="execution-fold" id="execution-activity"><summary>Activity · {{len .Run.Events}} events</summary><ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
+</section>{{end}}
+{{if not .Run.Sample}}<section class="panel padded" id="execution-output"><h2>Output and logs</h2><p>Saved executor output, replies, and diagnostics. Only content emitted and captured by the executor is available.</p>{{range .RunLogs}}<details class="execution-fold" id="log-{{.Name}}" open><summary>{{.Name}}</summary>{{if .Note}}<p>{{.Note}}</p>{{end}}{{if .Text}}<pre class="execution-log" tabindex="0">{{.Text}}</pre>{{else if not .Note}}<p>This log is empty.</p>{{end}}<a href="/runs/{{$.Run.ID}}/artifacts/{{.Name}}" hx-boost="false" download>Download {{.Name}}</a></details>{{else}}<p>No output logs have been saved for this attempt. Activity below shows the recorded lifecycle events; it is not an agent transcript.</p>{{end}}{{if .Task.GraphID}}<p><a href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}&amp;view=workflow">Open workflow for live agent output and requests</a></p>{{end}}</section>{{end}}
+<details class="execution-fold" id="execution-activity" open><summary>{{if .Run.Sample}}Example activity{{else}}Activity{{end}} · {{len .Run.Events}} events</summary><ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
 <span class="timeline-dot">{{if eq .Type "decision"}}{{icon "arrow"}}{{else}}{{icon "check"}}{{end}}</span>
 <div>
 <div class="timeline-heading">
 <strong>{{eventTitle .Kind}}</strong>
 <time>{{when .At}}</time>
-</div>{{if eventSummary .}}<p>{{eventSummary .}}</p>{{end}}<span class="event-kind">{{.Type}} · {{.Seq}}</span>
+</div>{{if eventSummary .}}<p>{{eventSummary .}}</p>{{end}}<span class="event-kind">{{.Kind}} · {{.Type}} · {{.Seq}}</span><details id="event-{{.Seq}}"><summary>Event details</summary><pre class="execution-log" tabindex="0">{{eventData .}}</pre></details>
 </div>
 </li>{{end}}</ol></details>
 <details class="execution-fold" id="execution-attempts"><summary>Attempts · {{len .Attempts}}</summary>{{range .Attempts}}<a class="artifact" href="/runs/{{.ID}}"><div><strong>{{.AppName}}</strong><p>{{.Stage}} · {{when .CreatedAt}}</p><span class="mono">{{.ID}}{{if eq $.Run.ID .ID}} · Current view{{end}}</span></div>{{template "badge" .}}</a>{{end}}</details>
@@ -102,10 +103,10 @@
 </header>
 <div class="report-summary">
 
-<h2>{{if .Run.Verified}}Verified result{{else if .Run.Active}}Execution in progress{{else}}Execution result{{end}}</h2>
-<p>{{.Run.Summary}}</p>
+<h2>{{if .Run.Sample}}Illustrative example – no execution{{else if .Run.Verified}}Verified result{{else if .Run.Active}}Execution in progress{{else}}Execution result{{end}}</h2>
+<p>{{if .Run.Sample}}This record was generated by demo seeding. No agent ran this task; its events and outcome are examples.{{else}}{{.Run.Summary}}{{end}}</p>
 </div>
-<div class="report-stats">
+{{if not .Run.Sample}}<div class="report-stats">
 <div>
 <span>Acceptance</span>
 <strong>{{if .Run.Verified}}Passed{{else}}Not verified{{end}}</strong>
@@ -119,7 +120,7 @@
 <strong>{{len .Run.Artifacts}}</strong>
 </div>
 </div>
-<section class="report-section">
+{{end}}<section class="report-section">
 
 <h2>Deliverables</h2>{{template "artifacts" .Run}}</section>
 <section class="report-section">

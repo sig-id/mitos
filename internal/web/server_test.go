@@ -157,9 +157,7 @@ func TestJSONAndFormShareLaunchOperations(t *testing.T) {
 }
 func TestDecisionCardHasNoSilentDefault(t *testing.T) {
 	s, e := testServer(t)
-	if err := studio.SeedDemo(e.Store); err != nil {
-		t.Fatal(err)
-	}
+	seedPendingRun(t, e)
 	page := request(s, "GET", "/decisions", "", false)
 	for _, want := range []string{"Restart this interrupted work?", "Nothing is approved by silence.", "What’s at stake", `name="choice"`} {
 		if !strings.Contains(page.Body.String(), want) {
@@ -182,7 +180,7 @@ func TestDecisionCardHasNoSilentDefault(t *testing.T) {
 
 func TestNonLiveScreensNeverPollWhileWorkIsQueued(t *testing.T) {
 	s, e := testServer(t)
-	if err := studio.SeedDemo(e.Store); err != nil {
+	if _, err := e.Store.Create(studio.Brief{Title: "Queued work", Workspace: e.Root, AppID: "workspace-inventory", TimeoutMinutes: 1}, "Workspace inventory", "", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"/apps", "/apps/workspace-inventory", "/new", "/work"} {

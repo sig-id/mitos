@@ -6,7 +6,7 @@
  class MitosMarkdown extends HTMLElement {
   constructor(){super();this._options={};this._mode='preview';this._baseline='';this._built=false}
   connectedCallback(){if(!this._built)this._mode=this.getAttribute('mode')||(this.hasAttribute('editable')?'edit':'preview');this._build();this.refresh();this._observeSize()}
-  disconnectedCallback(){this._resize?.disconnect();cancelAnimationFrame(this._frame);cancelAnimationFrame(this._layoutFrame)}
+  disconnectedCallback(){this._drag=null;this._resize?.disconnect();cancelAnimationFrame(this._frame);cancelAnimationFrame(this._layoutFrame)}
   get value(){return this._input?.value??this._value??''}
   set value(v){v=String(v??'');this._value=v;if(!this._built){this._build()}if(this._input.value!==v)this._input.value=v;this._baseline=v;this.refresh()}
   get mode(){return this._mode}
@@ -34,7 +34,16 @@
    this._input.id ||= 'markdown-source-'+(++sequence);this._input.setAttribute('aria-describedby',this._input.id+'-status');
    this._source.append(this._gutter,this._input,this._measure);this._preview=node('div',undefined,'md-preview');this._preview.tabIndex=0;this._preview.setAttribute('role','region');this._preview.setAttribute('aria-label','Markdown preview');this._panes.append(this._source,this._preview);
    this._footer=node('div',undefined,'md-status');this._footer.id=this._input.id+'-status';
-   this.append(this._toolbar,this._format,this._panes,this._footer);
+   this._handle=node('div',undefined,'md-resize-handle');this._handle.tabIndex=0;this._handle.setAttribute('role','separator');this._handle.setAttribute('aria-label','Resize Markdown height');this._handle.setAttribute('aria-orientation','horizontal');this._handle.setAttribute('aria-valuemin','140');this._handle.title='Drag to resize, or use the Up and Down arrow keys';
+   this._handle.addEventListener('pointerdown',event=>{
+    if(event.button!==0||this._drag)return;event.preventDefault();this._handle.focus({preventScroll:true});
+    this._drag={id:event.pointerId,y:event.clientY,height:this._paneHeight(),rows:this._mode==='split'&&this.classList.contains('md-narrow')?2:1};this._handle.setPointerCapture(event.pointerId);
+   });
+   this._handle.addEventListener('pointermove',event=>{const drag=this._drag;if(drag&&drag.id===event.pointerId)this._setHeight(drag.height+(event.clientY-drag.y)/drag.rows)});
+   const endResize=event=>{if(this._drag?.id!==event.pointerId)return;this._drag=null;if(this._handle.hasPointerCapture(event.pointerId))this._handle.releasePointerCapture(event.pointerId)};
+   for(const event of ['pointerup','pointercancel','lostpointercapture'])this._handle.addEventListener(event,endResize);
+   this._handle.addEventListener('keydown',event=>{if(event.key!=='ArrowUp'&&event.key!=='ArrowDown')return;event.preventDefault();this._setHeight(this._paneHeight()+(event.key==='ArrowDown'?24:-24))});
+   this.append(this._toolbar,this._format,this._panes,this._footer,this._handle);
    this._input.addEventListener('invalid',()=>{this.mode='edit'});
    this._input.addEventListener('input',()=>{this._updateStatus();cancelAnimationFrame(this._frame);this._frame=requestAnimationFrame(()=>this._renderPreview())});
    for(const event of ['click','keyup','select','focus'])this._input.addEventListener(event,()=>this._updateStatus());
@@ -47,6 +56,8 @@
    this._show();
   }
   _button(text,click){const b=node('button',text);b.type='button';b.addEventListener('click',click);return b}
+  _paneHeight(){return (this._source.hidden?this._preview:this._source).getBoundingClientRect().height}
+  _setHeight(height){height=Math.max(140,Math.round(height));this.style.setProperty('--md-editor-height',height+'px');this._handle.setAttribute('aria-valuenow',String(height))}
   _show(){
    if(this._compact){this._mode='preview';this._renderPreview();return}
    const preview=this._mode==='preview',source=this._mode==='source';this.dataset.mode=this._mode;
@@ -86,7 +97,7 @@
    if(!document.execCommand('insertText',false,replacement)){t.setRangeText(replacement,from,to,'end');t.dispatchEvent(new Event('input',{bubbles:true}))}
    t.setSelectionRange(from+offset,from+offset+length);this.refresh();
   }
-  _observeSize(){if(this._compact)return;this._resize?.disconnect();this._resize=new ResizeObserver(entries=>{this.classList.toggle('md-narrow',this.clientWidth<680);this._scheduleGutter()});this._resize.observe(this);this._resize.observe(this._input)}
+  _observeSize(){if(this._compact)return;this._resize?.disconnect();this._resize=new ResizeObserver(entries=>{this.classList.toggle('md-narrow',this.clientWidth<680);this._handle.setAttribute('aria-valuenow',String(Math.round(this._paneHeight())));this._scheduleGutter()});this._resize.observe(this);this._resize.observe(this._input)}
  }
  customElements.define('mitos-markdown',MitosMarkdown);
  const view=(text,options={})=>document.createElement('mitos-markdown').configure(String(text??''),options);

@@ -24,7 +24,7 @@ type Attention struct {
 func (s *Store) attention() []Attention {
 	out := []Attention{}
 	for _, r := range s.runs {
-		if r.Decision == nil || r.Decision.ResolvedAt != nil || r.Decision.Choice != "" || r.Status != "parked" {
+		if r.Sample || r.Decision == nil || r.Decision.ResolvedAt != nil || r.Decision.Choice != "" || r.Status != "parked" {
 			continue
 		}
 		d := r.Decision

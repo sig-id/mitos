@@ -15,9 +15,9 @@
 <a class="button" href="/work">Back to work {{icon "arrow"}}</a>
 </div>{{end}}</div></div></main></div></body></html>{{end}}
 
-{{define "badge"}}<span class="badge {{.Status}}">
+{{define "badge"}}{{if .Sample}}<span class="sample-label">Demo record</span>{{else}}<span class="badge {{.Status}}">
 <span class="status-dot">
-</span>{{status .Status}}</span>{{end}}
+</span>{{status .Status}}</span>{{end}}{{end}}
 
 {{define "runlist"}}<div class="run-list">{{range .}}<a class="run-row" href="/runs/{{.ID}}">
 <span class="run-symbol {{.Status}}">{{if eq .Status "done"}}{{icon "check"}}{{else if eq .Status "parked"}}{{icon "decision"}}{{else if eq .Status "failed"}}{{icon "stop"}}{{else}}{{icon "work"}}{{end}}</span>
