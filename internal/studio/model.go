@@ -153,6 +153,7 @@ type Event struct {
 }
 
 type change struct {
+	Cooperation       *CooperationRecord         `json:"cooperation,omitempty"`
 	AgentPolicy       *ProjectAgentPolicy        `json:"agent_policy,omitempty"`
 	Graph             *graphChange               `json:"graph,omitempty"`
 	GraphAttempt      *GraphAttempt              `json:"graph_attempt,omitempty"`

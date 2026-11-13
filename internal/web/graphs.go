@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"mitos/internal/agentpolicy"
+	"mitos/internal/cooperation"
 	"mitos/internal/studio"
 )
 
@@ -111,6 +112,40 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, 200, saved)
+	})
+	mux.HandleFunc("PUT /api/projects/{project}/cooperation-document", func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			Hash string `json:"hash"`
+			Text string `json:"text"`
+		}
+		if !graphBody(w, r, &v) {
+			return
+		}
+		doc, err := s.engine.SaveCooperation(r.PathValue("project"), v.Hash, v.Text)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, doc)
+	})
+	mux.HandleFunc("POST /api/projects/{project}/cooperation", func(w http.ResponseWriter, r *http.Request) {
+		var v cooperation.Message
+		if !graphBody(w, r, &v) {
+			return
+		}
+		receipt, err := s.engine.SubmitCooperation(r.PathValue("project"), v)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, receipt)
+	})
+	mux.HandleFunc("GET /api/projects/{project}/cooperation", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := s.engine.Desk.Project(r.PathValue("project")); err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"version": cooperation.Version, "messages": s.engine.Store.Cooperation(r.PathValue("project")), "effects": "Recorded proposals and evidence; approval and task acceptance require runtime resolution."})
 	})
 	mux.HandleFunc("PUT /api/projects/{project}/agent-policy", func(w http.ResponseWriter, r *http.Request) {
 		var p agentpolicy.Policy

@@ -14,18 +14,32 @@ func WithInstructions(snapshot Snapshot, name string, data []byte) (Snapshot, er
 	if name != "AGENTS.md" && name != "agents.md" {
 		return Snapshot{}, errors.New("invalid instructions filename")
 	}
+	return withDocument(snapshot, name, data, []string{"AGENTS.md", "agents.md"}, true)
+}
+
+func WithCooperation(snapshot Snapshot, data []byte, exists bool) (Snapshot, error) {
+	return withDocument(snapshot, "COOPERATION.md", data, []string{"COOPERATION.md"}, exists)
+}
+
+func withDocument(snapshot Snapshot, name string, data []byte, remove []string, exists bool) (Snapshot, error) {
 	files := make([]File, 0, len(snapshot.Files)+1)
 	var size int64
 	for _, file := range snapshot.Files {
-		if file.Path == "AGENTS.md" || file.Path == "agents.md" {
+		skip := false
+		for _, name := range remove {
+			skip = skip || file.Path == name
+		}
+		if skip {
 			continue
 		}
 		files = append(files, file)
 		size += file.Bytes
 	}
 	sum := sha256.Sum256(data)
-	files = append(files, File{Path: name, Data: append([]byte(nil), data...), Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Mode: "100644"})
-	size += int64(len(data))
+	if exists {
+		files = append(files, File{Path: name, Data: append([]byte(nil), data...), Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Mode: "100644"})
+		size += int64(len(data))
+	}
 	if size > DefaultLimits.Bytes || len(files) > DefaultLimits.Files {
 		return Snapshot{}, errors.New("frozen project instructions exceed workspace limits")
 	}
