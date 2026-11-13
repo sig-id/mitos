@@ -21,6 +21,7 @@ import (
 	"mitos/internal/autonomy"
 	"mitos/internal/decision"
 	"mitos/internal/fleet"
+	"mitos/internal/harness"
 	"mitos/internal/service"
 	"mitos/internal/studio"
 	"mitos/internal/workpool"
@@ -308,6 +309,9 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		limit := int64(32 << 10)
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/agent-sessions/") && strings.HasSuffix(r.URL.Path, "/observe") {
+			limit = harness.MaxObservationBytes
+		}
 		if r.Method == "POST" && (r.URL.Path == "/api/graphs" || strings.HasPrefix(r.URL.Path, "/api/graphs/")) {
 			limit = 2 << 20
 		}

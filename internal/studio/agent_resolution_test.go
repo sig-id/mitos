@@ -256,3 +256,46 @@ func TestAsyncAttentionDoesNotMarkWorkerBlocked(t *testing.T) {
 		t.Fatal("nonblocking clarification paused worker display")
 	}
 }
+
+func TestCachedInvestigationPreservesAnsweredCardsAndResolvesRemainder(t *testing.T) {
+	e, req := graphEngine(t, false)
+	p := agentpolicy.Default()
+	p.Autonomy = "delegated"
+	p.Fallback = "investigate"
+	if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+		t.Fatal(err)
+	}
+	session, token, err := e.Store.CreateBoundAgentSession("codex", "Two questions", e.Root, req.ProjectID, "", "", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := json.RawMessage(`{"id":1,"method":"item/tool/requestUserInput","params":{"threadId":"t","turnId":"u","questions":[{"id":"q1","question":"First?","options":[{"label":"Alpha","description":"Alpha"},{"label":"Beta","description":"Beta"}]},{"id":"q2","question":"Second?","options":[{"label":"Alpha","description":"Alpha"},{"label":"Beta","description":"Beta"}]}]}}`)
+	view, err := e.Store.IngestAgentRequest(session.ID, token, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := e.Store.Get(view.RunIDs[0])
+	if _, err = e.ResolveAs(first.ID, first.Decision.ID, "option_0", "Operator choice", "api", decision.LocalOperator()); err != nil {
+		t.Fatal(err)
+	}
+	route, err := e.RouteAgentRequest(context.Background(), session.ID, token, view.RequestID)
+	if err != nil || route.Route.Resolver != "investigate" {
+		t.Fatal(route, err)
+	}
+	evaluation := ModelEvaluation{ID: graphDigest([]any{route.Key, "investigate", route.PolicyRevision}), Scope: route.Key, ProjectID: req.ProjectID, Purpose: "investigate", PolicyRevision: route.PolicyRevision, Status: "selected", Investigation: &InvestigationResult{Reason: "Inspected evidence", Answers: []InvestigationAnswer{{Choice: "option_1"}, {Choice: "option_1"}}}}
+	e.Store.mu.Lock()
+	err = e.Store.commit("", "effect", "agent_investigation_completed", change{ModelEvaluation: &evaluation})
+	e.Store.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.ResolveAgentRequest(context.Background(), session.ID, token, view.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	first, _ = e.Store.Get(view.RunIDs[0])
+	second, _ := e.Store.Get(view.RunIDs[1])
+	status, err := e.Store.AgentRequestStatus(session.ID, token, view.RequestID)
+	if err != nil || status.State != "accepted" || first.Decision.Choice != "option_0" || first.Decision.Resolution.Resolver != decision.LocalOperator().ID || second.Decision.Choice != "option_1" || second.Decision.Resolution.Resolver != "mitos-automation" {
+		t.Fatal(status, err, first.Decision, second.Decision)
+	}
+}

@@ -8,6 +8,7 @@ import (
 
 	"mitos/internal/decision"
 	"mitos/internal/device"
+	"mitos/internal/harness"
 )
 
 func (s *Server) agentRoutes(mux *http.ServeMux) {
@@ -73,8 +74,8 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			}
 			err = s.engine.Store.EndAgentThread(id, token, in.Thread)
 		case "observe":
-			raw, readErr := io.ReadAll(io.LimitReader(r.Body, (24<<10)+1))
-			if readErr != nil || len(raw) > 24<<10 {
+			raw, readErr := io.ReadAll(io.LimitReader(r.Body, harness.MaxObservationBytes+1))
+			if readErr != nil || len(raw) > harness.MaxObservationBytes {
 				writeJSON(w, 413, map[string]string{"error": "body_limit"})
 				return
 			}

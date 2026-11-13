@@ -21,6 +21,11 @@ type Delivery struct {
 	Body      json.RawMessage `json:"body"`
 	RunIDs    []string        `json:"run_ids"`
 }
+
+// MaxObservationBytes matches the native app-server frame limit. Approval requests
+// retain their smaller independent limit.
+const MaxObservationBytes = 1 << 20
+
 type Observer interface {
 	Observe(context.Context, json.RawMessage) error
 }
