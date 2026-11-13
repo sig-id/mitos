@@ -51,7 +51,7 @@
  function selectTask(id){if($('earlier-work'))$('earlier-work').open=true;selected=id;detailTab='assignment';signature='';const u=new URL(location);u.searchParams.delete('graph');u.searchParams.delete('node');u.searchParams.set('task',id);history.replaceState(null,'',u);refreshProject().catch(showError)}
  function renderWork(){
   const w=snapshot.work,counts={};for(const t of w.tasks)counts[t.status]=(counts[t.status]||0)+1;$('work-counts').textContent=projectCounts(counts);
-  const resp=$('responsibilities');resp.replaceChildren();for(const r of w.responsibilities){const t=w.tasks.find(t=>t.id===r.task_id);if(!t||['accepted','cancelled'].includes(t.status))continue;const s=w.sessions.find(s=>s.id===r.coordinator_session_id);const row=el('article',undefined,'responsibility'),info=el('div');info.append(el('h3',r.title),el('p',s?`Coordinator: ${s.command} · ${s.status}`:'Supervision ready · no coordinator running'));row.append(info);const actions=el('div',undefined,'actions');actions.append(button('Inbox'+(r.messages.length?` · ${r.messages.length}`:''),()=>openMessages(r)));if(s)actions.append(link('Open session',terminal(s)));actions.append(button(active(s)?'View work':'Assign coordinator',()=>active(s)?selectTask(t.id):openWork(t)));row.append(actions);resp.append(row)}
+  const resp=$('responsibilities');resp.replaceChildren();for(const r of w.responsibilities){const t=w.tasks.find(t=>t.id===r.task_id);if(!t||['accepted','cancelled'].includes(t.status))continue;const s=w.sessions.find(s=>s.id===r.coordinator_session_id);const row=el('article',undefined,'responsibility'),info=el('div');info.append(el('h3',r.title),el('p',s?`Coordinator: ${s.command} · ${s.status}`:'Coordination ready · no coordinator running'));row.append(info);const actions=el('div',undefined,'actions');actions.append(button('Inbox'+(r.messages.length?` · ${r.messages.length}`:''),()=>openMessages(r)));if(s)actions.append(link('Open session',terminal(s)));actions.append(button(active(s)?'View work':'Assign coordinator',()=>active(s)?selectTask(t.id):openWork(t)));row.append(actions);resp.append(row)}
   const list=$('work-list'),query=$('work-search').value.toLowerCase();list.replaceChildren();
   if(!w.tasks.length&&!snapshot.batch_tasks.length)list.append(empty('What should this project achieve?','Create a bounded assignment or maintain an ongoing responsibility.',button('New native session',()=>openWork(),'primary')));
   for(const goal of w.goals){const tasks=w.tasks.filter(t=>t.goal_id===goal.id&&(!query||(t.title+' '+t.intent).toLowerCase().includes(query)));if(!tasks.length)continue;
@@ -82,7 +82,27 @@
   if(detailTab==='attempts'){const sessions=snapshot.work.sessions.filter(s=>s.task_id===t.id).reverse();if(!sessions.length)box.append(el('p','No execution attempts yet.','muted'));for(const attempt of sessions){const row=el('article',undefined,'record');row.append(el('h3',`${attempt.command} · attempt ${attempt.generation}`),el('p',`${attempt.status} · ${date(attempt.created_at)}`,'muted'),el('code',attempt.attempt_id+' · '+attempt.process_id),link('Open saved session →',terminal(attempt)));for(const report of [...(t.previous_reports||[]),...(t.result?[t.result]:[])].filter(r=>r.session_id===attempt.id)){const d=el('details');d.append(el('summary','Report · '+date(report.submitted_at)));d.append(window.MitosFormat?window.MitosMarkdown.view(report.body,{filename:'Report.md'}):el('p',report.body,'prose'));row.append(d)}box.append(row)}}
  }
  let projectRequest=0,projectApplied=0;
- async function refreshProject(){if(!project)return;const request=++projectRequest;const result=await api(endpoint('work')+`?offset=${offset}&task=${encodeURIComponent(selected)}`);if(request<projectApplied)return;projectApplied=request;snapshot=result;lastObserved=snapshot.observed_at;const next=JSON.stringify([snapshot.work,snapshot.batch_tasks]);if(next!==signature){signature=next;renderWork()}}
+ let supervisionSignature='';
+ async function refreshSupervision(){
+  const data=await api(endpoint('supervision/incidents')),panel=$('supervision-panel'),sig=JSON.stringify(data);if(sig===supervisionSignature)return;supervisionSignature=sig;
+  panel.replaceChildren();panel.hidden=!data.incidents.length;
+  for(const id of ['start-agent-session','new-work','new-session-work']){if($(id))$(id).disabled=data.held}
+  if(panel.hidden)return;
+  panel.append(el('h2',data.held?'Project held by supervision':'Supervision incidents'),el('p',data.coverage));
+  for(const incident of data.incidents){
+   const item=el('details');item.open=!incident.resolved_at;item.append(el('summary',incident.verdict.reason+' · '+incident.state));
+   item.append(el('p',incident.stop_confirmed?'Owned termination confirmed.':incident.resolved_at?'Resolution recorded; see operator note.':'Termination is not fully confirmed. Inspect outstanding processes.'));
+   for(const target of incident.targets)item.append(el('p',target.kind+' '+target.id+': '+target.detail));
+   const evidence=el('details');evidence.append(el('summary','Review evidence'),el('pre',JSON.stringify(incident.verdict.evidence,null,2)));item.append(evidence);
+   if(incident.resolved_at)item.append(el('p',incident.resolution));else{
+    const note=el('textarea');note.placeholder='Explain what was inspected or corrected';note.maxLength=4000;note.setAttribute('aria-label','Incident resolution');
+    const label=el('label','I verified that outstanding processes have stopped'),confirmed=el('input');confirmed.type='checkbox';label.prepend(confirmed);
+    item.append(note,label,button('Resolve incident',async()=>{await api(endpoint('supervision/incidents/'+incident.id+'/resolve'),{note:note.value,confirmed_stopped:confirmed.checked});await refreshSupervision()}));
+   }
+   panel.append(item);
+  }
+ }
+ async function refreshProject(){if(!project)return;await refreshSupervision();const request=++projectRequest;const result=await api(endpoint('work')+`?offset=${offset}&task=${encodeURIComponent(selected)}`);if(request<projectApplied)return;projectApplied=request;snapshot=result;lastObserved=snapshot.observed_at;const next=JSON.stringify([snapshot.work,snapshot.batch_tasks]);if(next!==signature){signature=next;renderWork()}}
  $('work-search')?.addEventListener('input',renderWork);
  let editing=null,parentTask=null,reviewed=false,createKey='',launchKey='',createdTask=null,agents=[];
  async function openWork(task=null,parent=null){editing=task;parentTask=parent;reviewed=!!task;createdTask=task;createKey=key();launchKey=key();const f=$('work-form');f.reset();$('work-fields').hidden=!!task;$('work-dialog-title').textContent=task?'Assign an executor':parent?'New subtask':'New work';f.elements.title.value=task?.title||'';f.elements.intent.value=task?.intent||'';f.elements.criteria.value=task?.criteria||'';f.elements.role.value=task?.role||'agent';for(const n of ['title','intent','criteria'])f.elements[n].required=!task;$('launch-review').hidden=!task;$('edit-work').hidden=true;$('work-submit').textContent=task?'Start executor':'Review work';if(task)$('launch-review').textContent=task.intent+'\n\nCriteria: '+task.criteria;
@@ -100,7 +120,7 @@
  $('new-session-work')?.addEventListener('click',()=>openWork().catch(showError));
  $('edit-work').onclick=()=>{reviewed=false;$('work-fields').hidden=false;$('launch-review').hidden=true;$('edit-work').hidden=true;$('work-submit').textContent='Review work';};
  $('work-form').onsubmit=e=>{e.preventDefault();const f=e.target;submit(f,async()=>{
-  if(!reviewed){reviewed=true;$('work-fields').hidden=true;$('launch-review').textContent=f.elements.title.value+'\n\n'+f.elements.intent.value+'\n\nCriteria: '+f.elements.criteria.value+'\n\n'+(f.elements.role.value==='coordinator'?'Supervisor with delegated work':'One worker');$('launch-review').hidden=false;$('edit-work').hidden=false;$('work-submit').textContent='Start work';return}
+  if(!reviewed){reviewed=true;$('work-fields').hidden=true;$('launch-review').textContent=f.elements.title.value+'\n\n'+f.elements.intent.value+'\n\nCriteria: '+f.elements.criteria.value+'\n\n'+(f.elements.role.value==='coordinator'?'Coordinator with delegated work':'One worker');$('launch-review').hidden=false;$('edit-work').hidden=false;$('work-submit').textContent='Start work';return}
   if(!createdTask)createdTask=await api(endpoint('work'),{key:createKey,title:f.elements.title.value,intent:f.elements.intent.value,criteria:f.elements.criteria.value,role:f.elements.role.value,parent_id:parentTask?.id||''});
   $('edit-work').hidden=true;const t=createdTask;await api(endpoint('sessions'),{key:launchKey,agent_id:f.elements.agent_id.value,profile_id:f.elements.profile_id.value,prompt:t.intent,role:t.role||'agent',expected_revision:t.revision,assignment:{task_id:t.id,goal_id:t.goal_id,requested_by:'operator'}});
   $('work-dialog').close();selected=t.id;signature='';await refreshProject();

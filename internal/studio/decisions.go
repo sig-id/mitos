@@ -147,6 +147,9 @@ func (s *Store) resolveChoiceWithAutomation(id string, resolution decision.Resol
 		return reject("unsupported value or oversized note", ErrConflict)
 	}
 	d := r.Decision
+	if s.supervisionHeld(r.ProjectID) || !s.supervisionAllows(d.Source) {
+		return reject("independent supervision has not cleared this action", ErrConflict)
+	}
 	if d.Source != nil && s.agentSessions[d.Source.SessionID].Operator != principal.ID && automation == nil {
 		return reject("answer not offered to this operator", ErrConflict)
 	}
@@ -282,6 +285,9 @@ func (e *Engine) resolveAs(id, decisionID, choice, note, via string, principal d
 	return e.applyResolution(r)
 }
 func (e *Engine) applyResolution(r Run) (string, error) {
+	if e.Store.SupervisionHeld(r.ProjectID) {
+		return "", ErrConflict
+	}
 	d := r.Decision
 	if d == nil || d.Resolution == nil {
 		return "", ErrConflict

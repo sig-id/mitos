@@ -23,6 +23,8 @@ import (
 )
 
 type Store struct {
+	supervisorVerdicts     map[string]SupervisorVerdict
+	supervisionIncidents   map[string]SupervisionIncident
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord
@@ -176,6 +178,21 @@ func (s *Store) apply(e Event) error {
 		if c.CustomEvent == nil {
 			return nil
 		}
+	}
+	if c.SupervisorVerdict != nil {
+		if s.supervisorVerdicts == nil {
+			s.supervisorVerdicts = map[string]SupervisorVerdict{}
+		}
+		s.supervisorVerdicts[c.SupervisorVerdict.Key] = graphClone(*c.SupervisorVerdict)
+	}
+	if c.SupervisionIncident != nil {
+		if s.supervisionIncidents == nil {
+			s.supervisionIncidents = map[string]SupervisionIncident{}
+		}
+		s.supervisionIncidents[c.SupervisionIncident.ID] = graphClone(*c.SupervisionIncident)
+	}
+	if c.SupervisorVerdict != nil || c.SupervisionIncident != nil {
+		return nil
 	}
 	if c.AgentRoute != nil {
 		if s.agentRoutes == nil {

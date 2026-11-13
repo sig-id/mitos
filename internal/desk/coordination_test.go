@@ -41,22 +41,22 @@ func TestProjectProfileRevisionAndDurability(t *testing.T) {
 	}
 }
 
-func TestSupervisorDelegationContextAndCompletion(t *testing.T) {
+func TestCoordinatorDelegationContextAndCompletion(t *testing.T) {
 	m, p := continuationManager(t)
-	supervisor, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "coordinator", Prompt: "Deliver a parser"}, "http://localhost")
+	coordinator, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "coordinator", Prompt: "Deliver a parser"}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "target", Prompt: "Write parser tests", Assignment: &agentcli.Assignment{RequestedBy: supervisor.ID, TaskID: "parser-tests"}}, "http://localhost")
+	worker, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "target", Prompt: "Write parser tests", Assignment: &agentcli.Assignment{RequestedBy: coordinator.ID, TaskID: "parser-tests"}}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if worker.SupervisorID != supervisor.ID || worker.Workspace != p.Directory {
+	if worker.CoordinatorID != coordinator.ID || worker.Workspace != p.Directory {
 		t.Fatal(worker)
 	}
 	await(t, func() bool {
-		out, _ := m.ReadOutput(supervisor.ID, 0)
-		return strings.Contains(string(out.Data), "You are the Mitos supervisor") && strings.Contains(string(out.Data), "desk start-session") && strings.Contains(string(out.Data), "Before implementation") && strings.Contains(string(out.Data), "do not make implementation edits yourself")
+		out, _ := m.ReadOutput(coordinator.ID, 0)
+		return strings.Contains(string(out.Data), "You are the Mitos coordinator") && strings.Contains(string(out.Data), "desk start-session") && strings.Contains(string(out.Data), "Before implementation") && strings.Contains(string(out.Data), "do not make implementation edits yourself")
 	})
 	profile := DefaultProjectProfile()
 	profile.MaxAgents = 1
@@ -70,11 +70,11 @@ func TestSupervisorDelegationContextAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal("replacement counts twice against agent limit", err)
 	}
-	if replacement.SupervisorID != supervisor.ID {
+	if replacement.CoordinatorID != coordinator.ID {
 		t.Fatal("handover lost parent", replacement)
 	}
 	stopContinuation(t, m, replacement)
-	inbox, err := m.Inbox(supervisor.ID)
+	inbox, err := m.Inbox(coordinator.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +85,13 @@ func TestSupervisorDelegationContextAndCompletion(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("supervisor not notified of exit", inbox)
+		t.Fatal("coordinator not notified of exit", inbox)
 	}
 }
 
 func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 	m, p := testManager(t)
-	supervisor, err := startTestCommand(m, p.ID, "Supervisor", "coordinator", "sleep 60", "http://localhost")
+	coordinator, err := startTestCommand(m, p.ID, "Coordinator", "coordinator", "sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,20 +99,20 @@ func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := m.Broadcast(p.ID, supervisor.ID, "Hold the shared index", true)
+	n, err := m.Broadcast(p.ID, coordinator.ID, "Hold the shared index", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(n.Targets) != 1 || n.Targets[0].SessionID != worker.ID {
 		t.Fatal(n)
 	}
-	if err = m.Acknowledge(n.ID, supervisor.ID); !errors.Is(err, ErrNotFound) {
+	if err = m.Acknowledge(n.ID, coordinator.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatal("non-target acknowledged", err)
 	}
 	if err = m.NoticeDelivery(n.ID, worker.ID, "context_queued", "Hook delivered"); err != nil {
 		t.Fatal(err)
 	}
-	view, _ := m.Supervision(p.ID)
+	view, _ := m.Coordination(p.ID)
 	if view.Notices[0].Targets[0].AcknowledgedAt != nil {
 		t.Fatal("delivery falsely acknowledged")
 	}
@@ -132,9 +132,9 @@ func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 		t.Fatal("new worker missed breakpoint")
 	}
 	if err = m.ReleaseNotice(n.ID, worker.ID); !errors.Is(err, ErrConflict) {
-		t.Fatal("worker released supervisor breakpoint", err)
+		t.Fatal("worker released coordinator breakpoint", err)
 	}
-	if err = m.ReleaseNotice(n.ID, supervisor.ID); err != nil {
+	if err = m.ReleaseNotice(n.ID, coordinator.ID); err != nil {
 		t.Fatal(err)
 	}
 	inbox, _ = m.Inbox(worker.ID)
@@ -162,7 +162,7 @@ func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	view, err = reopened.Supervision(p.ID)
+	view, err = reopened.Coordination(p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestCodexAttentionQueueWaitsForExactLink(t *testing.T) {
 	if _, err = m.LinkNativeSession(s.ID, reference); err != nil {
 		t.Fatal(err)
 	}
-	await(t, func() bool { v, _ := m.Supervision(p.ID); return v.Notices[0].Targets[0].State == "context_queued" })
+	await(t, func() bool { v, _ := m.Coordination(p.ID); return v.Notices[0].Targets[0].State == "context_queued" })
 	data, err := os.ReadFile(filepath.Join(p.Directory, "queued.txt"))
 	if err != nil || !strings.Contains(string(data), reference) || !strings.Contains(string(data), n.ID) {
 		t.Fatal(string(data), err)
@@ -275,7 +275,7 @@ func TestCodexAttentionQueueWaitsForExactLink(t *testing.T) {
 	if err = m.ReleaseNotice(n.ID, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	await(t, func() bool { v, _ := m.Supervision(p.ID); return v.Notices[0].Targets[0].ReleaseQueued })
+	await(t, func() bool { v, _ := m.Coordination(p.ID); return v.Notices[0].Targets[0].ReleaseQueued })
 	data, err = os.ReadFile(filepath.Join(p.Directory, "queued.txt"))
 	if err != nil || !strings.Contains(string(data), "RELEASED") {
 		t.Fatal(string(data), err)

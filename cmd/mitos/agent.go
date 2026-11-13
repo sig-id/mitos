@@ -81,7 +81,12 @@ func agentClient(args []string) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if client.Heartbeat(ctx) != nil {
+				if err := client.Heartbeat(ctx); err != nil {
+					var status *harness.HTTPError
+					if errors.As(err, &status) && status.Status >= 400 && status.Status < 500 {
+						cancel()
+						return
+					}
 					if time.Since(lastHealthy) > 25*time.Second {
 						cancel()
 						return

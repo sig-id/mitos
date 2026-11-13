@@ -22,9 +22,16 @@ try{
  await assert.rejects(readFile(path.join(workspace,'AGENTS.md')));await page.getByRole('button',{name:'Compare with saved',exact:true}).click();assert.equal(await page.locator('.setup-comparison>section').count(),2);
  await page.getByRole('button',{name:'Apply to AGENTS.md',exact:true}).click();await page.getByText('AGENTS.md saved. New work will use these instructions.',{exact:true}).waitFor();assert.ok((await readFile(path.join(workspace,'AGENTS.md'),'utf8')).includes('saved evidence'));
  await page.getByRole('button',{name:'My defaults',exact:true}).click();const dialog=page.locator('.setup-default-dialog');await dialog.getByRole('textbox',{name:'Describe your defaults',exact:true}).fill('Keep replies concise and use fixture-global-model.');await dialog.getByRole('button',{name:'Send',exact:true}).click();await dialog.getByRole('button',{name:'Save proposed defaults',exact:true}).click();await dialog.getByText('Personal defaults saved.',{exact:true}).waitFor();await dialog.getByRole('button',{name:'Close',exact:true}).click();assert.ok(!(await readFile(path.join(workspace,'AGENTS.md'),'utf8')).includes('Keep personal'));
- await page.reload();await page.getByRole('heading',{name:'AGENTS.md',exact:true}).waitFor();assert.ok(await page.locator('.setup-edit-surface .md-preview').getByText('saved evidence',{exact:true}).isVisible());
+ await page.reload();await page.getByRole('heading',{name:'AGENTS.md',exact:true}).waitFor();await page.locator('.setup-edit-surface .md-preview').getByText('saved evidence',{exact:true}).waitFor();
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'/tmp/mitos-project-setup-mobile.png'});await page.setViewportSize({width:1600,height:1040});await page.screenshot({path:'/tmp/mitos-project-setup.png'});await page.locator('[data-view=work]').click();
  await page.locator('#graph-prompt').fill('Produce and review the answer');await page.locator('#graph-create').click();await page.locator('#graph-current').waitFor({state:'visible'});const graphID=new URL(page.url()).searchParams.get('graph');assert.ok(graphID);
+ // A running worker exposes incremental messages before any report exists.
+ await page.locator('[data-view=workflow]').click();
+ const liveWorker=page.locator('.graph-node[data-kind=step]').first();await liveWorker.waitFor();await liveWorker.click();
+ await page.locator('.graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor();
+ await page.locator('.graph-live-text').filter({hasText:'Preparing the answer'}).waitFor();
+ assert.equal(await page.locator('#graph-node-kind').textContent(),'Agent');
+ await page.screenshot({path:'/tmp/mitos-live-agent-output.png'});
  await page.locator('#work-tree .work-tree-node').first().waitFor();await wait(async()=>{const state=await api('/api/graphs/'+graphID);const blocked=Object.values(state.expansions).find(x=>x.error);if(blocked)logs=JSON.stringify(state);return state.status==='accepted'});await page.locator('#graph-status.accepted').waitFor();
  await page.locator('[data-view=workflow]').click();
  const g=await api('/api/graphs/'+graphID);assert.equal(g.setup.model,'fixture-project-model');assert.ok(g.setup.document.includes('saved evidence'));assert.ok(g.setup.personal.includes('Keep personal'));
@@ -32,7 +39,23 @@ try{
  const treeOrder=await page.locator('#work-tree .work-tree-node').evaluateAll(ns=>ns.map(n=>n.dataset.treeKey).filter(k=>k!=='planner'));
  const graphOrder=await page.locator('.graph-node[data-kind=step]').evaluateAll(ns=>ns.sort((a,b)=>parseFloat(a.style.left)-parseFloat(b.style.left)||parseFloat(a.style.top)-parseFloat(b.style.top)).map(n=>n.dataset.id));assert.deepEqual(treeOrder,graphOrder,'tree does not follow workflow order');
  assert.equal(await page.locator('.graph-node[data-kind=planner]').count(),0);assert.equal(await page.locator('[data-tree-key="planner"]').count(),1);
- await page.locator('.graph-planner-history').click();await page.getByRole('button',{name:'Read this round',exact:true}).first().click();await page.locator('.graph-plan-output').waitFor();await page.getByRole('heading',{name:'Planner summary',exact:true}).waitFor();
+ // Repeat navigation against an unchanged snapshot, including the same round.
+ const inspector=page.locator('#graph-node-detail');
+ await page.locator('.graph-planner-history').click();
+ await inspector.getByRole('button',{name:'Read this round',exact:true}).last().click();
+ await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Output'}).waitFor();
+ const latestHeading=await inspector.locator('h3').textContent();
+ await inspector.getByRole('button',{name:'Planning rounds',exact:true}).click();
+ await page.getByRole('button',{name:'Latest update',exact:true}).click();
+ await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Output'}).waitFor();
+ assert.equal(await inspector.locator('h3').textContent(),latestHeading);
+ await page.locator('.graph-node[data-kind=scope]').first().click();
+ assert.equal(await page.locator('#graph-node-kind').textContent(),'Goal');
+ await page.getByRole('button',{name:'Latest update',exact:true}).click();
+ await inspector.getByRole('heading',{name:latestHeading,exact:true}).waitFor();
+ await page.locator('#graph-inspector-close').click();await page.locator('[data-tree-key=planner]').click();
+ await inspector.getByRole('heading',{name:latestHeading,exact:true}).waitFor();
+ await page.locator('.graph-planner-history').click();await page.getByRole('button',{name:'Read this round',exact:true}).first().click();await page.locator('.graph-plan-output').waitFor();await page.getByRole('heading',{name:'Coordinator summary',exact:true}).waitFor();
  assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>=560,'output pane is too narrow');
  assert.equal(await page.locator('.graph-structured-output details[data-read-key=raw]').getAttribute('open'),null,'raw JSON should start collapsed');
  const assignment=page.locator('.graph-plan-output details[data-read-key="step:0"]');assert.equal(await assignment.getAttribute('open'),'');await assignment.locator('summary').first().click();
@@ -41,7 +64,7 @@ try{
  await page.screenshot({path:'/tmp/mitos-planner-reader.png'});await page.locator('#graph-inspector-expand').click();assert.ok(await page.locator('.graph-map').isVisible());
  await page.locator(`[data-tree-key="${worker.spec.id}"]`).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.ok(await page.locator('#graph-node-detail').getByText('The answer is', {exact:false}).count());
  await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).waitFor();await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();await page.getByRole('button',{name:'Back to graph',exact:true}).click();
- const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.getByRole('button',{name:'View output & files',exact:true}).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
+ const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByRole('link',{name:'report.md',exact:true}).waitFor();await page.getByRole('button',{name:'Open attempt 1',exact:true}).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/mitos-output-mobile.png'});assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>320);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.setViewportSize({width:1600,height:1040});
  // Stored output is untrusted; JSON and Markdown cannot inject HTML or scripts.
  const safe=await page.evaluate(()=>{const n=window.MitosGraphOutput.render(JSON.stringify({explanation:'<img src=x onerror="window.injected=true">',steps:[null,{title:'<script>bad()</script>',assignment:'**Readable**',criteria:'done',after:[]}]}),{planner:true});document.body.append(n);const result={html:n.querySelectorAll('img,script').length,bold:!!n.querySelector('strong')};n.remove();return result});assert.deepEqual(safe,{html:0,bold:true});

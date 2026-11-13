@@ -41,25 +41,25 @@ func (m *Manager) prepareSessionContextLocked(p Project, s *Session, launch *age
 		parent, err := m.sessionLocked(s.Assignment.RequestedBy)
 		if err == nil {
 			if parent.Role == "coordinator" {
-				s.SupervisorID = parent.ID
+				s.CoordinatorID = parent.ID
 			} else {
-				s.SupervisorID = parent.SupervisorID
+				s.CoordinatorID = parent.CoordinatorID
 			}
 		}
 	}
-	if s.Role == "agent" && s.SupervisorID == "" {
+	if s.Role == "agent" && s.CoordinatorID == "" {
 		for _, old := range m.state.Sessions {
 			if s.Continuation != nil && s.Continuation.Kind == "handover" && old.ID == s.Continuation.SourceID {
 				continue
 			}
 			if old.ID != s.ID && old.ProjectID == p.ID && old.Role == "coordinator" && activeSession(old) {
-				s.SupervisorID = old.ID
+				s.CoordinatorID = old.ID
 				break
 			}
 		}
 	}
 	if s.Role == "coordinator" {
-		s.SupervisorID = ""
+		s.CoordinatorID = ""
 	}
 	for _, directory := range []string{m.dir, p.Directory} {
 		var stat syscall.Statfs_t

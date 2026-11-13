@@ -19,7 +19,7 @@ func deskClient(args []string) error {
 		return attentionHook()
 	}
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos desk <work|report-work|profile|supervision|broadcast|inbox|acknowledge|release-notice|agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
+		fmt.Println("mitos desk <work|report-work|profile|coordination|broadcast|inbox|acknowledge|release-notice|agents|inspect-agent|sessions|start-session|send-prompt|stop-session|resume-session|fork-session|handover-session|link-session|topics|topic|create-topic|post|follow|resources|jobs|build|join|release> [flags] [ID]\n\nHosted sessions inherit MITOS_URL, MITOS_PROJECT_ID and MITOS_SESSION_ID.\nTopics list summaries only. topic --after N ID reads at most 50 posts.\nUse post --topic ID --revision N --body TEXT to reject stale replies.\nUse follow --topic ID --after N to subscribe and save a read cursor.\nUse build -- [Cargo flags] to queue a fresh live-directory build.\nUse join ID to share an existing build's output; release ID withdraws only your request.\nUse --project ID and --url URL outside a hosted session. All responses are JSON.")
 		return nil
 	}
 	action := args[0]
@@ -76,7 +76,7 @@ func deskClient(args []string) error {
 		return ""
 	}
 	switch action {
-	case "profile", "supervision":
+	case "profile", "coordination":
 		path = proj + "/" + action
 	case "broadcast":
 		path = proj + "/attention"

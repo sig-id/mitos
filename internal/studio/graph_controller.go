@@ -20,7 +20,7 @@ type GraphPlan struct {
 
 func (e *Engine) reconcileGraphControllers() error {
 	for _, snapshot := range e.Store.Graphs() {
-		if snapshot.Status != "active" || snapshot.Policy.ControllerApplication == "" || !time.Now().Before(snapshot.Limits.Deadline) {
+		if e.Store.SupervisionHeld(snapshot.ProjectID) || snapshot.Status != "active" || snapshot.Policy.ControllerApplication == "" || !time.Now().Before(snapshot.Limits.Deadline) {
 			continue
 		}
 		keys := []string{}
@@ -121,7 +121,7 @@ func (e *Engine) reconcileGraphControllers() error {
 	slices.Sort(ids)
 	for _, id := range ids {
 		old := s.graphs[id]
-		if old.Status != "active" || old.Policy.ControllerApplication == "" || !time.Now().Before(old.Limits.Deadline) {
+		if s.supervisionHeld(old.ProjectID) || old.Status != "active" || old.Policy.ControllerApplication == "" || !time.Now().Before(old.Limits.Deadline) {
 			continue
 		}
 		if old.Policy.Automatic {

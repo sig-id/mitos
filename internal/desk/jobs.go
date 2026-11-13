@@ -150,7 +150,7 @@ func (m *Manager) Release(job, author string, confirmed bool) error {
 	return nil
 }
 func (m *Manager) dispatchJobLocked(project string) {
-	if m.closed || m.writeErr != nil {
+	if m.closed || m.writeErr != nil || m.projectHeld(project) {
 		return
 	}
 	for _, live := range m.jobs {
@@ -250,4 +250,33 @@ func (w *jobOutput) Write(p []byte) (int, error) {
 		err = io.ErrShortWrite
 	}
 	return n, err
+}
+
+// StopProjectJobs cancels owned build processes without claiming their exit.
+func (m *Manager) StopProjectJobs(project string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := []string{}
+	for _, j := range m.state.Jobs {
+		if j.ProjectID == project && (j.Status == "running" || j.Status == "interrupted") {
+			ids = append(ids, j.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	if err := m.writable(); err != nil {
+		return nil, err
+	}
+	for i := range m.state.Jobs {
+		j := &m.state.Jobs[i]
+		if !slices.Contains(ids, j.ID) {
+			continue
+		}
+		if live := m.jobs[j.ID]; live != nil {
+			live.cancel()
+		}
+		j.Detail = "Independent supervision requested termination."
+	}
+	return ids, m.saveLocked()
 }

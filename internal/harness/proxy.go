@@ -39,7 +39,7 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 	go func() { <-ctx.Done(); _ = server.Close() }()
 	go func() {
 		scan := bufio.NewScanner(clientIn)
-		scan.Buffer(make([]byte, 4096), 1<<20)
+		scan.Buffer(make([]byte, 4096), MaxObservationBytes)
 		for scan.Scan() {
 			line := append([]byte(nil), scan.Bytes()...)
 			var envelope Envelope
@@ -74,7 +74,7 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 	go func() {
 		defer close(lines)
 		scan := bufio.NewScanner(server)
-		scan.Buffer(make([]byte, 4096), 1<<20)
+		scan.Buffer(make([]byte, 4096), MaxObservationBytes)
 		for scan.Scan() {
 			line := append([]byte(nil), scan.Bytes()...)
 			select {
@@ -103,6 +103,11 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 			var e Envelope
 			if json.Unmarshal(line, &e) != nil {
 				return errors.New("invalid app-server JSON")
+			}
+			if observer, ok := b.(Observer); ok && ObservationRelevant(line) {
+				if err := observer.Observe(ctx, line); err != nil {
+					return err
+				}
 			}
 			originalLine := line
 			async := false
@@ -160,6 +165,12 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 						go func(key string, p *waiting) {
 							answer, err := Wait(requestCtx, b, delivery.RequestID)
 							if err != nil {
+								if requestCtx.Err() == nil {
+									select {
+									case errorsOut <- err:
+									default:
+									}
+								}
 								return
 							}
 							mu.Lock()

@@ -90,7 +90,7 @@
      const list=el('div',undefined,'graph-deliverable-links graph-saved-files');const render=()=>{const matching=entry.files.filter(f=>f.path.toLowerCase().includes(search.value.toLowerCase())).sort((a,b)=>a.path.localeCompare(b.path));list.replaceChildren(...matching.slice(0,100).map(f=>button(f.path,()=>open({...f,entry}))));if(matching.length>100)list.append(el('p','Showing 100 of '+matching.length+' files. Search to narrow the list.','muted'))};search.oninput=render;render();group.append(search,list);if(entry.problem)group.append(el('p',entry.problem,'muted'));evidence.append(group);
     }
     container.append(evidence);
-    const review=el('details');review.append(el('summary','Planner completion review'),markup(graph.members[graph.root_task].accepted?.rationale||''));container.append(review);
+    const review=el('details');review.append(el('summary','Coordinator completion review'),markup(graph.members[graph.root_task].accepted?.rationale||''));container.append(review);
     if(initial){const entry=entries.find(e=>e.member.spec.id===initial.task&&e.run.id===initial.run);if(entry)location={kind:'file',file:{...initial,entry}}}
     await show();
    }catch(e){if(current())container.append(el('p','Could not load the result: '+e.message,'form-error'))}

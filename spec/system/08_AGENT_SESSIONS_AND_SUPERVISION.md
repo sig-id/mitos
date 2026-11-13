@@ -161,3 +161,14 @@ classification routing and fallback; real decision-service integration; and
 independent incident/hold/stop behavior. Tests MUST cover stale replies, conflicting
 resolutions, revocation, model failure, replay, and supervisor stop races where those
 behaviors are introduced. Unsupported capabilities remain explicit.
+
+Initial delivery is tracked in issues [#2](https://github.com/sig-id/mitos/issues/2),
+[#3](https://github.com/sig-id/mitos/issues/3), [#4](https://github.com/sig-id/mitos/issues/4),
+[#5](https://github.com/sig-id/mitos/issues/5), [#6](https://github.com/sig-id/mitos/issues/6)
+and [#7](https://github.com/sig-id/mitos/issues/7), respectively. The implementation
+uses project-scoped incidents and holds. The first supervisor reviews intercepted
+requests and Codex command/file/tool events, not every host effect; see the
+[operational coverage](../../docs/independent-supervision.md). Physical confinement,
+continuous host auditing and a separate general-LLM supervisor backend remain outside
+this initial implementation. The supervisor model currently uses the bounded
+Decisions API Choice adapter.

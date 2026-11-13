@@ -12,7 +12,7 @@
   const build=()=>{if(built||!d.open)return;built=true;if(depth>=12){body.append(el('p','Expand the raw data below to inspect deeper values.'));return}for(const [key,v]of entries.slice(0,100)){const row=el('div',undefined,'graph-json-row');if(v&&typeof v==='object')row.append(structured(v,key,depth+1,path+'/'+key));else row.append(el('strong',key),structured(v));body.append(row)}if(entries.length>100)body.append(el('p','Showing the first 100 entries. Full data is available below.','muted'))};d.addEventListener('toggle',build);d.append(body);build();return d;
  }
  function plan(value,resolve){
-  const box=el('div',undefined,'graph-plan-output');box.append(el('h4','Planner summary'),prose(value.explanation));
+  const box=el('div',undefined,'graph-plan-output');box.append(el('h4','Coordinator summary'),prose(value.explanation));
   if(value.complete===true)box.append(el('p','The planner proposes completing this goal.','graph-output-callout'));
   const steps=list(value.steps).filter(s=>s&&typeof s==='object'),local=new Map(steps.map(s=>[s.id,s.title]));
   const taskName=id=>local.get(id)||resolve(id)||id;

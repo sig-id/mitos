@@ -77,10 +77,12 @@ The terminal opens in the browser; supported questions and approvals appear in
 The CLI equivalent is `./bin/mitos agent codex --workspace /path/to/project` while
 Mitos is serving. Add `--keep-open --prompt "Assignment"` to supply the initial
 assignment and keep the conversation open. Codex supports live turn steering and asynchronous clarification replies.
+Independent boundary review is configured in **Project setup → Autonomy & approvals**;
+[supervision incidents](docs/independent-supervision.md) appear on the project page.
 Bridge resume/fork is not yet supported; ordinary native sessions remain available below.
 
 Installed interactive agent terminals are separate executors. **Sessions & earlier
-work → New native session** retains their assignment, supervision inbox, reports,
+work → New native session** retains their assignment, coordination inbox, reports,
 and replacement workflow. Submitted session reports require explicit human review;
 that acceptance covers the saved report, not unverified repository changes.
 

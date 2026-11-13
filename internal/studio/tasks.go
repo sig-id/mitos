@@ -318,7 +318,7 @@ func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 		t := s.tasks[id]
 		turns[t.Scheduling.Pool] = max(turns[t.Scheduling.Pool], t.LastScheduledSeq)
 		r := s.runs[t.CurrentRunID]
-		if r == nil || r.ExecutionKind == "interactive" || r.Status != "queued" || r.Sample || activeRuns[r.ID] {
+		if r == nil || r.ExecutionKind == "interactive" || r.Status != "queued" || r.Sample || s.supervisionHeld(r.ProjectID) || activeRuns[r.ID] {
 			continue
 		}
 		if deadline := t.Scheduling.Deadline; deadline != nil && !time.Now().Before(*deadline) {
@@ -420,7 +420,7 @@ func (s *Store) schedule(id string, activeIDs []string, expected *workpool.Pool)
 	if r == nil {
 		return false, ErrNotFound
 	}
-	if r.Status != "queued" || r.Sample {
+	if r.Status != "queued" || r.Sample || s.supervisionHeld(r.ProjectID) {
 		return false, ErrConflict
 	}
 	task := s.tasks[r.TaskID]

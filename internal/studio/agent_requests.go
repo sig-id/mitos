@@ -63,6 +63,9 @@ func (s *Store) CreateBoundAgentSession(adapter, title, workspace, project, sess
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.supervisionHeld(project) {
+		return AgentSession{}, "", deviceError(409, "supervision_hold")
+	}
 	session := AgentSession{ProjectID: project, DeskSessionID: sessionID, RunID: runID, ID: newID("agent"), Adapter: adapter, Title: title, Workspace: workspace, Operator: p.ID, Tenant: p.Tenant, TokenHash: tokenHash(token), LeaseUntil: time.Now().UTC().Add(30 * time.Second)}
 	if err = s.commit("", "effect", "agent_session_started", change{AgentSession: &session}); err != nil {
 		return AgentSession{}, "", err
@@ -75,7 +78,7 @@ func (s *Store) agentSession(id, token string) (AgentSession, error) {
 	if !ok || a.TokenHash != tokenHash(token) || token == "" {
 		return a, deviceError(401, "unauthenticated")
 	}
-	if a.Closed || !time.Now().Before(a.LeaseUntil) {
+	if a.Closed || s.supervisionHeld(a.ProjectID) || !time.Now().Before(a.LeaseUntil) {
 		return a, deviceError(410, "session_ended")
 	}
 	return a, nil
@@ -189,6 +192,21 @@ func (s *Store) agentRequestView(key string) (AgentRequestView, error) {
 		view.RunIDs = append(view.RunIDs, r.ID)
 	}
 	if answer, ok := s.agentAnswers[key]; ok {
+		if answer.State == "accepted" {
+			for _, r := range request.Runs {
+				current := s.runs[r.ID]
+				if current != nil && current.Decision != nil && current.Decision.Resolution != nil && current.Decision.Resolution.Via == "automation" {
+					route, ok := s.agentRoutes[key]
+					policy := s.agentPolicy(s.agentSessions[request.SessionID].ProjectID)
+					if !ok || route.PolicyRevision != policy.Revision || policy.Autonomy != "delegated" {
+						return AgentRequestView{}, deviceError(409, "automated_answer_policy_changed")
+					}
+				}
+				if current == nil || current.Decision == nil || !s.supervisionAllows(current.Decision.Source) {
+					return view, nil
+				}
+			}
+		}
 		view.State = answer.State
 		view.Body = append(json.RawMessage(nil), answer.Body...)
 		view.Digest = answer.Digest

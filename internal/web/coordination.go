@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func (s *Server) supervisionRoutes(mux *http.ServeMux) {
+func (s *Server) coordinationRoutes(mux *http.ServeMux) {
 	m := s.engine.Desk
 	mux.HandleFunc("POST /api/projects/{project}/profile-drafts", func(w http.ResponseWriter, r *http.Request) {
 		var in desk.ProfileDraftRequest
@@ -41,8 +41,8 @@ func (s *Server) supervisionRoutes(mux *http.ServeMux) {
 		v, err := m.ReviewAndStartProfileDraft(r.PathValue("project"), r.PathValue("draft"), in.Profile, in.Revision, "http://"+r.Host)
 		deskResult(w, v, err)
 	})
-	mux.HandleFunc("GET /api/projects/{project}/supervision", func(w http.ResponseWriter, r *http.Request) {
-		v, err := m.Supervision(r.PathValue("project"))
+	mux.HandleFunc("GET /api/projects/{project}/coordination", func(w http.ResponseWriter, r *http.Request) {
+		v, err := m.Coordination(r.PathValue("project"))
 		deskResult(w, v, err)
 	})
 	mux.HandleFunc("GET /api/projects/{project}/profile", func(w http.ResponseWriter, r *http.Request) {

@@ -14,19 +14,23 @@ type Rule struct {
 	Action    string `json:"action"`    // allow, review, deny
 }
 type Policy struct {
-	Revision            int    `json:"revision"`
-	Autonomy            string `json:"autonomy"` // manual, delegated
-	Guidance            string `json:"guidance,omitempty"`
-	DecisionApplication string `json:"decision_application,omitempty"`
-	Fallback            string `json:"fallback"` // human, investigate
-	MaxCalls            int    `json:"max_calls"`
-	Rules               []Rule `json:"rules"`
+	Supervision         Supervision `json:"supervision"`
+	Revision            int         `json:"revision"`
+	Autonomy            string      `json:"autonomy"` // manual, delegated
+	Guidance            string      `json:"guidance,omitempty"`
+	DecisionApplication string      `json:"decision_application,omitempty"`
+	Fallback            string      `json:"fallback"` // human, investigate
+	MaxCalls            int         `json:"max_calls"`
+	Rules               []Rule      `json:"rules"`
 }
 
 func Default() Policy {
-	return Policy{Autonomy: "manual", Fallback: "human", MaxCalls: 4, Rules: []Rule{}}
+	return Policy{Supervision: Supervision{Mode: "rules", MaxCalls: 16}, Autonomy: "manual", Fallback: "human", MaxCalls: 4, Rules: []Rule{}}
 }
 func (p Policy) Validate() error {
+	if err := p.Supervision.Validate(); err != nil {
+		return err
+	}
 	if p.Revision < 0 || (p.Autonomy != "manual" && p.Autonomy != "delegated") || (p.Fallback != "human" && p.Fallback != "investigate") || p.MaxCalls < 1 || p.MaxCalls > 64 || len(p.Guidance) > 8000 || strings.ContainsRune(p.Guidance, 0) || len(p.DecisionApplication) > 100 || len(p.Rules) > 64 {
 		return errors.New("invalid agent policy")
 	}
@@ -58,4 +62,32 @@ func (p Policy) Match(command, directory, workspace string) (Rule, bool) {
 		}
 	}
 	return Rule{}, false
+}
+
+type Supervision struct {
+	Mode          string `json:"mode"` // off, rules, model
+	Application   string `json:"application,omitempty"`
+	Guidance      string `json:"guidance,omitempty"`
+	WorkspaceOnly bool   `json:"workspace_only"`
+	MaxCalls      int    `json:"max_calls"` // per session, separate from routing
+}
+
+func (s Supervision) Effective() Supervision {
+	if s.Mode == "" {
+		s.Mode = "rules"
+	}
+	if s.MaxCalls == 0 {
+		s.MaxCalls = 16
+	}
+	return s
+}
+func (s Supervision) Validate() error {
+	s = s.Effective()
+	if (s.Mode != "off" && s.Mode != "rules" && s.Mode != "model") || s.MaxCalls < 1 || s.MaxCalls > 64 || len(s.Application) > 100 || len(s.Guidance) > 8000 || strings.ContainsRune(s.Guidance, 0) {
+		return errors.New("invalid supervision policy")
+	}
+	if s.Mode == "model" && (s.Application == "" || strings.TrimSpace(s.Guidance) == "") {
+		return errors.New("model supervision requires a configured application and project boundaries")
+	}
+	return nil
 }

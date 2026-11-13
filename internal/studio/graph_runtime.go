@@ -47,7 +47,7 @@ func (e *Engine) reconcileGraphs() error {
 	slices.Sort(ids)
 	for _, id := range ids {
 		old := s.graphs[id]
-		if old.Status != "active" || !time.Now().Before(old.Limits.Deadline) {
+		if s.supervisionHeld(old.ProjectID) || old.Status != "active" || !time.Now().Before(old.Limits.Deadline) {
 			continue
 		}
 		g := graphClone(*old)

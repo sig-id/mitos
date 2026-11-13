@@ -8,6 +8,7 @@ import (
 
 	"mitos/internal/decision"
 	"mitos/internal/device"
+	"mitos/internal/harness"
 )
 
 func (s *Server) agentRoutes(mux *http.ServeMux) {
@@ -39,6 +40,17 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			writeJSON(w, 400, map[string]string{"error": "desk_session_required"})
 			return
 		}
+		if in.ProjectID == "" {
+			for _, p := range s.engine.Desk.Projects() {
+				if p.Directory == workspace {
+					if in.ProjectID != "" {
+						writeJSON(w, 409, map[string]string{"error": "ambiguous_project_use_ui_session"})
+						return
+					}
+					in.ProjectID = p.ID
+				}
+			}
+		}
 		session, token, err := s.engine.Store.CreateBoundAgentSession(in.Adapter, in.Title, workspace, in.ProjectID, in.DeskSessionID, "", decision.LocalOperator())
 		if err != nil {
 			s.deviceAdminError(w, r, err)
@@ -61,6 +73,13 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 				return
 			}
 			err = s.engine.Store.EndAgentThread(id, token, in.Thread)
+		case "observe":
+			raw, readErr := io.ReadAll(io.LimitReader(r.Body, harness.MaxObservationBytes+1))
+			if readErr != nil || len(raw) > harness.MaxObservationBytes {
+				writeJSON(w, 413, map[string]string{"error": "body_limit"})
+				return
+			}
+			err = s.engine.ObserveAgent(r.Context(), id, token, raw)
 		case "heartbeat":
 			err = s.engine.Store.AgentHeartbeat(id, token)
 		case "close":

@@ -37,6 +37,7 @@ type Engine struct {
 	setupMu    sync.Mutex
 	resolving  map[string]bool
 	setupChats map[string]context.CancelFunc
+	liveOutput map[string]*agentOutputPreview
 }
 
 func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
@@ -338,6 +339,9 @@ func (e *Engine) dispatch() {
 			return
 		case <-tick.C:
 			if err := e.Store.expireAgentSessions(); err != nil {
+				continue
+			}
+			if err := e.reconcileSupervision(); err != nil {
 				continue
 			}
 			cycleTime := time.Now().UTC()
