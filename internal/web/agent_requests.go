@@ -100,6 +100,14 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 		id, token, key := r.PathValue("session"), agentBearer(r), r.PathValue("request")
 		var err error
 		switch r.PathValue("action") {
+		case "route":
+			route, err := s.engine.RouteAgentRequest(r.Context(), id, token, key)
+			if err != nil {
+				s.deviceAdminError(w, r, err)
+				return
+			}
+			writeJSON(w, 200, route)
+			return
 		case "invalidate":
 			err = s.engine.Store.InvalidateAgentRequest(id, token, key)
 		case "delivery":

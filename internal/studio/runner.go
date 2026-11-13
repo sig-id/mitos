@@ -65,6 +65,10 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			e.Desk.Close()
 		}
 	}()
+	if err = s.recoverModelEvaluations(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if err = s.recoverGraphDecisions(); err != nil {
 		cancel()
 		return nil, err
