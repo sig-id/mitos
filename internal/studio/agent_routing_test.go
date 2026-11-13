@@ -3,6 +3,7 @@ package studio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/decision"
 	"mitos/internal/decisionmodel"
@@ -147,5 +148,46 @@ func TestAgentRouteRejectsPolicyChangeDuringClassification(t *testing.T) {
 	route, err := e.RouteAgentRequest(context.Background(), session.ID, token, request.RequestID)
 	if err != nil || route.Route.Resolver != "human" {
 		t.Fatal(route, err)
+	}
+}
+
+func TestAnsweredAgentRequestRejectsRoutingBeforeCacheOrInference(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(map[bool]string{false: "uncached", true: "cached"}[cached], func(t *testing.T) {
+			var calls atomic.Int32
+			srv := choiceServer(t, func() string { return "decision" }, &calls)
+			defer srv.Close()
+			e, req := graphEngine(t, false)
+			e.Apps = append(e.Apps, Application{ID: "classifier", DecisionModel: modelConfig(srv.URL, "before_segment")})
+			p := agentpolicy.Default()
+			p.Autonomy = "delegated"
+			p.DecisionApplication = "classifier"
+			if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+				t.Fatal(err)
+			}
+			session, token, err := e.Store.CreateBoundAgentSession("codex", "Completed request", e.Root, req.ProjectID, "", "", decision.LocalOperator())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := e.Store.IngestAgentRequest(session.ID, token, json.RawMessage(routingQuestion))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cached {
+				if _, err = e.RouteAgentRequest(context.Background(), session.ID, token, request.RequestID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run, _ := e.Store.Get(request.RunIDs[0])
+			if _, err = e.ResolveAs(run.ID, run.Decision.ID, "option_0", "Operator answer", "api", decision.LocalOperator()); err != nil {
+				t.Fatal(err)
+			}
+			before := calls.Load()
+			evaluations := len(e.Store.ModelEvaluations(session.ID + "/" + request.RequestID))
+			route, err := e.RouteAgentRequest(context.Background(), session.ID, token, request.RequestID)
+			if !errors.Is(err, ErrConflict) || route.Key != "" || calls.Load() != before || len(e.Store.ModelEvaluations(session.ID+"/"+request.RequestID)) != evaluations {
+				t.Fatal(route, err, calls.Load())
+			}
+		})
 	}
 }

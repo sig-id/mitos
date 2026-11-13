@@ -134,6 +134,10 @@ func (e *Engine) RouteAgentRequest(ctx context.Context, id, token, key string) (
 		s.mu.RUnlock()
 		return AgentRoute{}, ErrConflict
 	}
+	if _, answered := s.agentAnswers[id+"/"+key]; answered {
+		s.mu.RUnlock()
+		return AgentRoute{}, ErrConflict
+	}
 	policy := s.agentPolicy(session.ProjectID)
 	routeKey := id + "/" + key
 	if old, ok := s.agentRoutes[routeKey]; ok && old.PolicyRevision == policy.Revision {
