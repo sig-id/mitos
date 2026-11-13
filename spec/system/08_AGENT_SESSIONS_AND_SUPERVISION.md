@@ -16,9 +16,12 @@ enforcement boundary.
 | Supervisor | Independently examines actions and observations against project boundaries and can deny or stop work |
 | Daemon | A long-lived service process; not a model role |
 
-Legacy API fields named `planner`, `controller`, or `supervision` retain wire
-compatibility. Documentation and new UI MUST distinguish coordination, recovery
-control, and independent boundary supervision. The coordinator MUST NOT be the
+The obsolete project `/supervision` coordination endpoint and `desk supervision`
+command are removed. Coordination uses `/coordination`, `desk coordination`, and
+`coordinator_id`; no public compatibility aliases remain. Persisted execution
+identifiers such as `mitos.planner` still identify saved historical work.
+Documentation and UI MUST distinguish coordination, recovery control, and
+independent boundary supervision. The coordinator MUST NOT be the
 sole judge of whether its own actions comply with policy.
 
 ## 1. Explicit single-agent sessions
