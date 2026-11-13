@@ -62,7 +62,7 @@
  function renderPlanner(){
   const box=$('graph-planner-summary'),rounds=plannerRounds();box.hidden=!rounds.length;if(!rounds.length)return;
   const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':'Waiting for agents';
-  box.replaceChildren(node('strong','✦ Coordinator'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,async()=>{await selectNode(id);selectedTab='planning';detailSignature='';renderInspector()},'graph-planner-history'),button('Latest update',()=>selectNode(id)));
+  box.replaceChildren(node('strong','✦ Coordinator'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,()=>selectNode(id,'planning'),'graph-planner-history'),button('Latest update',()=>selectNode(id,'output')));
  }
  $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
  function closeResult(){ resultViewKey='';$('graph-result').hidden=true;$('graph-current').classList.remove('showing-result'); }
@@ -268,7 +268,7 @@
  $('graph-fit').onclick=fit; $('graph-zoom-in').onclick=()=>setZoom(zoom+.15); $('graph-zoom-out').onclick=()=>setZoom(zoom-.15);
  function setLayout(list) { listMode=list; $('graph-viewport').hidden=list; $('graph-list-view').hidden=!list; $('graph-mode-map').setAttribute('aria-pressed',String(!list)); $('graph-mode-list').setAttribute('aria-pressed',String(list)); document.querySelector('.graph-map-controls').hidden=list; }
  $('graph-mode-map').onclick=()=>setLayout(false); $('graph-mode-list').onclick=()=>setLayout(true);
- async function selectNode(id) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select('workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=graph.members[id].current_run_id?'output':'details'; detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
+ async function selectNode(id, tab) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select('workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=tab||(graph.members[id].current_run_id?'output':'details'); detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); renderInspector(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
  function captureReader(){
   if(!renderedReaderKey)return;
   const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifact:box.querySelector('[aria-label="Output artifact"]')?.value,open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});
@@ -282,7 +282,7 @@
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
   if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.state==='parked')actions.append(link('Inspect execution','/runs/'+encodeURIComponent(m.current_run_id)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
-  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(kind(m)==='planner'?[['output','Output'],['planning','History'],['details','Details']]:[['details','Details'],['output','Output'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
+  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(kind(m)==='planner'?[['output','Output'],['planning','Planning rounds'],['details','Details']]:[['details','Details'],['output','Output'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
   if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
@@ -298,22 +298,42 @@
   restoreReader();
  }
  function renderDecision(box,d){box.append(node('h4','Decision'),node('p',d.outcome==='selected'?'A candidate has been selected. Review its changes before applying.':d.reason?.replaceAll('_',' ')||d.outcome));if(d.answer)box.append(node('p','Selected candidate '+(Number(d.answer.choice)+1)));for(const [index,candidate]of(d.candidates||[]).entries()){const details=node('details');details.open=String(index)===d.answer?.choice;details.append(node('summary',`${index+1}. ${candidate.explanation}`));const ul=node('ul');for(const op of candidate.operations)ul.append(node('li',(op.kind.replaceAll('_',' '))+': '+(op.spec?.brief?.title||graph.members[op.task]?.spec.brief.title||op.rationale||'')));details.append(ul);box.append(details)}if(d.outcome==='selected')box.append(button('Apply selected changes',()=>openAction('apply-decision',d.key),'primary'));if(!['applied','dismissed'].includes(d.outcome))box.append(button('Dismiss decision',()=>openAction('dismiss-decision',d.key)));}
- async function runDetail(m,runID){const key=runID+':'+m.fact_revision; if(cachedRuns.has(key))return cachedRuns.get(key);const value=await request(endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID));cachedRuns.set(key,value);return value;}
+ async function runDetail(m,runID){const key=runID+':'+m.fact_revision; if(cachedRuns.has(key))return cachedRuns.get(key);const value=await request(endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID));if(!['queued','running','stopping'].includes(value.status))cachedRuns.set(key,value);return value;}
  function renderOutput(box,m,runID=m.current_run_id){
   if(!runID){box.append(node('p',m.spec.kind==='scope'?'Select an agent or step to read its output.':'Output will appear when this step runs.','muted'));return}
   const holder=node('div');holder.append(node('p','Loading output…','muted'));box.append(holder);const token=epoch,chosen=selected;
   runDetail(m,runID).then(async run=>{
    if(token!==epoch||selected!==chosen||selectedTab!=='output'||!holder.isConnected)return;
-   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)),badge(m.accepted?.run_id===run.id?'accepted':run.status==='done'?'finished':run.status));if(run.stage&&run.status==='running')attemptHeader.append(node('span',run.stage,'muted'));holder.append(attemptHeader);const files=run.artifacts||[];if(run.summary&&!files.some(a=>a.name==='report.md'))holder.append(node('p',run.summary));
+   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)),badge(m.accepted?.run_id===run.id?'accepted':run.status==='done'?'finished':run.status));if(run.stage&&run.status==='running')attemptHeader.append(node('span',run.stage,'muted'));holder.append(attemptHeader);const files=run.artifacts||[];holder.append(node('p','Created '+date(run.created_at),'muted'));if(run.summary&&run.status!=='running'&&!files.some(a=>a.name==='report.md'))holder.append(node('p',run.summary));
    const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);const report=readable.find(a=>/report\.md$/.test(a.name))||[...readable].reverse().find(a=>/output\.txt$/.test(a.name))||readable[0];
-   if(!report){holder.append(node('p',run.status==='running'?'The executor is running. Saved output appears after the current step finishes.':'No text output was saved.','muted'));}
+   if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run.id)}else if(!report){holder.append(node('p','No text output was saved for this attempt.','muted'));}
    if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Coordinator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifact||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));restoreReader();window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
    if(files.length){const details=node('details');details.dataset.readKey='artifacts';details.append(node('summary','Files & downloads'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
  }
+ function renderLiveOutput(box,m,runID){
+  const section=node('section',undefined,'graph-live-output'),heading=node('h4','Live output'),status=node('p','Waiting for the agent’s first update…','muted'),content=node('pre',undefined,'graph-live-text');
+  content.hidden=true;section.append(heading,status,content);box.append(section);
+  const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID)+'/output';
+  const active=()=>token===epoch&&section.isConnected;
+  const update=async()=>{
+   if(!active())return;
+   try{
+    if(!document.hidden&&!$('work-view').hidden){
+     const output=await request(path);if(!active())return;
+     heading.textContent=output.live?'Live output':'Execution log';
+     status.textContent=output.truncated?'Showing the most recent output. The saved execution log is available after the attempt finishes.':output.text?'Agent messages appear here as they arrive. Reports and files are saved when the attempt finishes.':output.live?'Waiting for the agent’s first update…':'No execution log was saved.';
+     if(content.textContent!==output.text){const follow=content.scrollHeight-content.scrollTop-content.clientHeight<40;content.textContent=output.text;content.hidden=!output.text;if(follow)content.scrollTop=content.scrollHeight;}
+     if(!output.live)return;
+    }
+   }catch(error){if(!active())return;status.textContent=error.message+' Retrying…';}
+   if(active())setTimeout(update,1000);
+  };
+  update();
+ }
  function renderPlanningHistory(box){
-  box.append(node('p','One planner role, called again as results arrive. Each round preserves its own proposal and evidence.','muted'));
-  for(const [i,id]of plannerRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id)));box.append(row)}
+  box.append(node('p','The coordinator plans the work and reviews agent results. Select a round to read its output.','muted'));
+  for(const [i,id]of plannerRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id,'output')));box.append(row)}
  }
  function renderAttempts(box,m){
   if(!m.attempts?.length){box.append(node('p','This agent has not started yet.','muted'));return}
@@ -321,8 +341,8 @@
   for(const [index,id]of m.attempts.entries()){
    const row=node('article',undefined,'graph-attempt-card'),heading=node('div',undefined,'graph-attempt-heading');heading.append(node('strong','Attempt '+(index+1)));if(id===m.current_run_id)heading.append(badge(displayState(m.spec.id)));row.append(heading);
    const meta=node('p','Loading status…','muted');row.append(meta);const token=epoch;
-   runDetail(m,id).then(run=>{if(token!==epoch||!row.isConnected)return;if(id!==m.current_run_id)heading.append(badge(run.status==='done'?'finished':run.status));meta.textContent=(Date.parse(run.started_at)>0?'Started '+date(run.started_at):'Queued')+(Date.parse(run.finished_at)>0?' · Finished '+date(run.finished_at):'');}).catch(error=>{if(row.isConnected)meta.textContent=error.message});
-   row.append(button('View output & files',()=>{selectedAttempt=id;selectedTab='output';detailSignature='';renderInspector()},'primary'));
+   runDetail(m,id).then(run=>{if(token!==epoch||!row.isConnected)return;if(id!==m.current_run_id)heading.append(badge(run.status==='done'?'finished':run.status));meta.textContent='Created '+date(run.created_at)+(Date.parse(run.finished_at)>0?' · Finished '+date(run.finished_at):'');const files=node('div',undefined,'graph-files');for(const artifact of run.artifacts||[])files.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));if(files.childElementCount){row.append(node('strong','Saved files'),files)}else row.append(node('p',['queued','running','stopping'].includes(run.status)?'No saved files yet. Open this attempt to follow live output.':'No files were saved for this attempt.','muted'));}).catch(error=>{if(row.isConnected)meta.textContent=error.message});
+   row.append(button('Open attempt '+(index+1),()=>{selectedAttempt=id;selectedTab='output';detailSignature='';renderInspector()},'primary'));
    const diagnostic=node('details');diagnostic.dataset.readKey='diagnostics:'+id;diagnostic.append(node('summary','Diagnostics'),link('Technical execution details','/runs/'+encodeURIComponent(id)));row.append(diagnostic);box.append(row);
   }
  }
