@@ -7,7 +7,7 @@ func WrapBridge(launch Launch, binary, url, workspace, title string) (Launch, er
 	if !launch.Bridge || (launch.AgentID != "codex" && launch.AgentID != "claude") {
 		return Launch{}, errors.New("unsupported bridge adapter")
 	}
-	args := []string{"agent", launch.AgentID, "--url", url, "--workspace", workspace, "--title", title, "--executable", launch.Executable}
+	args := []string{"agent", launch.AgentID, "--url", url, "--workspace", workspace, "--title", title, "--executable", launch.Executable, "--bind-desk-session"}
 	if launch.AgentID == "codex" {
 		args = append(args, "--keep-open", "--prompt", launch.BridgePrompt)
 		// Positional prompt is replaced by the bridge flag; retain CLI config flags.

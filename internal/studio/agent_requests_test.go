@@ -221,3 +221,19 @@ func TestAgentOperatorScopeAndRecentSupersession(t *testing.T) {
 		t.Fatal("native request implied a zero-cost budget")
 	}
 }
+
+func TestBoundAgentRequestPreservesInboxProject(t *testing.T) {
+	s := testStore(t)
+	session, token, err := s.CreateBoundAgentSession("codex", "Project question", t.TempDir(), "project", "desk", "", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.Get(view.RunIDs[0])
+	if err != nil || run.ProjectID != "project" || run.Brief.ProjectID != "project" {
+		t.Fatal(run, err)
+	}
+}

@@ -158,7 +158,7 @@ func (s *Store) IngestAgentRequest(id, token string, raw json.RawMessage) (Agent
 		}
 		// Each question has its own durable review run so simultaneous requests and
 		// multi-question native calls cannot overwrite another pending card.
-		r := Run{ID: c.RunID, ProjectID: a.ProjectID, Tenant: a.Tenant, Brief: Brief{Title: a.Title, Workspace: a.Workspace, AppID: "agent-" + a.Adapter, TimeoutMinutes: 1}, AppName: a.Adapter, Status: "parked", Stage: "Waiting for you", Summary: "The agent is waiting for your answer.", CreatedAt: now, UpdatedAt: now, Decision: &c}
+		r := Run{ID: c.RunID, ProjectID: a.ProjectID, Tenant: a.Tenant, Brief: Brief{ProjectID: a.ProjectID, Title: a.Title, Workspace: a.Workspace, AppID: "agent-" + a.Adapter, TimeoutMinutes: 1}, AppName: a.Adapter, Status: "parked", Stage: "Waiting for you", Summary: "The agent is waiting for your answer.", CreatedAt: now, UpdatedAt: now, Decision: &c}
 		saved.Runs = append(saved.Runs, r)
 		saved.Request.Cards[i] = c
 	}
