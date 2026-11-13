@@ -85,6 +85,9 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 		}
 		return "planning"
 	}
+	if s.runWaitingForAnswer(m.CurrentRunID) {
+		return "waiting_for_answer"
+	}
 	if m.State == "done" {
 		return "review"
 	}

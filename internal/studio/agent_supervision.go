@@ -8,6 +8,7 @@ import (
 	"mitos/internal/decision"
 	"mitos/internal/decisionmodel"
 	"mitos/internal/desk"
+	"mitos/internal/harness"
 	"mitos/internal/supervision"
 	"sort"
 	"time"
@@ -188,9 +189,11 @@ func (e *Engine) supervise(ctx context.Context, session AgentSession, event stri
 	return errors.New(verdict.Reason)
 }
 func (e *Engine) ObserveAgent(ctx context.Context, id, token string, raw json.RawMessage) error {
-	if len(raw) > 24<<10 || !json.Valid(raw) {
-		return errors.New("invalid supervision observation")
+	bounded, err := harness.SupervisionObservation(raw)
+	if err != nil {
+		return err
 	}
+	raw = bounded
 	s := e.Store
 	s.mu.RLock()
 	session, err := s.agentSession(id, token)

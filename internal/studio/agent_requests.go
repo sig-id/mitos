@@ -198,7 +198,7 @@ func (s *Store) agentRequestView(key string) (AgentRequestView, error) {
 				if current != nil && current.Decision != nil && current.Decision.Resolution != nil && current.Decision.Resolution.Via == "automation" {
 					route, ok := s.agentRoutes[key]
 					policy := s.agentPolicy(s.agentSessions[request.SessionID].ProjectID)
-					if !ok || route.PolicyRevision != policy.Revision || policy.Autonomy != "delegated" {
+					if !ok || route.PolicyRevision != policy.Revision || (policy.Autonomy != "delegated" && policy.Autonomy != "decision") {
 						return AgentRequestView{}, deviceError(409, "automated_answer_policy_changed")
 					}
 				}

@@ -154,3 +154,105 @@ func TestHeadlessAgentQuestionUsesSharedInbox(t *testing.T) {
 		t.Fatal(result, err)
 	}
 }
+
+func TestProjectDecisionProviderResolvesAndCanBeRevoked(t *testing.T) {
+	var calls atomic.Int32
+	srv := choiceServer(t, func() string { return "approve" }, &calls)
+	defer srv.Close()
+	e, req := graphEngine(t, false)
+	p := agentpolicy.Default()
+	p.Autonomy = "decision"
+	p.Guidance = "Allow printf reviewed."
+	p.DecisionProvider = modelConfig(srv.URL, "before_segment")
+	saved, err := e.SaveAgentPolicy(req.ProjectID, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, token, err := e.Store.CreateBoundAgentSession("codex", "Review", "/tmp", req.ProjectID, "", "", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := e.Store.IngestAgentRequest(session.ID, token, json.RawMessage(codexApproval))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.ResolveAgentRequest(context.Background(), session.ID, token, request.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := e.Store.AgentRequestStatus(session.ID, token, request.RequestID)
+	if err != nil || status.State != "accepted" || calls.Load() != 1 {
+		t.Fatal(status, err, calls.Load())
+	}
+	if len(e.Store.Attention()) != 0 {
+		t.Fatal("resolved request remains in notifications")
+	}
+	saved.Autonomy = "manual"
+	if _, err = e.SaveAgentPolicy(req.ProjectID, saved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.Store.AgentRequestStatus(session.ID, token, request.RequestID); err == nil {
+		t.Fatal("revoked automation answer delivered")
+	}
+}
+
+func TestAttentionTracksOwningGraphAndClearsAfterAnswer(t *testing.T) {
+	e, req := graphEngine(t, false)
+	g := createGraphTest(t, e, req)
+	// A native request is stored under a separate approval run, but belongs to this worker.
+	e.Store.mu.Lock()
+	e.Store.runs["owner"] = &Run{ID: "owner", TaskID: "worker", GraphAttempt: &GraphAttempt{GraphID: g.ID}}
+	e.Store.mu.Unlock()
+	session, token, err := e.Store.CreateBoundAgentSession("codex", "Worker approval", "/tmp", req.ProjectID, "", "owner", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := e.Store.IngestAgentRequest(session.ID, token, json.RawMessage(codexApproval))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.RouteAgentRequest(context.Background(), session.ID, token, request.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	notices := e.Store.Attention()
+	if len(notices) != 1 {
+		t.Fatal(notices)
+	}
+	n := notices[0]
+	if n.ProjectID != req.ProjectID || n.GraphID != g.ID || n.TaskID != "worker" || n.Reason != "automatic resolution is disabled" {
+		t.Fatal(n)
+	}
+	e.Store.mu.RLock()
+	state := e.Store.graphDisplayState(&g, &GraphMember{State: "running", CurrentRunID: "owner"})
+	e.Store.mu.RUnlock()
+	if state != "waiting_for_answer" {
+		t.Fatal(state)
+	}
+	if _, err = e.ResolveAs(n.Card.RunID, n.ID, "deny", "", "api", decision.LocalOperator()); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Store.Attention()) != 0 {
+		t.Fatal("answered notice retained")
+	}
+}
+
+func TestAsyncAttentionDoesNotMarkWorkerBlocked(t *testing.T) {
+	e, req := graphEngine(t, false)
+	session, token, err := e.Store.CreateBoundAgentSession("codex", "Question", "/tmp", req.ProjectID, "", "owner", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Replace(routingQuestion, "item/tool/requestUserInput", "mitos/asyncQuestion", 1)
+	if _, err = e.Store.IngestAgentRequest(session.ID, token, json.RawMessage(raw)); err != nil {
+		t.Fatal(err)
+	}
+	notices := e.Store.Attention()
+	if len(notices) != 1 || notices[0].Blocking {
+		t.Fatal(notices)
+	}
+	e.Store.mu.RLock()
+	waiting := e.Store.runWaitingForAnswer("owner")
+	e.Store.mu.RUnlock()
+	if waiting {
+		t.Fatal("nonblocking clarification paused worker display")
+	}
+}

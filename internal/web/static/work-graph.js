@@ -7,7 +7,7 @@
  const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
  const button = (text, fn, cls = '') => { const b = node('button', text, cls); b.type = 'button'; b.onclick = () => Promise.resolve().then(fn).catch(showError); return b; };
  const link = (text, href) => { const a = node('a', text, 'text-link'); a.href = href; return a; };
- const labels = { finished:'Finished', idle:'Not started', queued:'Queued', running:'Working', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
+ const labels = { waiting_for_answer:'Waiting for an answer', finished:'Finished', idle:'Not started', queued:'Queued', running:'Working', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
  const badge = status => node('span', labels[status] || status, 'graph-badge ' + status);
  const date = value => new Date(value).toLocaleString();
  const storageKey = `mitos.graph.pending.${server}.${project}`;
@@ -88,8 +88,9 @@
   const user=node('article',undefined,'conversation-message user');user.append(node('strong','You'),node('p',graph.members[graph.root_task].spec.brief.intent,'prose'));
   const agent=node('article',undefined,'conversation-message agent');agent.append(node('strong','Mitos'));
   if(graph.result){agent.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
-  else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
+  else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':overall()==='waiting_for_answer'?'An agent is waiting for an answer. Review the request here to continue.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
   if(graph.status==='active'&&!graph.policy.automatic)agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
+  if(overall()==='waiting_for_answer')agent.append(button('Review request',()=>window.MitosNotifications?.open(),'primary'));
   box.replaceChildren(user,agent);
   if(graph.predecessor){try{const prior=await request(endpoint(graph.predecessor));if(graph?.id!==id)return;const history=node('details',undefined,'conversation-history');history.append(node('summary','Earlier in this conversation'),node('p',prior.members[prior.root_task].spec.brief.intent,'prose'));if(prior.result)history.append(window.MitosMarkdown.view(answerPreview(prior.result)));history.append(button('Open earlier result',async()=>{await chooseGraph(prior.id);openResult()}));box.prepend(history)}catch(e){if(graph?.id===id)box.prepend(node('p','Earlier conversation unavailable: '+e.message,'muted'))}}
  }
@@ -104,6 +105,7 @@
   if (Date.parse(graph.limits.deadline) <= Date.now()) return 'needs_attention';
   const values = Object.values(snapshot.nodes);
   if (Object.values(graph.expansions).some(x => !x.outcome && x.error) || values.some(n => ['failed','needs_attention'].includes(n.state))) return 'needs_attention';
+  if (values.some(n => n.state === 'waiting_for_answer')) return 'waiting_for_answer';
   if (values.some(n => n.state === 'running')) return 'running';
   if (reviewable(graph.root_task)) return 'review';
   if (!graph.policy.controller_application && Object.keys(graph.members).length===1) return 'idle';
@@ -162,7 +164,7 @@
    toggle.setAttribute('aria-label',(expanded?'Collapse ':'Expand ')+(row.title||'Work'));toggle.setAttribute('aria-expanded',String(expanded));toggle.dataset.treeKey='toggle:'+row.id;
    const choose=button(row.title||'Untitled work',async()=>{treeClosed.delete(row.id);if(current){await selectNode(graph.root_task)}else await chooseGraph(row.id);if($('work-view').hidden)document.querySelector('[data-view=work]').click()},'work-tree-goal');choose.title=row.title;choose.dataset.treeKey=row.id;
    if(current)choose.setAttribute('aria-current','page');
-   const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.running?'running':counts.failed||counts.needs_attention?'needs_attention':counts.queued?'queued':'idle';
+   const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.waiting_for_answer?'waiting_for_answer':counts.running?'running':counts.failed||counts.needs_attention?'needs_attention':counts.queued?'queued':'idle';
    const statusLabel=labels[status]||status,symbol={accepted:'✓',running:'◉',planning:'◉',idle:'○',queued:'◷',blocked:'◷',review:'!',needs_attention:'!',failed:'×',cancelled:'■',stopping:'■',finished:'✓'}[status]||'○';
    const indicator=node('span',symbol,'work-tree-status');indicator.dataset.status=status;indicator.setAttribute('aria-hidden','true');indicator.title=statusLabel;
    choose.replaceChildren(indicator,node('span',row.title||'Untitled work','work-tree-title'));choose.title=(row.depth?'Follow-up: ':'')+(row.title||'Untitled work')+' · '+statusLabel;choose.setAttribute('aria-label',choose.title);
@@ -279,6 +281,7 @@
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
   $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
+  if(displayState(selected)==='waiting_for_answer')box.append(button('Review request',()=>window.MitosNotifications?.open(window.MitosNotifications.forRun(m.current_run_id)[0]?.id),'primary'));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
   if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.state==='parked')actions.append(link('Inspect execution','/runs/'+encodeURIComponent(m.current_run_id)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}

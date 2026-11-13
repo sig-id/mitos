@@ -10,6 +10,7 @@
     "test:boundary-supervision": "node boundary-supervision.mjs",
     "test:diff": "node diff.mjs",
     "test:operating": "node operating.mjs",
+    "test:notifications": "node notifications.mjs",
     "test:pages": "node pages.mjs",
     "test:graphs": "node graphs.mjs",
     "test:picker": "node picker.mjs",

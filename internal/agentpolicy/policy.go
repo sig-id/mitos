@@ -3,6 +3,7 @@ package agentpolicy
 
 import (
 	"errors"
+	"mitos/internal/decisionmodel"
 	"path/filepath"
 	"strings"
 )
@@ -14,14 +15,15 @@ type Rule struct {
 	Action    string `json:"action"`    // allow, review, deny
 }
 type Policy struct {
-	Supervision         Supervision `json:"supervision"`
-	Revision            int         `json:"revision"`
-	Autonomy            string      `json:"autonomy"` // manual, delegated
-	Guidance            string      `json:"guidance,omitempty"`
-	DecisionApplication string      `json:"decision_application,omitempty"`
-	Fallback            string      `json:"fallback"` // human, investigate
-	MaxCalls            int         `json:"max_calls"`
-	Rules               []Rule      `json:"rules"`
+	DecisionProvider    *decisionmodel.Config `json:"decision_provider,omitempty"`
+	Supervision         Supervision           `json:"supervision"`
+	Revision            int                   `json:"revision"`
+	Autonomy            string                `json:"autonomy"` // manual, delegated, decision
+	Guidance            string                `json:"guidance,omitempty"`
+	DecisionApplication string                `json:"decision_application,omitempty"`
+	Fallback            string                `json:"fallback"` // human, investigate
+	MaxCalls            int                   `json:"max_calls"`
+	Rules               []Rule                `json:"rules"`
 }
 
 func Default() Policy {
@@ -31,8 +33,16 @@ func (p Policy) Validate() error {
 	if err := p.Supervision.Validate(); err != nil {
 		return err
 	}
-	if p.Revision < 0 || (p.Autonomy != "manual" && p.Autonomy != "delegated") || (p.Fallback != "human" && p.Fallback != "investigate") || p.MaxCalls < 1 || p.MaxCalls > 64 || len(p.Guidance) > 8000 || strings.ContainsRune(p.Guidance, 0) || len(p.DecisionApplication) > 100 || len(p.Rules) > 64 {
+	if p.Revision < 0 || (p.Autonomy != "manual" && p.Autonomy != "delegated" && p.Autonomy != "decision") || (p.Fallback != "human" && p.Fallback != "investigate") || p.MaxCalls < 1 || p.MaxCalls > 64 || len(p.Guidance) > 8000 || strings.ContainsRune(p.Guidance, 0) || len(p.DecisionApplication) > 100 || len(p.Rules) > 64 {
 		return errors.New("invalid agent policy")
+	}
+	if p.DecisionProvider != nil {
+		if err := p.DecisionProvider.Validate(); err != nil {
+			return err
+		}
+	}
+	if p.Autonomy == "decision" && (strings.TrimSpace(p.Guidance) == "" || p.DecisionProvider == nil && p.DecisionApplication == "") {
+		return errors.New("automatic decision review requires a decision provider and approval boundaries")
 	}
 	seen := map[string]bool{}
 	operations := map[string]bool{}

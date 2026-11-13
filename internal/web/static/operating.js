@@ -26,7 +26,7 @@
  document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
  async function submit(form,fn){const b=form.querySelector('[type=submit]');b.disabled=true;form.querySelector('.form-error').textContent='';try{await fn()}catch(e){form.querySelector('.form-error').textContent=e.message}finally{b.disabled=false}}
  function empty(title,text,action){const n=el('div',undefined,'empty');n.append(el('h2',title),el('p',text));if(action)n.append(action);return n;}
- function projectCounts(c){const parts=[];for(const [s,label]of [['accepted','accepted'],['running','working'],['reported_complete','to review'],['needs_executor','need an executor'],['needs_inspection','need inspection'],['queued','ready']])if(c[s])parts.push(`${c[s]} ${label}`);return parts.join(' · ')||'No active work';}
+ function projectCounts(c){const parts=[];for(const [s,label]of [['accepted','accepted'],['running','working'],['waiting_for_answer','waiting for an answer'],['reported_complete','to review'],['needs_executor','need an executor'],['needs_inspection','need inspection'],['queued','ready']])if(c[s])parts.push(`${c[s]} ${label}`);return parts.join(' · ')||'No active work';}
  async function refreshHome(){
   home=await api('/api/workspace-home');lastObserved=home.observed_at;
   const next=JSON.stringify([home.projects,home.decisions]);if(next===homeSignature)return;homeSignature=next;
@@ -39,8 +39,10 @@
    const details=el('details');details.append(el('summary','Technical details'),el('code',home.server.id));for(const [k,v]of Object.entries(home.server.capabilities||{})){const row=el('div',undefined,'capability');row.append(el('span',k.replaceAll('_',' ')),el('span',v?'Available':'Not available','muted'));details.append(row)}panel.append(details);content.append(panel);return;
   }
   if(section==='inbox'){
-   if(!home.decisions.length)content.append(empty('Nothing needs your decision','Pending choices appear here with their project and home server.'));
-   for(const d of home.decisions){const card=el('article',undefined,'panel inbox-card');card.append(el('small',home.server.name+' · '+(home.projects.find(p=>p.project.id===d.project_id)?.project.name||'Batch work')),el('h2',d.title),el('p',d.question),link('Review →',d.graph_id?`/projects/${d.project_id}?graph=${d.graph_id}`:d.task_id?`/projects/${d.project_id}?task=${d.task_id}&tab=result`:'/runs/'+d.run_id));content.append(card)}return;
+   content.append(el('p','Reports from your agents: what happened and what needs to happen next.','muted'));
+   for(const row of home.projects){const summary=el('article',undefined,'panel');summary.append(el('h2',row.project.name),el('p',projectCounts(row.counts)),link('Open project','/projects/'+row.project.id));content.append(summary)}
+   if(!home.decisions.length)content.append(empty('You’re up to date','Agent reports and work summaries appear here. Notifications bring requests that need an immediate answer.'));
+   for(const d of home.decisions){const card=el('article',undefined,'panel inbox-card');card.append(el('small',home.server.name+' · '+(home.projects.find(p=>p.project.id===d.project_id)?.project.name||'Batch work')),el('h2',d.title),el('p',d.question),link(d.needs_review===false?'Read report →':'Review report →',d.graph_id?`/projects/${d.project_id}?graph=${d.graph_id}`:d.task_id?`/projects/${d.project_id}?task=${d.task_id}&tab=result`:'/runs/'+d.run_id));content.append(card)}return;
   }
   if(!home.projects.length){content.append(empty('Give your work a home','Open a project on this server to set an outcome, run workers, and keep their results.',button('Open project',()=>dialog('project-dialog'),'primary')));return;}
   const grid=el('div',undefined,'project-grid');for(const row of home.projects){const card=link('','/projects/'+row.project.id,'project-card');card.append(el('h2',row.project.name),el('small',home.server.name),el('small',row.project.directory),el('p',projectCounts(row.counts)));if(row.unbound)card.append(el('small',`${row.unbound} earlier sessions`));grid.append(card)}content.append(grid);

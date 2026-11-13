@@ -53,12 +53,13 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 			Unbound int            `json:"unbound"`
 		}
 		type item struct {
-			RunID     string `json:"run_id"`
-			GraphID   string `json:"graph_id,omitempty"`
-			ProjectID string `json:"project_id"`
-			Title     string `json:"title"`
-			Question  string `json:"question"`
-			TaskID    string `json:"task_id,omitempty"`
+			NeedsReview bool   `json:"needs_review"`
+			RunID       string `json:"run_id"`
+			GraphID     string `json:"graph_id,omitempty"`
+			ProjectID   string `json:"project_id"`
+			Title       string `json:"title"`
+			Question    string `json:"question"`
+			TaskID      string `json:"task_id,omitempty"`
 		}
 		projects := []summary{}
 		inbox := []item{}
@@ -75,7 +76,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 					if t.Status == "needs_inspection" {
 						question = "Inspect and settle the previous process before assigning a replacement."
 					}
-					inbox = append(inbox, item{ProjectID: p.ID, TaskID: t.ID, Title: t.Title, Question: question})
+					inbox = append(inbox, item{NeedsReview: true, ProjectID: p.ID, TaskID: t.ID, Title: t.Title, Question: question})
 				}
 			}
 			for _, session := range v.Sessions {
@@ -90,6 +91,8 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 					status = "accepted"
 				} else if g.Status == "cancelled" {
 					status = "cancelled"
+				} else if g.Counts["waiting_for_answer"] > 0 {
+					status = "waiting_for_answer"
 				} else if g.Counts["running"] > 0 {
 					status = "running"
 				} else if g.Counts["failed"]+g.Counts["needs_attention"] > 0 {
@@ -98,18 +101,17 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 					status = "reported_complete"
 				}
 				row.Counts[status]++
+				if status == "accepted" {
+					inbox = append(inbox, item{ProjectID: p.ID, GraphID: g.ID, Title: g.Title, Question: "Completed. Your agent’s result and supporting evidence are ready."})
+				}
 				if status == "reported_complete" || status == "needs_inspection" {
-					inbox = append(inbox, item{ProjectID: p.ID, GraphID: g.ID, Title: g.Title, Question: "Review the graph’s results and outstanding work."})
+					inbox = append(inbox, item{NeedsReview: true, ProjectID: p.ID, GraphID: g.ID, Title: g.Title, Question: "Review the graph’s results and outstanding work."})
 				}
 			}
 			projects = append(projects, row)
 		}
-		for _, run := range s.engine.Store.List() {
-			if run.Decision != nil && run.Decision.ResolvedAt == nil {
-				inbox = append(inbox, item{RunID: run.ID, ProjectID: run.Brief.ProjectID, Title: run.Brief.Title, Question: run.Decision.Question})
-			}
-		}
-		writeJSON(w, 200, map[string]any{"server": s.engine.Store.Home(), "observed_at": time.Now().UTC(), "projects": projects, "decisions": inbox})
+
+		writeJSON(w, 200, map[string]any{"server": s.engine.Store.Home(), "observed_at": time.Now().UTC(), "projects": projects, "decisions": inbox, "attention": s.engine.Store.Attention()})
 	})
 	mux.HandleFunc("GET /api/projects/{project}/work", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.ProjectWork(r.PathValue("project"))

@@ -105,7 +105,11 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 				return errors.New("invalid app-server JSON")
 			}
 			if observer, ok := b.(Observer); ok && ObservationRelevant(line) {
-				if err := observer.Observe(ctx, line); err != nil {
+				observation, err := SupervisionObservation(line)
+				if err != nil {
+					return err
+				}
+				if err := observer.Observe(ctx, observation); err != nil {
 					return err
 				}
 			}

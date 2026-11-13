@@ -13,8 +13,8 @@ credential references are not accepted from agents. Existing batch and graph
 choices retain their behavior.
 
 The runtime first applies explicit rules. A matching `allow` or `deny` rule gives a
-direct answer. A `review` rule delegates a bounded approval choice. Missing authority
-always routes to the operator. Ambiguous questions use the configured Choice API
+direct answer. A `review` rule delegates a bounded approval choice. Without an exact grant or explicit project decision-review delegation, requests
+route to the operator. Ambiguous questions use the configured Choice API
 as a classifier selecting `human`, `decision`, or, when configured, `investigate`.
 The decision route is available only for supported fixed answer options.
 
@@ -36,7 +36,7 @@ stop work. Neither the request router nor the coordinator establishes confinemen
 
 Automatic workers now run through Codex app-server under the compute provider's
 process ownership. Supported questions and approvals share the explicit-session
-Inbox and resolution service. The process deadline remains active while a question
+notification and resolution service. The process deadline remains active while a question
 is pending. Unsupported native requests fail visibly instead of receiving invented
 answers. Final reports are captured from final agent-message items, and failed or
 interrupted turns cannot be accepted as successful attempts.
@@ -46,7 +46,7 @@ It cannot ask recursive questions, and requested escalations are denied. Its res
 must match the original cards and current policy; uncertainty returns to the user.
 This uses the native runtime's read-only sandbox, not independent OS confinement.
 
-Structured asynchronous Codex question items create nonblocking Inbox questions.
+Structured asynchronous Codex question items create nonblocking notifications.
 Their answers use turn/steer with the original active-turn precondition and become
 applied only after the source acknowledges delivery. Turn completion invalidates
 outstanding replies. Terminal input during an active turn also uses turn/steer;
@@ -56,3 +56,32 @@ Independent supervision runs before resolution and can veto an otherwise eligibl
 route. See [configuration, incident handling and coverage](independent-supervision.md).
 With supervision enabled, an explicit denied operation opens a stop incident instead
 of merely delivering a declined answer.
+
+## Notifications and API setup
+
+Immediate questions and approvals appear in **Notifications** on every workspace
+surface and in a persistent action banner. Review and answer them without leaving
+current work. Workflow nodes and goals show **Waiting for an answer** while an
+associated native request is pending. Inbox collects reports and project summaries;
+it is no longer the queue for runtime approval cards. Desktop notifications are
+opt-in and work while a Mitos page is open.
+
+In **Project setup → Decisions API & approvals**, select **Configure API connection**
+and enter the protocol, full endpoint, model, credential environment-variable name,
+timeout and confidence thresholds. **Test API connection** makes one small inference
+request; it does not save settings or approve any work. Credentials must already be
+available in the server environment. The project policy stores only their variable
+name, never their value. Existing installed decision applications remain supported.
+
+Choose **Decisions API reviews commands within my boundaries** and write the allowed
+scope in **Approval boundaries** to explicitly delegate supported command approval
+review. Exact deny rules still win. Unsupported requests and additional permission
+scopes still require the operator; insufficient evidence or failed inference uses
+the configured fallback. Saving the policy does not mean every command is approved.
+Existing projects retain their previous approval policy. Automatic planning alone
+does not grant automatic approval authority.
+
+Large native tool results are represented in supervision evidence with a bounded
+preview, original byte count and SHA-256 digest. Native clients still receive the
+original events. Command inputs, tool arguments and changed paths are not truncated;
+metadata that cannot fit is rejected with a specific size error.

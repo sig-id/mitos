@@ -27,8 +27,11 @@ func Prepare(p agentpolicy.Policy, r harness.Request, workspace string) Route {
 		if matched && rule.Action == "deny" {
 			return Route{Resolver: "direct", Choice: "deny", RuleID: rule.ID, Source: "rule", Reason: "explicit deny rule"}
 		}
-		if p.Autonomy != "delegated" {
+		if p.Autonomy != "delegated" && p.Autonomy != "decision" {
 			return human("automatic resolution is disabled")
+		}
+		if !matched && p.Autonomy == "decision" {
+			return Route{Resolver: "decision", Source: "policy", Reason: "operator delegated command review within approval boundaries"}
 		}
 		if !matched {
 			return human("no delegated authority for this exact operation")
@@ -38,7 +41,7 @@ func Prepare(p agentpolicy.Policy, r harness.Request, workspace string) Route {
 		}
 		return Route{Resolver: "decision", RuleID: rule.ID, Source: "rule", Reason: "delegated operation requires decision review"}
 	}
-	if p.Autonomy != "delegated" {
+	if p.Autonomy != "delegated" && p.Autonomy != "decision" {
 		return human("automatic resolution is disabled")
 	}
 	if len(r.Questions) == 0 {
