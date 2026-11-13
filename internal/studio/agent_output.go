@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 const agentOutputLimit = 64 << 10
@@ -13,12 +14,16 @@ type agentOutputPreview struct {
 	mu        sync.Mutex
 	text      []byte
 	truncated bool
+	updatedAt time.Time
 }
 
 func (p *agentOutputPreview) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	n := len(b)
+	if n > 0 {
+		p.updatedAt = time.Now().UTC()
+	}
 	if n >= agentOutputLimit {
 		p.truncated = p.truncated || len(p.text)+n > agentOutputLimit
 		p.text = append(p.text[:0], b[n-agentOutputLimit:]...)
@@ -34,9 +39,11 @@ func (p *agentOutputPreview) Write(b []byte) (int, error) {
 }
 
 type GraphRunOutput struct {
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated"`
-	Live      bool   `json:"live"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	Available bool       `json:"available"`
+	Text      string     `json:"text"`
+	Truncated bool       `json:"truncated"`
+	Live      bool       `json:"live"`
 }
 
 func (e *Engine) beginAgentOutput(id string) (*agentOutputPreview, func()) {
@@ -65,7 +72,8 @@ func (e *Engine) GraphRunOutput(graph, task, id string) (GraphRunOutput, error) 
 	if p != nil {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		return GraphRunOutput{Text: strings.ToValidUTF8(string(p.text), "�"), Truncated: p.truncated, Live: true}, nil
+		at := p.updatedAt
+		return GraphRunOutput{Text: strings.ToValidUTF8(string(p.text), "�"), Truncated: p.truncated, Live: true, Available: true, UpdatedAt: &at}, nil
 	}
 	data, err := e.Store.Artifact(id, "output.txt")
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -75,5 +83,5 @@ func (e *Engine) GraphRunOutput(graph, task, id string) (GraphRunOutput, error) 
 	if truncated {
 		data = data[len(data)-agentOutputLimit:]
 	}
-	return GraphRunOutput{Text: strings.ToValidUTF8(string(data), "�"), Truncated: truncated, Live: run.Status == "queued" || run.Status == "running" || run.Status == "stopping"}, nil
+	return GraphRunOutput{Text: strings.ToValidUTF8(string(data), "�"), Truncated: truncated, Live: run.Status == "queued" || run.Status == "running" || run.Status == "stopping", Available: err == nil}, nil
 }

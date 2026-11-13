@@ -174,7 +174,9 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 	if json.Unmarshal(raw, &thread) != nil || thread.Thread.ID == "" {
 		return errors.New("app-server did not create a thread")
 	}
-	fmt.Fprintln(output, "Connected to Codex. Review supported requests in Mitos or on the paired device.")
+	if !options.Headless {
+		fmt.Fprintln(output, "Connected to Codex. Review supported requests in Mitos or on the paired device.")
+	}
 	once := prompt != "" && !options.KeepOpen
 	requestID := 3
 	for {
@@ -227,6 +229,9 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 			var event Envelope
 			if json.Unmarshal(raw, &event) != nil {
 				return errors.New("invalid app-server event")
+			}
+			if options.Headless {
+				writeCodexActivity(output, event)
 			}
 			if len(event.ID) > 0 && event.Method != "" {
 				if options.Headless {

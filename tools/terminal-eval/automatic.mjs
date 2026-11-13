@@ -29,7 +29,29 @@ try{
  await page.locator('[data-view=workflow]').click();
  const liveWorker=page.locator('.graph-node[data-kind=step]').first();await liveWorker.waitFor();await liveWorker.click();
  await page.locator('.graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor();
+ await page.locator('#graph-status.waiting_input').waitFor();
+ await page.locator('[data-view=work]').click();await page.locator('#graph-conversation').getByRole('button',{name:'Review request',exact:true}).click();
+ await page.locator('.graph-request-card').getByRole('button',{name:/Allow once/}).waitFor();
+ const waitingURL=page.url();
+ await page.locator('.graph-node[data-kind=scope]').click();
+ assert.deepEqual(await page.locator('#graph-node-detail .graph-tabs button').allTextContents(),['Progress','Request','Result']);
+ await page.locator('.graph-goal-current .graph-request-card').waitFor();
+ await page.screenshot({path:'/tmp/mitos-goal-progress.png'});
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.getByRole('button',{name:'Review request',exact:true}).click();await page.screenshot({path:'/tmp/mitos-goal-progress-mobile.png'});await page.setViewportSize({width:1600,height:1040});
+ await page.locator('.graph-node[data-kind=scope]').click();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Result',exact:true}).click();
+ await page.getByRole('button',{name:'View progress',exact:true}).click();
+ await page.getByRole('button',{name:'Review request',exact:true}).click();
+ assert.equal(page.url(),waitingURL);
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();
+ await page.locator('.graph-attempt-card .graph-request-card').waitFor();
+ assert.ok(!(await page.locator('.graph-attempt-card').textContent()).includes('Queued'));
+ assert.equal(await page.locator('#graph-node-detail a[href^="/runs/"]').count(),0);
+ await page.locator('.graph-execution-events summary').click();await page.locator('.graph-event-list').getByText('Agent connected',{exact:true}).waitFor();
+ await page.locator('.graph-request-card').getByRole('button',{name:/Allow once/}).click();
+ await page.locator('.graph-live-text').filter({hasText:'Finished command: printf checked (exit 0)'}).waitFor();
  await page.locator('.graph-live-text').filter({hasText:'Preparing the answer'}).waitFor();
+ await page.locator('#graph-status.in_progress').waitFor();
  assert.equal(await page.locator('#graph-node-kind').textContent(),'Agent');
  await page.screenshot({path:'/tmp/mitos-live-agent-output.png'});
  await page.locator('#work-tree .work-tree-node').first().waitFor();await wait(async()=>{const state=await api('/api/graphs/'+graphID);const blocked=Object.values(state.expansions).find(x=>x.error);if(blocked)logs=JSON.stringify(state);return state.status==='accepted'});await page.locator('#graph-status.accepted').waitFor();
@@ -43,11 +65,11 @@ try{
  const inspector=page.locator('#graph-node-detail');
  await page.locator('.graph-planner-history').click();
  await inspector.getByRole('button',{name:'Read this round',exact:true}).last().click();
- await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Output'}).waitFor();
+ await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Activity'}).waitFor();
  const latestHeading=await inspector.locator('h3').textContent();
  await inspector.getByRole('button',{name:'Planning rounds',exact:true}).click();
  await page.getByRole('button',{name:'Latest update',exact:true}).click();
- await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Output'}).waitFor();
+ await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Activity'}).waitFor();
  assert.equal(await inspector.locator('h3').textContent(),latestHeading);
  await page.locator('.graph-node[data-kind=scope]').first().click();
  assert.equal(await page.locator('#graph-node-kind').textContent(),'Goal');
@@ -64,7 +86,35 @@ try{
  await page.screenshot({path:'/tmp/mitos-planner-reader.png'});await page.locator('#graph-inspector-expand').click();assert.ok(await page.locator('.graph-map').isVisible());
  await page.locator(`[data-tree-key="${worker.spec.id}"]`).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.ok(await page.locator('#graph-node-detail').getByText('The answer is', {exact:false}).count());
  await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).waitFor();await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();await page.getByRole('button',{name:'Back to graph',exact:true}).click();
- const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByRole('link',{name:'report.md',exact:true}).waitFor();await page.getByRole('button',{name:'Open attempt 1',exact:true}).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
+ const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByText('Files & downloads',{exact:true}).click();await page.locator('.graph-attempt-card').getByRole('link',{name:'report.md',exact:true}).waitFor();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
+ // A previous failed attempt expands in place beside the current successful one.
+ const previous='previous-attempt',snapshotPattern='**/api/graphs/'+graphID+'/snapshot?*',previousPath='**/api/graphs/'+graphID+'/nodes/'+worker.spec.id+'/runs/'+previous;
+ await page.route(snapshotPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.members[worker.spec.id].attempts=[previous,...worker.attempts];await route.fulfill({response,json:value})});
+ await page.route(previousPath,route=>route.fulfill({json:{id:previous,status:'failed',summary:'Earlier execution stopped.',created_at:g.created_at,updated_at:g.updated_at,finished_at:g.updated_at,artifacts:[]}}));
+ let previousActivityCalls=0;await page.route(previousPath+'/activity',route=>route.fulfill({json:{status:'running',created_at:g.created_at,started_at:g.created_at,updated_at:g.updated_at,requests:[],events:[{at:g.updated_at,kind:'agent_started',summary:'Activity update '+(++previousActivityCalls)}]}}));
+ await page.locator('.graph-attempt-card').nth(1).waitFor();
+ await page.locator('.graph-attempt-card').first().locator('summary').first().click();
+ await page.locator('.graph-attempt-card').first().getByText('Earlier execution stopped.',{exact:true}).waitFor();
+ // Returning to Attempts remembers a closed panel; reopening it must survive activity responses.
+ await page.locator('.graph-attempt-card').first().locator('summary').first().click();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Assignment',exact:true}).click();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();
+ assert.equal(await page.locator('.graph-attempt-card').first().getAttribute('open'),null);
+ const activityBeforeOpen=previousActivityCalls;
+ await page.locator('.graph-attempt-card').first().locator('summary').first().click();
+ await wait(async()=>previousActivityCalls>=activityBeforeOpen+2);
+ assert.notEqual(await page.locator('.graph-attempt-card').first().getAttribute('open'),null,'activity response collapsed the reopened attempt');
+ const eventsPanel=page.locator('.graph-attempt-card').first().locator('.graph-execution-events');
+ await eventsPanel.locator('summary').click();
+ const activityBeforeRead=previousActivityCalls;
+ await wait(async()=>previousActivityCalls>=activityBeforeRead+2);
+ assert.notEqual(await eventsPanel.getAttribute('open'),null,'activity update closed execution events');
+
+ if(await page.locator('.graph-attempt-card').nth(1).getAttribute('open')===null)await page.locator('.graph-attempt-card').nth(1).locator('summary').first().click();
+ await page.locator('.graph-attempt-card').nth(1).locator('.analysis-prose').filter({hasText:'The answer is'}).waitFor();
+ assert.equal(page.url(),beforeAttemptURL);
+ await page.unroute(snapshotPattern);await page.unroute(previousPath);await page.unroute(previousPath+'/activity');
+ await wait(async()=>await page.locator('.graph-attempt-card').count()===1);
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/mitos-output-mobile.png'});assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>320);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.setViewportSize({width:1600,height:1040});
  // Stored output is untrusted; JSON and Markdown cannot inject HTML or scripts.
  const safe=await page.evaluate(()=>{const n=window.MitosGraphOutput.render(JSON.stringify({explanation:'<img src=x onerror="window.injected=true">',steps:[null,{title:'<script>bad()</script>',assignment:'**Readable**',criteria:'done',after:[]}]}),{planner:true});document.body.append(n);const result={html:n.querySelectorAll('img,script').length,bold:!!n.querySelector('strong')};n.remove();return result});assert.deepEqual(safe,{html:0,bold:true});
@@ -91,5 +141,5 @@ try{
  await page.context().setOffline(true);await page.locator('#graph-sync.offline').waitFor();assert.equal(await page.locator('#graph-status').textContent(),'Complete');await page.context().setOffline(false);await page.locator('#graph-sync:not(.offline)').waitFor();
  // An uncertain goal submission replays the exact body across reload.
  await page.setViewportSize({width:1600,height:1040});await page.locator('#new-work').click();await page.locator('#graph-prompt').fill('Produce and review another answer');let dropped=false;await page.route('**/api/graphs/automatic',async route=>{if(!dropped){dropped=true;await route.fetch();await route.abort('failed')}else await route.continue()});await page.locator('#graph-create').click();await page.getByRole('button',{name:'Retry same request',exact:true}).waitFor();const count=(await api('/api/graphs?project_id='+project.id)).graphs.length;await page.reload();await page.getByRole('button',{name:'Retry same request',exact:true}).click();await wait(async()=>new URL(page.url()).searchParams.get('graph')!==old.id);assert.equal((await api('/api/graphs?project_id='+project.id)).graphs.length,count);assert.deepEqual(errors,[]);
- console.log('PASS: automatic goal-to-result, dependent agents, specialization, tree navigation, readable output, library create/edit/reload, Devices, Plugins, explicit old-goal start, mobile layout, reconnect and uncertain-request replay');
+ console.log('PASS: inline approvals, goal progress, live commands, embedded attempt history, automatic goal-to-result, dependent agents, specialization, tree navigation, readable output, library create/edit/reload, Devices, Plugins, explicit old-goal start, mobile layout, reconnect and uncertain-request replay');
 }finally{await browser?.close();if(server&&server.exitCode===null){server.kill('SIGTERM');await exited}if(!process.env.MITOS_KEEP_GRAPH_FIXTURE)await rm(temporary,{recursive:true,force:true});else console.log('Fixture:',temporary)}

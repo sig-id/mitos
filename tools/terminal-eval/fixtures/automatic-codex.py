@@ -12,6 +12,15 @@ if 'app-server' in sys.argv:
    params=request['params'];prompt=params['input'][0]['text']
    if 'outputSchema' not in params:
     send({'method':'item/agentMessage/delta','params':{'delta':'Inspecting the assignment and checking saved evidence.\n'}})
+    marker=pathlib.Path(__file__).with_suffix('.approval-requested')
+    if not marker.exists():
+     marker.touch()
+     send({'id':99,'method':'item/commandExecution/requestApproval','params':{'threadId':'fixture-thread','turnId':'fixture-turn','itemId':'fixture-command','command':'printf checked','cwd':str(pathlib.Path.cwd())}})
+     response=json.loads(next(sys.stdin))
+     assert response['id']==99 and response['result']['decision']=='accept',response
+    send({'method':'item/started','params':{'item':{'type':'commandExecution','command':'printf checked','cwd':str(pathlib.Path.cwd())}}})
+    send({'method':'item/commandExecution/outputDelta','params':{'delta':'checked\n'}})
+    send({'method':'item/completed','params':{'item':{'type':'commandExecution','command':'printf checked','exitCode':0}}})
     time.sleep(3)
     send({'method':'item/agentMessage/delta','params':{'delta':'Preparing the answer and its report.\n'}})
     time.sleep(3)
