@@ -32,12 +32,9 @@ func asyncRequest(e Envelope) (json.RawMessage, bool) {
 	questions := []map[string]any{}
 	for i, q := range p.Item.Questions {
 		// Always retain free text support. Native async options have no descriptions.
-		questions = append(questions, map[string]any{"id": fmt.Sprintf("q%d", i), "question": q.Title + func() string {
-			if len(q.Options) == 0 {
-				return ""
-			}
-			return " Suggested answers: " + strings.Join(q.Options, ", ")
-		}(), "isOther": true})
+		// Suggestions remain in the original source payload displayed in context;
+		// they must not enlarge the card's bounded question title.
+		questions = append(questions, map[string]any{"id": fmt.Sprintf("q%d", i), "question": q.Title, "isOther": true})
 	}
 	raw, err := json.Marshal(map[string]any{"id": "async:" + p.Item.ID, "method": "mitos/asyncQuestion", "params": map[string]any{"threadId": p.Thread, "turnId": p.Turn, "questions": questions, "source": json.RawMessage(e.Params)}})
 	return raw, err == nil
