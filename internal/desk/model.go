@@ -15,6 +15,7 @@ type Project struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 type Session struct {
+	Bridge             bool                 `json:"bridge,omitempty"`
 	TaskID             string               `json:"task_id,omitempty"`
 	AttemptID          string               `json:"attempt_id,omitempty"`
 	ProcessID          string               `json:"process_id,omitempty"`

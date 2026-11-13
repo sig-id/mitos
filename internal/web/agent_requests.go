@@ -13,12 +13,14 @@ import (
 func (s *Server) agentRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent-sessions", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Adapter   string `json:"adapter"`
-			Title     string `json:"title"`
-			Workspace string `json:"workspace"`
+			ProjectID     string `json:"project_id"`
+			DeskSessionID string `json:"desk_session_id"`
+			Adapter       string `json:"adapter"`
+			Title         string `json:"title"`
+			Workspace     string `json:"workspace"`
 		}
 		b, err := io.ReadAll(r.Body)
-		if err != nil || device.DecodeObject(b, &in, []string{"adapter", "title", "workspace"}) != nil {
+		if err != nil || device.DecodeObject(b, &in, []string{"adapter", "title", "workspace", "project_id", "desk_session_id"}) != nil {
 			writeJSON(w, 400, map[string]string{"error": "malformed"})
 			return
 		}
@@ -27,7 +29,17 @@ func (s *Server) agentRoutes(mux *http.ServeMux) {
 			writeJSON(w, 422, map[string]string{"error": "workspace_unavailable"})
 			return
 		}
-		session, token, err := s.engine.Store.CreateAgentSession(in.Adapter, in.Title, workspace, decision.LocalOperator())
+		if in.DeskSessionID != "" {
+			existing, err := s.engine.Desk.Session(in.DeskSessionID)
+			if err != nil || existing.ProjectID != in.ProjectID || existing.Workspace != workspace || !existing.Bridge {
+				writeJSON(w, 409, map[string]string{"error": "session_binding_mismatch"})
+				return
+			}
+		} else if in.ProjectID != "" {
+			writeJSON(w, 400, map[string]string{"error": "desk_session_required"})
+			return
+		}
+		session, token, err := s.engine.Store.CreateBoundAgentSession(in.Adapter, in.Title, workspace, in.ProjectID, in.DeskSessionID, "", decision.LocalOperator())
 		if err != nil {
 			s.deviceAdminError(w, r, err)
 			return

@@ -93,5 +93,6 @@
    if(setup.settings_error)showError(new Error('AGENTS.md execution settings need attention: '+setup.settings_error));drawDocument();await poll();
   }
   await surface(container,'project');
+  window.MitosAgentPolicy.render(container,setup.agent_policy,base,api);
  }};
 })();

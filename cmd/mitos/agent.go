@@ -34,6 +34,9 @@ func agentClient(args []string) error {
 	base := flags.String("url", "http://127.0.0.1:4646", "Local Studio URL")
 	workspace := flags.String("workspace", ".", "Harness working directory")
 	prompt := flags.String("prompt", "", "Initial Codex prompt; exits when the turn completes")
+	executable := flags.String("executable", "", "Selected native CLI executable")
+	bindDesk := flags.Bool("bind-desk-session", false, "Bind an explicitly hosted bridge to its desk session")
+	keepOpen := flags.Bool("keep-open", false, "Keep the session open after the initial prompt")
 	plan := flags.Bool("plan", false, "Use Codex plan mode, including structured questions")
 	title := flags.String("title", "Agent request", "Title for review cards")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -49,6 +52,9 @@ func agentClient(args []string) error {
 	client, err := harness.NewClient(*base, "", "")
 	if err != nil {
 		return err
+	}
+	if *bindDesk {
+		client.ProjectID, client.DeskSessionID = os.Getenv("MITOS_PROJECT_ID"), os.Getenv("MITOS_SESSION_ID")
 	}
 	name := adapter
 	if name == "codex-proxy" {
@@ -88,7 +94,11 @@ func agentClient(args []string) error {
 	}()
 	if adapter == "codex-proxy" || adapter == "codex" {
 		argv := append([]string{"app-server"}, flags.Args()...)
-		cmd := exec.CommandContext(ctx, "codex", argv...)
+		native := *executable
+		if native == "" {
+			native = "codex"
+		}
+		cmd := exec.CommandContext(ctx, native, argv...)
 		cmd.Dir = dir
 		cmd.Stderr = os.Stderr
 		input, err := cmd.StdinPipe()
@@ -105,7 +115,7 @@ func agentClient(args []string) error {
 		stream := &processStream{Reader: output, Writer: input, close: func() error { _ = input.Close(); return output.Close() }}
 		var proxyErr error
 		if adapter == "codex" {
-			proxyErr = harness.RunCodexTerminal(ctx, client, stream, os.Stdin, os.Stdout, dir, *prompt, *plan)
+			proxyErr = harness.RunCodexTerminalOptions(ctx, client, stream, os.Stdin, os.Stdout, dir, *prompt, *plan, *keepOpen)
 		} else {
 			proxyErr = harness.ProxyCodex(ctx, client, stream, os.Stdin, os.Stdout)
 		}
@@ -140,7 +150,11 @@ func agentClient(args []string) error {
 	settings, _ := json.Marshal(map[string]any{"hooks": hooks})
 	// Pass a JSON settings value to this invocation; never rewrite user settings.
 	argv := append([]string{"--settings", string(settings)}, flags.Args()...)
-	cmd := exec.CommandContext(ctx, "claude", argv...)
+	native := *executable
+	if native == "" {
+		native = "claude"
+	}
+	cmd := exec.CommandContext(ctx, native, argv...)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

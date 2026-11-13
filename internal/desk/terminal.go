@@ -189,7 +189,7 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	if options.ID == "" {
 		options.ID = id("session")
 	}
-	s := Session{SetupDraftID: options.DraftID, ID: options.ID, NativeSessionID: launch.NativeSessionID, InitialPrompt: options.Prompt, Continuation: options.Continuation, ProjectID: project, AgentID: launch.AgentID, ProfileID: launch.ProfileID, NamePending: options.NamePending, Name: strings.TrimSpace(name), Role: role, Command: command, Status: "starting", Rows: 28, Cols: 100, CreatedAt: time.Now().UTC()}
+	s := Session{Bridge: launch.Bridge, SetupDraftID: options.DraftID, ID: options.ID, NativeSessionID: launch.NativeSessionID, InitialPrompt: options.Prompt, Continuation: options.Continuation, ProjectID: project, AgentID: launch.AgentID, ProfileID: launch.ProfileID, NamePending: options.NamePending, Name: strings.TrimSpace(name), Role: role, Command: command, Status: "starting", Rows: 28, Cols: 100, CreatedAt: time.Now().UTC()}
 	s.Assignment = assignment
 	if err := m.prepareSessionContextLocked(p, &s, &launch); err != nil {
 		return Session{}, err
@@ -210,6 +210,16 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	}
 	if err := m.createSessionWorktreeLocked(p, s); err != nil {
 		return m.startFailedLocked(s.ID, err)
+	}
+	if launch.Bridge {
+		binary, err := os.Executable()
+		if err != nil {
+			return m.startFailedLocked(s.ID, err)
+		}
+		launch, err = agentcli.WrapBridge(launch, binary, serverURL, s.Workspace, s.Name)
+		if err != nil {
+			return m.startFailedLocked(s.ID, err)
+		}
 	}
 	cmd := exec.Command(launch.Executable, launch.Args...)
 	cmd.Dir = s.Workspace
