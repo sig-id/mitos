@@ -23,6 +23,8 @@ import (
 )
 
 type Store struct {
+	agentRoutes            map[string]AgentRoute
+	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord
 	agentPolicies          map[string]agentpolicy.Policy
 	graphs                 map[string]*WorkGraph
@@ -174,6 +176,20 @@ func (s *Store) apply(e Event) error {
 		if c.CustomEvent == nil {
 			return nil
 		}
+	}
+	if c.AgentRoute != nil {
+		if s.agentRoutes == nil {
+			s.agentRoutes = map[string]AgentRoute{}
+		}
+		s.agentRoutes[c.AgentRoute.Key] = graphClone(*c.AgentRoute)
+		return nil
+	}
+	if c.ModelEvaluation != nil {
+		if s.modelEvaluations == nil {
+			s.modelEvaluations = map[string]ModelEvaluation{}
+		}
+		s.modelEvaluations[c.ModelEvaluation.ID] = graphClone(*c.ModelEvaluation)
+		return nil
 	}
 	if c.Cooperation != nil {
 		if s.cooperation == nil {

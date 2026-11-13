@@ -153,6 +153,8 @@ type Event struct {
 }
 
 type change struct {
+	AgentRoute        *AgentRoute                `json:"agent_route,omitempty"`
+	ModelEvaluation   *ModelEvaluation           `json:"model_evaluation,omitempty"`
 	Cooperation       *CooperationRecord         `json:"cooperation,omitempty"`
 	AgentPolicy       *ProjectAgentPolicy        `json:"agent_policy,omitempty"`
 	Graph             *graphChange               `json:"graph,omitempty"`
