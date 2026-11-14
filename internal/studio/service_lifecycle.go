@@ -3,6 +3,7 @@ package studio
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -12,18 +13,19 @@ import (
 )
 
 type ServiceLifecycleOperation struct {
-	Action      string                    `json:"action,omitempty"`
-	Replaces    int64                     `json:"replaces,omitempty"`
-	CancelKey   string                    `json:"cancel_key,omitempty"`
-	Detail      string                    `json:"detail,omitempty"`
-	Seq         int64                     `json:"seq"`
-	RootID      string                    `json:"root_id"`
-	Key         string                    `json:"idempotency_key"`
-	Revision    int64                     `json:"catalog_revision"`
-	Members     []service.LifecycleMember `json:"members"`
-	ActiveTasks []string                  `json:"active_tasks,omitempty"`
-	Status      string                    `json:"status"`
-	ResumeKey   string                    `json:"resume_key,omitempty"`
+	Action         string                    `json:"action,omitempty"`
+	Replaces       int64                     `json:"replaces,omitempty"`
+	CancelKey      string                    `json:"cancel_key,omitempty"`
+	Detail         string                    `json:"detail,omitempty"`
+	Seq            int64                     `json:"seq"`
+	RootID         string                    `json:"root_id"`
+	Key            string                    `json:"idempotency_key"`
+	Revision       int64                     `json:"catalog_revision"`
+	Members        []service.LifecycleMember `json:"members"`
+	ActiveTasks    []string                  `json:"active_tasks,omitempty"`
+	ProjectMinutes map[string]int            `json:"project_minutes,omitempty"`
+	Status         string                    `json:"status"`
+	ResumeKey      string                    `json:"resume_key,omitempty"`
 }
 type serviceLifecycleState struct {
 	Operation     ServiceLifecycleOperation
@@ -63,6 +65,11 @@ func validateServiceLifecycle(e Event, c change) error {
 	for _, id := range op.ActiveTasks {
 		if id == "" || len(id) > 128 {
 			return errors.New("invalid active Task witness")
+		}
+	}
+	for id, minutes := range op.ProjectMinutes {
+		if op.Action != "restart" || !seen[id] || minutes < 1 || minutes > 43200 {
+			return errors.New("invalid restart project limit")
 		}
 	}
 	if op.Action != "" && op.Action != "restart" || len(op.Detail) > 2000 || op.Replaces < 0 || op.Replaces >= op.Seq || op.Action != "restart" && op.Replaces != 0 {
@@ -235,6 +242,7 @@ func lifecycleView(state *serviceLifecycleState) ServiceLifecycleView {
 	op := state.Operation
 	op.Members = append([]service.LifecycleMember(nil), op.Members...)
 	op.ActiveTasks = append([]string(nil), op.ActiveTasks...)
+	op.ProjectMinutes = maps.Clone(op.ProjectMinutes)
 	return ServiceLifecycleView{ServiceLifecycleOperation: op, At: state.At, UpdatedAt: state.UpdatedAt, TaskCount: len(state.Victims), Tasks: append([]ServiceReplacement{}, state.Victims[:min(50, len(state.Victims))]...), MoreTasks: len(state.Victims) > 50, Relaunch: relaunchViews(state)}
 }
 func (s *Store) ServiceLifecycles() []ServiceLifecycleView {
@@ -271,6 +279,15 @@ func (e *Engine) requestServiceLifecycle(root, key string, restart bool) (Servic
 	}
 	e.actions.Lock()
 	defer e.actions.Unlock()
+	var projectMinutes map[string]int
+	var catalogRevision int64
+	if restart {
+		var err error
+		projectMinutes, catalogRevision, err = e.relaunchProjectMinutes(root, key)
+		if err != nil {
+			return ServiceLifecycleView{}, err
+		}
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.Store.mu.Lock()
@@ -285,6 +302,9 @@ func (e *Engine) requestServiceLifecycle(root, key string, restart bool) (Servic
 	}
 	if s.services == nil {
 		return ServiceLifecycleView{}, ErrNotFound
+	}
+	if restart && catalogRevision != s.services.Revision {
+		return ServiceLifecycleView{}, ErrConflict
 	}
 	var replaces int64
 	for _, state := range s.serviceLifecycle {
@@ -311,7 +331,7 @@ func (e *Engine) requestServiceLifecycle(root, key string, restart bool) (Servic
 	if err != nil {
 		return ServiceLifecycleView{}, fmt.Errorf("%w: %s", ErrNotFound, err)
 	}
-	op := &ServiceLifecycleOperation{Seq: s.seq + 1, RootID: root, Key: key, Revision: s.services.Revision, Members: members, Status: "stopping", Replaces: replaces}
+	op := &ServiceLifecycleOperation{Seq: s.seq + 1, RootID: root, Key: key, Revision: s.services.Revision, Members: members, Status: "stopping", Replaces: replaces, ProjectMinutes: projectMinutes}
 	if restart {
 		for _, m := range members {
 			for seq := range s.serviceHolds[m.ID] {
