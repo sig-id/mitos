@@ -61,6 +61,7 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		cancel()
 		return nil, err
 	}
+	e.Desk.LaunchDefaults = s.AgentLaunchDefaults
 	initialized := false
 	defer func() {
 		if !initialized {

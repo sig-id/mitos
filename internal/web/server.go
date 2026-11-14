@@ -135,6 +135,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("GET /{$}", s.operatingPage)
+	s.configurationRoutes(mux)
 	s.workspaceRoutes(mux)
 	mux.HandleFunc("GET /overview", s.overview)
 	s.deskRoutes(mux)
@@ -450,7 +451,7 @@ func (s *Server) application(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) newBrief(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("app") == studio.WorkflowAppID {
-		redirect(w,r,"/work")
+		redirect(w, r, "/work")
 		return
 	}
 	p := s.base("new", "New work", "work")

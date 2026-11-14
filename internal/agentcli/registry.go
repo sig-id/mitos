@@ -200,6 +200,12 @@ func (r *Registry) prepare(request Request, mode, reference string) (Launch, err
 	if err != nil {
 		return Launch{}, err
 	}
+	if err := request.Defaults.Validate(); err != nil {
+		return Launch{}, err
+	}
+	if request.ProfileID == "" {
+		request.ProfileID = request.Defaults.ProfileID
+	}
 	env, profile, err := r.environment(request.AgentID, request.ProfileID)
 	if err != nil {
 		return Launch{}, err
@@ -219,6 +225,14 @@ func (r *Registry) prepare(request Request, mode, reference string) (Launch, err
 		reference = nativeID
 	} else if mode == "resume" {
 		nativeID = reference
+	}
+	if len(request.Defaults.Args) > 0 {
+		cli, ok := adapter.(CLI)
+		if !ok {
+			return Launch{}, errors.New("this adapter does not support launch flags")
+		}
+		cli.Spec.Args = append(append([]string{}, cli.Spec.Args...), request.Defaults.Args...)
+		adapter = cli
 	}
 	args, err := adapter.SessionArguments(mode, reference, request.Prompt)
 	if err != nil {

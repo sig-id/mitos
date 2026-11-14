@@ -34,6 +34,12 @@ func (m *Manager) StartAgent(project string, request agentcli.Request, serverURL
 	if err != nil {
 		return Session{}, err
 	}
+	if m.LaunchDefaults != nil {
+		request.Defaults = m.LaunchDefaults(project, request.AgentID)
+		if request.ProfileID == "" {
+			request.ProfileID = request.Defaults.ProfileID
+		}
+	}
 	installation, err := m.Agents.Inspect(request.AgentID, request.ProfileID, p.Directory)
 	if err != nil {
 		return Session{}, err

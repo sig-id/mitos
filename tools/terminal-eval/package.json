@@ -17,6 +17,7 @@
     "test:workflow-files": "node workflow-files.mjs",
     "test:automatic": "node automatic.mjs",
     "test:markdown": "node markdown.mjs",
+    "test:settings": "node settings.mjs",
     "test:work-navigation": "node work-navigation.mjs"
   },
   "devDependencies": {

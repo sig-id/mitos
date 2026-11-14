@@ -73,15 +73,16 @@ type Installation struct {
 }
 
 type Request struct {
-	Bridge           bool        `json:"bridge,omitempty"`
-	Key              string      `json:"key,omitempty"`
-	Criteria         string      `json:"criteria,omitempty"`
-	ExpectedRevision int         `json:"expected_revision,omitempty"`
-	AgentID          string      `json:"agent_id"`
-	ProfileID        string      `json:"profile_id,omitempty"`
-	Prompt           string      `json:"prompt,omitempty"`
-	Role             string      `json:"role,omitempty"`
-	Assignment       *Assignment `json:"assignment,omitempty"`
+	Defaults         LaunchDefaults `json:"-"`
+	Bridge           bool           `json:"bridge,omitempty"`
+	Key              string         `json:"key,omitempty"`
+	Criteria         string         `json:"criteria,omitempty"`
+	ExpectedRevision int            `json:"expected_revision,omitempty"`
+	AgentID          string         `json:"agent_id"`
+	ProfileID        string         `json:"profile_id,omitempty"`
+	Prompt           string         `json:"prompt,omitempty"`
+	Role             string         `json:"role,omitempty"`
+	Assignment       *Assignment    `json:"assignment,omitempty"`
 }
 
 // Assignment carries Mitos fleet lineage, independently of any native CLI

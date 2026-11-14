@@ -6,9 +6,11 @@ import (
 )
 
 func (s *Server) testDecisionProvider(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.engine.Desk.Project(r.PathValue("project")); err != nil {
-		graphFailure(w, err)
-		return
+	if project := r.PathValue("project"); project != "" {
+		if _, err := s.engine.Desk.Project(project); err != nil {
+			graphFailure(w, err)
+			return
+		}
 	}
 	var in struct {
 		Config decisionmodel.Config `json:"config"`

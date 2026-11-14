@@ -162,6 +162,7 @@ type Event struct {
 }
 
 type change struct {
+	SystemConfiguration *SystemConfiguration       `json:"system_configuration,omitempty"`
 	NativeThreadID      string                     `json:"native_thread_id,omitempty"`
 	SupervisorVerdict   *SupervisorVerdict         `json:"supervisor_verdict,omitempty"`
 	SupervisionIncident *SupervisionIncident       `json:"supervision_incident,omitempty"`

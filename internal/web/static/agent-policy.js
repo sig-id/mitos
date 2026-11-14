@@ -4,6 +4,7 @@
  window.MitosAgentPolicy={render(root,initial,base,api){
   let policy=initial;
   const section=el('section');section.className='agent-policy setup-card';section.id='decisions-api';section.tabIndex=-1;section.append(el('h2','Decisions API & approvals'));
+  const settings=el('a','System Configuration →');settings.href='/settings?project='+encodeURIComponent(document.body.dataset.project);settings.className='text-link';section.append(settings);
   section.append(el('p','Approval review runs separately from the coordinator and workers, using the Decisions API. Configure a connection and approval boundaries to handle routine requests automatically. Saved changes also apply to pending requests.'));
   const form=el('form'),feedback=el('p');feedback.setAttribute('role','status');
   const field=(parent,label,input)=>{const l=el('label',label);input.setAttribute('aria-label',label);l.append(input);parent.append(l);return input};
@@ -11,7 +12,7 @@
   const mode=field(form,'Automatic handling',select([['manual','Ask me'],['decision','Decisions API reviews commands within my boundaries'],['delegated','Only delegate exact command rules']],policy.autonomy));
   const guidance=el('textarea');guidance.rows=3;guidance.maxLength=8000;guidance.value=policy.guidance||'';field(form,'Approval boundaries',guidance);guidance.placeholder='For example: allow read-only repository and GitHub inspection. Ask me before publishing changes or accessing unrelated files.';
   const config=policy.decision_provider||{},providerFields=el('fieldset');providerFields.append(el('legend','Decisions API connection'));
-  const source=field(form,'Decision provider',select([['none','Not configured'],['direct','Configure API connection'],['application','Use an installed decision application']],policy.decision_provider?'direct':policy.decision_application?'application':'none'));
+  const source=field(form,'Decision provider',select([['none','Inherit system Decisions API'],['direct','Override API connection for this project'],['application','Use an installed decision application']],policy.decision_provider?'direct':policy.decision_application?'application':'none'));
   const provider=el('input');provider.value=policy.decision_application||'';provider.maxLength=100;const appField=el('div');field(appField,'Installed decision application ID',provider);form.append(appField,providerFields);
   const protocol=field(providerFields,'API protocol',select([['openai_decisions','OpenAI Decisions'],['systemone','System One']],config.protocol||'openai_decisions'));
   const input=(label,value,type='text')=>{const n=el('input');n.type=type;n.value=value;return field(providerFields,label,n)};

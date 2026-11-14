@@ -28,22 +28,23 @@ type StateStore interface {
 }
 
 type Manager struct {
-	storage       StateStore
-	committed     []byte
-	Agents        *agentcli.Registry
-	lock          *os.File
-	mu            sync.Mutex
-	dir, root     string
-	state         state
-	live          map[string]*terminal
-	drafts        map[string]context.CancelFunc
-	draftLogs     map[string]*draftLog
-	jobs          map[string]*runningJob
-	closed        bool
-	writeErr      error
-	wg            sync.WaitGroup
-	outputMu      sync.Mutex
-	outputChanged chan struct{}
+	LaunchDefaults func(project, agent string) agentcli.LaunchDefaults
+	storage        StateStore
+	committed      []byte
+	Agents         *agentcli.Registry
+	lock           *os.File
+	mu             sync.Mutex
+	dir, root      string
+	state          state
+	live           map[string]*terminal
+	drafts         map[string]context.CancelFunc
+	draftLogs      map[string]*draftLog
+	jobs           map[string]*runningJob
+	closed         bool
+	writeErr       error
+	wg             sync.WaitGroup
+	outputMu       sync.Mutex
+	outputChanged  chan struct{}
 }
 
 func Open(dir, root string) (*Manager, error) { return OpenStored(dir, root, nil) }

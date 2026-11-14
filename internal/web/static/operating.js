@@ -119,11 +119,11 @@
   dialog('work-dialog');$('work-submit').disabled=true;
   try{agents=await api('/api/agents?project='+project);f.elements.agent_id.replaceChildren();for(const a of agents.filter(a=>a.installed)){const o=el('option',a.name);o.value=a.id;f.elements.agent_id.append(o)}if(!f.elements.agent_id.value)throw Error('No installed executor is available. Configure an agent application first.');updateProfiles();}catch(e){f.querySelector('.form-error').textContent=e.message}finally{$('work-submit').disabled=!f.elements.agent_id.value}
  }
- function updateProfiles(){const f=$('work-form'),a=agents.find(a=>a.id===f.elements.agent_id.value);f.elements.profile_id.replaceChildren(new Option('Native configuration',''));for(const p of a?.profiles||[])f.elements.profile_id.append(new Option(p.name||p.id,p.id))}
+ function updateProfiles(){const f=$('work-form'),a=agents.find(a=>a.id===f.elements.agent_id.value);f.elements.profile_id.replaceChildren(new Option('Configured default profile',''));for(const p of a?.profiles||[])f.elements.profile_id.append(new Option(p.name||p.id,p.id))}
  $('work-form').elements.agent_id.onchange=updateProfiles;
  let bridgeAgents=[], bridgeLaunchKey='';
  const bridgeForm=$('agent-session-form');
- function bridgeProfiles(){const a=bridgeAgents.find(a=>a.id===bridgeForm.elements.agent_id.value);bridgeForm.elements.profile_id.replaceChildren(new Option('Native configuration',''));for(const p of a?.profiles||[])bridgeForm.elements.profile_id.append(new Option(p.name||p.id,p.id))}
+ function bridgeProfiles(){const a=bridgeAgents.find(a=>a.id===bridgeForm.elements.agent_id.value);bridgeForm.elements.profile_id.replaceChildren(new Option('Configured default profile',''));for(const p of a?.profiles||[])bridgeForm.elements.profile_id.append(new Option(p.name||p.id,p.id))}
  bridgeForm.elements.agent_id.onchange=bridgeProfiles;
  $('start-agent-session')?.addEventListener('click',async()=>{bridgeForm.reset();bridgeLaunchKey=key();bridgeForm.querySelector('.form-error').textContent='';dialog('agent-session-dialog');try{bridgeAgents=(await api('/api/agents?project='+project)).filter(a=>a.installed&&['codex','claude'].includes(a.id));bridgeForm.elements.agent_id.replaceChildren(...bridgeAgents.map(a=>new Option(a.name,a.id)));bridgeProfiles();if(!bridgeAgents.length)throw Error('Install Codex or Claude to start an agent session.')}catch(e){bridgeForm.querySelector('.form-error').textContent=e.message}});
  bridgeForm.onsubmit=e=>{e.preventDefault();submit(bridgeForm,async()=>{const s=await api(endpoint('sessions'),{key:bridgeLaunchKey,agent_id:bridgeForm.elements.agent_id.value,profile_id:bridgeForm.elements.profile_id.value,prompt:bridgeForm.elements.prompt.value,bridge:true});window.location.href=terminal(s)})};
