@@ -7,7 +7,7 @@ import (
 )
 
 // SystemConfiguration holds operator defaults for this Mitos server.
-// Credentials are environment-variable references, never secret values.
+// Credentials are references to environment variables or server-local key files.
 type SystemConfiguration struct {
 	Revision            int                                `json:"revision"`
 	DecisionProvider    *decisionmodel.Config              `json:"decision_provider,omitempty"`
@@ -68,6 +68,11 @@ func (e *Engine) SaveSystemConfiguration(c SystemConfiguration) (SystemConfigura
 	if c.Revision != s.systemConfiguration.Revision {
 		return c, ErrConflict
 	}
+	provider, err := s.saveDecisionCredential(c.DecisionProvider)
+	if err != nil {
+		return c, err
+	}
+	c.DecisionProvider = provider
 	c.Revision++
 	if err := s.commit("", "effect", "system_configuration_changed", change{SystemConfiguration: &c}); err != nil {
 		return c, err

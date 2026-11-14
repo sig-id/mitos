@@ -171,7 +171,7 @@ func (e *Engine) executeGraphDecision(ctx context.Context, r Run) error {
 	s.mu.Unlock()
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	answer, callErr := decisionmodel.Decide(ctx, cfg, request)
+	answer, callErr := e.Decide(ctx, cfg, request)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old = s.graphs[r.GraphAttempt.GraphID]

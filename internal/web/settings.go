@@ -60,6 +60,7 @@ func (s *Server) configurationRoutes(mux *http.ServeMux) {
 					return
 				}
 				config.Revision = saved.Revision
+				config.DecisionProvider = saved.DecisionProvider
 			} else {
 				var err error
 				config, err = s.engine.SaveSystemConfiguration(config)

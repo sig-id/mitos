@@ -162,7 +162,7 @@ func (e *Engine) modelBoundary(ctx context.Context, id, hook string, segment int
 	}
 	if fresh {
 		callCtx, cancel := context.WithDeadline(ctx, d.Deadline)
-		answer, callErr := decisionmodel.Decide(callCtx, *cfg, d.Request)
+		answer, callErr := e.Decide(callCtx, *cfg, d.Request)
 		cancel()
 		d, err = e.Store.finishModelDecision(id, d.Request.ID, answer, callErr)
 		if err != nil {

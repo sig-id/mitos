@@ -69,11 +69,40 @@ it is no longer the queue for runtime approval cards. Desktop notifications are
 opt-in and work while a Mitos page is open.
 
 In **System Configuration → Decisions API**, select **Configure API connection**
-and enter the protocol, full endpoint, model, credential environment-variable name,
-timeout, call limit and confidence thresholds. **Test API connection** makes one small
-inference request; it does not save settings or approve any work. Credentials must
-already be available in the server environment. Settings store only the variable
-name, never its value. Existing installed decision applications remain supported.
+and use a provider button to fill the protocol, full endpoint, and model together.
+These are dedicated decision APIs: they score a fixed set of choices and return
+probabilities and confidence, without generating free-form text. Generic chat
+completion models and prompted JSON decisions are not supported.
+
+Choose **API key** to paste a key, or **Environment variable** to enter its name.
+Pasted keys work without restarting; environment values must be set before starting
+Mitos. Saving writes a pasted key to an owner-only (0600) file in the server data
+directory's `credentials/` directory (0700), outside event logs and project files.
+These files use filesystem permissions, not encryption. Settings and execution
+plans hold opaque references; responses never return the key. Blank key fields keep
+an existing reference; replacing or removing a key takes effect on save. Previous
+key files remain for frozen execution plans. Saved keys are bound to the endpoint;
+re-enter a key after changing that endpoint. Selecting a preset for another endpoint
+clears the old credential from the form and fills the provider's environment name.
+
+**Test API connection** makes one small inference request without saving settings
+or credentials or approving work. Existing installed decision applications remain
+supported.
+
+Provider presets verified against primary documentation on 2026-11-14:
+
+| Preset | Full endpoint | Model | Protocol |
+| --- | --- | --- | --- |
+| [TypeSafe Jev](https://api.typesafe.ai/openapi.json) | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | System One |
+| [OpenAI](https://developers.openai.com/api/docs/guides/decisions) | `https://api.openai.com/v1/decisions` | `gpt-6-luna` | OpenAI Decisions |
+| [Gemini](https://aistudio.google.com/docs/decisions-api) | `https://generativelanguage.googleapis.com/v1beta/decisions` | `gemini-decision-1` | Gemini Decisions |
+| [OpenRouter Jev](https://openrouter.ai/docs/guides/features/decisions) | `https://openrouter.ai/api/alpha/decisions` | `typesafe/jev-1.14` | OpenRouter Decisions |
+| Cloudflare Clef (OpenRouter) | Same OpenRouter Decisions endpoint | `cloudflare/clef-flash` | OpenRouter Decisions |
+| Mercury Decide (OpenRouter) | Same OpenRouter Decisions endpoint | `inception/mercury-decide` | OpenRouter Decisions |
+
+All fields remain editable. OpenRouter's documented decision-model catalog supplies
+the Clef and Mercury presets; these use an OpenRouter key. Provider access and model
+availability depend on the account. Presets do not make network requests or save.
 
 Choose **Decisions API reviews commands within my boundaries** and write the allowed
 scope in **Approval boundaries** to explicitly delegate supported command approval
@@ -127,10 +156,14 @@ Storage and implementation:
   stale project writes; changing settings never resets request call allowances.
 - `internal/studio/agent_routing.go` and `agent_resolution.go` classify requests and
   select permitted answers in separate, journaled calls. `internal/decisionmodel/model.go`
-  implements the System One and OpenAI Decisions wire adapters, reads bearer credentials
-  from the named environment variable, bounds HTTP duration and payload sizes, and
+  implements the System One, OpenAI Decisions, Gemini Decisions, and OpenRouter Decisions
+  wire adapters, uses a supplied key or named environment variable, bounds HTTP duration
+  and payload sizes, and
   validates choices, probability distributions and confidence. It performs no automatic
   HTTP retry or redirect and executes no action itself.
+- `internal/studio/decision_credentials.go` stores pasted keys separately and resolves
+  references only at the outbound inference boundary. Gemini uses `x-goog-api-key`;
+  the other adapters use bearer authentication.
 - `internal/agentcli/registry.go` applies native launch defaults before constructing
   arguments; `internal/desk/terminal.go` and `continuation.go` resolve project inheritance
   for new sessions and continuations. Secret environment values are not serialized.

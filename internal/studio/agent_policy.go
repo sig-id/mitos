@@ -54,6 +54,11 @@ func (e *Engine) SaveAgentPolicy(project string, p agentpolicy.Policy) (agentpol
 	if s.agentPolicy(project).Revision != p.Revision {
 		return p, ErrConflict
 	}
+	provider, err := s.saveDecisionCredential(p.DecisionProvider)
+	if err != nil {
+		return p, err
+	}
+	p.DecisionProvider = provider
 	p.Revision++
 	p.Revision -= s.systemConfiguration.Revision
 	if err := s.commit("", "effect", "project_agent_policy_changed", change{AgentPolicy: &ProjectAgentPolicy{ProjectID: project, Policy: p}}); err != nil {

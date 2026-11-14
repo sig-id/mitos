@@ -19,9 +19,9 @@ func (s *Server) testDecisionProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Config.Instructions = "Connectivity test. Choose connected. No action will be executed."
-	answer, err := decisionmodel.Decide(r.Context(), in.Config, decisionmodel.Request{ID: "operator-connection-test", State: []byte(`{"purpose":"connection test"}`), Choices: []decisionmodel.Choice{{Value: "connected", Description: "The API connection works."}, {Value: "unavailable", Description: "The API connection is unavailable."}}})
+	answer, err := s.engine.Decide(r.Context(), in.Config, decisionmodel.Request{ID: "operator-connection-test", State: []byte(`{"purpose":"connection test"}`), Choices: []decisionmodel.Choice{{Value: "connected", Description: "The API connection works."}, {Value: "unavailable", Description: "The API connection is unavailable."}}})
 	if err != nil {
-		writeJSON(w, 400, map[string]string{"error": "Connection test failed. Check the endpoint, model and server credential environment variable."})
+		writeJSON(w, 400, map[string]string{"error": "Connection test failed. Check the endpoint, model, and API key or environment variable."})
 		return
 	}
 	message := "Connected. The provider returned a valid decision."

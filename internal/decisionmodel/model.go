@@ -20,12 +20,15 @@ import (
 
 const MaxBytes = 64 << 10
 
-// Config is frozen with the execution plan. APIKeyEnv is a reference, never a key.
+// Config is frozen with the execution plan. Credentials persist only as references.
+// APIKey is write-only input or a resolved runtime secret; JSON output omits it.
 type Config struct {
 	Protocol       string   `json:"protocol"`
 	Endpoint       string   `json:"endpoint"`
 	Model          string   `json:"model"`
 	APIKeyEnv      string   `json:"api_key_env,omitempty"`
+	APIKeyRef      string   `json:"api_key_ref,omitempty"`
+	APIKey         string   `json:"-"`
 	Hooks          []string `json:"hooks"`
 	Instructions   string   `json:"instructions"`
 	TimeoutMS      int      `json:"timeout_ms"`
@@ -38,7 +41,10 @@ type Config struct {
 // not silently become a zero threshold. Programmatic callers use Validate too.
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type plain Config
-	var decoded plain
+	var decoded struct {
+		plain
+		APIKey string `json:"api_key"`
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decoded); err != nil {
@@ -54,12 +60,13 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("decision_model: %s must be explicit", field)
 		}
 	}
-	*c = Config(decoded)
+	*c = Config(decoded.plain)
+	c.APIKey = decoded.APIKey
 	return c.Validate()
 }
 
 func (c Config) Validate() error {
-	if c.Protocol != "systemone" && c.Protocol != "openai_decisions" {
+	if c.Protocol != "systemone" && c.Protocol != "openai_decisions" && c.Protocol != "gemini_decisions" && c.Protocol != "openrouter_decisions" {
 		return errors.New("decision_model: unsupported protocol")
 	}
 	u, err := url.Parse(c.Endpoint)
@@ -75,6 +82,21 @@ func (c Config) Validate() error {
 	}
 	if c.APIKeyEnv != "" && !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(c.APIKeyEnv) {
 		return errors.New("decision_model: invalid credential environment name")
+	}
+	credentials := 0
+	for _, value := range []string{c.APIKeyEnv, c.APIKeyRef, c.APIKey} {
+		if value != "" {
+			credentials++
+		}
+	}
+	if credentials > 1 {
+		return errors.New("decision_model: choose an API key or an environment variable")
+	}
+	if c.APIKeyRef != "" && !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(c.APIKeyRef) {
+		return errors.New("decision_model: invalid saved credential reference")
+	}
+	if c.APIKey != "" && (len(c.APIKey) > 8192 || strings.ContainsAny(c.APIKey, " \t\r\n") || strings.TrimSpace(c.APIKey) == "") {
+		return errors.New("decision_model: invalid API key")
 	}
 	if c.TimeoutMS < 1 || c.TimeoutMS > 120000 || c.MaxCalls < 1 || c.MaxCalls > 64 {
 		return errors.New("decision_model: timeout_ms must be 1..120000 and max_calls 1..64")
@@ -178,6 +200,12 @@ func Decide(ctx context.Context, c Config, r Request) (Answer, error) {
 	var body any
 	if c.Protocol == "systemone" {
 		body = map[string]any{"model": c.Model, "state": r.State, "questions": map[string]any{"action": map[string]any{"type": "choice", "instructions": c.Instructions, "criteria": criteria}}}
+	} else if c.Protocol == "gemini_decisions" || c.Protocol == "openrouter_decisions" {
+		field := "input"
+		if c.Protocol == "openrouter_decisions" {
+			field = "state"
+		}
+		body = map[string]any{"model": c.Model, field: string(r.State), "questions": map[string]any{"action": map[string]any{"type": "choice", "instructions": c.Instructions, "criteria": criteria}}}
 	} else {
 		body = map[string]any{"model": c.Model, "input": string(r.State), "questions": []any{map[string]any{"type": "choice", "name": "action", "instructions": c.Instructions, "choices": r.Choices}}}
 	}
@@ -193,12 +221,22 @@ func Decide(ctx context.Context, c Config, r Request) (Answer, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Client-Request-Id", r.ID)
+	key := c.APIKey
+	if c.APIKeyRef != "" {
+		return Answer{}, errors.New("credential_unavailable")
+	}
 	if c.APIKeyEnv != "" {
-		key := os.Getenv(c.APIKeyEnv)
+		key = os.Getenv(c.APIKeyEnv)
 		if key == "" {
 			return Answer{}, errors.New("credential_unavailable")
 		}
-		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	if key != "" {
+		if c.Protocol == "gemini_decisions" {
+			req.Header.Set("x-goog-api-key", key)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
 	}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
@@ -218,6 +256,12 @@ func Decide(ctx context.Context, c Config, r Request) (Answer, error) {
 	}
 	if len(data) > MaxBytes {
 		return Answer{}, errors.New("response_too_large")
+	}
+	if c.Protocol == "gemini_decisions" {
+		return decodeGemini(c.Model, r, data)
+	}
+	if c.Protocol == "openrouter_decisions" {
+		return decode("systemone", r, data)
 	}
 	return decode(c.Protocol, r, data)
 }

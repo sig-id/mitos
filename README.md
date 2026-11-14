@@ -173,10 +173,22 @@ Decisions API connection and native agent launch defaults. Select a project in
 project connections remain overrides; projects without one inherit the system
 connection. Approval boundaries and delegation remain in **Project setup**.
 
-The Decisions API form accepts a full endpoint, protocol, model, credential
-**environment-variable name**, timeout, call limit, and confidence thresholds.
-**Test API connection** makes one request without saving. Make the secret available
-to the Mitos server's environment, then restart the server if its environment changed.
+Provider buttons prefill the endpoint, protocol, and dedicated decision model for
+TypeSafe Jev, OpenAI, Gemini, and OpenRouter-hosted decision models. All fields stay
+editable. These use typed decision APIs, not generic chat completions.
+
+The Decisions API form accepts a full endpoint, protocol, model, timeout, call
+limit, and confidence thresholds. Under **Authentication**, choose **API key** to
+paste your key directly, or **Environment variable** to enter a name such as
+`OPENAI_API_KEY`. Pasted keys work immediately, without a restart. Environment
+variables must be set before starting Mitos; restart after changing their values.
+**Test API connection** makes one request without saving. Saving stores pasted keys
+in owner-only files under `<data-directory>/credentials/`; settings, event logs,
+and execution plans contain only references. The form never returns a saved key.
+Leave its field blank to keep it, paste a replacement to rotate it, or select
+**Remove saved key** and save to stop using it. Old key files remain available to
+existing execution plans; they are plaintext files protected by filesystem permissions,
+not encrypted. Saved keys are bound to their endpoint; re-enter the key if it changes.
 For native agents, choose an existing environment profile and additional arguments
 as a JSON array. Resumes and forks retain the source environment profile while using
 current default arguments. Managed coordinated workers and read-only assistants
@@ -190,7 +202,8 @@ Settings are journaled in `<data-directory>/events.jsonl` (normally
 
 Command applications can add `decision_model` to choose whether to start a segment
 or take an already eligible recovery. Mitos supports the Jev/Laya System One HTTP
-format and OpenAI Decisions through separate adapters. Configure the full endpoint,
+format, OpenAI Decisions, Gemini Decisions, and OpenRouter Decisions through separate
+adapters. Configure the full endpoint,
 model, credential environment-variable name if needed, hooks, question, timeout,
 call limit, and probability/confidence thresholds in `app.json`.
 

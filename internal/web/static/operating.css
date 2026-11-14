@@ -34,3 +34,5 @@ summary.goal-heading{display:list-item;list-style-position:inside}
 .resource-policy-fields>p{font-size:13px;margin:0;line-height:1.6}.resource-setting [hidden]{display:none!important}
 .resource-policy-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:18px 0}.resource-policy-summary h4{font-size:14px;margin:0 0 10px}.resource-policy-summary dl{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:0;font-size:13px}.resource-policy-summary dt{color:var(--muted)}.resource-policy-summary dd{margin:0 0 10px;overflow-wrap:anywhere}
 @media(max-width:640px){.resource-policy-summary{grid-template-columns:1fr;gap:12px}.resource-setting{grid-template-columns:1fr}.resource-policy-fields fieldset{padding:16px}}
+
+.decision-presets{display:grid;gap:10px}.decision-preset-buttons{display:flex;flex-wrap:wrap;gap:8px}.decision-preset-buttons button{width:auto}.agent-policy [hidden]{display:none}
