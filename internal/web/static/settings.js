@@ -37,7 +37,7 @@
   connection.append(direct,applicationBox);
   function sourceChanged(){direct.hidden=direct.disabled=source.value!=='direct';applicationBox.hidden=application.disabled=source.value!=='application';application.required=source.value==='application';endpoint.required=model.required=source.value==='direct';inherited.hidden=!project||source.value!=='inherit'}
   source.onchange=sourceChanged;sourceChanged();form.append(connection);
-  const launch=el('fieldset');launch.append(el('legend','Agent launch defaults'),el('p','Choose the default environment profile and additional launch arguments for each native agent session. Explicit session profiles take precedence. Project overrides replace the system settings for that agent. Changes apply to future launches, including resumes and forks.'),el('p','These CLI arguments apply to native sessions. Coordinated workers and read-only setup or investigation assistants use managed launch protocols and do not take these flags.'));
+  const launch=el('fieldset');launch.append(el('legend','Agent launch defaults'),el('p','Choose the default environment profile and additional launch arguments for each native agent session. Explicit session profiles take precedence. Project overrides replace the system settings for that agent. Changes apply to future launches. Resumes and forks keep the source environment profile and use current default arguments.'),el('p','These CLI arguments apply to native sessions. Coordinated workers and read-only setup or investigation assistants use managed launch protocols and do not take these flags.'));
   const rows=[];
   for(const agent of agents.filter(a=>a.kind==='agent')){
    const box=el('details');box.append(el('summary',agent.name+(agent.installed?'':' · not installed')));

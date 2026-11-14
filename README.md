@@ -178,8 +178,9 @@ The Decisions API form accepts a full endpoint, protocol, model, credential
 **Test API connection** makes one request without saving. Make the secret available
 to the Mitos server's environment, then restart the server if its environment changed.
 For native agents, choose an existing environment profile and additional arguments
-as a JSON array. These apply to future native sessions, resumes and forks; managed
-coordinated workers and read-only assistants retain their separate launch protocols.
+as a JSON array. Resumes and forks retain the source environment profile while using
+current default arguments. Managed coordinated workers and read-only assistants
+retain their separate launch protocols.
 
 Settings are journaled in `<data-directory>/events.jsonl` (normally
 `.mitos/events.jsonl`), outside project instruction files. See

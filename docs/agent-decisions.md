@@ -104,7 +104,10 @@ arguments for each native runtime. Arguments are a JSON array of literal strings
 not a shell command. An explicit session profile takes precedence over the default.
 A project override replaces that agent's complete system default; an empty argument
 array explicitly removes inherited flags. Uncheck the override to restore inheritance.
-Changes affect new native launches, resumes and forks. Coordinated app-server workers,
+New native sessions use the current defaults. Resumes and forks preserve the source
+environment profile, including the native environment, while applying current default
+arguments. Retrying a keyed launch returns its original session even if defaults
+changed or the new profile is unavailable. Coordinated app-server workers,
 setup assistants and investigations retain their managed launch protocols. Agent
 library role instructions and project execution/resource settings retain their own
 editors. Environment profiles are defined by the existing agent registry configuration.
