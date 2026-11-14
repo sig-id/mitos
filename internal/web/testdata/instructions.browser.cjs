@@ -77,6 +77,19 @@ test('Markdown treats HTML and executable URLs as text', async t => {
  assert.match(await page.locator('.instructions-popup').textContent(), /<img/);
 });
 
+test('focus-scrolling opens help; moving its anchor afterwards dismisses it', async t => {
+ const page = await fixture(t);
+ await page.evaluate(() => {
+  document.querySelector('form').style.marginTop = '1500px';
+  document.body.style.minHeight = '3000px';
+ });
+ await page.getByRole('button', {name:'Time limit help'}).focus();
+ await page.waitForTimeout(150);
+ assert.equal(await isOpen(page), true);
+ await page.evaluate(() => window.scrollBy(0, 100));
+ await page.waitForFunction(() => !document.querySelector('.instructions-popup').matches(':popover-open'));
+});
+
 test('dynamic instances, updates, reconnects and light dismissal work', async t => {
  const page = await fixture(t);
  await page.evaluate(() => {

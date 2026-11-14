@@ -9,7 +9,10 @@
    const options = {signal:this._events.signal};
    window.addEventListener('resize', () => this.close(), options);
    document.addEventListener('scroll', event => {
-    if (!(event.target instanceof Node) || !this._popup.contains(event.target)) this.close();
+    if (event.target instanceof Node && this._popup.contains(event.target)) return;
+    const rect = this._trigger.getBoundingClientRect();
+    // Focus can scroll the anchor before opening help. Ignore that queued scroll event.
+    if (this._anchor && (rect.top !== this._anchor.top || rect.left !== this._anchor.left)) this.close();
    }, {...options, capture:true});
   }
   disconnectedCallback() { this._events?.abort(); clearTimeout(this._timer); this.close(); }
@@ -94,6 +97,7 @@
   close() { this._pinned = false; if (this._popup?.showPopover && this._popup.isConnected && this._popup.matches(':popover-open')) this._popup.hidePopover(); }
   _position() {
    const rect = this._trigger.getBoundingClientRect(), gap = 8;
+   this._anchor = {top:rect.top, left:rect.left};
    const width = this._popup.offsetWidth, height = this._popup.offsetHeight;
    this._popup.style.left = Math.max(gap, Math.min(rect.left, innerWidth - width - gap)) + 'px';
    this._popup.style.top = Math.max(gap, Math.min(rect.bottom + gap, innerHeight - height - gap)) + 'px';
