@@ -121,14 +121,51 @@ mitos-file-browser{display:block;min-width:0}mitos-file-browser input{width:100%
 .project-navigation{min-width:0}
 .work-navigation{padding:0 0 12px 8px;margin-left:8px}
 .work-navigation .rail-title{margin:12px 0 8px;padding:0}
-#work-filter{font-size:13px;padding:5px 8px;margin-bottom:10px;background:transparent}
 .work-tree-node-row{display:flex;align-items:center;min-width:0}
 .work-tree-node-row .work-tree-node{flex:1}
 .work-tree-node-row .work-tree-toggle{width:20px}
 .work-tree-goal-label{min-width:0;flex:1}
-.work-tree-state{display:block;font-size:11px;font-weight:400;color:var(--muted);margin-top:2px}
 .work-tree-error{font-size:12px;color:#f3aaa2;padding:6px}
 
 @media(max-width:640px){.os-rail:has(.work-navigation){grid-auto-rows:max-content;align-content:start;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr)}.os-rail #projects{display:block;width:100%;min-width:0;overflow:visible}.project-navigation{width:100%}.work-navigation{width:auto;max-height:180px}.os-rail #notifications-toggle{min-width:0}}
 
 .graph-node-top,.graph-inspector .graph-tabs{flex-wrap:wrap}.graph-badge.reviewing_approval{color:var(--running)}
+
+/* Compact state icons share the same shapes for work and its agents. */
+.work-tree-status{flex:0 0 16px;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center}
+.work-tree-status svg{width:16px;height:16px}
+.work-tree-status[data-status=review]{color:var(--violet)}
+.work-tree-status[data-status=needs_attention],.work-tree-status[data-status=waiting_input]{color:#e6ba79}
+.work-tree-status[data-status=in_progress],.work-tree-status[data-status=resuming],.work-tree-status[data-status=reviewing_approval]{color:var(--blue)}
+.os-rail #projects .work-overview-link{font-size:13px;padding:4px 0;letter-spacing:1px}
+.project-statistics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:28px}
+.project-stat{display:flex;flex-direction:column;gap:7px;padding:20px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.project-stat strong{font-size:28px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.project-stat small{font-size:12px}
+.project-work-panel{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:16px}
+.project-work-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+#project-work-filters{display:flex;gap:6px;flex-wrap:wrap}
+#project-work-filters button{background:none;border-color:transparent;padding:7px 10px;white-space:nowrap;color:var(--muted)}
+#project-work-filters button[aria-current=page]{background:#2c3934;color:#d5eacb;border-color:#43584b}
+#project-work-search{max-width:280px;font-size:14px}
+.project-work-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 20px;border-bottom:1px solid var(--line)}
+.project-work-row:last-child{border-bottom:0}.project-work-row:hover{background:var(--panel)}
+.project-work-copy{display:grid;gap:5px;min-width:0;overflow-wrap:anywhere}.project-work-copy strong{font-weight:500}
+.project-work-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
+.project-work-pagination:empty{display:none}
+@media(max-width:1100px){.project-statistics{grid-template-columns:repeat(2,minmax(0,1fr))}.project-work-toolbar{align-items:stretch;flex-direction:column}#project-work-search{max-width:none}}
+@media(max-width:640px){.project-statistics{gap:8px;margin-bottom:18px}.project-stat{padding:12px}.project-stat strong{font-size:23px}.project-work-toolbar{padding:10px}.project-work-row{gap:10px;padding:14px;align-items:flex-start}.project-work-row .graph-badge{flex-shrink:0;max-width:110px;white-space:normal}.project-work-pagination{flex-wrap:wrap}.project-tabs{flex-wrap:wrap}}
+
+/* On wide screens keep the work conversation beside the selected agent. */
+@media(min-width:1440px){
+ #graph-work:has(>#graph-current[data-work-view=work]:not([hidden])):has(#graph-inspector:not([hidden])){max-width:none}
+ #graph-current[data-work-view=work]:has(#graph-inspector:not([hidden])){display:grid;grid-template-columns:minmax(0,1.15fr) minmax(400px,1fr);gap:20px 24px;align-items:start}
+ #graph-current[data-work-view=work]:has(#graph-inspector:not([hidden]))>.graph-heading{grid-column:1/-1;margin-bottom:0}
+ #graph-current[data-work-view=work]:has(#graph-inspector:not([hidden]))>#graph-conversation{grid-column:1;grid-row:2;margin:0;max-width:none;width:100%;max-height:max(320px,calc(100dvh - 310px));overflow:auto;scrollbar-gutter:stable;padding:0 16px 24px 0}
+ #graph-current[data-work-view=work]:has(#graph-inspector:not([hidden]))>.graph-body{display:block;grid-column:2;grid-row:2;min-width:0;margin:0}
+ #graph-current[data-work-view=work]>.graph-body>.graph-map{display:none}
+ #graph-current[data-work-view=work] .graph-inspector{max-height:max(320px,calc(100dvh - 310px));overflow:auto;margin:0;padding:20px}
+ #graph-current[data-work-view=work]:has(.graph-body.reading-mode)>#graph-conversation{display:none}
+ #graph-current[data-work-view=work]:has(#graph-inspector:not([hidden]))>.graph-body.reading-mode{grid-column:1/-1}
+ #graph-work:has(#graph-current[data-work-view=work] #graph-inspector:not([hidden]))>.graph-followup{max-width:none;width:calc((100% - 24px)*.535);margin-left:0}
+}

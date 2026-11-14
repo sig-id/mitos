@@ -83,3 +83,21 @@ func TestGraphPlannerDiscoveryIsExplicit(t *testing.T) {
 		t.Fatal("registered planner undiscoverable")
 	}
 }
+
+func TestGraphSummaryCountsActiveExecutorsNotScopesOrQueuedAttempts(t *testing.T) {
+	s := &Store{graphs: map[string]*WorkGraph{}, runs: map[string]*Run{}}
+	members := map[string]*GraphMember{"root": {Spec: GraphSpec{ID: "root", Kind: "scope"}}}
+	for _, state := range []string{"queued", "running", "parked", "stopping", "done", "failed", "cancelled"} {
+		members[state] = &GraphMember{Spec: GraphSpec{ID: state, Kind: "application"}, State: state, CurrentRunID: state}
+		s.runs[state] = &Run{ID: state, Status: state}
+	}
+	s.graphs["graph"] = &WorkGraph{ID: "graph", ProjectID: "project", RootTask: "root", Status: "active", Members: members}
+	rows, _ := s.GraphSummaries("project", "", 10)
+	if len(rows) != 1 || rows[0].Agents != 7 || rows[0].ActiveAgents != 3 {
+		t.Fatalf("agents: %+v", rows)
+	}
+	rows, _ = s.GraphSummaries("other", "", 10)
+	if len(rows) != 0 {
+		t.Fatal("other project leaked")
+	}
+}

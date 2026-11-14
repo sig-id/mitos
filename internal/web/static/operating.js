@@ -9,7 +9,7 @@
  const state=s=>el('span',labels[s]||s,'state '+s),date=v=>v?new Date(v).toLocaleString():'';
  const terminal=s=>`/workspace?project=${encodeURIComponent(project||s.project_id)}&session=${encodeURIComponent(s.id)}&view=terminal`;
  const endpoint=path=>`/api/projects/${encodeURIComponent(project)}/${path}`;
- let home,snapshot,selected=document.body.dataset.task||'',detailTab=new URLSearchParams(location.search).get('tab')==='result'?'result':'assignment',view=new URLSearchParams(location.search).get('view')||'work',lastObserved='',offset=0,alive=true,signature='',homeSignature='';
+ let home,snapshot,selected=document.body.dataset.task||'',detailTab=new URLSearchParams(location.search).get('tab')==='result'?'result':'assignment',view=new URLSearchParams(location.search).get('view')||(new URLSearchParams(location.search).has('graph')||selected?'work':'overview'),lastObserved='',offset=0,alive=true,signature='',homeSignature='';
  async function api(path,body,method='POST'){
   const control=new AbortController(),timer=setTimeout(()=>control.abort(),15000);
   try{
@@ -155,10 +155,10 @@
   else{const response=await fetch(source);if(!response.ok)throw Error('Saved patch unavailable.');const diff=await response.text();if(requestID!==changesRequest)return;window.MitosDiff.render({diff});$('changes-context').textContent='Saved agent patch: original snapshot compared with the agent’s result. This has not been applied to the project.'}
  }
  async function selectView(next){
-  view=['work','workflow','result','changes','services','resources'].includes(next)?next:'work';
+  view=['overview','work','workflow','result','changes','services','resources'].includes(next)?next:'overview';
   document.querySelectorAll('[data-view]').forEach(n=>{if(n.dataset.view===view)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current')});
-  for(const id of ['work','services','resources','changes'])$(id+'-view').hidden=id==='work'?!['work','workflow','result'].includes(view):id!==view;
-  const url=new URL(location.href);url.searchParams.set('view',view);history.replaceState(null,'',url);
+  for(const id of ['overview','work','services','resources','changes'])$(id+'-view').hidden=id==='work'?!['work','workflow','result'].includes(view):id!==view;
+  const url=new URL(location.href);url.searchParams.set('view',view);if(view==='overview'){for(const key of ['graph','node','task','tab'])url.searchParams.delete(key)}history.replaceState(null,'',url);
   document.dispatchEvent(new CustomEvent('mitos-view',{detail:view}));
   try{if(view==='services')await refreshServices();if(view==='resources'){if(!snapshot)await refreshProject();await refreshResources()}if(view==='changes')await refreshChanges()}catch(e){showError(e)}
  }

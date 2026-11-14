@@ -14,7 +14,7 @@ async function wait(fn,ms=30000){const until=Date.now()+ms;while(Date.now()<unti
 try{
  start();await wait(async()=>(await fetch(base+'/healthz')).ok);const project=await api('/api/projects',{name:'Answer project',directory:workspace});
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});page=await browser.newPage({viewport:{width:1600,height:1040}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base+'/projects/'+project.id);await page.locator('#graph-create:not([disabled])').waitFor();assert.equal(await page.locator('#graph-picker').count(),0);assert.equal(await page.getByRole('button',{name:'Add step',exact:true}).count(),0);
+ await page.goto(base+'/projects/'+project.id);await page.locator('#new-work').click();await page.locator('#graph-create:not([disabled])').waitFor();assert.equal(await page.locator('#graph-picker').count(),0);assert.equal(await page.getByRole('button',{name:'Add step',exact:true}).count(),0);
  await page.locator('[data-view=resources]').click();await page.getByRole('heading',{name:'AGENTS.md',exact:true}).waitFor();
  await page.locator('.setup-assistant-options>summary').click();await page.getByRole('combobox',{name:'Setup assistant runtime',exact:true}).selectOption('pi');await page.getByRole('textbox',{name:'Describe project setup',exact:true}).fill('Require review before publishing.');await page.getByRole('button',{name:'Send',exact:true}).click();await page.getByText('Should every change require review?',{exact:true}).waitFor();
  const setupEditor=page.locator('.setup-edit-surface mitos-markdown');assert.equal(await page.getByText('Edit Markdown',{exact:true}).count(),0);await setupEditor.getByRole('button',{name:'Edit',exact:true}).click();await setupEditor.locator('textarea').fill('# My unsaved note');
@@ -25,12 +25,19 @@ try{
  await page.reload();await page.getByRole('heading',{name:'AGENTS.md',exact:true}).waitFor();await page.locator('.setup-edit-surface .md-preview').getByText('saved evidence',{exact:true}).waitFor();
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'/tmp/mitos-project-setup-mobile.png'});await page.setViewportSize({width:1600,height:1040});await page.screenshot({path:'/tmp/mitos-project-setup.png'});await page.locator('[data-view=work]').click();
  await page.locator('#graph-prompt').fill('Produce and review the answer');await page.locator('#graph-create').click();await page.locator('#graph-current').waitFor({state:'visible'});const graphID=new URL(page.url()).searchParams.get('graph');assert.ok(graphID);
- // A running worker exposes incremental messages before any report exists.
- await page.locator('[data-view=workflow]').click();
- const liveWorker=page.locator('.graph-node[data-kind=step]').first();await liveWorker.waitFor();await liveWorker.click();
- await page.locator('.graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor();
+ // The wide conversation inspector loads fresh output, status, requests, and events
+ // without first visiting Workflow (which would mask a stalled polling loop).
+ const liveWorker=page.locator('#work-tree .work-tree-node').filter({hasText:'Implement change'});await liveWorker.waitFor();await liveWorker.click();
+ assert.equal(new URL(page.url()).searchParams.get('view'),'work');
+ assert.equal(await page.locator('#graph-conversation').isVisible(),true);
+ await page.locator('#graph-inspector .graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor({timeout:10000});
  await page.locator('#graph-status.waiting_input').waitFor();
- await page.locator('[data-view=work]').click();await page.locator('#graph-conversation').getByRole('button',{name:'Review request',exact:true}).click();
+ await page.locator('#graph-inspector .graph-request-card').getByRole('button',{name:/Allow once/}).waitFor();
+ await page.locator('#graph-inspector .graph-run-activity > p').filter({hasText:'Started'}).waitFor();
+ await page.locator('#graph-inspector .graph-execution-events summary').click();
+ await page.locator('#graph-inspector .graph-event-list').getByText('Agent connected',{exact:true}).waitFor();
+ await page.locator('#graph-inspector .graph-execution-events summary').click();
+ await page.locator('[data-view=work]').click();await page.locator('#graph-conversation').getByRole('button',{name:'Review request',exact:true}).click();await page.locator('[data-view=workflow]').click();
  await page.locator('.graph-request-card').getByRole('button',{name:/Allow once/}).waitFor();
  const waitingURL=page.url();
  await page.locator('#graph-message').getByRole('link',{name:'Configure Decisions API',exact:true}).click();
@@ -61,7 +68,9 @@ try{
  assert.equal(await page.locator('#graph-node-kind').textContent(),'Agent');
  await page.screenshot({path:'/tmp/mitos-live-agent-output.png'});
  await page.locator('#work-tree .work-tree-node').first().waitFor();await wait(async()=>{const state=await api('/api/graphs/'+graphID);const blocked=Object.values(state.expansions).find(x=>x.error);if(blocked)logs=JSON.stringify(state);return state.status==='accepted'});await page.locator('#graph-status.accepted').waitFor();
- await page.locator('#work-filter').selectOption('closed');await page.locator(`[data-tree-key="${graphID}"]`).waitFor();
+ // Completed work remains reachable through the overview. Reopen it for the tree checks below.
+ await page.locator('[data-view=overview]').click();await page.locator('[data-work-state=closed]').click();await page.locator('#project-work-list a').first().click();await page.locator('#graph-current').waitFor({state:'visible'});
+ await page.getByLabel('Work actions',{exact:true}).click();await page.locator('#graph-reopen').click();await page.locator(`[data-tree-key="${graphID}"]`).click();
  await page.locator('[data-view=workflow]').click();
  const g=await api('/api/graphs/'+graphID);assert.equal(g.setup.model,'fixture-project-model');assert.ok(g.setup.document.includes('saved evidence'));assert.ok(g.setup.personal.includes('Keep personal'));
  const worker=Object.values(g.members).find(m=>m.spec.kind==='application'&&!m.controller_for);assert.equal(Object.values(g.members).filter(m=>m.executor?.application.agent?.specialization).length,1);
