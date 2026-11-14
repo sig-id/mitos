@@ -20,7 +20,7 @@
     const f=$('profile-form'), p=draft?(reviewed(draft)?.profile||draft.profile):snapshot.profile;
     reviewDraft=draft;profileRevision=draft?draft.base_revision:p.revision;
     $('profile-dialog-title').textContent=draft?'Review context & set a goal':'Project profile';
-    $('profile-introduction').textContent=draft?'Continue to the final launch step when you are ready.':'Changes apply to this project’s agents.';
+    $('profile-introduction').value=draft?'Continue to the final launch step when you are ready.':'Changes apply to this project’s agents.';
     $('profile-save').textContent=draft?'Continue':'Save project profile';
     $('profile-goal').required=!!draft;
     for(const [key,value] of Object.entries(p)){const input=f.elements.namedItem(key);if(input)input.value=Array.isArray(value)?value.join('\n'):value;}

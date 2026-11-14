@@ -13,7 +13,9 @@
 </form>{{end}}<a class="button primary" href="/runs/{{.Run.ID}}/report">Open report {{icon "arrow"}}</a>
 </div>{{end}}
 </div>
-{{if .Run.Sample}}<section class="panel padded sample-explanation"><h2>This is demo history, not an agent failure</h2><p>Mitos created this illustrative record when an empty data directory was started with <code>--demo</code>. No person submitted this task, no agent ran it, and it belongs to no project.</p><p>The events below are synthetic examples. There are no agent replies, execution logs, or reasoning traces because nothing was executed. No restart or approval is needed.</p></section>{{end}}
+{{if .Run.Sample}}<section class="panel padded sample-explanation"><h2>This is demo history <mitos-instructions label="Demo history">Created with `--demo`: no agent ran it, and it belongs to no project.
+
+Events and results are illustrative. There are no execution logs or generated files. No restart or approval is needed.</mitos-instructions></h2></section>{{end}}
 <section class="panel padded run-origin"><h2>Where this work came from</h2><dl class="facts"><div><dt>Launch source</dt><dd>{{.RunSource}}</dd></div><div><dt>Project</dt><dd>{{if and .Run.Brief.ProjectID (not .Run.Sample)}}<a href="/projects/{{.Run.Brief.ProjectID}}">{{.RunProjectName}}</a>{{else}}{{.RunProjectName}}{{end}}</dd></div><div><dt>Executor</dt><dd>{{if .Run.Sample}}None{{else}}{{.Run.AppName}} · <code>{{.Run.Brief.AppID}}</code>{{end}}</dd></div></dl>{{if not .Run.Sample}}<h3>Original request</h3><p class="brief-content">{{if .Run.Brief.Intent}}{{.Run.Brief.Intent}}{{else}}No request text was recorded beyond the title above.{{end}}</p>{{if .Run.GraphAttempt}}<h3>Completion criteria</h3><p class="brief-content">{{.Run.GraphAttempt.Criteria}}</p>{{end}}<p><a href="#execution-output">Output and logs</a> · <a href="#execution-activity">Activity details</a></p>{{end}}</section>
 {{with .Run.Condition}}<section class="panel padded"><h2>Service condition</h2><p>{{.Status}}{{if .Detail}} · {{.Detail}}{{end}}</p>{{range .Facts}}<p>{{.Kind}}{{if .Name}} · {{.Name}}{{end}} · {{if .Passed}}passed{{else}}not met{{end}}</p>{{end}}</section>{{end}}
 {{with .Run.Health}}<section class="panel padded"><h2>Service health</h2><p>{{.Config.Type}} · {{.Status}}{{if .Action}} · requested action: {{.Action}}{{end}}</p>{{with .Check}}<p>Check {{.Number}}: {{.Outcome}}{{if .Detail}} · {{.Detail}}{{end}}</p>{{end}}{{if .HeartbeatAt}}<p>Last heartbeat: {{.HeartbeatAt}} · sequence {{.HeartbeatSequence}}</p>{{end}}{{if .Detail}}<p>{{.Detail}}</p>{{end}}</section>{{end}}
@@ -34,8 +36,8 @@
 </div>{{if .Run.Verified}}<span class="pill">Acceptance passed</span>{{end}}</div>{{end}}
 <div class="detail-grid">
 <section>
-{{if not .Run.Sample}}<section class="panel padded">
-<p class="eyebrow">Execution details</p>
+{{if not .Run.Sample}}<details class="execution-fold">
+<summary>Execution details</summary>
 {{if .Task.ID}}<p>Task {{.Task.Status}} · <a class="text-link" href="/tasks">{{.Task.Scheduling.Pool}} pool</a></p>{{end}}
 <a class="text-link" href="/api/runs/{{.Run.ID}}/evidence" hx-boost="false">Structured fleet evidence</a>
 <dl class="facts">
@@ -60,9 +62,9 @@
 <a class="text-link" href="/runs/{{.Run.ParentID}}">View attempt {{icon "arrow"}}</a>
 </dd>
 </div>{{end}}</dl>
-</section>{{end}}
-{{if not .Run.Sample}}<section class="panel padded" id="execution-output"><h2>Output and logs</h2><p>Saved executor output, replies, and diagnostics. Only content emitted and captured by the executor is available.</p>{{range .RunLogs}}<details class="execution-fold" id="log-{{.Name}}" open><summary>{{.Name}}</summary>{{if .Note}}<p>{{.Note}}</p>{{end}}{{if .Text}}<pre class="execution-log" tabindex="0">{{.Text}}</pre>{{else if not .Note}}<p>This log is empty.</p>{{end}}<a href="/runs/{{$.Run.ID}}/artifacts/{{.Name}}" hx-boost="false" download>Download {{.Name}}</a></details>{{else}}<p>No output logs have been saved for this attempt. Activity below shows the recorded lifecycle events; it is not an agent transcript.</p>{{end}}{{if .Task.GraphID}}<p><a href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}&amp;view=workflow">Open workflow for live agent output and requests</a></p>{{end}}</section>{{end}}
-<details class="execution-fold" id="execution-activity" open><summary>{{if .Run.Sample}}Example activity{{else}}Activity{{end}} · {{len .Run.Events}} events</summary><ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
+</details>{{end}}
+{{if not .Run.Sample}}<section class="panel padded" id="execution-output"><h2>Output and logs <mitos-instructions label="Output and logs">Saved executor output, replies, and diagnostics. Only content captured by the executor is available.</mitos-instructions></h2>{{range .RunLogs}}<details class="execution-fold" id="log-{{.Name}}" open><summary>{{.Name}}</summary>{{if .Note}}<p>{{.Note}}</p>{{end}}{{if .Text}}<pre class="execution-log" tabindex="0">{{.Text}}</pre>{{else if not .Note}}<p>This log is empty.</p>{{end}}<a href="/runs/{{$.Run.ID}}/artifacts/{{.Name}}" hx-boost="false" download>Download {{.Name}}</a></details>{{else}}<p>No output logs have been saved for this attempt. Activity below shows the recorded lifecycle events; it is not an agent transcript.</p>{{end}}{{if .Task.GraphID}}<p><a href="/projects/{{.Run.Brief.ProjectID}}?graph={{.Task.GraphID}}&amp;node={{.Task.ID}}&amp;view=workflow">Open workflow for live agent output and requests</a></p>{{end}}</section>{{end}}
+<details class="execution-fold" id="execution-activity"><summary>{{if .Run.Sample}}Example activity{{else}}Activity{{end}} · {{len .Run.Events}} events</summary><ol class="timeline">{{range .Run.Events}}<li class="{{.Type}}">
 <span class="timeline-dot">{{if eq .Type "decision"}}{{icon "arrow"}}{{else}}{{icon "check"}}{{end}}</span>
 <div>
 <div class="timeline-heading">
@@ -130,8 +132,6 @@
 </p>
 </section>
 <footer class="report-footer">
-<div>{{icon "check"}}<span>Saved with the execution record.</span>
-</div>
 <a class="text-link" href="/runs/{{.Run.ID}}">See what happened {{icon "arrow"}}</a>
 </footer>
 </article>{{end}}

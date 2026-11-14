@@ -44,7 +44,7 @@
     selectedInstallation=v;sessionMode();
     $('session-prompt').disabled = !v.capabilities.initial_prompt;
     const info = $('agent-setup-content'); info.replaceChildren();
-    info.append(el('p','Uses its own configuration, skills, and memory. Credential values are never shown.','muted'));
+    info.append(MitosInstructions.create('Uses its own configuration, skills, and memory. Credential values are never shown.','Agent configuration'));
     info.append(el('p',v.auth,'muted'));
     for (const e of v.environment) info.append(el('p',`${e.name}: ${e.present?'set':'not set'}${e.source!==e.name?' (from '+e.source+')':''}`,'agent-setting'));
     for (const r of v.resources) info.append(el('p',`${r.scope} ${r.kind} · ${r.status}\n${r.path}`,'agent-setting'));
@@ -425,7 +425,7 @@
     const query=new URLSearchParams({q:$('topic-search').value}); if ($('followed-only').checked) query.set('follower','operator');
     const values=await api(projectAPI(`topics?${query}`)), signature=JSON.stringify(values); if (signature===topicsSignature) return; topicsSignature=signature;
     $('topic-list').replaceChildren();
-    if (!values.length) $('topic-list').append(el('p','No matching topics. Publish a summary so agents can discover relevant work.','muted'));
+    if (!values.length) $('topic-list').append(el('p','No matching topics.','muted'));
     for (const t of values) {
       const card=el('article',undefined,'topic-card');card.append(action(t.title,()=>openTopic(t.id)),el('p',t.summary),el('span',`revision ${t.revision}${(t.paths||[]).length?' · '+t.paths.join(', '):''}`,'topic-meta'));$('topic-list').append(card);
     }
@@ -480,7 +480,7 @@
     if(!r.processes.length)$('process-list').append(el('p','No live project processes observed.','muted'));
     $('process-list').append(el('h2','Session scratch','activity-heading'));
     for(const s of r.scratch||[]){const row=el('article',undefined,'scratch-row');row.append(el('code',s.session_id),el('p',s.path),el('p',`${size(s.bytes)}${s.partial?' · partial scan':''}`));if(s.hold)row.append(el('p',`Cleanup deferred: ${s.hold}`));else row.append(action('Remove session scratch',async()=>{await api(`/api/sessions/${s.session_id}/scratch/clean`,{});await inspect();}));$('process-list').append(row);}
-    $('process-list').append(el('h2','Observed Git commands','activity-heading'),el('p','Git Trace2 command names by session. This does not establish line authorship; programs can disable tracing.','muted'));
+    $('process-list').append(el('h2','Observed Git commands','activity-heading'),MitosInstructions.create('Git Trace2 command names by session. This does not establish line authorship; programs can disable tracing.','Observed Git commands'));
     for(const g of r.git_activity||[]){const row=el('article',undefined,'process-row');row.append(el('strong',`git ${g.command}`),el('p',`${g.session_id} · ${g.at}`));$('process-list').append(row);}
   }
   $('refresh-changes').addEventListener('click',()=>inspect().catch(error));$('refresh-resources').addEventListener('click',()=>inspect().catch(error));

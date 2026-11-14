@@ -1,11 +1,11 @@
 {{define "work"}}<div class="page-heading">
 <div>
 
-<h1>Execution history<span class="olive">.</span>
+<h1>Run history<span class="olive">.</span>
 </h1>
-<p>Application runs and interactive attempts.</p>
+<mitos-instructions label="Run history">Application runs and interactive attempts.</mitos-instructions>
 </div>
-<div class="actions"><a class="button" href="/services">Services</a><a class="button" href="/tasks">Tasks and scheduling</a><a class="button primary" href="/new">{{icon "plus"}}New work</a></div>
+<a class="button primary" href="/new">{{icon "plus"}}Run application</a>
 </div>
 <section class="panel">
 <form hx-boost="true" class="work-filters" action="/work" method="get" hx-get="/work" hx-target="#work-list" hx-select="#work-list" hx-push-url="true" hx-trigger="submit, change, input delay:350ms">
@@ -28,8 +28,8 @@
 <div id="work-list">
 <div class="list-label">
 <span>{{len .Runs}} {{if eq (len .Runs) 1}}RESULT{{else}}RESULTS{{end}}</span>
-<span>NEWEST FIRST</span>
-</div>{{if .Runs}}{{template "runlist" .Runs}}{{else}}<div class="empty">{{icon "search"}}<h3>{{if or .Query .Filter}}No work matches these filters{{else}}Your work starts here{{end}}</h3>
+
+</div>{{if .Runs}}{{template "runlist" .Runs}}{{else}}<div class="empty">{{icon "search"}}<h3>{{if or .Query .Filter}}No work matches these filters{{else}}No runs yet{{end}}</h3>
 <p>{{if or .Query .Filter}}Try a different search, or show all work.{{else}}Choose an application and tell it what you need.{{end}}</p>
 <a class="text-link" href="{{if or .Query .Filter}}/work{{else}}/new{{end}}">{{if or .Query .Filter}}Clear filters{{else}}Create new work{{end}} {{icon "arrow"}}</a>
 </div>{{end}}</div>
@@ -48,9 +48,9 @@
 
 </div>{{else}}<div class="empty decision-empty">
 <span class="large-check">{{icon "check"}}</span>
-<p class="eyebrow">NOTHING NEEDS YOUR ATTENTION</p>
+
 <h2>No pending application decisions</h2>
-<p>All pending project reviews and decisions are available in the Inbox.</p>
+<a class="text-link" href="/inbox">Open Inbox</a>
 <a class="button" href="/work">Back to work {{icon "arrow"}}</a>
 </div>{{end}}{{end}}
 
@@ -59,13 +59,13 @@
 <a class="back-link" href="/work">← All work</a>
 <h1>Run an application<span class="olive">.</span>
 </h1>
-<p>Choose an assignment, application, and workspace.</p>
+
 </div>
 </div>
 <div class="brief-layout single-form">
 <form hx-boost="true" class="panel brief-form" method="post" action="/runs" hx-disabled-elt="find button">
 <div class="form-section">
-<span class="step-number">01</span>
+
 <div class="form-section-body">
 <h2>What should get done?</h2>{{if .Error}}<div class="notice error" role="alert">{{.Error}}</div>{{end}}<label for="title">Give this work a name</label>
 <input id="title" name="title" required minlength="3" maxlength="160" placeholder="e.g. Get a clear picture of the workspace" value="{{.Brief.Title}}">
@@ -75,31 +75,34 @@
 </div>
 </div>
 <div class="form-section">
-<span class="step-number">02</span>
+
 <div class="form-section-body">
 <h2>Where and how?</h2>
-<label for="app_id">Application</label>
+<div class="instruction-label"><label for="app_id">Application</label><mitos-instructions label="Application">Each application runs its installed entrypoint and acceptance check.</mitos-instructions></div>
 <select id="app_id" name="app_id">{{range .Apps}}<option value="{{.ID}}" {{if eq $.Brief.AppID .ID}}selected{{end}}>{{.Name}} · {{.Entrypoint}}</option>{{end}}</select>
-<p class="field-help">Each application runs its installed entrypoint and acceptance check.</p>
-<label for="workspace">Workspace directory</label>
+
+<div class="instruction-label"><label for="workspace">Workspace directory</label><mitos-instructions label="Workspace directory">Choose a directory under `{{.Root}}`. Work runs in a fresh copy.</mitos-instructions></div>
 <input id="workspace" name="workspace" required value="{{.Brief.Workspace}}" spellcheck="false">
-<p class="field-help">Choose a directory under <code>{{.Root}}</code>. Work runs in a fresh copy.</p>
+
 <details><summary>Schedule and coordinate shared work</summary>
-<label for="pool">Work pool</label><select id="pool" name="pool">{{range .Pools}}<option value="{{.ID}}" {{if or (eq $.Brief.Scheduling.Pool .ID) (and (eq $.Brief.Scheduling.Pool "") (eq .ID "interactive"))}}selected{{end}}>{{.ID}}</option>{{end}}</select>
+<label for="pool">Work pool</label>
+<select id="pool" name="pool">{{range .Pools}}<option value="{{.ID}}" {{if or (eq $.Brief.Scheduling.Pool .ID) (and (eq $.Brief.Scheduling.Pool "") (eq .ID "interactive"))}}selected{{end}}>{{.ID}}</option>{{end}}</select>
 <label for="priority">Priority</label><input id="priority" name="priority" type="number" min="-1000" max="1000" value="{{.Brief.Scheduling.Priority}}">
-<label for="after_tasks">Wait for these tasks to succeed</label><textarea id="after_tasks" name="after_tasks" rows="3" placeholder="task_…">{{range .Brief.Scheduling.Deps}}{{.From}}
-{{end}}</textarea><p class="field-help">Use task IDs from Tasks and scheduling, one per line. Dependencies may belong to another pool.</p>
-<label for="dependency_inputs">Artifacts to consume</label><textarea id="dependency_inputs" name="dependency_inputs" rows="3" placeholder="task_…:inventory.json">{{range .Brief.Scheduling.Deps}}{{$task := .From}}{{range .Artifacts}}{{$task}}:{{.}}
-{{end}}{{end}}</textarea><p class="field-help">One TASK_ID:ARTIFACT_NAME per line. Each selected artifact comes from that task’s successful attempt and is copied into a separate input directory.</p>
-<label for="join">Dependency rule</label><select id="join" name="join"><option value="all" {{if eq .Brief.Scheduling.Join.Rule "all"}}selected{{end}}>All</option><option value="any" {{if eq .Brief.Scheduling.Join.Rule "any"}}selected{{end}}>Any one</option><option value="k_of_n" {{if eq .Brief.Scheduling.Join.Rule "k_of_n"}}selected{{end}}>Quorum</option></select>
+<div class="instruction-label"><label for="after_tasks">Wait for these tasks to succeed</label><mitos-instructions label="Task dependencies">Use task IDs from the Job queue, one per line. Dependencies may belong to another pool.</mitos-instructions></div><textarea id="after_tasks" name="after_tasks" rows="3" placeholder="task_…">{{range .Brief.Scheduling.Deps}}{{.From}}
+{{end}}</textarea>
+<div class="instruction-label"><label for="dependency_inputs">Artifacts to consume</label><mitos-instructions label="Input artifacts">One TASK_ID:ARTIFACT_NAME per line. Each selected artifact comes from that task’s successful attempt and is copied into a separate input directory.</mitos-instructions></div>
+<textarea id="dependency_inputs" name="dependency_inputs" rows="3" placeholder="task_…:inventory.json">{{range .Brief.Scheduling.Deps}}{{$task := .From}}{{range .Artifacts}}{{$task}}:{{.}}
+{{end}}{{end}}</textarea>
+<label for="join">Dependency rule</label>
+<select id="join" name="join"><option value="all" {{if eq .Brief.Scheduling.Join.Rule "all"}}selected{{end}}>All</option><option value="any" {{if eq .Brief.Scheduling.Join.Rule "any"}}selected{{end}}>Any one</option><option value="k_of_n" {{if eq .Brief.Scheduling.Join.Rule "k_of_n"}}selected{{end}}>Quorum</option></select>
 <label for="quorum">Quorum count (0 for All or Any)</label><input id="quorum" name="quorum" type="number" min="0" max="128" value="{{.Brief.Scheduling.Join.K}}">
-<label for="deadline">Absolute deadline (optional)</label><input id="deadline" name="deadline" placeholder="2026-09-10T18:00:00+02:00" value="{{if .Brief.Scheduling.Deadline}}{{.Brief.Scheduling.Deadline.Format "2006-01-02T15:04:05Z07:00"}}{{end}}"><p class="field-help">Includes waiting time and limits every attempt of this task. Include the timezone.</p>
-<label for="owned_paths">Paths this work may change</label>
+<div class="instruction-label"><label for="deadline">Absolute deadline (optional)</label><mitos-instructions label="Deadline">Includes waiting time and limits every attempt of this task. Include the timezone.</mitos-instructions></div><input id="deadline" name="deadline" placeholder="2026-09-10T18:00:00+02:00" value="{{if .Brief.Scheduling.Deadline}}{{.Brief.Scheduling.Deadline.Format "2006-01-02T15:04:05Z07:00"}}{{end}}">
+<div class="instruction-label"><label for="owned_paths">Paths this work may change</label><mitos-instructions label="Allowed paths">One relative file or directory per line. Leave empty for the whole workspace. Work with overlapping paths waits its turn.</mitos-instructions></div>
 <textarea id="owned_paths" name="owned_paths" rows="3" placeholder="src/component&#10;tests/component">{{lines .Brief.Ownership.Paths}}</textarea>
-<p class="field-help">One relative file or directory per line. Leave empty for the whole workspace. Work with overlapping paths waits its turn.</p>
-<label for="leases">Exclusive resources</label>
+
+<div class="instruction-label"><label for="leases">Exclusive resources</label><mitos-instructions label="Exclusive resources">One shared resource name per line. Use the same name on work that must not use a resource simultaneously.</mitos-instructions></div>
 <textarea id="leases" name="leases" rows="2" placeholder="database:integration">{{lines .Brief.Ownership.Leases}}</textarea>
-<p class="field-help">One shared resource name per line. Use the same name on work that must not use a resource simultaneously.</p>
+
 </details>
 <label for="timeout_minutes">Stop after</label>
 <select id="timeout_minutes" name="timeout_minutes">
@@ -130,12 +133,12 @@
 </h3>
 <p>{{.Description}}</p>
 <div class="app-card-footer">
-<span>{{if .GraphController}}Graph planner{{else}}1 entrypoint{{end}}</span>
+
 <a class="text-link" href="/new?app={{.ID}}">Start work {{icon "arrow"}}</a>
 </div>
 </article>{{end}}
 
-{{define "apps"}}<div class="page-heading"><div><h1>Plugins</h1><p>Installed tools for specific jobs. Agents and their instructions live in the <a class="text-link" href="/agents">agent library</a>.</p></div><span class="pill">{{len .Apps}} installed</span></div>
+{{define "apps"}}<div class="page-heading"><div><h1>Plugins <mitos-instructions label="Plugins">Installed tools for specific jobs. Agent instructions live in the [agent library](/agents).</mitos-instructions></h1></div><span class="pill">{{len .Apps}} installed</span></div>
 <div class="app-grid full">{{range .Apps}}{{template "appcard" .}}{{end}}</div>
 {{end}}
 
@@ -151,31 +154,10 @@
 <div class="detail-grid">
 <section class="panel padded">
 <p class="eyebrow">ENTRYPOINT</p>
-<h2>{{.App.Entrypoint}}</h2>
-<p>Runs against a local workspace with your brief and time limit.</p>
-<ol class="pipeline">
-<li>
-<span>1</span>
-<div>
-<strong>Prepare</strong>
-<p>Copy the workspace. Preserve the original.</p>
-</div>
-</li>
-<li>
-<span>2</span>
-<div>
-<strong>{{if .App.Builtin}}Inventory{{else}}Execute{{end}}</strong>
-<p>{{if .App.Builtin}}Read files and calculate content fingerprints.{{else}}Run the installed application command.{{end}}</p>
-</div>
-</li>
-<li>
-<span>3</span>
-<div>
-<strong>Check & deliver</strong>
-<p>{{if .App.Builtin}}Verify the inventory checksum and deliver a report.{{else}}Run acceptance outside the workspace and save the evidence.{{end}}</p>
-</div>
-</li>
-</ol>
+<h2>{{.App.Entrypoint}} <mitos-instructions label="Application execution">Runs against a local workspace with your brief and time limit.</mitos-instructions></h2>
+<mitos-instructions label="Execution steps" mode="popover">1. Copy the workspace, preserving the original.
+2. {{if .App.Builtin}}Read files and calculate content fingerprints.{{else}}Run the installed application command.{{end}}
+3. {{if .App.Builtin}}Verify the inventory checksum and deliver a report.{{else}}Run acceptance outside the workspace and save the evidence.{{end}}</mitos-instructions>
 </section>
 <aside class="panel padded">
 <p class="eyebrow">APPLICATION DETAILS</p>

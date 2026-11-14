@@ -17,7 +17,7 @@ func (s *Server) services(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	p := s.base("services", "Services", "work")
+	p := s.base("services", "Background jobs", "work")
 	p.Live = false
 	p.Services = &view
 	p.ServiceLifecycles = s.engine.Store.ServiceLifecycles()
