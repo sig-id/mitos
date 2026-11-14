@@ -330,6 +330,11 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "automatic_goal_planning": true, "completed_result_continuations": true, "intent_shaped_results": true, "native_agent_runtimes": []string{"codex"}, "editable_agent_library": true, "agent_specialization": true, "controller_proposals": true, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "capacity": 2})
 	})
 	mux.HandleFunc("GET /api/graphs", func(w http.ResponseWriter, r *http.Request) {
+		state := r.URL.Query().Get("state")
+		if state != "" && state != "all" && state != "open" && state != "closed" && state != "archived" {
+			writeJSON(w, 400, map[string]string{"error": "state must be open, closed, archived or all"})
+			return
+		}
 		limit := 50
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -339,8 +344,20 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 			}
 			limit = n
 		}
-		rows, next := s.engine.Store.GraphSummaries(r.URL.Query().Get("project_id"), r.URL.Query().Get("after"), limit)
+		rows, next := s.engine.Store.GraphSummaries(r.URL.Query().Get("project_id"), r.URL.Query().Get("after"), limit, state)
 		writeJSON(w, 200, map[string]any{"graphs": rows, "next": next, "truncated": next != ""})
+	})
+	mux.HandleFunc("POST /api/graphs/{id}/work-state", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.GraphWorkStateEdit
+		if !graphBody(w, r, &req) {
+			return
+		}
+		g, err := s.engine.Store.SetGraphWorkState(r.PathValue("id"), req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, g)
 	})
 	mux.HandleFunc("POST /api/graphs", func(w http.ResponseWriter, r *http.Request) {
 		var req studio.CreateGraph

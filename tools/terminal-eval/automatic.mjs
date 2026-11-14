@@ -55,6 +55,7 @@ try{
  assert.equal(await page.locator('#graph-node-kind').textContent(),'Agent');
  await page.screenshot({path:'/tmp/mitos-live-agent-output.png'});
  await page.locator('#work-tree .work-tree-node').first().waitFor();await wait(async()=>{const state=await api('/api/graphs/'+graphID);const blocked=Object.values(state.expansions).find(x=>x.error);if(blocked)logs=JSON.stringify(state);return state.status==='accepted'});await page.locator('#graph-status.accepted').waitFor();
+ await page.locator('#work-filter').selectOption('closed');await page.locator(`[data-tree-key="${graphID}"]`).waitFor();
  await page.locator('[data-view=workflow]').click();
  const g=await api('/api/graphs/'+graphID);assert.equal(g.setup.model,'fixture-project-model');assert.ok(g.setup.document.includes('saved evidence'));assert.ok(g.setup.personal.includes('Keep personal'));
  const worker=Object.values(g.members).find(m=>m.spec.kind==='application'&&!m.controller_for);assert.equal(Object.values(g.members).filter(m=>m.executor?.application.agent?.specialization).length,1);

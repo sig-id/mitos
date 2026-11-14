@@ -16,7 +16,10 @@
  let workView=["work","workflow","result"].includes(new URLSearchParams(location.search).get("view"))?new URLSearchParams(location.search).get("view"):"work",resultViewKey="",conversationKey="",openingResult=false;
  let selectedAttempt='', renderedReaderKey='', readerStates=new Map(), requestDrafts=new Map();
  let selected = new URLSearchParams(location.search).get('node') || '', snapshot, graph, selectedTab = 'details';
- let snapshotRequest=0,snapshotApplied=0,summarySignature='',loadedMore=false;
+ let snapshotRequest=0,snapshotApplied=0,summaryRequest=0,loadedPages=1;
+ let workFilter=['open','closed','archived'].includes(new URLSearchParams(location.search).get('work_state'))?new URLSearchParams(location.search).get('work_state'):'open';
+ const initialFilterSpecified=new URLSearchParams(location.search).has('work_state');
+ const workState=g=>g.work_state||(['accepted','cancelled'].includes(g.status)?'closed':'open');
  let epoch = 0, alive = true, polling = false, tick = 0, failureCount = 0, snapshotSignature = '', detailSignature = '';
  let zoom = 1, dimensions = { width:700, height:400 }, listMode = false, firstLayout = true;
  let collapsed = new Set(), order = [], positions = new Map(), cachedRuns = new Map(), artifactCache = new Map();
@@ -48,6 +51,7 @@
   const old = pending;
   try { const result = await request(old.path, old.body); rememberPending(null); $('action-error').hidden = true;
    document.querySelectorAll('#graph-step-dialog[open],#graph-action-dialog[open],#graph-resume-dialog[open]').forEach(d => d.close());
+   if (old.kind === 'work-state') { await finishWorkStateChange(); return; }
    if (old.kind === 'schedule') { location.href='/services'; return; }
    if (old.kind === 'create') { createBody = null; await loadSummaries(true); await chooseGraph(result.id); } else await refreshSelected();
   } catch (error) { if (error.status && error.status < 500) rememberPending(null); showError(error); }
@@ -58,7 +62,7 @@
  function title(m) { return m.spec.brief.title || (m.spec.kind === 'scope' ? 'Goal' : 'Untitled step'); }
  function kind(m) { return m.spec.kind === 'scope' ? 'scope' : m.controller_for?.startsWith('decision:') ? 'decision' : m.controller_for ? 'planner' : 'step'; }
  function kindLabel(m) { return {scope:'Goal', planner:'Coordinator', decision:'Decision', step:'Agent'}[kind(m)]; }
- function plannerRounds(){return Object.keys(graph.members).filter(id=>kind(graph.members[id])==='planner').sort((a,b)=>(graph.members[a].attempts?.length?0:1)-(graph.members[b].attempts?.length?0:1)||(snapshot.nodes[a]?.created_at||'').localeCompare(snapshot.nodes[b]?.created_at||'')||a.localeCompare(b))}
+ function plannerRounds(g=graph,view=snapshot){return Object.keys(g.members).filter(id=>kind(g.members[id])==='planner').sort((a,b)=>(g.members[a].attempts?.length?0:1)-(g.members[b].attempts?.length?0:1)||(view.nodes[a]?.created_at||'').localeCompare(view.nodes[b]?.created_at||'')||a.localeCompare(b))}
  function latestPlanner(){const rounds=plannerRounds();return rounds.at(-1)}
  function renderPlanner(){
   const box=$('graph-planner-summary'),rounds=plannerRounds();box.hidden=!rounds.length;if(!rounds.length)return;
@@ -157,56 +161,114 @@
 
   } catch (error) { form.querySelector('.form-error').textContent = error.message; } finally { submit.disabled = false; }
  };
+ const treeExpanded=new Set(), treeClosed=new Set(), treeNodeClosed=new Set(), treeSnapshots=new Map(), treeLoading=new Set(), treeErrors=new Map();
+ const treeStorageKey=`mitos.work.tree.${server}.${project}`;
+ try { const saved=JSON.parse(sessionStorage.getItem(treeStorageKey)||'{}');for(const id of saved.expanded||[])treeExpanded.add(id);for(const id of saved.closed||[])treeClosed.add(id);for(const id of saved.nodes||[])treeNodeClosed.add(id); } catch {}
+ function rememberTree(){try{sessionStorage.setItem(treeStorageKey,JSON.stringify({expanded:[...treeExpanded],closed:[...treeClosed],nodes:[...treeNodeClosed]}))}catch{}}
+ let treeSignature='';
  async function loadSummaries(reset = false) {
-  const result = await request('/api/graphs?project_id=' + encodeURIComponent(project) + '&limit=100' + (!reset && nextPage ? '&after=' + encodeURIComponent(nextPage) : ''));
-  const known = new Map(graphs.map(g => [g.id,g])); for (const row of result.graphs) known.set(row.id,row); graphs = [...known.values()].sort((a,b) => b.created_at.localeCompare(a.created_at)); if(!reset)loadedMore=true;if(!loadedMore||!reset)nextPage=result.next;
-  const nextSignature=JSON.stringify([graphs.map(g=>[g.id,g.title,g.status,g.counts]),graphID,nextPage]);if(nextSignature===summarySignature)return;summarySignature=nextSignature;
-  renderTree(); $('graph-load-more').hidden=!nextPage;
+  const sequence=++summaryRequest,filter=workFilter,pages=reset?loadedPages:1;
+  let after=reset?'':nextPage,rows=reset?[]:[...graphs],next='';
+  for(let page=0;page<pages;page++){
+   const result=await request('/api/graphs?project_id='+encodeURIComponent(project)+'&state='+filter+'&limit=100'+(after?'&after='+encodeURIComponent(after):''));
+   rows.push(...result.graphs.filter(g=>g.project_id===project));next=result.next;if(!next)break;after=next;
+  }
+  if(sequence!==summaryRequest||filter!==workFilter)return;
+  graphs=[...new Map(rows.map(g=>[g.id,g])).values()].sort((a,b)=>b.created_at.localeCompare(a.created_at)||a.id.localeCompare(b.id));
+  if(!reset)loadedPages++;nextPage=next;
+  renderTree();$('graph-load-more').hidden=!nextPage;
+  await Promise.all(graphs.filter(g=>treeExpanded.has(g.id)&&g.id!==graphID).map(g=>loadTreeSnapshot(g.id)));
  }
  $('graph-load-more').onclick=()=>loadSummaries().catch(showError);
- const treeClosed=new Set(); let treeSignature='';
+ $('work-filter').hidden=false;$('work-filter').value=workFilter;
+ $('work-filter').onchange=async event=>{
+  workFilter=event.target.value;loadedPages=1;graphs=[];nextPage='';updateURL();renderTree();
+  try{await loadSummaries(true)}catch(error){showError(error)}
+ };
+ async function loadTreeSnapshot(id){
+  if(treeLoading.has(id))return;treeLoading.add(id);treeErrors.delete(id);renderTree();
+  try{const view=await request(endpoint(id)+'/snapshot');if(view.graph.project_id!==project||view.graph.home!==server)throw Error('This work belongs to another project.');treeSnapshots.set(id,view)}
+  catch(error){treeErrors.set(id,error.message)}finally{treeLoading.delete(id);renderTree()}
+ }
+ async function toggleTree(id){
+  if(treeExpanded.has(id)){treeExpanded.delete(id);treeClosed.add(id)}else{treeExpanded.add(id);treeClosed.delete(id)}
+  rememberTree();renderTree();
+  if(treeExpanded.has(id)&&id!==graphID)await loadTreeSnapshot(id);
+ }
  function renderTree() {
-  const tree=$('work-tree'); if(!tree)return;
-  const sig=JSON.stringify([graphs,graphID,selected,showHistory,graph?.members,snapshot?.nodes,[...treeClosed]]);if(sig===treeSignature)return;treeSignature=sig;
+  const tree=$('work-tree');if(!tree)return;
+  const sig=JSON.stringify([graphs,graphID,selected,workFilter,showHistory,graph,snapshot?.nodes,[...treeExpanded],[...treeNodeClosed],[...treeSnapshots],[...treeLoading],[...treeErrors]]);
+  if(sig===treeSignature)return;treeSignature=sig;
   const focus=document.activeElement?.dataset.treeKey;tree.replaceChildren();
-  const ordered=[],visited=new Set();const appendRows=(row,depth)=>{if(visited.has(row.id))return;visited.add(row.id);ordered.push({...row,depth});for(const child of graphs.filter(g=>g.predecessor===row.id).sort((a,b)=>a.created_at.localeCompare(b.created_at)))appendRows(child,depth+1)};for(const row of graphs.filter(g=>!graphs.some(p=>p.id===g.predecessor)))appendRows(row,0);for(const row of graphs)appendRows(row,0);
-  for(const row of ordered){
-   const current=row.id===graphID, expanded=current&&!treeClosed.has(row.id), counts=row.counts||{};
-   const item=node('div',undefined,'work-tree-item'+(row.depth?' work-tree-followup':'')),heading=node('div',undefined,'work-tree-heading');
-   const toggle=button(expanded?'▾':'▸',async()=>{if(current){if(treeClosed.has(row.id))treeClosed.delete(row.id);else treeClosed.add(row.id);renderTree()}else{treeClosed.delete(row.id);await chooseGraph(row.id)}},'work-tree-toggle');
+  for(const row of graphs){
+   const current=row.id===graphID,expanded=treeExpanded.has(row.id),view=current&&graph?snapshot:treeSnapshots.get(row.id),g=view?.graph,counts=row.counts||{};
+   const item=node('div',undefined,'work-tree-item'),heading=node('div',undefined,'work-tree-heading');item.dataset.graphId=row.id;
+   const toggle=button(expanded?'▾':'▸',()=>toggleTree(row.id),'work-tree-toggle');
    toggle.setAttribute('aria-label',(expanded?'Collapse ':'Expand ')+(row.title||'Work'));toggle.setAttribute('aria-expanded',String(expanded));toggle.dataset.treeKey='toggle:'+row.id;
-   const choose=button(row.title||'Untitled work',async()=>{treeClosed.delete(row.id);if(current){await selectNode(graph.root_task)}else await chooseGraph(row.id);if($('work-view').hidden)document.querySelector('[data-view=work]').click()},'work-tree-goal');choose.title=row.title;choose.dataset.treeKey=row.id;
+   const choose=button(row.title||'Untitled work',async()=>{if(!current)await chooseGraph(row.id);else{closeInspector();workView='work';window.MitosProjectNav.select('work');$('graph-compose').hidden=true;$('graph-current').hidden=false;applyWorkView()}},'work-tree-goal');choose.dataset.treeKey=row.id;
    if(current)choose.setAttribute('aria-current','page');
-   const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.running?'running':counts.failed||counts.needs_attention?'needs_attention':counts.queued?'queued':'idle';
-   const statusLabel=labels[status]||status,symbol={accepted:'✓',running:'◉',planning:'◉',idle:'○',queued:'◷',blocked:'◷',review:'!',needs_attention:'!',failed:'×',cancelled:'■',stopping:'■',finished:'✓'}[status]||'○';
-   const indicator=node('span',symbol,'work-tree-status');indicator.dataset.status=status;indicator.setAttribute('aria-hidden','true');indicator.title=statusLabel;
-   choose.replaceChildren(indicator,node('span',row.title||'Untitled work','work-tree-title'));choose.title=(row.depth?'Follow-up: ':'')+(row.title||'Untitled work')+' · '+statusLabel;choose.setAttribute('aria-label',choose.title);
+   const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.waiting_input?'waiting_input':counts.failed||counts.needs_attention?'needs_attention':counts.running?'running':counts.review?'review':counts.blocked?'blocked':counts.queued?'queued':'idle';
+   const statusLabel=labels[status]||status,symbol={accepted:'✓',running:'◉',in_progress:'◉',planning:'◉',idle:'○',queued:'◷',blocked:'◷',review:'!',waiting_input:'!',needs_attention:'!',failed:'×',cancelled:'■',stopping:'■',finished:'✓'}[status]||'○';
+   const indicator=node('span',symbol,'work-tree-status');indicator.dataset.status=status;indicator.setAttribute('aria-hidden','true');
+   const label=node('span',undefined,'work-tree-goal-label');label.append(node('span',row.title||'Untitled work','work-tree-title'),node('small',statusLabel,'work-tree-state'));
+   choose.replaceChildren(indicator,label);choose.title=(row.predecessor?'Follow-up: ':'')+(row.title||'Untitled work')+' · '+statusLabel;choose.setAttribute('aria-label',choose.title);
    heading.append(toggle,choose);item.append(heading);
-   if(expanded&&graph){const list=node('ul');const append=(parent,container)=>{for(const [id,m]of workflowOrder().map(id=>[id,graph.members[id]]).filter(([,m])=>m.spec.parent===parent)){const li=node('li'),b=button(title(m),()=>selectNode(id),'work-tree-node');b.dataset.treeKey=id;b.title=kindLabel(m)+': '+title(m)+' · '+(labels[displayState(id)]||displayState(id));if(selected===id)b.setAttribute('aria-current','page');const dot=node('span',undefined,'work-tree-dot');dot.dataset.status=displayState(id);dot.setAttribute('aria-label',labels[displayState(id)]||displayState(id));b.replaceChildren(dot,node('span',title(m),'work-tree-title'));li.append(b);if(Object.values(graph.members).some(c=>c.spec.parent===id)){const nested=node('ul');append(id,nested);li.append(nested)}container.append(li)}};const planner=latestPlanner();if(planner){const li=node('li'),b=button('✦ Coordinator',()=>selectNode(planner),'work-tree-node');b.dataset.treeKey='planner';if(selected&&kind(graph.members[selected])==='planner')b.setAttribute('aria-current','page');li.append(b);list.append(li)}append(graph.root_task,list);if(!list.children.length)list.append(node('li',graph.policy.automatic?'Preparing coordinator…':'Not started','work-tree-empty'));item.append(list)}
+   if(expanded){
+    if(g){
+     const list=node('ul'),ids=workflowOrder(g,view,current&&showHistory),seen=new Set();
+     const openNode=async id=>{if(!current)await chooseGraph(row.id);await selectNode(id)};
+     const append=(parent,container)=>{for(const id of ids.filter(id=>g.members[id].spec.parent===parent)){
+      if(seen.has(id))continue;seen.add(id);const m=g.members[id],li=node('li'),line=node('div',undefined,'work-tree-node-row'),key=row.id+':'+id;
+      const children=ids.some(child=>g.members[child].spec.parent===id),isOpen=!treeNodeClosed.has(key);
+      if(children){const toggle=button(isOpen?'▾':'▸',()=>{if(isOpen)treeNodeClosed.add(key);else treeNodeClosed.delete(key);rememberTree();renderTree()},'work-tree-toggle');toggle.dataset.treeKey='node-toggle:'+key;toggle.setAttribute('aria-label',(isOpen?'Collapse ':'Expand ')+title(m));toggle.setAttribute('aria-expanded',String(isOpen));line.append(toggle)}
+      const state=view.nodes[id]?.state||m.state,b=button(title(m),()=>openNode(id),'work-tree-node');b.dataset.treeKey=id;b.title=kindLabel(m)+': '+title(m)+' · '+(labels[state]||state);if(current&&selected===id)b.setAttribute('aria-current','page');
+      const dot=node('span',undefined,'work-tree-dot');dot.dataset.status=state;dot.setAttribute('aria-label',labels[state]||state);b.replaceChildren(dot,node('span',title(m),'work-tree-title'));line.append(b);li.append(line);
+      if(children&&isOpen){const nested=node('ul');append(id,nested);li.append(nested)}container.append(li);
+     }};
+     const planner=plannerRounds(g,view).at(-1);if(planner){const li=node('li'),b=button('✦ Coordinator',()=>openNode(planner),'work-tree-node');b.dataset.treeKey=current?'planner':'planner:'+row.id;if(current&&selected&&g.members[selected]&&kind(g.members[selected])==='planner')b.setAttribute('aria-current','page');li.append(b);list.append(li)}
+     append(g.root_task,list);if(!list.children.length)list.append(node('li',g.policy.automatic?'Preparing coordinator…':'Not started','work-tree-empty'));item.append(list);
+    }else item.append(node('p',treeLoading.has(row.id)?'Loading…':'No details loaded','work-tree-empty'));
+    if(treeErrors.has(row.id))item.append(node('p',treeErrors.get(row.id),'work-tree-error'),button('Retry',()=>loadTreeSnapshot(row.id)));
+   }
    tree.append(item);
   }
-  if(!graphs.length)tree.append(node('p','No work yet','work-tree-empty'));
+  if(!graphs.length)tree.append(node('p',workFilter==='archived'?'No archived work':workFilter==='closed'?'No closed work':'No open work','work-tree-empty'));
   if(focus)tree.querySelector(`[data-tree-key="${CSS.escape(focus)}"]`)?.focus({preventScroll:true});
  }
+ async function finishWorkStateChange(){
+  await loadSummaries(true);
+  if(graphs.length)await chooseGraph(graphs[0].id);
+  else{epoch++;graphID='';graph=null;snapshot=null;selected='';updateURL();renderTree();compose()}
+ }
+ async function changeWorkState(state){
+  if(!graph)return;const id=graph.id;
+  await sendMutation(endpoint(id)+'/work-state',{key:crypto.randomUUID(),revision:graph.revision,state},'work-state');
+  document.querySelector('.graph-menu')?.removeAttribute('open');treeSnapshots.delete(id);if(graphID===id)await finishWorkStateChange();else await loadSummaries(true);
+ }
+ for(const [id,state] of [['graph-close','closed'],['graph-reopen','open'],['graph-archive','archived'],['graph-restore','closed']])$(id).onclick=()=>changeWorkState(state).catch(showError);
  async function chooseGraph(id, keepNode = false) {
+  document.querySelector('.graph-menu')?.removeAttribute('open');
+  if(!treeClosed.has(id))treeExpanded.add(id);rememberTree();
   closeResult();resultViewKey='';conversationKey='';if(!keepNode){workView='work';window.MitosProjectNav.select('work')}epoch++; graphID = id;showHistory=false;$('graph-show-history').checked=false; if (!keepNode) selected = ''; selectedAttempt=''; readerStates.clear(); renderedReaderKey=''; graph = null; snapshot = null; snapshotSignature = ''; detailSignature = ''; collapsed = new Set(); order = []; firstLayout = true; positions.clear(); cachedRuns.clear(); artifactCache.clear();
   $('graph-compose').hidden = true; $('graph-current').hidden = true; $('graph-inspector').hidden = true; updateURL();
   await refreshSelected();
+  if(graph&&(!keepNode||!initialFilterSpecified)&&workState(graph)!==workFilter){workFilter=workState(graph);$('work-filter').value=workFilter;loadedPages=1;updateURL();await loadSummaries(true)}
  }
- function updateURL() { const url = new URL(location.href); for (const key of ['task','tab']) url.searchParams.delete(key); if (graphID) url.searchParams.set('graph',graphID); else url.searchParams.delete('graph'); if (selected) url.searchParams.set('node',selected); else url.searchParams.delete('node'); history.replaceState(null,'',url); }
+ function updateURL() { const url = new URL(location.href);url.searchParams.set('work_state',workFilter); for (const key of ['task','tab']) url.searchParams.delete(key); if (graphID) url.searchParams.set('graph',graphID); else url.searchParams.delete('graph'); if (selected) url.searchParams.set('node',selected); else url.searchParams.delete('node'); history.replaceState(null,'',url); }
  async function refreshSelected() {
   if (!graphID) return;
   const id = graphID, expected = epoch, selection = selected,sequence=++snapshotRequest;
   const result = await request(endpoint(id) + '/snapshot?node=' + encodeURIComponent(selection));
   if (expected !== epoch || id !== graphID || selection !== selected || sequence<snapshotApplied) return;snapshotApplied=sequence;
   if (result.graph.project_id !== project || result.graph.home !== server) throw new Error('This graph belongs to a different project or server.');
-  snapshot = result; graph = result.graph; if (selected && !graph.members[selected]) selected = '';
+  snapshot = result; graph = result.graph;treeSnapshots.set(id,result); if (selected && !graph.members[selected]) selected = '';
   const signature = JSON.stringify([graph,snapshot.nodes,Date.parse(graph.limits.deadline)<=Date.now()]);
   if (signature !== snapshotSignature) { snapshotSignature = signature; render(); }
   $('graph-sync').textContent = 'Live · ' + new Date(result.observed_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); $('graph-sync').classList.remove('offline');
  }
  function render() {
   if ($('graph-compose').hidden) $('graph-current').hidden = false;
+  const state=workState(graph);$('graph-work-state').textContent={open:'Open',closed:'Closed',archived:'Archived'}[state];$('graph-close').hidden=state!=='open';$('graph-reopen').hidden=state!=='closed';$('graph-archive').hidden=state==='archived';$('graph-restore').hidden=state!=='archived';$('graph-close').textContent=graph.status==='active'?'Close and stop work':'Close work';$('graph-archive').textContent=graph.status==='active'?'Archive and stop work':'Archive work';
   $('graph-title').textContent = title(graph.members[graph.root_task]); const status = overall(); $('graph-status').className = 'graph-badge ' + status; $('graph-status').textContent = labels[status] || status;
   const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.controller_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
   const awaiting=workers.filter(([,m])=>!m.accepted&&m.state==='done').length;
@@ -267,12 +329,12 @@
   }catch(e){error.textContent=e.message}finally{submit.disabled=false}};
   dialog.showModal();
  }
- function workflowOrder() {
-  const ids=Object.keys(graph.members).filter(id=>kind(graph.members[id])!=='planner'&&(showHistory||!graph.members[id].replacement));
+ function workflowOrder(g=graph,view=snapshot,history=showHistory) {
+  const ids=Object.keys(g.members).filter(id=>kind(g.members[id])!=='planner'&&(history||!g.members[id].replacement));
   const included=new Set(ids),ranks=new Map(),remaining=new Set(ids);
-  const predecessors=id=>[graph.members[id].spec.parent,...(graph.members[id].spec.brief.scheduling?.deps||[]).map(d=>d.from)].filter(p=>included.has(p));
+  const predecessors=id=>[g.members[id].spec.parent,...(g.members[id].spec.brief.scheduling?.deps||[]).map(d=>d.from)].filter(p=>included.has(p));
   while(remaining.size){let progress=false;for(const id of remaining){const deps=predecessors(id);if(deps.every(p=>ranks.has(p))){ranks.set(id,Math.max(0,...deps.map(p=>ranks.get(p)+1)));remaining.delete(id);progress=true}}if(!progress){for(const id of remaining)ranks.set(id,1);break}}
-  return ids.sort((a,b)=>ranks.get(a)-ranks.get(b)||(snapshot.nodes[a]?.created_at||'').localeCompare(snapshot.nodes[b]?.created_at||'')||title(graph.members[a]).localeCompare(title(graph.members[b]))||a.localeCompare(b));
+  return ids.sort((a,b)=>ranks.get(a)-ranks.get(b)||(view.nodes[a]?.created_at||'').localeCompare(view.nodes[b]?.created_at||'')||title(g.members[a]).localeCompare(title(g.members[b]))||a.localeCompare(b));
  }
  function visibleNodes() {
   const members = graph.members;
@@ -335,7 +397,12 @@
  function restoreDisclosures(box){const saved=readerStates.get(renderedReaderKey);if(!saved)return;for(const d of box.querySelectorAll('details[data-read-key]'))if(d.dataset.readKey in saved.open)d.open=saved.open[d.dataset.readKey];}
  function restoreReader(){const saved=readerStates.get(renderedReaderKey);if(!saved)return;restoreDisclosures($('graph-node-detail'));$('graph-inspector').scrollTop=saved.scroll;}
  $('graph-inspector-expand').onclick=()=>{const body=document.querySelector('.graph-body'),expanded=body.classList.toggle('reading-mode');$('graph-inspector-expand').textContent=expanded?'Show graph':'Expand';$('graph-inspector-expand').setAttribute('aria-pressed',String(expanded));scrollWorkTo($('graph-inspector'))};
- $('graph-inspector-close').onclick=()=>{selected='';epoch++;detailSignature='';$('graph-inspector').hidden=true;document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');updateURL();renderMap();renderTree()};
+ function closeInspector() {
+  selected='';selectedAttempt='';epoch++;detailSignature='';$('graph-inspector').hidden=true;
+  document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');
+  updateURL();if(graph)renderMap();renderTree();
+ }
+ $('graph-inspector-close').onclick=closeInspector;
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
   if(m.spec.kind==='scope'&&!['progress','details','result'].includes(selectedTab))selectedTab='progress';

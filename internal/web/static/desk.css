@@ -41,7 +41,7 @@
 .coordinator-link.selected{background:#352b48;border-color:#665085;border-left:3px solid #c4a1ee;color:#ead9ff}
 
 body:not([data-view=terminal]) #session-list .session-link.selected{background:transparent}
-body[data-view=terminal] #session-list .session-link.selected{background:#23354b;box-shadow:inset 3px 0 #94b6ff}
+body[data-view=terminal] #session-list .session-link.selected{background:#23354b}
 .setup-output-panel{margin:0 0 24px;border:1px solid #434051;border-radius:8px;overflow:hidden;min-width:0}.setup-output-panel[hidden]{display:none}
 .setup-output-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;background:#25212f;flex-wrap:wrap}.setup-output-heading h3{font-size:0.875rem;margin:0}.setup-output-heading small{font-size:0.8125rem;font-weight:400;margin-left:8px}.setup-output-heading>span{font-size:0.875rem;color:#c4a1ee}
 #setup-output{margin:0;padding:14px;background:#101216;color:#d5dbe5;height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:0.875rem;line-height:1.6}.setup-output-panel>p{padding:8px 14px;font-size:0.8125rem}

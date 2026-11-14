@@ -143,6 +143,19 @@ the programmatic interface; `/api/graphs/capabilities` reports the implemented
 adapter and remaining integrations. Native PTY sessions and services retain their
 separate lifecycle.
 
+Work is grouped beneath its project in the sidebar. Each work can be expanded
+independently; selecting its title opens its conversation. **Open** is the default
+list, while completed and stopped work moves to **Closed**. The work actions menu
+can close, archive, restore, or reopen work. Closing or archiving active work also
+requests cancellation of its agents. Reopening restores the item to Open without
+restarting execution; results and earlier conversation remain available.
+
+Work organization is persisted separately from execution status. List a project’s
+work with `GET /api/graphs?project_id=…&state=open` (also `closed`, `archived`, or
+`all`; omitting `state` retains the full API listing). Update an item with
+`POST /api/graphs/{id}/work-state` and a JSON body containing `key`, `revision`, and
+`state`. State edits use revision checks and replay-safe request keys.
+
 ## Agent library
 
 The [default library](agents/README.md) ships eight adaptable definitions ported from

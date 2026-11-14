@@ -66,6 +66,29 @@ func TestGraphAPITransactionsAndDiscovery(t *testing.T) {
 	if got := request(s, "POST", "/api/graphs", `{"unknown":"field"}`, false); got.Code != 400 {
 		t.Fatal("unknown schema accepted")
 	}
+	current, _ := e.Store.Graph(g.ID)
+	edit, _ := json.Marshal(studio.GraphWorkStateEdit{Key: "archive-api", Revision: current.Revision, State: "archived"})
+	if got := request(s, "POST", "/api/graphs/"+g.ID+"/work-state", string(edit), false); got.Code != 200 {
+		t.Fatal(got.Body.String())
+	}
+	for _, state := range []string{"open", "closed", "archived"} {
+		got := request(s, "GET", "/api/graphs?project_id="+project.ID+"&state="+state, "", false)
+		var result struct {
+			Graphs []studio.GraphSummary `json:"graphs"`
+		}
+		if got.Code != 200 || json.Unmarshal(got.Body.Bytes(), &result) != nil {
+			t.Fatal(got.Body.String())
+		}
+		if (len(result.Graphs) == 1) != (state == "archived") {
+			t.Fatalf("wrong %s listing: %s", state, got.Body.String())
+		}
+	}
+	if got := request(s, "GET", "/api/graphs?state=invalid", "", false); got.Code != 400 {
+		t.Fatal("invalid state accepted")
+	}
+	if got := request(s, "POST", "/api/graphs/"+g.ID+"/work-state", `{"key":"invalid","state":"deleted"}`, false); got.Code != 422 {
+		t.Fatal("invalid edit accepted")
+	}
 }
 
 func TestGraphResumeAPI(t *testing.T) {
