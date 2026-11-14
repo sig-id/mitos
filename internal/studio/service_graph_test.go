@@ -13,7 +13,7 @@ import (
 )
 
 func TestWorkflowResultRecovery(t *testing.T) {
-	for _, scenario := range []string{"unsaved", "saved", "mismatch", "corrupt"} {
+	for _, scenario := range []string{"unsaved", "orphan", "partial-orphan", "saved", "mismatch", "corrupt"} {
 		t.Run(scenario, func(t *testing.T) {
 			e, req := workflowEngine(t)
 			req.Cron, req.Timezone = "", "" // No clock admissions during recovery.
@@ -44,7 +44,20 @@ func TestWorkflowResultRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if scenario != "unsaved" {
+			if scenario == "orphan" || scenario == "partial-orphan" {
+				// Crash after file creation/write, before its artifact journal event.
+				dir := filepath.Join(e.Store.Dir(), "artifacts", r.ID)
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				saved := data
+				if scenario == "partial-orphan" {
+					saved = data[:len(data)/2]
+				}
+				if err := os.WriteFile(filepath.Join(dir, "workflow-result.json"), saved, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if scenario != "unsaved" {
 				saved := data
 				if scenario == "mismatch" {
 					saved = []byte(`{"title":"another result"}`)

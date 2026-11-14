@@ -262,6 +262,9 @@ it MUST NOT silently retry an interrupted agent's external effects.
 The console MUST show saved instructions, trigger configuration, queue state, and
 the latest graph/result link. Successful graph completion MUST save its result on
 the occurrence, without labelling the agent's report as independent verification.
+Recovery MUST tolerate a crash before or after the result's artifact journal entry,
+and before occurrence completion. A committed result MUST be validated and reused;
+an uncommitted result file MAY be reconstructed from the durable accepted graph.
 Start failures and expired occurrences MUST remain visible and release capacity
 after settlement. Completed graphs MUST NOT exhaust the active graph allowance.
 

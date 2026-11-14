@@ -208,7 +208,9 @@ func (e *Engine) reconcileServiceGraphs() error {
 			saved, err := e.Store.Artifact(r.ID, "workflow-result.json")
 			switch {
 			case errors.Is(err, ErrNotFound):
-				err = e.Store.SaveArtifact(r.ID, "workflow-result.json", data)
+				// A file may also survive a crash before its journal entry.
+				// Reconstruct only this uncommitted result from the durable graph.
+				err = e.Store.saveArtifacts(r.ID, true, ArtifactData{Name: "workflow-result.json", Data: data})
 			case err == nil && !bytes.Equal(saved, data):
 				err = errors.New("saved workflow result does not match accepted graph")
 			}
