@@ -22,10 +22,14 @@ directory; outside targets and symlink escapes are vetoed before approval. In mo
 before either a person or automation can resolve them. Codex command, file-change
 and MCP-tool lifecycle events also receive independent review. Duplicate evidence
 reuses its receipt; changing policy does not reset the per-session call allowance.
-Native observations accept the same 1 MiB frame limit as the bridge, independently
-of the smaller approval-request limit. Deterministic checks and stored verdicts
-retain the full event. Model review excerpts large command output, file diffs and
-MCP results with explicit omission markers, preserving action metadata (including
+Native observations and all bridge readers share an inclusive 1 MiB JSON payload
+limit, excluding LF or CRLF line terminators and independently of the smaller
+approval-request limit. The HTTP bridge sends the original observation bytes so
+HTML escaping cannot inflate a valid event past the limit. Stream errors retain
+their cause and follow preceding events; EOF cannot overtake a final result.
+Malformed or oversized frames still stop execution, as do supervision vetoes.
+Deterministic checks and stored verdicts retain the full event. Model review
+excerpts large command output, file diffs and MCP results with explicit omission markers, preserving action metadata (including
 commands, working directories, file targets, arguments and permissions). Metadata
 that exceeds the model limit still holds work; commands and paths are never
 silently truncated. The model must hold if omitted content is needed to establish
