@@ -61,19 +61,34 @@ func (e *Engine) reconcileGraphs() error {
 			if g.Attempts >= g.Limits.Attempts {
 				break
 			}
+			ready, err := s.refreshResumedPlanner(&g, m)
+			if err != nil {
+				return err
+			}
+			if !ready {
+				continue
+			}
 			t := s.tasks[tid]
-			if t == nil || !s.graphReadiness(t).Ready {
+			if t == nil || !s.graphMemberReadiness(&g, m).Ready {
 				continue
 			}
 			if m.Executor == nil {
 				return graphError("missing frozen executor")
 			}
+			if m.ControllerFor != "" && m.ContinueFrom != "" {
+				if g.ControllerCalls >= g.Limits.ControllerCalls {
+					continue
+				}
+				g.ControllerCalls++
+			}
 			rid := newID("local")
-			binding := GraphAttempt{GraphID: g.ID, GraphRevision: g.Revision, Specification: m.Revision, PolicyRevision: g.PolicyRevision, Generation: g.ControllerGeneration, Executor: *m.Executor, Criteria: m.Spec.Criteria, Context: m.Spec.Context}
+			binding := GraphAttempt{ContinueFrom: m.ContinueFrom, GraphID: g.ID, GraphRevision: g.Revision, Specification: m.Revision, PolicyRevision: g.PolicyRevision, Generation: g.ControllerGeneration, Executor: *m.Executor, Criteria: m.Spec.Criteria, Context: m.Spec.Context}
 			r := Run{ID: rid, TaskID: tid, ProjectID: g.ProjectID, Tenant: decision.LocalTenant, Brief: m.Spec.Brief, AppName: m.Executor.Application.Name, GraphAttempt: &binding, Status: "queued", Stage: "Ready to start", Summary: "Graph task is waiting for execution capacity.", CreatedAt: g.UpdatedAt, UpdatedAt: g.UpdatedAt}
 			if len(m.Attempts) > 0 {
 				r.ParentID = m.Attempts[len(m.Attempts)-1]
 			}
+			m.RefreshContext = false
+			m.ContinueFrom = ""
 			m.CurrentRunID = rid
 			m.Attempts = append(m.Attempts, rid)
 			m.State = "queued"
@@ -110,7 +125,10 @@ func (s *Store) graphReadiness(t *Task) workpool.Readiness {
 	if g == nil {
 		return workpool.Readiness{Waiting: []string{"graph_missing"}}
 	}
-	req := t.Scheduling
+	return s.graphMemberReadiness(g, g.Members[t.ID])
+}
+func (s *Store) graphMemberReadiness(g *WorkGraph, m *GraphMember) workpool.Readiness {
+	req := m.Spec.Brief.Scheduling
 	req.Deps = append([]workpool.Dependency(nil), req.Deps...)
 	states := map[string]workpool.State{}
 	for i := range req.Deps {

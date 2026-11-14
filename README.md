@@ -245,6 +245,29 @@ policy; changing settings does not reset running budgets. See the
 [resource policy contract](spec/system/02_RUNTIME.md#resource-policy-scopes-and-enforcement)
 for units, inheritance, provider requirements, and token accounting requirements.
 
+When work reaches its time or attempt limit, choose **Resume with more resources**
+on that workflow. Set additional time, a larger cumulative attempt allowance, and
+the time allowed per resumed attempt. Planning and retry allowances are available
+in the same dialog. The workflow ID, assignments, dependencies, completed steps,
+frozen agents, and attempt history stay intact; used resources are not refunded.
+
+Failed or interrupted agents receive new runs under their existing tasks. Automatic
+Codex agents persist their conversation IDs and resume those exact conversations,
+with saved workspace changes restored into fresh copies. Patches remain cumulative
+from the original baseline. Older runs without saved conversations use their saved
+files and output as context. An unavailable saved conversation fails visibly rather
+than silently starting another conversation. Keep native Codex session storage as
+well as the Mitos data directory for native continuation.
+
+The resume API is `POST /api/graphs/{id}/resume`, with an idempotency `key`, current
+`revision`, full replacement `limits` (including a future `deadline`), and
+`attempt_minutes` (1–120). An untouched goal can also set `start_automatic: true`
+to start its coordinator under the new limits. Limits can only increase, within runtime maximums.
+Resume waits for stopped processes and released claims, preserves supervision holds,
+and rejects completed, explicitly cancelled, or service-owned workflows. Recurring
+occurrences remain controlled by their service lifecycle. Pending graph decisions
+must be resolved before resuming.
+
 ## Recurring agent workflows
 
 In the project goal composer, open **When to run** and choose **On a schedule**,

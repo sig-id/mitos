@@ -139,6 +139,17 @@ try{
  await page.locator('mitos-file-browser button[data-path="report.md"]').click();await page.locator('.graph-result-content').getByText('The answer is',{exact:false}).waitFor();
  await page.locator('#graph-message').getByRole('button',{name:'Inspect failed attempt',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Retry step',exact:true}).count(),0);
  await page.screenshot({path:'/tmp/mitos-workflow-attention.png'});
+ await page.locator('#graph-message').getByRole('button',{name:'Resume with more resources',exact:true}).click();
+ const resumeDialog=page.getByRole('dialog',{name:'Resume with more resources',exact:true});await resumeDialog.waitFor();
+ await resumeDialog.getByLabel('Additional workflow time (minutes)',{exact:true}).fill('90');
+ await resumeDialog.getByLabel('Time per resumed attempt (minutes)',{exact:true}).fill('60');
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'/tmp/mitos-resume-resources-mobile.png'});await page.setViewportSize({width:1600,height:1040});
+ let resumeBody;
+ await page.route('**/api/graphs/'+graphID+'/resume',async route=>{resumeBody=route.request().postDataJSON();await route.fulfill({json:{id:graphID}})});
+ await resumeDialog.getByRole('button',{name:'Resume workflow',exact:true}).click();await resumeDialog.waitFor({state:'hidden'});
+ assert.equal(resumeBody.attempt_minutes,60);assert.ok(resumeBody.limits.attempts>0);assert.ok(Date.parse(resumeBody.limits.deadline)>Date.now()+89*60000);assert.ok(resumeBody.key);assert.ok(resumeBody.revision);
+ await page.unroute('**/api/graphs/'+graphID+'/resume');
+
  await page.locator('#graph-message').getByRole('button',{name:'Start new work',exact:true}).click();assert.equal(await page.locator('#graph-prompt').inputValue(),g.members[g.root_task].spec.brief.intent);await page.locator('#graph-compose-close').click();
  await page.unroute(stoppedPattern);await page.locator('#graph-status.accepted').waitFor();
  // A follow-up is a new bounded continuation with the previous answer and evidence.

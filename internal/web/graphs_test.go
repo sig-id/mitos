@@ -90,3 +90,40 @@ func TestGraphAPITransactionsAndDiscovery(t *testing.T) {
 		t.Fatal("invalid edit accepted")
 	}
 }
+
+func TestGraphResumeAPI(t *testing.T) {
+	s, e := testServer(t)
+	project, err := e.Desk.CreateProject("Resume API", e.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+	create := studio.CreateGraph{Profile: studio.GraphProfile, Key: "resume-api-create", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, ControllerCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Second)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Explore project", Acceptance: "operator"}}}
+	g, err := e.CreateGraph(create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := studio.ResumeGraph{Key: "resume-api", Revision: g.Revision, Limits: g.Limits, AttemptMinutes: 60}
+	req.Limits.Deadline = time.Now().UTC().Add(time.Hour)
+	req.Limits.Attempts = 32
+	body, _ := json.Marshal(req)
+	path := "/api/graphs/" + g.ID + "/resume"
+	for range 2 {
+		response := request(s, "POST", path, string(body), false)
+		var next studio.WorkGraph
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &next) != nil || next.ID != g.ID || next.Revision != g.Revision+1 || next.Limits.Attempts != 32 {
+			t.Fatalf("resume: %d %s", response.Code, response.Body.String())
+		}
+	}
+	req.Key = "stale"
+	body, _ = json.Marshal(req)
+	if got := request(s, "POST", path, string(body), false); got.Code != 409 {
+		t.Fatalf("stale: %d", got.Code)
+	}
+	if got := request(s, "POST", path, `{"unknown":true}`, false); got.Code != 400 {
+		t.Fatal("unknown resume fields accepted")
+	}
+	if got := request(s, "POST", "/api/graphs/missing/resume", string(body), false); got.Code != 404 {
+		t.Fatal("missing graph not reported")
+	}
+}

@@ -162,6 +162,24 @@ evidence, effects, and remaining allowance. It MUST NOT regenerate already commi
 children from a narrative summary. Controller exhaustion produces a visible planning
 block; it MUST NOT silently accept the goal or require cancelling unrelated workers.
 
+### Explicit resource continuation
+
+An operator MAY extend the finite limits of an unfinished workflow and resume it
+in place after resource exhaustion. The resource grant MUST be atomic, durable,
+revision-checked, and idempotent. It MUST retain workflow and task identities,
+dependencies, accepted work, frozen agent definitions, prior runs, and consumed
+allowances. New runs MUST count against the extended limits. Old controller
+proposals MUST be fenced, and continued coordinators MUST observe current facts.
+
+Continuation MUST wait for prior execution and claims to settle and MUST NOT
+bypass supervision holds or revive explicitly cancelled or accepted workflows.
+Service-owned occurrences remain subject to their parent's lifecycle and deadline.
+Native agent continuation MUST use the exact recorded conversation identity and
+restore saved workspace state, preserving cumulative changes and prior evidence.
+Where an older attempt has no native conversation identity, portable continuation
+MUST identify that limitation and use recorded evidence. Missing or invalid saved
+state MUST produce a visible error, not an unrelated fresh conversation.
+
 ## Control messages
 
 Control messages use the [MQTT 5 profile](05_INTERFACES_AND_INTEGRATIONS.md#mqtt-5-messaging).

@@ -59,6 +59,8 @@ type GraphExecutor struct {
 	Digest      string      `json:"digest"`
 }
 type GraphMember struct {
+	RefreshContext  bool             `json:"refresh_context,omitempty"`
+	ContinueFrom    string           `json:"continue_from,omitempty"`
 	ControllerFor   string           `json:"controller_for,omitempty"`
 	Spec            GraphSpec        `json:"spec"`
 	Revision        int64            `json:"revision"`
@@ -185,6 +187,7 @@ type GraphProposal struct {
 	Explanation    string               `json:"explanation,omitempty"`
 }
 type GraphAttempt struct {
+	ContinueFrom   string             `json:"continue_from,omitempty"`
 	GraphID        string             `json:"graph_id"`
 	GraphRevision  int64              `json:"graph_revision"`
 	Specification  int64              `json:"specification"`

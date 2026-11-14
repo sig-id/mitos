@@ -50,7 +50,7 @@
   if (!pending) return;
   const old = pending;
   try { const result = await request(old.path, old.body); rememberPending(null); $('action-error').hidden = true;
-   document.querySelectorAll('#graph-step-dialog[open],#graph-action-dialog[open]').forEach(d => d.close());
+   document.querySelectorAll('#graph-step-dialog[open],#graph-action-dialog[open],#graph-resume-dialog[open]').forEach(d => d.close());
    if (old.kind === 'work-state') { await finishWorkStateChange(); return; }
    if (old.kind === 'schedule') { location.href='/services'; return; }
    if (old.kind === 'create') { createBody = null; await loadSummaries(true); await chooseGraph(result.id); } else await refreshSelected();
@@ -96,7 +96,7 @@
   else if(overall()==='waiting_input'){const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input');agent.append(node('p','An agent needs your answer before it can continue.'),button('Review request',()=>selectNode(waiting,'output'),'primary'));}
   else if(overall()==='needs_attention')agent.append(node('p','This work needs attention. The reason and next actions are shown above.'));
   else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
-  if(graph.status==='active'&&!graph.policy.automatic)agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
+  if(graph.status==='active'&&!graph.policy.automatic&&Date.parse(graph.limits.deadline)>Date.now())agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
   box.replaceChildren(user,agent);
   if(graph.predecessor){try{const prior=await request(endpoint(graph.predecessor));if(graph?.id!==id)return;const history=node('details',undefined,'conversation-history');history.append(node('summary','Earlier in this conversation'),node('p',prior.members[prior.root_task].spec.brief.intent,'prose'));if(prior.result)history.append(window.MitosMarkdown.view(answerPreview(prior.result)));history.append(button('Open earlier result',async()=>{await chooseGraph(prior.id);openResult()}));box.prepend(history)}catch(e){if(graph?.id===id)box.prepend(node('p','Earlier conversation unavailable: '+e.message,'muted'))}}
  }
@@ -108,7 +108,7 @@
  function overall() {
   if (graph.status === 'cancelled' && Object.values(snapshot.nodes).some(n=>!n.settled)) return 'stopping';
   if (graph.status !== 'active') return graph.status;
-  if (Date.parse(graph.limits.deadline) <= Date.now()) return 'needs_attention';
+  if (Date.parse(graph.limits.deadline) <= Date.now() || attemptsExhausted()) return 'needs_attention';
   const values = Object.values(snapshot.nodes);
   if (Object.values(graph.expansions).some(x => !x.outcome && x.error) || values.some(n => ['failed','needs_attention'].includes(n.state))) return 'needs_attention';
   if (values.some(n => n.state === 'waiting_input')) return 'waiting_input';
@@ -283,25 +283,51 @@
   if(/supervision|project is held/i.test(summary))return 'Review the supervision incident in Project setup before retrying this work.';
   return 'Read the failure and execution log below, resolve the reported problem, then retry if this workflow still has time and attempts available.';
  }
+ function attemptsExhausted(){return graph.attempts>=graph.limits.attempts&&Object.values(snapshot.nodes).every(n=>n.settled)}
  function renderMessage() {
   const box=$('graph-message');box.replaceChildren();box.hidden=true;box.dataset.attention='false';
   const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input')||Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].pending_requests);
-  const expired=Date.parse(graph.limits.deadline)<=Date.now()&&graph.status==='active';
+  const expired=Date.parse(graph.limits.deadline)<=Date.now()&&graph.status==='active',exhausted=attemptsExhausted();
   const failures=Object.keys(snapshot.nodes).filter(id=>['failed','needs_attention'].includes(snapshot.nodes[id].state)&&id!==graph.root_task);
   const errors=Object.values(graph.expansions).filter(x=>!x.outcome&&x.error);
-  if(graph.status==='active'&&(waiting||expired||failures.length||errors.length)){
-   box.hidden=false;box.dataset.attention='true';box.append(node('h3',expired?'Work stopped: time limit reached':waiting?'Your answer is needed':'Work needs attention'));
-   if(expired)box.append(node('p','The goal is unfinished. No new attempts can start in this workflow. Saved reports and changes are still available.'),node('p','Next: inspect the failure or saved work, fix any reported runtime problem, then start new work with an appropriate time limit.'));
+  if(graph.status==='active'&&(waiting||expired||exhausted||failures.length||errors.length)){
+   box.hidden=false;box.dataset.attention='true';box.append(node('h3',expired?'Work stopped: time limit reached':exhausted?'Work stopped: attempt limit reached':waiting?'Your answer is needed':'Work needs attention'));
+   if(expired||exhausted)box.append(node('p','The goal is unfinished. Resume with more resources to keep this workflow, its agents, completed steps and saved work.'),node('p','Review any reported failure before continuing. Saved agent conversations and workspace changes are reused when available.'));
    if(waiting)box.append(node('p',title(graph.members[waiting])+' has a pending request.'),button('Review request',()=>selectNode(waiting,'output')));
    for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.';item.append(node('strong',title(graph.members[id])),node('p',summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
    const reasons={controller_proposal_missing:'The coordinator did not save a work proposal.',controller_proposal_invalid:'The coordinator returned an unreadable proposal.',controller_proposal_stale_or_rejected:'The coordinator’s proposal did not match the current work.',controller_execution_needs_review:'The coordinator stopped before producing a verified proposal.',controller_allowance_exhausted:'The planning allowance has been used.',controller_context_limit:'The work exceeds the coordinator’s context limit.'};
    for(const error of errors)if(!failures.includes(error.controller_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect coordinator',()=>selectNode(error.controller_task||graph.root_task,'output')));
    if(expired&&!failures.length){const earlier=Object.keys(graph.members).filter(id=>graph.members[id].replacement&&graph.members[id].state==='failed');if(earlier.length){const history=node('details');history.append(node('summary',earlier.length+' earlier failed assignments'));for(const id of earlier)history.append(node('p',snapshot.nodes[id]?.summary||title(graph.members[id])),button('Inspect '+title(graph.members[id]),()=>selectNode(id,'output')));box.append(history)}}
-   const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(expired)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()},'primary'));box.append(actions);return;
+   const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(!waiting&&!graph.service_run_id)actions.append(button('Resume with more resources',openResume,'primary'));if(expired||exhausted)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()}));box.append(actions);return;
   }
   if(!graph.policy.controller_application&&Object.values(graph.expansions).some(x=>!x.outcome)&&Object.keys(graph.members).length===1){box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));box.hidden=false}
   else if(graph.status==='accepted'){box.append(node('span','Work complete.'),button('Read final answer',()=>openResult()));box.hidden=false}
   else if(Object.values(graph.decisions||{}).some(d=>d.outcome==='selected')){const d=Object.values(graph.decisions).find(d=>d.outcome==='selected');box.append(node('span','A decision is ready to apply.'),button('Review decision',()=>selectNode(d.task_id)));box.hidden=false}
+ }
+ function openResume(){
+  const g=structuredClone(graph),existing=$('graph-resume-dialog');if(existing)existing.remove();
+  const dialog=node('dialog');dialog.id='graph-resume-dialog';dialog.setAttribute('aria-labelledby','graph-resume-title');
+  const form=node('form'),heading=node('h2','Resume with more resources');heading.id='graph-resume-title';
+  form.append(heading,node('p','Continue this workflow with the same assignments and agents. Completed steps and previous attempts stay saved. Older attempts without a saved conversation continue from their saved files and output.'));
+  const inputs={};
+  function field(parent,key,label,value,min,max){const row=node('label',label),input=node('input');input.type='number';input.name=key;input.value=value;input.min=min;input.max=max;input.step=1;input.required=true;row.append(input);parent.append(row);inputs[key]=input;}
+  field(form,'minutes','Additional workflow time (minutes)',60,0,43200);
+  field(form,'attempts','Total agent attempts (including '+g.attempts+' already used)',Math.min(2048,g.limits.attempts+32),g.limits.attempts,2048);
+  field(form,'attempt_minutes','Time per resumed attempt (minutes)',Math.min(120,Math.max(30,...Object.values(g.members).map(m=>m.spec.brief.timeout_minutes||0))),1,120);
+  const advanced=node('details');advanced.append(node('summary','Planning and workflow allowances'));
+  for(const [key,label,max] of [['controller_calls','Total planning calls',256],['tasks','Total tasks',512],['amendments','Total workflow updates',2048],['expansions','Total planning rounds',256],['retries','Retries per task',16]]){
+   const used={controller_calls:g.controller_calls,tasks:Object.keys(g.members).length,amendments:g.limits.amendments,expansions:Object.keys(g.expansions).length,retries:Math.max(0,...Object.values(g.members).map(m=>(m.attempts||[]).length))}[key];
+   field(advanced,key,label,Math.min(max,Math.max(g.limits[key],used+(key==='retries'?1:8))),g.limits[key],max);
+  }
+  form.append(advanced,node('p','Used attempts are retained. Agents must finish stopping before this workflow can resume.','muted'));
+  const error=node('p','','form-error');error.setAttribute('role','alert');const actions=node('div',undefined,'actions'),submit=node('button','Resume workflow','primary');submit.type='submit';actions.append(button('Cancel',()=>dialog.close()),submit);form.append(error,actions);dialog.append(form);document.body.append(dialog);
+  form.onsubmit=async event=>{event.preventDefault();submit.disabled=true;error.textContent='';try{
+   const limits={...g.limits};for(const key of ['attempts','controller_calls','tasks','amendments','expansions','retries'])limits[key]=Number(inputs[key].value);
+   limits.deadline=new Date(Math.max(Date.now(),Date.parse(g.limits.deadline))+Number(inputs.minutes.value)*60000).toISOString();
+   await sendMutation(endpoint(g.id)+'/resume',{key:crypto.randomUUID(),revision:g.revision,limits,attempt_minutes:Number(inputs.attempt_minutes.value),start_automatic:!g.policy.controller_application&&Object.keys(g.members).length===1&&g.attempts===0});
+   dialog.close();await refreshSelected();await loadSummaries(true);
+  }catch(e){error.textContent=e.message}finally{submit.disabled=false}};
+  dialog.showModal();
  }
  function workflowOrder(g=graph,view=snapshot,history=showHistory) {
   const ids=Object.keys(g.members).filter(id=>kind(g.members[id])!=='planner'&&(history||!g.members[id].replacement));

@@ -65,6 +65,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	NativeThreadID     string                 `json:"native_thread_id,omitempty"`
 	GraphAttempt       *GraphAttempt          `json:"graph_attempt,omitempty"`
 	ModelDecisions     []ModelDecision        `json:"model_decisions,omitempty"`
 	RecordRefs         []RecordRef            `json:"record_refs,omitempty"`
@@ -161,6 +162,7 @@ type Event struct {
 }
 
 type change struct {
+	NativeThreadID      string                     `json:"native_thread_id,omitempty"`
 	SupervisorVerdict   *SupervisorVerdict         `json:"supervisor_verdict,omitempty"`
 	SupervisionIncident *SupervisionIncident       `json:"supervision_incident,omitempty"`
 	AgentRoute          *AgentRoute                `json:"agent_route,omitempty"`
