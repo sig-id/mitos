@@ -92,6 +92,12 @@ func TestSupervisionHTTPLargeObservations(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, kind := range []string{"commandExecution", "fileChange", "mcpToolCall"} {
+				// Keep the session alive between full-size observations, as the
+				// native client does. Race-instrumented journaling can exceed the
+				// lease across this sequence even though each request succeeds.
+				if err = bridge.Heartbeat(context.Background()); err != nil {
+					t.Fatal("session heartbeat before observation", err)
+				}
 				item := map[string]any{"type": kind, "cwd": e.Root, "command": "echo hello"}
 				setContent := func(content string) {
 					switch kind {

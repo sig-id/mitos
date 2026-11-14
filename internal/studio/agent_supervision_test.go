@@ -331,7 +331,9 @@ func TestLargeSupervisionObservationsContinueNativeProxy(t *testing.T) {
 				if len(raw) != harness.MaxObservationBytes {
 					t.Fatal("fixture must exercise the inclusive limit", len(raw))
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				// Full 16 MiB evidence is parsed and journaled under the race
+				// detector; the former 1 MiB fixture's deadline is too short.
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
 				client, server := net.Pipe()
 				defer server.Close()
