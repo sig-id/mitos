@@ -241,6 +241,18 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, g)
 	})
 
+	mux.HandleFunc("POST /api/graphs/{id}/resume", func(w http.ResponseWriter, r *http.Request) {
+		var req studio.ResumeGraph
+		if !graphBody(w, r, &req) {
+			return
+		}
+		g, err := s.engine.ResumeGraph(r.PathValue("id"), req)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, g)
+	})
 	mux.HandleFunc("POST /api/graphs/{id}/result", func(w http.ResponseWriter, r *http.Request) {
 		var req studio.PublishGraphResult
 		if !graphBody(w, r, &req) {

@@ -33,6 +33,12 @@ type Harvest struct {
 }
 
 func Prepare(ctx context.Context, base string, snapshot Snapshot) (*History, error) {
+	return PrepareContinuation(ctx, base, snapshot, snapshot)
+}
+
+// PrepareContinuation retains the original patch baseline while materializing
+// the saved result of a previous attempt in a fresh private workspace.
+func PrepareContinuation(ctx context.Context, base string, snapshot, current Snapshot) (*History, error) {
 	history := &History{Base: base, Directory: filepath.Join(base, "history.git")}
 	if err := os.MkdirAll(base, 0700); err != nil {
 		return nil, err
@@ -55,7 +61,7 @@ func Prepare(ctx context.Context, base string, snapshot Snapshot) (*History, err
 		return nil, err
 	}
 	worktree := filepath.Join(base, "workspace")
-	if err = snapshot.WriteTo(worktree); err != nil {
+	if err = current.WriteTo(worktree); err != nil {
 		return nil, err
 	}
 	if err = history.seedWorktree(ctx, worktree); err != nil {

@@ -23,6 +23,8 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 type CodexOptions struct {
 	Plan, KeepOpen, Headless bool
 	Model, Sandbox           string
+	ResumeThread             string
+	ThreadStarted            func(string) error
 	OutputSchema             json.RawMessage
 	Result                   func(string) error
 }
@@ -141,9 +143,15 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 	if options.Headless {
 		threadParams["approvalPolicy"] = "on-request"
 		threadParams["approvalsReviewer"] = "user"
-		threadParams["ephemeral"] = true
+		threadParams["ephemeral"] = options.ThreadStarted == nil
 	}
-	if err := send(map[string]any{"id": 2, "method": "thread/start", "params": threadParams}); err != nil {
+	method := "thread/start"
+	if options.ResumeThread != "" {
+		method = "thread/resume"
+		threadParams["threadId"] = options.ResumeThread
+		delete(threadParams, "ephemeral")
+	}
+	if err := send(map[string]any{"id": 2, "method": method, "params": threadParams}); err != nil {
 		return err
 	}
 	raw, err := wait(2)
@@ -158,6 +166,14 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 	}
 	if json.Unmarshal(raw, &thread) != nil || thread.Thread.ID == "" {
 		return errors.New("app-server did not create a thread")
+	}
+	if options.ResumeThread != "" && options.ResumeThread != thread.Thread.ID {
+		return errors.New("app-server resumed a different conversation")
+	}
+	if options.ThreadStarted != nil {
+		if err := options.ThreadStarted(thread.Thread.ID); err != nil {
+			return err
+		}
 	}
 	if !options.Headless {
 		fmt.Fprintln(output, "Connected to Codex. Review supported requests in Mitos or on the paired device.")

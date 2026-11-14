@@ -313,6 +313,9 @@ func (s *Store) apply(e Event) error {
 	if c.ClaimConflicts != nil {
 		r.ClaimConflicts = c.ClaimConflicts
 	}
+	if c.NativeThreadID != "" {
+		r.NativeThreadID = c.NativeThreadID
+	}
 	if c.Workspace != nil {
 		r.Workspace = c.Workspace
 	}

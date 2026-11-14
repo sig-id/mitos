@@ -92,3 +92,86 @@ func TestCodexTerminalKeepOpenAcceptsAnotherTurn(t *testing.T) {
 		t.Fatal("initial assignment closed the session", output.String())
 	}
 }
+
+func TestCodexDurableConversationResume(t *testing.T) {
+	for _, resume := range []string{"", "saved-thread"} {
+		t.Run("resume="+resume, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			client, server := net.Pipe()
+			defer server.Close()
+			recorded := false
+			requests := make(chan map[string]any, 3)
+			go func() {
+				scan := bufio.NewScanner(server)
+				for scan.Scan() {
+					var req map[string]any
+					_ = json.Unmarshal(scan.Bytes(), &req)
+					method := req["method"]
+					switch method {
+					case "initialize":
+						fmt.Fprintln(server, `{"id":1,"result":{}}`)
+					case "thread/start", "thread/resume":
+						requests <- req
+						fmt.Fprintln(server, `{"id":2,"result":{"thread":{"id":"saved-thread"}}}`)
+					case "turn/start":
+						requests <- req
+						fmt.Fprintln(server, `{"id":3,"result":{}}`)
+						fmt.Fprintln(server, `{"method":"item/completed","params":{"item":{"type":"agentMessage","text":"done"}}}`)
+						fmt.Fprintln(server, `{"method":"turn/completed","params":{"turn":{"status":"completed"}}}`)
+					}
+				}
+			}()
+			var output bytes.Buffer
+			err := RunCodex(ctx, nil, client, strings.NewReader(""), &output, t.TempDir(), "continue", CodexOptions{Headless: true, ResumeThread: resume, ThreadStarted: func(id string) error { recorded = id == "saved-thread"; return nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !recorded {
+				t.Fatal("conversation not persisted")
+			}
+			req := <-requests
+			p := req["params"].(map[string]any)
+			if resume == "" {
+				if req["method"] != "thread/start" || p["ephemeral"] != false {
+					t.Fatal("conversation was ephemeral", req)
+				}
+			} else if req["method"] != "thread/resume" || p["threadId"] != resume || p["ephemeral"] != nil {
+				t.Fatal("wrong resume", req)
+			}
+			turn := <-requests
+			if turn["params"].(map[string]any)["threadId"] != "saved-thread" {
+				t.Fatal("turn used another conversation")
+			}
+		})
+	}
+}
+
+func TestCodexCannotStartTurnBeforeConversationIsSaved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, server := net.Pipe()
+	defer server.Close()
+	go func() {
+		scan := bufio.NewScanner(server)
+		for scan.Scan() {
+			var req struct {
+				Method string `json:"method"`
+			}
+			_ = json.Unmarshal(scan.Bytes(), &req)
+			switch req.Method {
+			case "initialize":
+				fmt.Fprintln(server, `{"id":1,"result":{}}`)
+			case "thread/start":
+				fmt.Fprintln(server, `{"id":2,"result":{"thread":{"id":"saved"}}}`)
+			case "turn/start":
+				panic("turn launched without saving conversation")
+			}
+		}
+	}()
+	var output bytes.Buffer
+	err := RunCodex(ctx, nil, client, strings.NewReader(""), &output, t.TempDir(), "test", CodexOptions{Headless: true, ThreadStarted: func(string) error { return fmt.Errorf("journal unavailable") }})
+	if err == nil || !strings.Contains(err.Error(), "journal unavailable") {
+		t.Fatal("continued after persistence failure", err)
+	}
+}
