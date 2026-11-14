@@ -3,6 +3,7 @@ package agentpolicy
 
 import (
 	"errors"
+	"mitos/internal/agentcli"
 	"mitos/internal/decisionmodel"
 	"path/filepath"
 	"strings"
@@ -15,15 +16,16 @@ type Rule struct {
 	Action    string `json:"action"`    // allow, review, deny
 }
 type Policy struct {
-	DecisionProvider    *decisionmodel.Config `json:"decision_provider,omitempty"`
-	Supervision         Supervision           `json:"supervision"`
-	Revision            int                   `json:"revision"`
-	Autonomy            string                `json:"autonomy"` // manual, delegated, decision
-	Guidance            string                `json:"guidance,omitempty"`
-	DecisionApplication string                `json:"decision_application,omitempty"`
-	Fallback            string                `json:"fallback"` // human, investigate
-	MaxCalls            int                   `json:"max_calls"`
-	Rules               []Rule                `json:"rules"`
+	AgentLaunch         map[string]agentcli.LaunchDefaults `json:"agent_launch,omitempty"`
+	DecisionProvider    *decisionmodel.Config              `json:"decision_provider,omitempty"`
+	Supervision         Supervision                        `json:"supervision"`
+	Revision            int                                `json:"revision"`
+	Autonomy            string                             `json:"autonomy"` // manual, delegated, decision
+	Guidance            string                             `json:"guidance,omitempty"`
+	DecisionApplication string                             `json:"decision_application,omitempty"`
+	Fallback            string                             `json:"fallback"` // human, investigate
+	MaxCalls            int                                `json:"max_calls"`
+	Rules               []Rule                             `json:"rules"`
 }
 
 func Default() Policy {
@@ -41,8 +43,8 @@ func (p Policy) Validate() error {
 			return err
 		}
 	}
-	if p.Autonomy == "decision" && (strings.TrimSpace(p.Guidance) == "" || p.DecisionProvider == nil && p.DecisionApplication == "") {
-		return errors.New("automatic decision review requires a decision provider and approval boundaries")
+	if p.Autonomy == "decision" && strings.TrimSpace(p.Guidance) == "" {
+		return errors.New("automatic decision review requires approval boundaries")
 	}
 	seen := map[string]bool{}
 	operations := map[string]bool{}

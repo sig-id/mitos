@@ -165,6 +165,27 @@ added or edited in **Agent library**; subsequent goals make them available to th
 planner. The full [agent-library specification](spec/system/07_AGENT_LIBRARY.md)
 additionally describes future runtime negotiation, knowledge and publication features.
 
+## System Configuration
+
+Open **System Configuration** in the sidebar (`/settings`) to configure the shared
+Decisions API connection and native agent launch defaults. Select a project in
+**Configuration scope** to override the connection or an agent's defaults. Existing
+project connections remain overrides; projects without one inherit the system
+connection. Approval boundaries and delegation remain in **Project setup**.
+
+The Decisions API form accepts a full endpoint, protocol, model, credential
+**environment-variable name**, timeout, call limit, and confidence thresholds.
+**Test API connection** makes one request without saving. Make the secret available
+to the Mitos server's environment, then restart the server if its environment changed.
+For native agents, choose an existing environment profile and additional arguments
+as a JSON array. Resumes and forks retain the source environment profile while using
+current default arguments. Managed coordinated workers and read-only assistants
+retain their separate launch protocols.
+
+Settings are journaled in `<data-directory>/events.jsonl` (normally
+`.mitos/events.jsonl`), outside project instruction files. See
+[configuration and implementation details](docs/agent-decisions.md#system-configuration-and-project-overrides).
+
 ## Optional decision models
 
 Command applications can add `decision_model` to choose whether to start a segment

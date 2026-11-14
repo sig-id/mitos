@@ -34,7 +34,24 @@ func (m *Manager) StartAgent(project string, request agentcli.Request, serverURL
 	if err != nil {
 		return Session{}, err
 	}
-	installation, err := m.Agents.Inspect(request.AgentID, request.ProfileID, p.Directory)
+	// Reconcile the caller's original request before looking up current defaults
+	// or credentials. A successful launch remains retryable after they change.
+	if request.Key != "" {
+		m.mu.Lock()
+		prior, found, err := m.launchReceiptLocked(project, request)
+		m.mu.Unlock()
+		if err != nil || found {
+			return prior, err
+		}
+	}
+	if m.LaunchDefaults != nil {
+		request.Defaults = m.LaunchDefaults(project, request.AgentID)
+	}
+	profile := request.ProfileID
+	if profile == "" {
+		profile = request.Defaults.ProfileID
+	}
+	installation, err := m.Agents.Inspect(request.AgentID, profile, p.Directory)
 	if err != nil {
 		return Session{}, err
 	}

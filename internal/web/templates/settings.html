@@ -1,0 +1,11 @@
+{{define "settings"}}<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>System Configuration · Mitos</title><link rel="icon" href="/static/favicon.svg"><link rel="stylesheet" href="/static/operating.css"><link rel="stylesheet" href="/static/settings.css"><link rel="stylesheet" href="/static/notifications.css"><link rel="stylesheet" href="/static/navigation-resize.css"><script src="/static/settings.js" defer></script><script src="/static/notifications.js" defer></script><script src="/static/navigation-resize.js" defer></script></head>
+<body data-project="{{.Navigation.ProjectID}}" data-server="{{.Navigation.Home.ID}}">
+<a class="skip" href="#main">Skip to settings</a><div class="os-shell">{{template "navigation" .Navigation}}<main id="main">
+<header class="project-header"><div><p>Your workspace</p><h1>System Configuration</h1></div></header>
+<div class="content settings-content"><p>Configure the Decisions API and native agent launch defaults for this Mitos server. Projects inherit these settings unless you override them.</p>
+<form action="/settings" method="get" class="settings-scope"><label>Configuration scope<select name="project"><option value="">System defaults</option>{{range .Navigation.Projects}}<option value="{{.ID}}" {{if eq $.Navigation.ProjectID .ID}}selected{{end}}>{{.Name}} · project overrides</option>{{end}}</select></label><button type="submit">Open settings</button></form>
+{{if .Navigation.ProjectID}}<p><a class="text-link" href="/projects/{{.Navigation.ProjectID}}?view=resources#decisions-api">Project approval boundaries &amp; delegation →</a></p>{{end}}
+<p id="settings-status" role="status">Loading configuration…</p><div id="settings-form"></div>
+<noscript>Enable JavaScript to edit configuration.</noscript>
+</div></main></div></body></html>{{end}}

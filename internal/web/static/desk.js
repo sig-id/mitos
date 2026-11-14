@@ -52,7 +52,7 @@
   }
   function chooseAgent() {
     const v = agentCatalog.find(a=>a.id===$('session-agent').value);
-    $('agent-profile').replaceChildren(new Option('Native environment',''));
+    $('agent-profile').replaceChildren(new Option('Configured default profile',''));
     for (const p of v?.profiles || []) $('agent-profile').append(new Option(p.name,p.id));
     $('agent-profile-field').hidden = !v?.profiles.length;
     if (v && !v.installed && v.profiles.length) $('agent-profile').value=v.profiles[0].id;
@@ -100,7 +100,7 @@
   }
   async function selectContinuationAgent() {
     const a = agentCatalog.find(v=>v.id===$('continuation-agent').value);
-    $('continuation-profile').replaceChildren(new Option('Native environment',''));
+    $('continuation-profile').replaceChildren(new Option('Configured default profile',''));
     for (const p of a?.profiles || []) $('continuation-profile').append(new Option(p.name,p.id));
     if (continuationKind !== 'handover') $('continuation-profile').value=continuationSource.profile_id || '';
     await inspectContinuation();

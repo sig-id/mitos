@@ -23,6 +23,7 @@ import (
 )
 
 type Store struct {
+	systemConfiguration    SystemConfiguration
 	supervisorVerdicts     map[string]SupervisorVerdict
 	supervisionIncidents   map[string]SupervisionIncident
 	agentRoutes            map[string]AgentRoute
@@ -220,6 +221,10 @@ func (s *Store) apply(e Event) error {
 			s.cooperation = map[string]CooperationRecord{}
 		}
 		s.cooperation[c.Cooperation.ProjectID+"/"+c.Cooperation.Message.ID] = graphClone(*c.Cooperation)
+		return nil
+	}
+	if c.SystemConfiguration != nil {
+		s.systemConfiguration = graphClone(*c.SystemConfiguration)
 		return nil
 	}
 	if c.AgentPolicy != nil {

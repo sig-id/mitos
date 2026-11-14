@@ -216,6 +216,14 @@ func (m *Manager) Continue(sourceID, kind string, request ContinuationRequest, s
 		role = "agent"
 	}
 	launchRequest := agentcli.Request{AgentID: request.AgentID, ProfileID: request.ProfileID, Prompt: request.Prompt}
+	if m.LaunchDefaults != nil {
+		launchRequest.Defaults = m.LaunchDefaults(source.ProjectID, request.AgentID)
+	}
+	if kind != "handover" {
+		// An empty source profile means the native environment, not an unset
+		// preference. Keep it while still applying current default arguments.
+		launchRequest.Defaults.ProfileID = ""
+	}
 	var launch agentcli.Launch
 	newID := id("session")
 	if mode == "native" {
