@@ -28,6 +28,7 @@ type Brief struct {
 	Workspace      string           `json:"workspace"`
 	AppID          string           `json:"app_id"`
 	TimeoutMinutes int              `json:"timeout_minutes"`
+	ProjectLimits  bool             `json:"project_limits,omitempty"` // Workflow occurrences inherit the current project settings.
 }
 
 func (b *Brief) Validate() error {
@@ -50,8 +51,15 @@ func (b *Brief) Validate() error {
 	if b.Workspace == "" {
 		return errors.New("choose a local workspace directory")
 	}
-	if b.TimeoutMinutes < 1 || b.TimeoutMinutes > 120 {
-		return errors.New("choose a time limit from 1 to 120 minutes")
+	if b.ProjectLimits && b.AppID != WorkflowAppID {
+		return errors.New("project execution limits require an agent workflow")
+	}
+	maxMinutes := 120
+	if b.ProjectLimits {
+		maxMinutes = 43200
+	}
+	if b.TimeoutMinutes < 1 || b.TimeoutMinutes > maxMinutes {
+		return fmt.Errorf("choose a time limit from 1 to %d minutes", maxMinutes)
 	}
 	return nil
 }

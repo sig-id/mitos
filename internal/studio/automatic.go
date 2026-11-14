@@ -194,7 +194,7 @@ func (e *Engine) StartAutomaticGoal(req AutomaticGoal) (WorkGraph, error) {
 		if err != nil {
 			return WorkGraph{}, err
 		}
-		deadline := workflowDeadline(r)
+		deadline := workflowDeadline(r, setup.Minutes)
 		if deadline.Before(limits.Deadline) {
 			limits.Deadline = deadline
 		}

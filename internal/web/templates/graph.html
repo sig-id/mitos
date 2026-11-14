@@ -5,14 +5,30 @@
   <div class="graph-compose-heading"><div><span class="graph-eyebrow">FROM GOAL TO RESULT</span><h2>What would you like to accomplish?</h2><p>Start with an idea. Watch the work take shape.</p></div><button id="graph-compose-close" aria-label="Close new work" hidden>×</button></div>
   <form id="graph-create-form">
    <label class="sr-only" for="graph-prompt">Your goal</label><textarea id="graph-prompt" name="goal" rows="3" required minlength="3" maxlength="10000" placeholder="Investigate why checkout is slow, fix the bottleneck, and show the improvement…"></textarea>
-   <details class="execution-fold"><summary>When to run</summary>
-    <label>Run this work<select id="graph-trigger" name="trigger"><option value="once">Once</option><option value="cron">On a schedule</option><option value="event">On an external event</option><option value="both">On a schedule and external events</option></select></label>
-    <div id="graph-recurring-fields" hidden>
-     <label>Workflow name<input name="workflow_name" maxlength="96" placeholder="For example: monitor-prs"></label>
-     <div id="graph-cron-fields"><label>Cron schedule<input name="cron" value="*/5 * * * *" maxlength="256"></label><label>Timezone<input name="timezone" value="UTC" maxlength="128"></label></div>
-     <div id="graph-event-fields" hidden><label>External event name<input name="event" maxlength="96" placeholder="For example: repository.changed"></label></div>
-     <label>Time limit per occurrence (minutes)<input name="minutes" type="number" value="30" min="1" max="120"></label>
-     <p class="muted">Describe the procedure, conditions, and allowed actions in your goal. Agents follow those instructions each time. Pending conditions can be checked again on the next occurrence. Scheduled and external triggers share one queue; you can stop or edit the workflow in Services.</p>
+   <details class="graph-scheduling"><summary>When to run <span class="muted" id="graph-trigger-summary">Once</span></summary>
+    <div class="graph-scheduling-content">
+     <label>Run this work<select id="graph-trigger" name="trigger"><option value="once">Once</option><option value="cron">On a schedule</option><option value="event">On an external event</option><option value="both">On a schedule and external events</option></select></label>
+     <div id="graph-recurring-fields" hidden>
+      <div id="graph-cron-fields">
+       <div class="graph-schedule-row">
+        <label>Repeat<select id="graph-frequency"><option value="minutes">Every few minutes</option><option value="hours">Every few hours</option><option value="daily">Every day</option><option value="weekly">Every week</option><option value="custom">Custom cron</option></select></label>
+        <label id="graph-minute-field">Every<select id="graph-minute-interval"><option value="1">1 minute</option><option value="2">2 minutes</option><option value="5" selected>5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option><option value="20">20 minutes</option><option value="30">30 minutes</option></select></label>
+        <label id="graph-hour-field" hidden>Every<select id="graph-hour-interval"><option value="1">1 hour</option><option value="2">2 hours</option><option value="3">3 hours</option><option value="4">4 hours</option><option value="6">6 hours</option><option value="8">8 hours</option><option value="12">12 hours</option></select></label>
+        <label id="graph-weekday-field" hidden>On<select id="graph-weekday"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select></label>
+        <label id="graph-time-field" hidden>At<input id="graph-schedule-time" type="time" value="09:00" required></label>
+       </div>
+       <label id="graph-custom-field" hidden>Cron expression<input name="cron" value="*/5 * * * *" maxlength="256" required aria-describedby="graph-cron-help"><span class="muted" id="graph-cron-help">Five fields: minute, hour, day of month, month, day of week.</span></label>
+       <p class="graph-schedule-summary muted" id="graph-schedule-summary" aria-live="polite"></p>
+      </div>
+      <div id="graph-event-fields" hidden><label>External event name<input name="event" maxlength="96" placeholder="For example: repository.changed" required></label></div>
+      <details id="graph-schedule-advanced" class="graph-schedule-advanced"><summary>Advanced options</summary>
+       <div class="graph-schedule-row">
+        <label id="graph-timezone-field">Time zone<input name="timezone" maxlength="128" required aria-describedby="graph-timezone-help"><span class="muted" id="graph-timezone-help">Defaults to this device’s local time zone.</span></label>
+       </div>
+      </details>
+      <p class="muted graph-schedule-help">Each run inherits the project’s execution limits, including its time and agent-attempt limits.</p>
+      <p class="muted graph-schedule-help">Each run follows your goal’s instructions. You can manage the saved workflow in Services.</p>
+     </div>
     </div>
    </details>
    <div class="graph-create-controls"><span id="graph-planner-note" class="muted">Checking agent availability…</span><button id="graph-create" class="primary" type="submit" disabled>Start work →</button></div>

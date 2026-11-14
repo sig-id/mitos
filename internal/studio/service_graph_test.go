@@ -294,7 +294,7 @@ func TestWorkflowDeadlineAndCrashBeforeGraphCreation(t *testing.T) {
 
 func TestScheduledGoalValidationAndEventOnly(t *testing.T) {
 	e, req := workflowEngine(t)
-	for _, change := range []func(*ScheduledGoal){func(r *ScheduledGoal) { r.Cron = "bad" }, func(r *ScheduledGoal) { r.Minutes = 0 }, func(r *ScheduledGoal) { r.ProjectID = "missing" }, func(r *ScheduledGoal) { r.Event = "worker.completed" }, func(r *ScheduledGoal) { r.Cron = ""; r.Event = "" }} {
+	for _, change := range []func(*ScheduledGoal){func(r *ScheduledGoal) { r.Cron = "bad" }, func(r *ScheduledGoal) { r.Minutes = -1 }, func(r *ScheduledGoal) { r.ProjectID = "missing" }, func(r *ScheduledGoal) { r.Event = "worker.completed" }, func(r *ScheduledGoal) { r.Cron = ""; r.Event = "" }} {
 		bad := req
 		change(&bad)
 		if _, err := e.ScheduleGoal(bad); err == nil {
@@ -379,5 +379,66 @@ print('workflow fixture')
 	}
 	if len(e.Store.Graphs()) != 2 {
 		t.Fatal("occurrences did not create separate graphs")
+	}
+}
+
+func TestScheduledGoalInheritsProjectLimits(t *testing.T) {
+	e, req := workflowEngine(t)
+	req.Minutes = 0
+	req.Goal = "Review open pull requests.\nReport what changed."
+	if _, err := e.SavePreferences(req.ProjectID, RuntimePreferences{Minutes: 240, Attempts: 18}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := e.ScheduleGoal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := view.Catalog.Work[req.ID]
+	if !brief.ProjectLimits || brief.TimeoutMinutes != 240 || brief.Title != "Review open pull requests. Report what changed." {
+		t.Fatalf("unexpected inherited workflow: %+v", brief)
+	}
+	if again, err := e.ScheduleGoal(req); err != nil || again.Catalog.Revision != view.Catalog.Revision {
+		t.Fatal("inherited workflow retry failed", err)
+	}
+	setup, err := e.ProjectSetup(req.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SavePreferences(req.ProjectID, RuntimePreferences{Revision: setup.Project.Revision, Minutes: 180, Attempts: 12}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.TriggerService(req.ID, "inherit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Brief.TimeoutMinutes != 180 {
+		t.Fatal("admission did not refresh project limits", r.Brief.TimeoutMinutes)
+	}
+	if ok, err := e.Store.Schedule(r.ID, nil); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if err := e.startServiceGraph(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	g, ok := e.Store.serviceGraph(r.ID)
+	if !ok || g.Setup.Minutes != 180 || g.Limits.Attempts != 12 {
+		t.Fatalf("graph did not inherit project limits: %+v", g)
+	}
+	remaining := time.Until(g.Limits.Deadline)
+	if remaining < 179*time.Minute || remaining > 180*time.Minute {
+		t.Fatal("inherited deadline was capped by old default", remaining)
+	}
+}
+
+func TestScheduledGoalUnicodeTitle(t *testing.T) {
+	e, req := workflowEngine(t)
+	req.Goal = strings.Repeat("检查工作流程。", 40)
+	view, err := e.ScheduleGoal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := view.Catalog.Work[req.ID].Title
+	if len(title) > 160 || !strings.HasSuffix(title, "…") {
+		t.Fatal("unbounded derived title", title)
 	}
 }

@@ -201,8 +201,16 @@ it is not the full remote-client contract. See
 ## Recurring agent workflows
 
 In the project goal composer, open **When to run** and choose **On a schedule**,
-**On an external event**, or **On a schedule and external events**. Give the
-workflow a name, select a cron expression/timezone and/or event name, and save.
+**On an external event**, or **On a schedule and external events**. Choose a
+minute, hourly, daily, or weekly schedule and/or enter an event name, then save.
+The workflow title comes from the goal. Schedules use your device’s local time
+zone; minute and hourly intervals align to the clock. **Custom cron** supports
+five-field expressions. **Advanced options** lets you change the time zone.
+New workflows inherit project execution limits, including elapsed time and agent
+attempts, for each occurrence. Existing workflows with explicit time caps retain
+those caps. In the workflow API, omitted or zero `minutes` means inherit, not
+unlimited. CPU, memory, and token budgets need a separate resource-policy design;
+these are not enforced limits in this form.
 The goal text is the workflow's persistent instructions; agents implement its
 procedure using the project's tools and policies. Mitos does not hard-code PR,
 security-review, or merge algorithms.
@@ -210,7 +218,7 @@ security-review, or merge algorithms.
 For example, describe your PR monitoring procedure in the goal, including how to
 recognize your security review, which statuses permit merging, and what to do when
 a review is pending. Authorize the intended external actions there. Select
-`*/5 * * * *` for a check every five minutes. Tell agents to report pending work
+**Every few minutes → 5 minutes** for a check every five minutes. Tell agents to report pending work
 and finish each occurrence so the next check can revisit it.
 
 The first scheduled run starts at the next matching time. **Services → Trigger
