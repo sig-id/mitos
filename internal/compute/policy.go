@@ -4,12 +4,15 @@ package compute
 import (
 	"errors"
 	"fmt"
+	"mitos/internal/resourcepolicy"
 	"net/url"
 	"slices"
 	"time"
 )
 
 type Capabilities struct {
+	CPUQuota          bool     `json:"cpu_quota"`
+	MemoryLimit       bool     `json:"memory_limit"`
 	Isolation         string   `json:"isolation"`
 	Remote            bool     `json:"remote"`
 	Egress            string   `json:"egress"`
@@ -20,11 +23,12 @@ type Capabilities struct {
 	Metered           bool     `json:"metered"`
 }
 type Request struct {
-	TrustTier      string `json:"trust_tier"`
-	Provider       string `json:"provider,omitempty"`
-	NetMode        string `json:"net_mode,omitempty"`
-	WorkspaceMode  string `json:"workspace_mode,omitempty"`
-	BrokerEndpoint string `json:"broker_endpoint,omitempty"`
+	Resources      resourcepolicy.Agent `json:"resources"`
+	TrustTier      string               `json:"trust_tier"`
+	Provider       string               `json:"provider,omitempty"`
+	NetMode        string               `json:"net_mode,omitempty"`
+	WorkspaceMode  string               `json:"workspace_mode,omitempty"`
+	BrokerEndpoint string               `json:"broker_endpoint,omitempty"`
 }
 type Workspace struct {
 	Source              string `json:"source"`
@@ -47,15 +51,19 @@ type LaunchSpec struct {
 	Capabilities  Capabilities `json:"capabilities"`
 }
 type Posture struct {
-	NetMode        string    `json:"net_mode"`
-	BrokerEndpoint string    `json:"broker_endpoint,omitempty"`
-	DataMount      string    `json:"data_mount"`
-	Deadline       time.Time `json:"deadline"`
+	Resources      resourcepolicy.Agent `json:"resources"`
+	NetMode        string               `json:"net_mode"`
+	BrokerEndpoint string               `json:"broker_endpoint,omitempty"`
+	DataMount      string               `json:"data_mount"`
+	Deadline       time.Time            `json:"deadline"`
 }
 
 // Compile is deterministic. The legacy development exception is supplied by the
 // local operator's runtime, never inferred from a requested tier or provider.
 func Compile(request Request, providers map[string]Capabilities, development bool) (LaunchSpec, error) {
+	if err := (resourcepolicy.Policy{Agent: request.Resources}).Validate(); err != nil {
+		return LaunchSpec{}, err
+	}
 	if request.TrustTier == "" {
 		request.TrustTier = "T1"
 	}
@@ -94,6 +102,7 @@ func Compile(request Request, providers map[string]Capabilities, development boo
 	if request.Provider != "" {
 		names = []string{request.Provider}
 	}
+	var resourceErr error
 	for _, name := range names {
 		caps, ok := providers[name]
 		if !ok || !slices.Contains(caps.NetModes, netMode) {
@@ -123,7 +132,14 @@ func Compile(request Request, providers map[string]Capabilities, development boo
 				continue
 			}
 		}
-		return LaunchSpec{TrustTier: request.TrustTier, Provider: name, Workspace: Workspace{Mode: request.WorkspaceMode}, Harness: "installed-command", Posture: Posture{NetMode: netMode, BrokerEndpoint: request.BrokerEndpoint, DataMount: caps.DataMount}, Development: development, Capabilities: caps}, nil
+		if err := request.Resources.Check(caps.CPUQuota, caps.MemoryLimit); err != nil {
+			resourceErr = err
+			continue
+		}
+		return LaunchSpec{TrustTier: request.TrustTier, Provider: name, Workspace: Workspace{Mode: request.WorkspaceMode}, Harness: "installed-command", Posture: Posture{Resources: request.Resources, NetMode: netMode, BrokerEndpoint: request.BrokerEndpoint, DataMount: caps.DataMount}, Development: development, Capabilities: caps}, nil
+	}
+	if resourceErr != nil {
+		return LaunchSpec{}, resourceErr
 	}
 	return LaunchSpec{}, fmt.Errorf("no eligible provider for %s with %s; isolation will not be downgraded", request.TrustTier, netMode)
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"mitos/internal/compute"
+	"mitos/internal/resourcepolicy"
 )
 
 func compileApplication(app Application) (compute.LaunchSpec, error) {
@@ -17,6 +18,14 @@ func compileApplication(app Application) (compute.LaunchSpec, error) {
 	}
 	return compute.Compile(request, map[string]compute.Capabilities{"local": local.Capabilities()}, development)
 }
+
+// Automatic workflows use native local agents, while preserving their frozen
+// per-agent resource request through the same provider admission contract.
+func compileWorkflowLaunch(resources resourcepolicy.Agent) (compute.LaunchSpec, error) {
+	local := &compute.Local{}
+	return compute.Compile(compute.Request{Resources: resources}, map[string]compute.Capabilities{"local": local.Capabilities()}, true)
+}
+
 func executeProviderCommand(ctx context.Context, provider compute.Provider, launch compute.LaunchSpec, argv []string, dir string, input []byte, monitor *commandObservation, health ...*serviceHealthMonitor) (compute.Session, []byte, error) {
 	var hm *serviceHealthMonitor
 	if len(health) > 0 {

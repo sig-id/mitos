@@ -3,18 +3,17 @@
  const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n};
  const button=(label,fn,cls='')=>{const b=el('button',label,cls);b.type='button';b.onclick=fn;return b};
  function sourceEditor(title,value){const box=window.MitosMarkdown.editor(value,{filename:title,mode:'preview'});return {box,value:()=>box.value,set:v=>{box.value=v}}}
- function runtimeFields(value,defaults,global,installations=[]){
+ function runtimeFields(value,defaults,global,installations=[],controls=[]){
   const form=el('div',undefined,'setup-fields');const field=(title,input,hint)=>{const label=el('label',title);label.append(input);if(hint)label.append(el('small',hint,'muted'));form.append(label);return input};
   const runtime=el('select');runtime.setAttribute('aria-label',global?'Default runtime':'Project runtime');runtime.append(new Option(global?'Codex':'Use my default ('+(defaults.runtime||'Codex')+')',global?'codex':''));if(!global)runtime.append(new Option('Codex','codex'));for(const r of installations.filter(r=>r.kind==='agent'&&r.installed&&r.id!=='codex')){const option=new Option(r.name+' – automatic task adapter unavailable',r.id);option.disabled=true;runtime.append(option)}runtime.value=value.runtime||(global?'codex':'');field('Runtime',runtime);
   const model=el('input');model.value=value.model||'';model.maxLength=200;model.setAttribute('aria-label',global?'Default model':'Project model');model.placeholder=global?'Use the runtime’s configured model':defaults.model||'Use my default model';field('Model',model,'Model ID; availability is checked by the runtime.');
-  const minutes=el('input');minutes.type='number';minutes.min='1';minutes.max='43200';minutes.value=value.minutes||'';minutes.placeholder=String(defaults.minutes||120);minutes.setAttribute('aria-label',global?'Default time limit':'Project time limit');field('Time limit · minutes',minutes,global?'Blank uses 120 minutes.':'Blank inherits my default.');
-  const attempts=el('input');attempts.type='number';attempts.min='1';attempts.max='2048';attempts.value=value.attempts||'';attempts.placeholder=String(defaults.attempts||96);attempts.setAttribute('aria-label',global?'Default attempt limit':'Project attempt limit');field('Agent attempts',attempts,'Includes planner rounds, workers and retries.');
-  return {box:form,value:()=>({revision:value.revision,runtime:runtime.value,model:model.value.trim(),minutes:Number(minutes.value),attempts:Number(attempts.value),guidance:value.guidance||''})};
+  const budgets=MitosResourcePolicy.fields(value,controls);form.append(budgets.box);
+  return {box:form,value:()=>({revision:value.revision,runtime:runtime.value,model:model.value.trim(),resources:budgets.value(),guidance:value.guidance||''})};
  }
 
  let generation=0;
  const markup=text=>window.MitosMarkdown.view(text||'_No instructions yet._');
- function defaultSummary(p){const box=el('div',undefined,'setup-default-summary');box.append(markup(p.guidance||'_No personal guidance saved._'));const list=el('dl');for(const [k,v] of [['Runtime',p.runtime||'Codex'],['Model',p.model||'Runtime configuration'],['Time limit',(p.minutes||120)+' minutes'],['Attempt limit',String(p.attempts||96)]]){list.append(el('dt',k),el('dd',v))}box.append(list);return box}
+ function defaultSummary(p,controls){const box=el('div',undefined,'setup-default-summary');box.append(markup(p.guidance||'_No personal guidance saved._'));const list=el('dl');for(const [k,v] of [['Runtime',p.runtime||'Codex'],['Model',p.model||'Runtime configuration']]){list.append(el('dt',k),el('dd',v))}box.append(list,MitosResourcePolicy.summary(p,controls));return box}
  function seed(setup){if(setup.exists)return setup.document;return [['Project context',setup.sections.context],['Git & review',setup.sections.git]].filter(([,v])=>v?.trim()).map(([k,v])=>'## '+k+'\n\n'+v.trim()).join('\n\n')}
  window.MitosProjectSetup={async render({container,project,snapshot,api,onChanges}){
   const token=++generation;container.replaceChildren(el('p','Loading AGENTS.md…','muted'));
@@ -33,7 +32,7 @@
    const fileHeading=el('div',undefined,'setup-file-toolbar'),fileState=el('strong'),actions=el('div',undefined,'setup-file-actions'),compare=button('Compare with saved',()=>{comparing=!comparing;drawDocument()}),apply=button(personal?'Save proposed defaults':'Apply to '+name,applyProposal,'primary');actions.append(compare,apply);fileHeading.append(fileState,actions);
    const contents=el('div',undefined,'setup-document-content'),manual=el('div',undefined,'setup-edit-surface');file.append(fileHeading,manual,contents);
    let editor,fields,guidance;
-   if(personal){guidance=sourceEditor('Personal guidance',setup.defaults.guidance||'');fields=runtimeFields(setup.defaults,{},true,installations);manual.append(guidance.box,fields.box)}
+   if(personal){guidance=sourceEditor('Personal guidance',setup.defaults.guidance||'');fields=runtimeFields(setup.defaults,{},true,installations,setup.resource_controls);manual.append(guidance.box,fields.box)}
    else{editor=sourceEditor(name,seed(setup));manual.append(editor.box)}
    const save=button(personal?'Save my defaults':'Save '+name,async()=>{save.disabled=true;try{
     if(personal){setup.defaults=await api('/api/preferences',{...fields.value(),guidance:guidance.value()},'PUT')}
@@ -44,8 +43,8 @@
    const saveActions=el('div',undefined,'setup-save-actions');saveActions.append(save,discard);manual.append(saveActions);
    (guidance||editor).box.addEventListener('markdown-save',event=>{event.preventDefault();(loadedKey.startsWith('proposal:')&&!apply.hidden?apply:save).click()});
    manual.addEventListener('input',()=>drawDocument());
-   function replaceFields(values){const next=runtimeFields(values,{},true,installations);fields.box.replaceWith(next.box);fields=next}
-   function dirty(){if(!loadedKey)return false;return personal?guidance.box.dirty||['runtime','model','minutes','attempts'].some(k=>(fields.value()[k]||'')!==(loadedPreferences?.[k]||(k==='runtime'?'codex':''))):editor.box.dirty}
+   function replaceFields(values){const next=runtimeFields(values,{},true,installations,setup.resource_controls);fields.box.replaceWith(next.box);fields=next}
+   function dirty(){if(!loadedKey)return false;return personal?guidance.box.dirty||MitosResourcePolicy.signature(fields.value())!==MitosResourcePolicy.signature(loadedPreferences):editor.box.dirty}
    assistant.append(el('h3',personal?'Shape your defaults':'Set up with an agent'),el('p',personal?'Describe how you prefer agents to work.':'Describe this project and how you want agents to work. Review the proposed file, then apply it.','muted'));
    const messages=el('div',undefined,'setup-messages');messages.setAttribute('role','log');messages.setAttribute('aria-label','Setup conversation');assistant.append(messages);
    const form=el('form',undefined,'setup-chat-form'),prompt=el('textarea');prompt.rows=4;prompt.maxLength=8000;prompt.setAttribute('aria-label',personal?'Describe your defaults':'Describe project setup');prompt.placeholder=personal?'Keep replies concise. Prefer model …':'This is a safety-critical PLC project. Require tests and a review before opening PRs.';
@@ -62,9 +61,9 @@
    const controls=el('div',undefined,'setup-chat-controls');controls.append(send,stop,fresh);form.append(prompt,options,controls);assistant.append(form);
    if(!supported.length){send.disabled=true;assistant.append(el('p','Install or configure Codex, Claude Code or Pi to use the setup assistant. You can still edit the file manually.','form-error'))}
    const summary=el('details',undefined,'setup-execution-summary');if(!personal){file.append(summary);executionSummary()}
-   function executionSummary(){const p=setup.effective;summary.replaceChildren(el('summary','Runtime & limits'),el('p',setup.settings_error||`${p.runtime} · ${p.model||'configured model'} · ${p.minutes} minutes · ${p.attempts} attempts`,'setup-effective'),el('p','Used for new work. Ask the agent to change these values in '+name+', or change My defaults for all projects.','muted'),button('Change with agent',()=>{prompt.value='Update the runtime and limits in '+name+': ';prompt.focus();prompt.scrollIntoView({block:'center',behavior:'smooth'})}));if(Object.entries(setup.project).some(([k,v])=>['runtime','model','minutes','attempts'].includes(k)&&v))summary.append(el('p','Earlier local project overrides apply where this file does not specify a value.','muted'))}
+   function executionSummary(){const p=setup.effective;summary.replaceChildren(el('summary','Runtime & resource limits'),el('p',setup.settings_error||`${p.runtime} · ${p.model||'configured model'}`,'setup-effective'),MitosResourcePolicy.summary(p,setup.resource_controls),el('p','Used for new work. Ask the agent to change these values in '+name+', or change My defaults for all projects.','muted'),button('Change with agent',()=>{prompt.value='Update the runtime and limits in '+name+': ';prompt.focus();prompt.scrollIntoView({block:'center',behavior:'smooth'})}));if(Object.entries(setup.project).some(([k,v])=>['runtime','model','minutes','attempts','resources'].includes(k)&&v))summary.append(el('p','Earlier local project overrides apply where this file does not specify a value.','muted'))}
    function showError(e){feedback.textContent=e.message;feedback.classList.add('error')}
-   async function reloadSetup(){setup=await api(base+'/setup');if(editor)editor.set(seed(setup));if(fields){const next=runtimeFields(setup.defaults,{},true,installations);fields.box.replaceWith(next.box);fields=next;guidance.set(setup.defaults.guidance||'')}if(!personal)executionSummary()}
+   async function reloadSetup(){setup=await api(base+'/setup');if(editor)editor.set(seed(setup));if(fields){const next=runtimeFields(setup.defaults,{},true,installations,setup.resource_controls);fields.box.replaceWith(next.box);fields=next;guidance.set(setup.defaults.guidance||'')}if(!personal)executionSummary()}
    function drawDocument(){
     const changed=personal?!!proposal?.preferences:typeof proposal?.document==='string',key=changed?'proposal:'+conversation.key+':'+(personal?JSON.stringify(proposal.preferences):proposal.document):'saved:'+(personal?setup.defaults.revision:setup.file_hash);
     if(key!==loadedKey&&!dirty()){
@@ -78,14 +77,14 @@
     compare.textContent=comparing?'Back to document':'Compare with saved';manual.hidden=comparing&&changed;contents.hidden=!manual.hidden;
     if(!manual.hidden){contents.replaceChildren();return}
     contents.classList.add('setup-comparison');contents.replaceChildren();
-    const before=el('section'),after=el('section');before.append(el('h3','Saved'),personal?defaultSummary(setup.defaults):window.MitosMarkdown.view(seed(setup),{filename:name}));after.append(el('h3','Proposed'),personal?defaultSummary(proposal.preferences):window.MitosMarkdown.view(editingProposal?editor.value():proposal.document,{filename:name}));contents.append(before,after);
+    const before=el('section'),after=el('section');before.append(el('h3','Saved'),personal?defaultSummary(setup.defaults,setup.resource_controls):window.MitosMarkdown.view(seed(setup),{filename:name}));after.append(el('h3','Proposed'),personal?defaultSummary(proposal.preferences,setup.resource_controls):window.MitosMarkdown.view(editingProposal?editor.value():proposal.document,{filename:name}));contents.append(before,after);
    }
    function drawConversation(){
     messages.replaceChildren();for(const m of conversation.messages||[]){const item=el('div',undefined,'setup-message '+m.role);item.append(el('strong',m.role==='user'?'You':'Setup assistant'),markup(m.text));messages.append(item)}
     const running=conversation.status==='running';if(running)messages.append(el('p','Reading your request and preparing a reply…','muted'));if(conversation.error)messages.append(el('p',conversation.error,'form-error'));
     send.disabled=running||!supported.length;stop.hidden=!running;stop.disabled=false;fresh.disabled=running;apply.disabled=running;runtime.disabled=running;model.disabled=running;
    }
-   function acceptConversation(c){if(!hydrated){hydrated=true;if(c.runtime&&[...runtime.options].some(o=>o.value===c.runtime&&!o.disabled)){runtime.value=c.runtime;model.value=c.model||''}}conversation=c;const candidate=c.suggestion;if(candidate){const applied=personal?!!candidate.preferences&&['runtime','model','minutes','attempts','guidance'].every(k=>(candidate.preferences[k]||'')===(setup.defaults[k]||'')):candidate.document===setup.document;proposal=applied?null:candidate}drawConversation();drawDocument()}
+   function acceptConversation(c){if(!hydrated){hydrated=true;if(c.runtime&&[...runtime.options].some(o=>o.value===c.runtime&&!o.disabled)){runtime.value=c.runtime;model.value=c.model||''}}conversation=c;const candidate=c.suggestion;if(candidate){const applied=personal?!!candidate.preferences&&MitosResourcePolicy.signature(candidate.preferences)===MitosResourcePolicy.signature(setup.defaults):candidate.document===setup.document;proposal=applied?null:candidate}drawConversation();drawDocument()}
    let timer;
    async function poll(){if(!root.isConnected||token!==generation)return;try{acceptConversation(await api(base+'/setup/conversation?target='+target));if(conversation.status==='running')timer=setTimeout(poll,1000)}catch(e){showError(e);timer=setTimeout(poll,3000)}}
    form.onsubmit=async event=>{event.preventDefault();if(!prompt.value.trim())return;send.disabled=true;feedback.textContent='';feedback.classList.remove('error');try{const c=await api(base+'/setup/conversation',{key:crypto.randomUUID(),prompt:prompt.value,target,runtime:runtime.value,model:model.value.trim(),reset});reset=false;prompt.value='';acceptConversation(c);clearTimeout(timer);timer=setTimeout(poll,1000)}catch(e){showError(e);send.disabled=!supported.length}};

@@ -54,7 +54,7 @@ func (l *Local) Prepare(ctx context.Context, spec LaunchSpec) (Handle, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	admitted, err := Compile(Request{TrustTier: spec.TrustTier, Provider: "local", NetMode: spec.Posture.NetMode, WorkspaceMode: spec.Workspace.Mode, BrokerEndpoint: spec.Posture.BrokerEndpoint}, map[string]Capabilities{"local": l.Capabilities()}, spec.Development)
+	admitted, err := Compile(Request{Resources: spec.Posture.Resources, TrustTier: spec.TrustTier, Provider: "local", NetMode: spec.Posture.NetMode, WorkspaceMode: spec.Workspace.Mode, BrokerEndpoint: spec.Posture.BrokerEndpoint}, map[string]Capabilities{"local": l.Capabilities()}, spec.Development)
 	if err != nil || spec.Provider != "local" || admitted.TrustTier != spec.TrustTier || !reflect.DeepEqual(admitted.Capabilities, spec.Capabilities) || admitted.Posture.NetMode != spec.Posture.NetMode || admitted.Posture.DataMount != spec.Posture.DataMount {
 		return nil, errors.New("local provider cannot enforce the requested launch posture")
 	}

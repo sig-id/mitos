@@ -18,6 +18,7 @@ import (
 	"mitos/internal/compute"
 	"mitos/internal/decision"
 	"mitos/internal/harness"
+	"mitos/internal/resourcepolicy"
 	"mitos/internal/workpool"
 	workspacefs "mitos/internal/workspace"
 )
@@ -444,7 +445,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			}
 		}
 	}()
-	launch, err := compileApplication(Application{})
+	resources := resourcepolicy.Agent{}
+	if currentGraph.Setup != nil {
+		resources = currentGraph.Setup.Resources.Agent
+	}
+	launch, err := compileWorkflowLaunch(resources)
 	if err != nil {
 		return err
 	}
