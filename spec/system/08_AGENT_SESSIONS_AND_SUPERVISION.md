@@ -9,7 +9,7 @@ enforcement boundary.
 | Term | Responsibility |
 | --- | --- |
 | Runtime | Durable state, process ownership, scheduling, budgets, permission enforcement and stop delivery |
-| Coordinator | Plans and revises assignments, integrates results, requests eligible work; planning is an activity of this role |
+| Orchestrator | Plans and revises assignments, integrates results, requests eligible work; planning is an activity of this role |
 | Worker | Performs an assignment and submits evidence |
 | Router | Selects the resolver for a particular request |
 | Decision model | Classifies evidence or selects among supplied eligible choices |
@@ -18,10 +18,10 @@ enforcement boundary.
 
 The obsolete project `/supervision` coordination endpoint and `desk supervision`
 command are removed. Coordination uses `/coordination`, `desk coordination`, and
-`coordinator_id`; no public compatibility aliases remain. Persisted execution
-identifiers such as `mitos.planner` still identify saved historical work.
+`orchestrator_id`; no public compatibility aliases remain. Persisted execution
+identifiers such as `mitos.orchestrator` still identify saved historical work.
 Documentation and UI MUST distinguish coordination, recovery control, and
-independent boundary supervision. The coordinator MUST NOT be the
+independent boundary supervision. The orchestrator MUST NOT be the
 sole judge of whether its own actions comply with policy.
 
 ## 1. Explicit single-agent sessions
@@ -89,7 +89,7 @@ requiring A2A as the local transport.
 
 ## 4. Concrete routing and classification
 
-Routing is a runtime-owned pipeline, not an implicit coordinator judgment:
+Routing is a runtime-owned pipeline, not an implicit orchestrator judgment:
 
 1. Validate the native/structured request and bind its identity and current policy.
 2. Apply deterministic exclusions and explicit rules. Known permission violations
@@ -129,7 +129,7 @@ answers or treat an unanswered question as successful completion.
 ## 6. Independent boundary supervision
 
 Supervision is independent of task planning, request routing and result acceptance.
-It watches the coordinator and workers. Inputs include trusted proposed actions,
+It watches the orchestrator and workers. Inputs include trusted proposed actions,
 native tool requests, execution events, policy revisions, resource consumption and
 agent observations. Self-reports are evidence, not proof of compliance.
 
@@ -138,14 +138,14 @@ where the adapter can intercept it. A separately configured supervision model
 examines contextual deviations and returns `allow`, `hold`, or `stop` with evidence.
 Its decision cannot expand permissions or accept task completion. Requests to the
 supervision model use the same bounded, durable decision infrastructure but a
-separate role, policy and budget from the coordinator/router.
+separate role, policy and budget from the orchestrator/router.
 
 On a violation, the runtime MUST durably record the incident, deny the pending
 action, hold new admissions for the affected scope, and request cancellation of
 active work. It MUST retain evidence and report whether process termination was
 confirmed. Model uncertainty can hold work for operator review; timeout/failure
 MUST NOT silently permit an action requiring supervision. Resume requires an
-explicit operator resolution and revalidation, not a coordinator restart.
+explicit operator resolution and revalidation, not a orchestrator restart.
 
 An observation-only adapter cannot guarantee prevention of an action already
 executed. Same-user processes can have effects outside intercepted requests.

@@ -2,14 +2,14 @@
 
 ## Durable supervision
 
-The runtime MUST persist a supervisory assignment, coordinator binding, generation,
+The runtime MUST persist a supervisory assignment, orchestrator binding, generation,
 inbox, child work, decisions, and limits independently of its harness. At most one
-coordinator generation may authorize changes for that responsibility.
+orchestrator generation may authorize changes for that responsibility.
 
-Coordinators MAY propose decomposition, placement, integration, recovery, and plan
+Orchestrators MAY propose decomposition, placement, integration, recovery, and plan
 amendments. Proposals MUST identify observed state revision and authority; the
 [runtime](02_RUNTIME.md) enforces admission. Already-admitted work MAY continue
-while the coordinator is unavailable; work needing new authority waits visibly.
+while the orchestrator is unavailable; work needing new authority waits visibly.
 
 Replacement MUST advance generation, fence stale proposals and mailbox settlement,
 and preserve outstanding work. Replacement context MUST include goal, task graph,
@@ -28,22 +28,22 @@ Topics support discovery and discussion through bounded reads, revision-checked
 replies, and durable follow cursors. Posts and acknowledgments MUST NOT confer
 claims, approve actions, or complete tasks.
 
-## Adaptive controllers
+## Adaptive orchestrators
 
-A controller owns a declared planning scope within a supervisory responsibility.
+A orchestrator owns a declared planning scope within a supervisory responsibility.
 Its policy MUST bind eligible event types, deterministic relevance filters, permitted
 proposal operations, mandatory obligations, executor/capability allowlists, limits,
-and conditions requiring human judgment. Policy and controller generation are
+and conditions requiring human judgment. Policy and orchestrator generation are
 revisioned independently of agent conversation history. Authority to decompose work
 MUST NOT imply authority to remove a mandatory check, publish externally, or enlarge
-allowances. Multiple planners MAY produce candidates; only the current authorized
-controller generation may submit a controller mutation for its scope. Operator
+allowances. Multiple orchestrators MAY produce candidates; only the current authorized
+orchestrator generation may submit a orchestrator mutation for its scope. Operator
 mutations still serialize through the same runtime transactions.
 
 | Planning policy | Source of concrete work | Runtime invariant |
 |---|---|---|
 | Defined | Operator or installed deterministic definition supplies tasks and transitions. | Scheduler advances eligible work without a supervisor launch loop. |
-| Adaptive | A planner derives tasks and amendments from the goal and committed evidence. | Every accepted amendment passes the same admission checks. |
+| Adaptive | A orchestrator derives tasks and amendments from the goal and committed evidence. | Every accepted amendment passes the same admission checks. |
 | Hybrid | Fixed obligations constrain adaptive decomposition and repair. | Adaptive work cannot bypass mandatory obligations or acceptance policy. |
 
 These policies MUST compose with manual, scheduled, and event activation and with
@@ -55,7 +55,7 @@ MUST be evaluated by code rather than repeatedly delegated to a model.
 ### Planning and typed decisions
 
 Planning generates fully specified candidate amendments. It MAY use an agent,
-installed templates, deterministic expansion, or an operator. A planner's output
+installed templates, deterministic expansion, or an operator. A orchestrator's output
 is a proposal, not executable authority. Installing or generating new executable
 capabilities requires its own authorized application operation; a graph amendment
 references registered adapters and capability revisions. Registration MUST NOT require
@@ -68,7 +68,7 @@ Decision evaluation judges a bounded supplied set of alternatives or evidence.
 Choice may select a concrete candidate; Predicate/Noul or Score may inform a declared
 policy when their provider mappings are implemented. These answer types MUST NOT
 be treated as arbitrary task/argument generation. To discover unknown work, the
-controller may select an authorized planning task, then evaluate its proposals.
+orchestrator may select an authorized planning task, then evaluate its proposals.
 Candidate generation and decision evaluation MUST have separately recorded attempts,
 inputs, limits, and outcomes. No pipeline of models is required for a deterministic
 or operator-supplied amendment.
@@ -76,7 +76,7 @@ or operator-supplied amendment.
 Before inference, the runtime MUST validate candidate schemas and exclude ineligible
 operations using current facts, grants, and remaining limits. The request MUST bind
 the exact candidate set/digest, concrete operands, projected facts/read set, graph
-revision, controller generation, policy, provider/model configuration, deadline,
+revision, orchestrator generation, policy, provider/model configuration, deadline,
 and allowance reservation. An answer selects only a supplied candidate; it cannot
 substitute task IDs, commands, criteria, budgets, or other operands. Commit MUST
 revalidate all affected facts after inference because prevalidation is not a lock.
@@ -103,7 +103,7 @@ The existing batch hook profile remains narrower and retains its own contract in
 ### Agent templates, context, and domain adaptation
 
 The [agent-library contract](07_AGENT_LIBRARY.md) owns reusable definitions,
-specialization, knowledge/context and binding semantics. Controllers MUST select
+specialization, knowledge/context and binding semantics. Orchestrators MUST select
 suitable library definitions or create graph-scoped specialists within policy;
 they MUST NOT require users to assemble ordinary worker steps. A suitable role can
 have many fresh instances; no idle instance is required before admitting new work.
@@ -117,14 +117,14 @@ Template changes cannot silently alter existing attempts or mandatory acceptance
 Agents SHOULD work with their task context, knowledge, data, and native tools. They
 MUST NOT be required to emit framework-specific PASS/FAIL/FIX tags, transition labels,
 JSON envelopes, or graph-edit syntax in ordinary replies. Adapter observations and
-controller interpretation provide the runtime boundary defined in
+orchestrator interpretation provide the runtime boundary defined in
 [interfaces](05_INTERFACES_AND_INTEGRATIONS.md#native-agent-observation-contract).
 An agent MAY opt into structured tools, but ordinary text remains a supported source
 of reports and planning evidence. An agent's explanation of success remains a claim,
 regardless of its formatting.
 
 Domain workflows MUST be constructed from authorized capabilities and current evidence.
-For example, a controller may choose a worktree, request a commit, compare changes,
+For example, a orchestrator may choose a worktree, request a commit, compare changes,
 introduce integration/review tasks, or revise a merge strategy only when needed.
 No fixed Git lifecycle or mandatory software-engineering role sequence is implied.
 Workspace ownership, conflicting writes, acceptance, and uncertain external effects
@@ -134,7 +134,7 @@ explicit deterministic handling even when a model proposes their recovery.
 
 ### Event-driven coordination and replacement
 
-The runtime MUST persist a controller cursor, trigger identity, pending expansion
+The runtime MUST persist a orchestrator cursor, trigger identity, pending expansion
 obligations, candidate/decision receipts, durable waits, and remaining allowance.
 Relevant task outcomes, accepted artifacts, failures, decisions, and service inputs
 can wake it. Event consumption and expansion/wait registration MUST follow the
@@ -142,24 +142,24 @@ no-loss receipt contract. Duplicate delivery cannot create duplicate tasks or ca
 Coalescing MUST retain contributing event identities and a bounded durable window;
 it MUST NOT discard unresolved work or cause starvation under continuous updates.
 
-Controllers SHOULD receive bounded projections and artifact references selected for
-their scope. Reads MUST disclose truncation and unavailable evidence; planners cannot
+Orchestrators SHOULD receive bounded projections and artifact references selected for
+their scope. Reads MUST disclose truncation and unavailable evidence; orchestrators cannot
 act as though omitted facts were observed. Model calls SHOULD occur on meaningful
 state changes, not scheduler polling ticks or terminal byte updates. Independent
-eligible work continues during inference. Controller compute, model calls, workers,
+eligible work continues during inference. Orchestrator compute, model calls, workers,
 and retained claims MUST be accounted separately, including waits and cancellations.
 A logical root or persisted wait MUST NOT occupy a worker slot merely by existing.
 A live waiting process still consumes its actual resources; checkpointing/yielding
-releases compute only when provider custody permits it. Controller capacity and
+releases compute only when provider custody permits it. Orchestrator capacity and
 worker capacity MUST have explicit admission policy so passive coordination cannot
 silently consume all capacity required by its children.
 
-If a controller disappears, admitted work continues within its frozen limits and the
+If a orchestrator disappears, admitted work continues within its frozen limits and the
 scheduler may admit existing eligible tasks under valid standing policy. New planning
 waits or activates a replacement under declared policy. Replacement advances generation,
 fences old proposals, and reconstructs the graph, obligations, pending decisions,
 evidence, effects, and remaining allowance. It MUST NOT regenerate already committed
-children from a narrative summary. Controller exhaustion produces a visible planning
+children from a narrative summary. Orchestrator exhaustion produces a visible planning
 block; it MUST NOT silently accept the goal or require cancelling unrelated workers.
 
 ### Explicit resource continuation
@@ -168,8 +168,8 @@ An operator MAY extend the finite limits of an unfinished workflow and resume it
 in place after resource exhaustion. The resource grant MUST be atomic, durable,
 revision-checked, and idempotent. It MUST retain workflow and task identities,
 dependencies, accepted work, frozen agent definitions, prior runs, and consumed
-allowances. New runs MUST count against the extended limits. Old controller
-proposals MUST be fenced, and continued coordinators MUST observe current facts.
+allowances. New runs MUST count against the extended limits. Old orchestrator
+proposals MUST be fenced, and continued orchestrators MUST observe current facts.
 
 Continuation MUST wait for prior execution and claims to settle and MUST NOT
 bypass supervision holds or revive explicitly cancelled or accepted workflows.
@@ -263,7 +263,7 @@ occurrence gets a fresh graph and reads current state according to the instructi
 The work binding freezes when the occurrence is queued; project/agent execution
 settings freeze when its graph is created, as for manually started automatic work.
 
-Trigger payload and provenance MUST be passed to the planner and workers as bounded,
+Trigger payload and provenance MUST be passed to the orchestrator and workers as bounded,
 untrusted context, separately from the user's instructions. Event data cannot change
 the workflow's project, instructions, grants, or limits. External changes require
 authorization in the saved user instructions under the existing agent policy.
@@ -329,7 +329,7 @@ unresolved resources.
 
 ## Human decisions
 
-Coordinator planning, request routing, and independent boundary supervision are
+Orchestrator planning, request routing, and independent boundary supervision are
 separate responsibilities. Their vocabulary and delegated automated-resolution
 contract are defined in [agent sessions and supervision](08_AGENT_SESSIONS_AND_SUPERVISION.md).
 Human-only requests retain the rules below; delegated automation requires the

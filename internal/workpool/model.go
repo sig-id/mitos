@@ -2,6 +2,7 @@
 package workpool
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -37,12 +38,31 @@ func Defaults() map[string]Pool {
 }
 
 type Dependency struct {
+	Inbox     *Inbox   `json:"inbox,omitempty"`
 	Artifacts []string `json:"artifacts,omitempty"`
 	From      string   `json:"from"`
 	Relation  string   `json:"relation"`
 	Payload   string   `json:"payload"`
 	Strength  string   `json:"strength"`
 	Guard     string   `json:"guard,omitempty"`
+}
+
+// Inbox selects an admitted MQTT envelope, not a broker subscription. From on
+// its dependency is a local source name, not a task ID. All selectors are exact.
+type Inbox struct {
+	Project       string `json:"project"`
+	Mailbox       string `json:"mailbox"`
+	Sender        string `json:"sender,omitempty"`
+	Kind          string `json:"kind"`
+	Type          string `json:"type"`
+	Correlation   string `json:"correlation,omitempty"`
+	Generation    int    `json:"generation"`
+	AfterSequence int64  `json:"after_sequence"`
+}
+
+type InboxWitness struct {
+	Key     string          `json:"key"`
+	Message json.RawMessage `json:"message"`
 }
 type Join struct {
 	Rule string `json:"rule"`
@@ -91,10 +111,21 @@ func (r Request) Validate() error {
 			return errors.New("dependency sources must be unique task IDs")
 		}
 		seen[d.From] = true
+		if d.Inbox != nil {
+			in := d.Inbox
+			if !namePattern.MatchString(d.From) || in.Project == "" || in.Mailbox == "" || in.Type == "" || len(in.Project) > 100 || len(in.Mailbox) > 100 || len(in.Sender) > 100 || len(in.Type) > 100 || len(in.Correlation) > 100 || in.Generation < 0 || in.AfterSequence < 0 || (in.Kind != "note" && in.Kind != "event" && in.Kind != "command") || d.Guard != "inbox_received" {
+				return errors.New("inbox dependencies require a source name, exact mailbox/type/kind, nonnegative generation/cursor and inbox_received guard")
+			}
+			if len(d.Artifacts) != 0 {
+				return errors.New("inbox data is delivered as message.json; artifact selection is only for task sources")
+			}
+		} else if d.Guard == "inbox_received" {
+			return errors.New("inbox_received requires an inbox source")
+		}
 		if d.Relation != "FS" || (d.Payload != "control" && d.Payload != "data") {
 			return errors.New("this drainer currently admits finish-to-start control or data dependencies")
 		}
-		if d.Payload == "data" {
+		if d.Payload == "data" && d.Inbox == nil {
 			if len(d.Artifacts) == 0 || len(d.Artifacts) > 32 {
 				return errors.New("data dependencies require 1–32 explicit artifact names")
 			}
@@ -112,7 +143,7 @@ func (r Request) Validate() error {
 			return errors.New("dependency strength must be hard or soft")
 		}
 		switch d.Guard {
-		case "", "done", "failed", "cancelled", "candidate_available":
+		case "", "done", "failed", "cancelled", "candidate_available", "inbox_received":
 		default:
 			return errors.New("dependency guard must be a terminal task status")
 		}
@@ -140,18 +171,20 @@ func (r Request) Validate() error {
 }
 
 type State struct {
+	Inbox                   *InboxWitness
 	ID, Status, RunID, Hash string
 	Seq                     int64
 	Sample                  bool
 }
 type Witness struct {
-	Artifacts    []Artifact `json:"artifacts,omitempty"`
-	InputOmitted string     `json:"input_omitted,omitempty"`
-	Seq          int64      `json:"event_seq"`
-	TaskID       string     `json:"task_id"`
-	RunID        string     `json:"run_id"`
-	Status       string     `json:"status"`
-	Hash         string     `json:"event_hash"`
+	Inbox        *InboxWitness `json:"inbox,omitempty"`
+	Artifacts    []Artifact    `json:"artifacts,omitempty"`
+	InputOmitted string        `json:"input_omitted,omitempty"`
+	Seq          int64         `json:"event_seq"`
+	TaskID       string        `json:"task_id"`
+	RunID        string        `json:"run_id"`
+	Status       string        `json:"status"`
+	Hash         string        `json:"event_hash"`
 }
 type Artifact struct {
 	Name   string `json:"name"`
@@ -177,13 +210,13 @@ func Evaluate(r Request, states map[string]State) Readiness {
 	optional := []Witness{}
 	for _, dep := range r.Deps {
 		state, exists := states[dep.From]
-		terminal := state.Status == "done" || state.Status == "failed" || state.Status == "cancelled"
+		terminal := state.Status == "done" || state.Status == "failed" || state.Status == "cancelled" || state.Status == "inbox_received" && state.Inbox != nil && dep.Inbox != nil
 		ok := exists && !state.Sample && terminal && (dep.Guard == "" || dep.Guard == state.Status)
 		if dep.Strength == "soft" {
 			if ok {
 				out.SoftScore++
 				if dep.Payload == "data" {
-					optional = append(optional, Witness{Seq: state.Seq, TaskID: dep.From, RunID: state.RunID, Status: state.Status, Hash: state.Hash})
+					optional = append(optional, Witness{Inbox: state.Inbox, Seq: state.Seq, TaskID: dep.From, RunID: state.RunID, Status: state.Status, Hash: state.Hash})
 				}
 			}
 			continue
@@ -191,7 +224,7 @@ func Evaluate(r Request, states map[string]State) Readiness {
 		hard++
 		if ok {
 			matched++
-			out.Matched = append(out.Matched, Witness{Seq: state.Seq, TaskID: dep.From, RunID: state.RunID, Status: state.Status, Hash: state.Hash})
+			out.Matched = append(out.Matched, Witness{Inbox: state.Inbox, Seq: state.Seq, TaskID: dep.From, RunID: state.RunID, Status: state.Status, Hash: state.Hash})
 		} else {
 			out.Waiting = append(out.Waiting, dep.From)
 		}
@@ -239,6 +272,9 @@ func Graph(graph map[string]Request) error {
 		}
 		color[id] = 1
 		for _, dep := range r.Deps {
+			if dep.Inbox != nil {
+				continue
+			}
 			if err := visit(dep.From); err != nil {
 				return err
 			}

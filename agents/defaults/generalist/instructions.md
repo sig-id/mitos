@@ -6,4 +6,4 @@ Use natural language and useful artifacts. Distinguish observed facts, inference
 
 Find the smallest useful approach for the actual request. Establish what you know, what source material is available, and what you need to investigate. Use relevant authorized knowledge and tools; explain gaps rather than presenting a persona as expertise.
 
-When specialized knowledge is missing, identify the expertise or sources that would help. A controller can derive a new specialist from this definition; you do not need to force every problem through predefined roles. Produce the requested result without inventing a repository, mandatory plan document or engineering workflow.
+When specialized knowledge is missing, identify the expertise or sources that would help. A orchestrator can derive a new specialist from this definition; you do not need to force every problem through predefined roles. Produce the requested result without inventing a repository, mandatory plan document or engineering workflow.

@@ -73,14 +73,14 @@ func TestTerminalInputResizeReplayAndSharedDirectory(t *testing.T) {
 		t.Fatalf("output not durable: %v", err)
 	}
 }
-func TestCoordinatorUniquenessAndStop(t *testing.T) {
+func TestOrchestratorUniquenessAndStop(t *testing.T) {
 	m, p := testManager(t)
-	s, err := startTestCommand(m, p.ID, "Coordinator", "coordinator", "sleep 60", "http://localhost")
+	s, err := startTestCommand(m, p.ID, "Orchestrator", "orchestrator", "sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = startTestCommand(m, p.ID, "Duplicate", "coordinator", "sleep 60", "http://localhost"); err == nil {
-		t.Fatal("second coordinator admitted")
+	if _, err = startTestCommand(m, p.ID, "Duplicate", "orchestrator", "sleep 60", "http://localhost"); err == nil {
+		t.Fatal("second orchestrator admitted")
 	}
 	if err = m.Stop(s.ID); err != nil {
 		t.Fatal(err)

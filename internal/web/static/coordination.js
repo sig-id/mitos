@@ -38,11 +38,11 @@
   submit($('attention-form'),async value=>{await api(endpoint('attention'),{body:value.body,pause:value.pause==='on'});$('attention-dialog').close();$('attention-form').reset();await refresh();});
   function chooseRole(role){
     $('session-role').value=role;$('session-role').dispatchEvent(new Event('change'));
-    if(role==='coordinator'&&!$('session-prompt').value)$('session-prompt').value=snapshot?.profile.goal||'';
+    if(role==='orchestrator'&&!$('session-prompt').value)$('session-prompt').value=snapshot?.profile.goal||'';
     $('session-dialog').showModal();
   }
   document.querySelectorAll('[data-start-role]').forEach(b=>b.onclick=()=>{
-    if(b.dataset.startRole==='coordinator'&&['running','ready','reviewed'].includes(snapshot?.draft?.status)){
+    if(b.dataset.startRole==='orchestrator'&&['running','ready','reviewed'].includes(snapshot?.draft?.status)){
       if(snapshot.draft.status!=='running')showProfile(snapshot.draft);else $('setup-progress').scrollIntoView({block:'center'});return;
     }
     chooseRole(b.dataset.startRole);
@@ -54,19 +54,19 @@
     $('session-dialog').close();$('tab-coordination').click();await refresh();
   }};
   function renderDraft(){
-    const d=snapshot.draft,box=$('setup-progress'),coordinator=snapshot.sessions.find(s=>s.role==='coordinator'&&active(s));
-    const running=!!coordinator,ready=d&&['ready','reviewed'].includes(d.status),review=ready&&reviewed(d);
+    const d=snapshot.draft,box=$('setup-progress'),orchestrator=snapshot.sessions.find(s=>s.role==='orchestrator'&&active(s));
+    const running=!!orchestrator,ready=d&&['ready','reviewed'].includes(d.status),review=ready&&reviewed(d);
     const step=running?4:review?3:ready?2:1;
     document.body.dataset.setup=String(!running&&!snapshot.sessions.length);
     $('setup-workflow').hidden=running;
     for(const item of $('setup-steps').children){const n=Number(item.dataset.step);item.classList.toggle('complete',n<step);item.classList.toggle('current',n===step);if(n===step)item.setAttribute('aria-current','step');else item.removeAttribute('aria-current');item.firstElementChild.textContent=n<step?'✓':String(n);}
-    const stage=$('workspace-stage');stage.replaceChildren(el('span',undefined,`state-dot ${running?coordinator.status:d?.status==='failed'?'failed':''}`),el('span',running?coordinator.status[0].toUpperCase()+coordinator.status.slice(1):step===3?'Ready to start':step===2?'Review':d?.status==='running'?'Analyzing':'Setup'));
+    const stage=$('workspace-stage');stage.replaceChildren(el('span',undefined,`state-dot ${running?orchestrator.status:d?.status==='failed'?'failed':''}`),el('span',running?orchestrator.status[0].toUpperCase()+orchestrator.status.slice(1):step===3?'Ready to start':step===2?'Review':d?.status==='running'?'Analyzing':'Setup'));
     box.replaceChildren();if(running)return;
     const actions=el('div',undefined,'setup-actions');
     const primary=(label,fn)=>{const b=button(label,fn);b.classList.add('primary');actions.append(b);return b;};
     if(review){
       box.append(el('h2','Ready to start'),el('p',review.profile.goal,'setup-goal'));
-      const launch=primary('Start coordinator',async()=>{launch.disabled=true;try{const session=await api(endpoint(`profile-drafts/${d.id}/start`),review);sessionStorage.removeItem(reviewKey(d.id));location.href=terminal(session);}finally{launch.disabled=false;}});launch.id='start-coordinator';
+      const launch=primary('Start orchestrator',async()=>{launch.disabled=true;try{const session=await api(endpoint(`profile-drafts/${d.id}/start`),review);sessionStorage.removeItem(reviewKey(d.id));location.href=terminal(session);}finally{launch.disabled=false;}});launch.id='start-orchestrator';
       actions.append(button('Edit context or goal',()=>showProfile(d)));
     }else if(ready){
       box.append(el('h2','Analysis complete'));
@@ -78,7 +78,7 @@
       const failed=d&&['failed','interrupted','cancelled'].includes(d.status);
       box.append(el('h2',failed?({failed:'Project analysis failed',interrupted:'Analysis interrupted',cancelled:'Analysis cancelled'}[d.status]):'Set up your project'));
       if(failed&&d.detail)box.append(el('p',d.detail,'setup-error-detail'));
-      primary(failed?'Retry analysis':'Analyze project',()=>{setupKey='';chooseRole('coordinator');});
+      primary(failed?'Retry analysis':'Analyze project',()=>{setupKey='';chooseRole('orchestrator');});
     }
     box.append(actions);
   }
@@ -100,7 +100,7 @@
   }
   function updateSelection(){
     const coordination=document.body.dataset.view==='coordination';
-    document.querySelectorAll('#coordinator-list a').forEach(a=>{
+    document.querySelectorAll('#orchestrator-list a').forEach(a=>{
       const selected=coordination||a.dataset.sessionId===document.body.dataset.session;
       a.classList.toggle('selected',selected);
       if(selected)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');
@@ -110,7 +110,7 @@
   function detail(s){
     selectedAssignment=s.id;
     const box=$('assignment-detail');box.hidden=false;box.replaceChildren(el('h3',s.name),el('p',s.initial_prompt||'No task prompt recorded.'));
-    box.append(el('p',`Coordinator: ${snapshot.sessions.find(v=>v.id===s.coordinator_id)?.name||'Unassigned'} · ${s.status}`,'muted'),el('code',s.workspace||'Project checkout'));
+    box.append(el('p',`Orchestrator: ${snapshot.sessions.find(v=>v.id===s.orchestrator_id)?.name||'Unassigned'} · ${s.status}`,'muted'),el('code',s.workspace||'Project checkout'));
     if(s.assignment){const a=s.assignment;box.append(el('p',`Goal: ${a.goal_id||'–'} · Task: ${a.task_id||'–'} · Requested by: ${a.requested_by||'operator'}`,'muted'));if(a.handoff_topic_id)box.append(el('p',`Handoff topic: ${a.handoff_topic_id}`,'muted'));}
     box.append(el('p',`Profile at launch: revision ${s.policy_revision||0} · Attention: ${transport(s)}`,'muted'));
     const link=el('a','Open terminal →','text-link');link.href=terminal(s);box.append(link);
@@ -121,48 +121,48 @@
     if(s.attention_transport==='native-hook')return 'Claude prompt/tool hooks · tool-boundary pause';
     return 'Manual inbox · cooperative acknowledgment';
   }
-  function graph(coordinator,workers){
+  function graph(orchestrator,workers){
     const box=$('coordination-graph');box.replaceChildren();
-    const attached=workers.filter(s=>coordinator&&s.coordinator_id===coordinator.id);
-    const others=workers.filter(s=>!coordinator||s.coordinator_id!==coordinator.id);
-    if(!coordinator){box.append(el('p',snapshot.draft?.status==='running'?'Project analysis is running above. After review, the selected agent becomes the coordinator and its terminal opens here.':'The coordinator is a coding agent that coordinates other agents. Complete setup to open its terminal.','graph-empty'));}
+    const attached=workers.filter(s=>orchestrator&&s.orchestrator_id===orchestrator.id);
+    const others=workers.filter(s=>!orchestrator||s.orchestrator_id!==orchestrator.id);
+    if(!orchestrator){box.append(el('p',snapshot.draft?.status==='running'?'Project analysis is running above. After review, the selected agent becomes the orchestrator and its terminal opens here.':'The orchestrator is a coding agent that coordinates other agents. Complete setup to open its terminal.','graph-empty'));}
     else{
       const rows=Math.ceil(attached.length/3), height=135+rows*125;
       const nodeX=i=>{const count=Math.min(3,attached.length-Math.floor(i/3)*3);return 900/(count+1)*(i%3+1);};
-      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox',`0 0 900 ${height}`);svg.setAttribute('aria-label','Coordinator with clickable assignments and agent terminals');svg.setAttribute('role','group');
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox',`0 0 900 ${height}`);svg.setAttribute('aria-label','Orchestrator with clickable assignments and agent terminals');svg.setAttribute('role','group');
       const draw=(tag,attrs,text)=>{const n=document.createElementNS(svg.namespaceURI,tag);for(const [k,v]of Object.entries(attrs))n.setAttribute(k,v);if(text)n.textContent=text;svg.append(n);return n;};
       for(let i=0;i<attached.length;i++){
         const s=attached[i],x=nodeX(i),y=190+Math.floor(i/3)*125;
         const edge=draw('path',{d:`M450 90 C${x===450?480:450} ${y-65},${x} ${y-65},${x} ${y-32}`,class:'assignment-edge',tabindex:0,role:'button','aria-label':`Inspect assignment: ${s.name}`});
         edge.onclick=()=>detail(s);edge.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();detail(s);}};
       }
-      function node(s,x,y,coordinatorNode){
-        const a=draw('a',{href:terminal(s),'aria-label':`Open ${coordinatorNode?'coordinator':'agent'} terminal: ${s.name}`});
+      function node(s,x,y,orchestratorNode){
+        const a=draw('a',{href:terminal(s),'aria-label':`Open ${orchestratorNode?'orchestrator':'agent'} terminal: ${s.name}`});
         function child(tag,attrs,text){const n=document.createElementNS(svg.namespaceURI,tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,v);if(text)n.textContent=text;a.append(n);return n;}
-        child('rect',{x:x-127,y:y-32,width:254,height:70,rx:10,class:coordinatorNode?'coordinator-node':'agent-node'});
+        child('rect',{x:x-127,y:y-32,width:254,height:70,rx:10,class:orchestratorNode?'orchestrator-node':'agent-node'});
         child('text',{x,y:y-6,'text-anchor':'middle',class:'node-title'},s.name.length>29?s.name.slice(0,27)+'…':s.name);
-        child('text',{x,y:y+17,'text-anchor':'middle',class:'node-status'},`${coordinatorNode?'COORDINATOR':s.agent_id||'AGENT'} · ${s.status}`);
+        child('text',{x,y:y+17,'text-anchor':'middle',class:'node-status'},`${orchestratorNode?'ORCHESTRATOR':s.agent_id||'AGENT'} · ${s.status}`);
       }
-      node(coordinator,450,52,true);
+      node(orchestrator,450,52,true);
       attached.forEach((s,i)=>node(s,nodeX(i),190+Math.floor(i/3)*125,false));
       box.append(svg);
       if(!attached.length)box.append(el('p','No workers delegated yet.','graph-empty'));
       const choices=el('div',undefined,'assignment-buttons');attached.forEach(s=>choices.append(button(`Assignment: ${s.name}`,()=>detail(s))));box.append(choices);
     }
-    if(others.length){box.append(el('h3','Other sessions'));for(const s of others){const row=el('div',undefined,'other-session');const a=el('a',s.name,'text-link');a.href=terminal(s);row.append(a,el('span',s.coordinator_id?'Assigned to an earlier coordinator':'Unassigned','muted'),button('Details',()=>detail(s)));box.append(row);}}
+    if(others.length){box.append(el('h3','Other sessions'));for(const s of others){const row=el('div',undefined,'other-session');const a=el('a',s.name,'text-link');a.href=terminal(s);row.append(a,el('span',s.orchestrator_id?'Assigned to an earlier orchestrator':'Unassigned','muted'),button('Details',()=>detail(s)));box.append(row);}}
   }
   function render(){
     renderDraft();
-    const {sessions,profile,notices}=snapshot, coordinators=sessions.filter(s=>s.role==='coordinator');
-    const coordinator=coordinators.find(active)||coordinators.at(-1), workers=sessions.filter(s=>s.role!=='coordinator');
+    const {sessions,profile,notices}=snapshot, orchestrators=sessions.filter(s=>s.role==='orchestrator');
+    const orchestrator=orchestrators.find(active)||orchestrators.at(-1), workers=sessions.filter(s=>s.role!=='orchestrator');
     $('coordination-workspace').hidden=!sessions.length;$('project-objective').textContent=profile.goal||'';$('project-objective').hidden=!profile.goal;
     $('active-agent-count').textContent=`${workers.filter(active).length} active`;
-    const rail=$('coordinator-list');rail.replaceChildren();
-    const overview=el('a',coordinator?coordinator.name:'Project setup','session-link coordinator-link');overview.href=coordinator?terminal(coordinator):`/workspace?project=${project}`;
-    if(coordinator){overview.dataset.sessionId=coordinator.id;overview.dataset.sessionName=coordinator.name;overview.setAttribute('aria-haspopup','menu');overview.setAttribute('aria-controls','desk-context-menu');overview.setAttribute('aria-keyshortcuts','Shift+F10');}
-    overview.append(el('small',coordinator?`${coordinator.agent_id} · ${coordinator.status}`:snapshot.draft?`${snapshot.draft.agent_id} · analysis ${snapshot.draft.status}`:'Project overview & rules'));rail.append(overview);
+    const rail=$('orchestrator-list');rail.replaceChildren();
+    const overview=el('a',orchestrator?orchestrator.name:'Project setup','session-link orchestrator-link');overview.href=orchestrator?terminal(orchestrator):`/workspace?project=${project}`;
+    if(orchestrator){overview.dataset.sessionId=orchestrator.id;overview.dataset.sessionName=orchestrator.name;overview.setAttribute('aria-haspopup','menu');overview.setAttribute('aria-controls','desk-context-menu');overview.setAttribute('aria-keyshortcuts','Shift+F10');}
+    overview.append(el('small',orchestrator?`${orchestrator.agent_id} · ${orchestrator.status}`:snapshot.draft?`${snapshot.draft.agent_id} · analysis ${snapshot.draft.status}`:'Project overview & rules'));rail.append(overview);
     updateSelection();
-    const graphKey=JSON.stringify([sessions,snapshot.draft?.status]);if(graphKey!==graphSignature){graphSignature=graphKey;graph(coordinator,workers);}
+    const graphKey=JSON.stringify([sessions,snapshot.draft?.status]);if(graphKey!==graphSignature){graphSignature=graphKey;graph(orchestrator,workers);}
     if(selectedAssignment){const s=sessions.find(s=>s.id===selectedAssignment);if(s)detail(s);}
     const list=$('attention-list');list.replaceChildren();
     if(!notices.length)list.append(el('p','No messages.','muted'));
@@ -179,7 +179,7 @@
   }
   async function refresh(){const next=await api(endpoint('coordination')),key=JSON.stringify(next);snapshot=next;if(key!==signature){signature=key;render();}await refreshDraftOutput();}
   async function poll(){try{await refresh();window.MitosConnection.recovered('coordination');}catch(e){window.MitosConnection.failed('coordination',e);}if(alive)setTimeout(poll,3000);}
-  refresh().then(()=>{if(new URLSearchParams(location.search).get('setup')==='true'&&!snapshot?.draft)chooseRole('coordinator');}).catch(e=>window.MitosConnection.failed('coordination',e)).finally(()=>{if(alive)setTimeout(poll,3000);});
+  refresh().then(()=>{if(new URLSearchParams(location.search).get('setup')==='true'&&!snapshot?.draft)chooseRole('orchestrator');}).catch(e=>window.MitosConnection.failed('coordination',e)).finally(()=>{if(alive)setTimeout(poll,3000);});
   const clockTimer=setInterval(updateDraftClock,1000);
   window.addEventListener('pagehide',()=>{alive=false;clearInterval(clockTimer);});
 })();

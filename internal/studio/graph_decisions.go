@@ -12,15 +12,15 @@ import (
 )
 
 type GraphDecisionRequest struct {
-	Proposal   GraphProposal `json:"proposal"` // envelope; operations must be empty
-	Candidates []GraphPlan   `json:"candidates"`
-	Context    string        `json:"context"`
+	Proposal   GraphProposal      `json:"proposal"` // envelope; operations must be empty
+	Candidates []OrchestratorPlan `json:"candidates"`
+	Context    string             `json:"context"`
 }
 type GraphDecision struct {
 	Key          string                `json:"key"`
 	Digest       string                `json:"digest"`
 	Proposal     GraphProposal         `json:"proposal"`
-	Candidates   []GraphPlan           `json:"candidates"`
+	Candidates   []OrchestratorPlan    `json:"candidates"`
 	Request      decisionmodel.Request `json:"request"`
 	Config       decisionmodel.Config  `json:"config"`
 	TaskID       string                `json:"task_id"`
@@ -57,13 +57,16 @@ func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, 
 	if err := app.DecisionModel.Validate(); err != nil {
 		return GraphDecision{}, err
 	}
-	if old.ControllerCalls >= old.Limits.ControllerCalls || old.Attempts >= old.Limits.Attempts || len(old.Expansions) >= old.Limits.Expansions || len(old.Members) >= old.Limits.Tasks {
+	if old.OrchestratorCalls >= old.Limits.OrchestratorCalls || old.Attempts >= old.Limits.Attempts || len(old.Expansions) >= old.Limits.Expansions || len(old.Members) >= old.Limits.Tasks {
 		return GraphDecision{}, graphError("decision allowance exhausted")
 	}
 	if old.Members[old.RootTask].Sealed {
 		return GraphDecision{}, graphError("decision requires an open root scope")
 	}
 	for _, candidate := range req.Candidates {
+		if candidate.Complete || len(candidate.Accept) > 0 || candidate.Result.Title != "" || candidate.Result.Markdown != "" || len(candidate.Result.SourceTasks) > 0 || len(candidate.Result.Items) > 0 {
+			return GraphDecision{}, graphError("decision candidates must contain only operations and explanation")
+		}
 		p := req.Proposal
 		p.Operations = candidate.Operations
 		p.Explanation = candidate.Explanation
@@ -74,7 +77,7 @@ func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, 
 	g := graphClone(*old)
 	now := time.Now().UTC()
 	g.Revision++
-	g.ControllerCalls++
+	g.OrchestratorCalls++
 	g.Attempts++
 	g.UpdatedAt = now
 	tid, rid := newID("task"), newID("local")
@@ -99,13 +102,13 @@ func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, 
 	spec.Brief.Scheduling.Deadline = &p.Deadline
 	executor := GraphExecutor{Application: app, Directory: app.Directory, Builtin: app.Builtin}
 	executor.Digest = graphDigest(executor)
-	binding := GraphAttempt{GraphID: g.ID, GraphRevision: g.Revision, Specification: 1, PolicyRevision: g.PolicyRevision, Generation: g.ControllerGeneration, Executor: executor, Criteria: spec.Criteria}
-	g.Members[tid] = &GraphMember{ControllerFor: "decision:" + d.Key, Spec: spec, Revision: 1, FactRevision: 1, Executor: &executor, CurrentRunID: rid, Attempts: []string{rid}, State: "queued"}
+	binding := GraphAttempt{GraphID: g.ID, GraphRevision: g.Revision, Specification: 1, PolicyRevision: g.PolicyRevision, Generation: g.OrchestratorGeneration, Executor: executor, Criteria: spec.Criteria}
+	g.Members[tid] = &GraphMember{OrchestratorFor: "decision:" + d.Key, Spec: spec, Revision: 1, FactRevision: 1, Executor: &executor, CurrentRunID: rid, Attempts: []string{rid}, State: "queued"}
 	if g.Decisions == nil {
 		g.Decisions = map[string]*GraphDecision{}
 	}
 	g.Decisions[d.Key] = &d
-	g.Expansions["decision:"+d.Key] = &GraphExpansion{ID: "decision:" + d.Key, Scope: g.RootTask, Generation: g.ControllerGeneration, Deadline: p.Deadline, ControllerTask: tid}
+	g.Expansions["decision:"+d.Key] = &GraphExpansion{ID: "decision:" + d.Key, Scope: g.RootTask, Generation: g.OrchestratorGeneration, Deadline: p.Deadline, OrchestratorTask: tid}
 	if err := validateGraph(&g); err != nil {
 		return GraphDecision{}, err
 	}
@@ -143,7 +146,7 @@ func (e *Engine) executeGraphDecision(ctx context.Context, r Run) error {
 	}
 	g := graphClone(*old)
 	copy := g.Decisions[key]
-	fresh := old.Status == "active" && old.Revision == d.Proposal.Revision && old.ControllerGeneration == d.Proposal.Generation && time.Now().Before(d.Proposal.Deadline)
+	fresh := old.Status == "active" && old.Revision == d.Proposal.Revision && old.OrchestratorGeneration == d.Proposal.Generation && time.Now().Before(d.Proposal.Deadline)
 	for id, read := range d.Proposal.Reads {
 		m := old.Members[id]
 		if m == nil || m.Revision != read.Specification || m.FactRevision != read.Fact {
@@ -183,7 +186,7 @@ func (e *Engine) executeGraphDecision(ctx context.Context, r Run) error {
 	case old.Decisions[key].Outcome != "pending":
 		copy.Outcome = old.Decisions[key].Outcome
 		copy.Reason = "decision_no_longer_pending"
-	case current.Status != "running" || g.Status != "active" || g.ControllerGeneration != copy.Proposal.Generation || g.Revision != copy.Proposal.Revision:
+	case current.Status != "running" || g.Status != "active" || g.OrchestratorGeneration != copy.Proposal.Generation || g.Revision != copy.Proposal.Revision:
 		copy.Reason = "state_changed"
 	case !time.Now().Before(deadline):
 		copy.Reason = "deadline_expired"

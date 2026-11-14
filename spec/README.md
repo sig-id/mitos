@@ -10,7 +10,7 @@ current baseline and remaining work.
 [ADR 0004](ADRs/0004_ADAPTIVE_WORK_GRAPHS.md) explains the decision to generate work
 graphs as evidence arrives, including lessons from Chief Wiggum. Start with
 [graph transactions and completion](system/02_RUNTIME.md#adaptive-work-graphs), then
-[controllers and agent templates](system/03_ORCHESTRATION.md#adaptive-controllers)
+[orchestrators and agent templates](system/03_ORCHESTRATION.md#adaptive-orchestrators)
 and [native observations](system/05_INTERFACES_AND_INTEGRATIONS.md#native-agent-observation-contract).
 [G1–G5](system/06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) define
 implementation order and acceptance; the local adapter implements only the subset
@@ -37,7 +37,7 @@ features. Local deployment retains its lightweight defaults.
 
 ## Sessions, cooperation and supervision reading path
 
-[ADR 0007](ADRs/0007_SESSIONS_ROUTING_AND_SUPERVISION.md) separates coordinator,
+[ADR 0007](ADRs/0007_SESSIONS_ROUTING_AND_SUPERVISION.md) separates orchestrator,
 router and supervisor responsibilities. [Agent sessions and supervision](system/08_AGENT_SESSIONS_AND_SUPERVISION.md)
 defines six delivery slices, project preferences, the proposed COOPERATION.md
 convention, explicit model classification, and boundary enforcement limitations.

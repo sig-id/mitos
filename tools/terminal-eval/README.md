@@ -44,7 +44,7 @@ calls and does not mutate the running demo. Set `MITOS_SCREENSHOT_DIR` to retain
 the page screenshots.
 
 `npm run test:graphs --prefix tools/terminal-eval` exercises free-text goal creation,
-planner-generated steps, dependency edges, output formatting, stable zoom and
+orchestrator-generated steps, dependency edges, output formatting, stable zoom and
 selection, the sidebar work tree, automatic result acceptance, mobile scrolling,
 reconnection, exact-key recovery after a lost creation response, explicit start of
 old goals, Devices/Plugins navigation, and agent-library create/edit persistence.

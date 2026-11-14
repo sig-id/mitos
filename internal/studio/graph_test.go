@@ -35,7 +35,7 @@ func graphEngine(t *testing.T, live bool) (*Engine, CreateGraph) {
 	} else {
 		e.Close()
 	}
-	req := CreateGraph{Profile: GraphProfile, Key: "initial", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: GraphLimits{Tasks: 32, Amendments: 64, Attempts: 32, Retries: 2, Expansions: 16, ControllerCalls: 8, Depth: 8, Fanout: 16, Deadline: time.Now().UTC().Add(time.Hour)}, Tasks: []GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Understand the workspace", Acceptance: "operator", Brief: Brief{Title: "Understand the workspace"}}}}
+	req := CreateGraph{Profile: GraphProfile, Key: "initial", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: GraphLimits{Tasks: 32, Amendments: 64, Attempts: 32, Retries: 2, Expansions: 16, OrchestratorCalls: 8, Depth: 8, Fanout: 16, Deadline: time.Now().UTC().Add(time.Hour)}, Tasks: []GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Understand the workspace", Acceptance: "operator", Brief: Brief{Title: "Understand the workspace"}}}}
 	return e, req
 }
 func createGraphTest(t *testing.T, e *Engine, req CreateGraph) WorkGraph {
@@ -50,7 +50,7 @@ func graphWorker(id, parent string) GraphSpec {
 	return GraphSpec{ID: id, Parent: parent, Kind: "application", Required: true, Criteria: "Inventory is independently checked", Acceptance: "application", Brief: Brief{Title: "Inspect workspace", AppID: "workspace-inventory", TimeoutMinutes: 1}}
 }
 func proposal(g WorkGraph, key string, ops ...GraphOperation) GraphProposal {
-	return GraphProposal{Profile: GraphProfile, Key: key, GraphID: g.ID, Revision: g.Revision, PolicyRevision: g.PolicyRevision, Generation: g.ControllerGeneration, Deadline: g.Limits.Deadline, Operations: ops}
+	return GraphProposal{Profile: GraphProfile, Key: key, GraphID: g.ID, Revision: g.Revision, PolicyRevision: g.PolicyRevision, Generation: g.OrchestratorGeneration, Deadline: g.Limits.Deadline, Operations: ops}
 }
 func amendGraphTest(t *testing.T, e *Engine, g WorkGraph, key string, ops ...GraphOperation) (WorkGraph, GraphReceipt) {
 	t.Helper()
@@ -389,8 +389,8 @@ func TestGraphSealOutcomeRaceAndOldGeneration(t *testing.T) {
 	if current.Members[current.RootTask].Sealed || len(current.Triggers) != 1 || current.Triggers[0].Outcome != "" {
 		t.Fatal("seal raced past relevant outcome")
 	}
-	stale := proposal(current, "old-controller", GraphOperation{Kind: "reopen", Task: current.RootTask})
-	next, _ := amendGraphTest(t, e, current, "replace", GraphOperation{Kind: "replace_controller", Rationale: "new controller"})
+	stale := proposal(current, "old-orchestrator", GraphOperation{Kind: "reopen", Task: current.RootTask})
+	next, _ := amendGraphTest(t, e, current, "replace", GraphOperation{Kind: "replace_orchestrator", Rationale: "new orchestrator"})
 	stale.Revision = next.Revision
 	if _, _, err := e.amendGraph(stale, false, false); !errors.Is(err, ErrConflict) {
 		t.Fatal("old generation admitted after replacement")

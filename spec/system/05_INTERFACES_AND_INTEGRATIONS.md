@@ -78,7 +78,7 @@ wake condition and checkpoint before releasing worker capacity, without losing a
 answer arriving during registration. Wake-up creates or resumes an authorized attempt
 under current policy; it does not revive an expired worker grant.
 
-## Adaptive graph and controller interface
+## Adaptive graph and orchestrator interface
 
 The target `work-graph/v1` profile defines semantic operations below, not currently
 available HTTP routes or MQTT handlers. Servers MUST advertise implemented profile
@@ -100,7 +100,7 @@ authority checks, canonical request identity, and receipts.
 
 The amendment envelope MUST contain `version`, home/project/graph identity,
 `request_key`, expected graph structural revision, policy revision, proposer identity
-bound to authentication, controller generation when applicable, deadline, relevant
+bound to authentication, orchestrator generation when applicable, deadline, relevant
 fact/specification read set, and a bounded ordered operation list. The handler computes
 a canonical payload digest. Each referenced artifact binds identity, hash, and size;
 proposal-local task references are valid only within their containing transaction.
@@ -120,7 +120,7 @@ MUST bind content digests as execution input. An adapter's schema permits invoca
 arguments; it does not imply permission for all representable operations.
 
 Read APIs MUST expose why a task is blocked and which decision, dependency, resource,
-controller obligation, or reconciliation would unblock it. Clients MUST be able to
+orchestrator obligation, or reconciliation would unblock it. Clients MUST be able to
 trace added/superseded tasks to their proposal, trigger, and decision evidence without
 reading an entire transcript. Cached previews MUST be revalidated on commit. Cursors
 and notifications MUST NOT confer authority; a transport receipt is not graph commit,
@@ -146,7 +146,7 @@ Malformed/ambiguous interpretation produces an observation or visible question, 
 an implicit launch, continuation, approval, or successful completion.
 
 Explicit structured tools MAY request graph operations under their caller's grant.
-Ordinary replies MUST NOT need to call them. A controller may propose an amendment
+Ordinary replies MUST NOT need to call them. A orchestrator may propose an amendment
 based on observed text through the same validation path. An adapter reporting process
 exit proves only the observed lifecycle event; interpreting "done" yields a completion
 claim. Neither proves that required artifacts exist or that acceptance passed.
@@ -154,7 +154,7 @@ claim. Neither proves that required artifacts exist or that acceptance passed.
 Context assembly MUST provide the assignment, relevant knowledge and artifact
 provenance, current accepted facts, permitted capabilities, and outstanding questions.
 It SHOULD hide transport envelopes, revision bookkeeping, and graph command syntax
-from an executor unless that executor explicitly performs a controller/tool role.
+from an executor unless that executor explicitly performs a orchestrator/tool role.
 Templates and context policies MUST declare source permissions and truncation behavior.
 Model interpretation and planning MAY use authorized source content under their own
 bounded data-disclosure policy; they MUST NOT silently expand the existing batch
@@ -200,8 +200,8 @@ application work already admitted to an inbox.
 Remote connections MUST use TLS and scoped publish/subscribe authorization. Ingress
 MUST authenticate sender claims through broker-enforced identity mapping or verified
 credentials, not trust a sender field or topic name. MQTT access does not grant task
-authority. One current coordinator generation owns a responsibility; shared
-subscriptions MUST NOT elect coordinators or bypass runtime fencing. Arrival order
+authority. One current orchestrator generation owns a responsibility; shared
+subscriptions MUST NOT elect orchestrators or bypass runtime fencing. Arrival order
 and reconnect order MUST NOT substitute for revision checks and causal references.
 
 The configured runtime persistence remains authoritative (the journal in the current

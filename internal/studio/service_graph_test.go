@@ -33,7 +33,7 @@ func TestWorkflowResultRecovery(t *testing.T) {
 			g, _ := e.Store.serviceGraph(r.ID)
 			// Persist a settled graph at the boundary before parent completion.
 			g.Status = "accepted"
-			g.Result = &GraphResult{Title: "Occurrence result", Markdown: "Nothing requires action.", Author: "planner:test", CreatedAt: time.Now().UTC()}
+			g.Result = &GraphResult{Title: "Occurrence result", Markdown: "Nothing requires action.", Author: "orchestrator:test", CreatedAt: time.Now().UTC()}
 			e.Store.mu.Lock()
 			err = e.Store.commit("", "effect", "test_graph_accepted", change{Graph: &graphChange{Graph: g}})
 			e.Store.mu.Unlock()
@@ -217,7 +217,7 @@ func TestWorkflowExternalContextAndStopSettlement(t *testing.T) {
 	if root.Spec.Brief.Intent != req.Goal || !strings.Contains(root.Spec.Context, `\"change\":123`) && !strings.Contains(root.Spec.Context, `"change":123`) {
 		t.Fatal("missing bounded event context", root.Spec.Context)
 	}
-	// Queue a graph controller attempt, then stop the logical parent. Parent must
+	// Queue a graph orchestrator attempt, then stop the logical parent. Parent must
 	// remain stopping until graph cancellation settles every child attempt.
 	if err := e.reconcileGraphs(); err != nil {
 		t.Fatal(err)
@@ -325,9 +325,9 @@ if '--output-schema' in sys.argv:
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  root=[f for f in ctx['facts'] if f['spec']['kind']=='scope'][0]
  assert 'recurring workflow' in prompt
- plan={'explanation':'Checked this occurrence.','steps':[],'accept':[],'retry':[],'complete':bool(workers)}
+ plan={'explanation':'Checked this occurrence.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:
-  plan['steps']=[{'id':'inspect','title':'Inspect current state','assignment':'Report current state without changing files.','criteria':'Report current state.','agent':'mitos.generalist','role':'','instructions':'','after':[],'replaces':''}]
+  plan['operations']=[{'kind':'add','spec':{'id':'inspect','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Report current state.','brief':{'title':'Inspect current state','intent':'Report current state without changing files.','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  else:
   plan['accept']=[{'task':f['id'],'rationale':'Read the saved report for this occurrence.'} for f in workers]
  plan['result']={'title':'Occurrence result','markdown':'The current state was checked.','source_tasks':[f['id'] for f in workers]} if workers else {'title':'','markdown':'','source_tasks':[]}

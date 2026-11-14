@@ -259,7 +259,7 @@ func (e *Engine) finishServiceGraph(r Run, status, summary string) error {
 	return e.Store.Transition(r.ID, "workflow_finished", status, "Workflow finished", summary)
 }
 
-// Runtime stop intent is not a planner amendment: it remains possible after
+// Runtime stop intent is not a orchestrator amendment: it remains possible after
 // budget/deadline exhaustion. Graph process cancellation performs settlement.
 func (s *Store) stopServiceGraph(id string) error {
 	s.mu.Lock()

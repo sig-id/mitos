@@ -253,7 +253,7 @@ func TestAcceptedAutomatedAnswerCannotBeDeliveredAfterRevocation(t *testing.T) {
 	}
 }
 
-func TestSupervisorStopsAutomaticCoordinatorThroughNativeObservation(t *testing.T) {
+func TestSupervisorStopsAutomaticOrchestratorThroughNativeObservation(t *testing.T) {
 	e, req := automaticScriptEngine(t, `import sys,time,json,os
 sys.stdin.read()
 sys.__stdout__.write(json.dumps({'method':'item/started','params':{'threadId':'fixture-thread','turnId':'fixture-turn','item':{'id':'forbidden','type':'commandExecution','command':'forbidden operation','cwd':os.getcwd()}}})+'\n')
@@ -291,8 +291,8 @@ time.sleep(60)
 	before, _ := e.Store.Graph(graph.ID)
 	time.Sleep(400 * time.Millisecond)
 	after, _ := e.Store.Graph(graph.ID)
-	if after.ControllerCalls != before.ControllerCalls || after.Status == "accepted" {
-		t.Fatal("coordinator continued through hold", before.ControllerCalls, after.ControllerCalls, after.Status)
+	if after.OrchestratorCalls != before.OrchestratorCalls || after.Status == "accepted" {
+		t.Fatal("orchestrator continued through hold", before.OrchestratorCalls, after.OrchestratorCalls, after.Status)
 	}
 }
 

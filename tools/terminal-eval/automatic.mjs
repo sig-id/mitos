@@ -45,13 +45,13 @@ try{
  assert.equal(new URL(page.url()).searchParams.get('graph'),graphID);
  assert.equal(await page.locator('#decisions-api').evaluate(n=>document.activeElement===n),true);
  await page.goto(waitingURL);await page.locator('#graph-message').getByRole('button',{name:'Review request',exact:true}).click();await page.locator('.graph-request-card').waitFor();
- assert.equal(await page.locator('#graph-planner-summary').count(),0);
- await page.locator('.graph-node[data-kind=planner]').click();
+ assert.equal(await page.locator('#graph-orchestrator-summary').count(),0);
+ await page.locator('.graph-node[data-kind=orchestrator]').click();
  assert.deepEqual(await page.locator('#graph-node-detail .graph-tabs button').allTextContents(),['Activity','Planning rounds','Request','Result']);
  await page.locator('.graph-goal-current .graph-request-card').waitFor();
  await page.screenshot({path:'/tmp/mitos-goal-progress.png'});
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.getByLabel('Work graphs',{exact:true}).getByRole('button',{name:'Review request',exact:true}).click();await page.screenshot({path:'/tmp/mitos-goal-progress-mobile.png'});await page.setViewportSize({width:1600,height:1040});
- await page.locator('.graph-node[data-kind=planner]').click();
+ await page.locator('.graph-node[data-kind=orchestrator]').click();
  await page.locator('#graph-node-detail').getByRole('button',{name:'Result',exact:true}).click();
  await page.getByRole('button',{name:'View progress',exact:true}).click();
  await page.getByLabel('Work graphs',{exact:true}).getByRole('button',{name:'Review request',exact:true}).click();
@@ -73,34 +73,34 @@ try{
  await page.getByLabel('Work actions',{exact:true}).click();await page.locator('#graph-reopen').click();await page.locator(`[data-tree-key="${graphID}"]`).click();
  await page.locator('[data-view=workflow]').click();
  const g=await api('/api/graphs/'+graphID);assert.equal(g.setup.model,'fixture-project-model');assert.ok(g.setup.document.includes('saved evidence'));assert.ok(g.setup.personal.includes('Keep personal'));
- const worker=Object.values(g.members).find(m=>m.spec.kind==='application'&&!m.controller_for);assert.equal(Object.values(g.members).filter(m=>m.executor?.application.agent?.specialization).length,1);
- const treeOrder=await page.locator('#work-tree .work-tree-node').evaluateAll(ns=>ns.map(n=>n.dataset.treeKey).filter(k=>k!=='planner'));
+ const worker=Object.values(g.members).find(m=>m.spec.kind==='application'&&!m.orchestrator_for);assert.equal(Object.values(g.members).filter(m=>m.executor?.application.agent?.specialization).length,1);
+ const treeOrder=await page.locator('#work-tree .work-tree-node').evaluateAll(ns=>ns.map(n=>n.dataset.treeKey).filter(k=>k!=='orchestrator'));
  const graphOrder=await page.locator('.graph-node[data-kind=step]').evaluateAll(ns=>ns.sort((a,b)=>parseFloat(a.style.left)-parseFloat(b.style.left)||parseFloat(a.style.top)-parseFloat(b.style.top)).map(n=>n.dataset.id));assert.deepEqual(treeOrder,graphOrder,'tree does not follow workflow order');
- assert.equal(await page.locator('.graph-node[data-kind=planner]').count(),1);assert.equal(await page.locator('[data-tree-key="planner"]').count(),1);
+ assert.equal(await page.locator('.graph-node[data-kind=orchestrator]').count(),1);assert.equal(await page.locator('[data-tree-key="orchestrator"]').count(),1);
  // Repeat navigation against an unchanged snapshot, including the same round.
  const inspector=page.locator('#graph-node-detail');
- await page.locator('.graph-node[data-kind=planner]').click();
+ await page.locator('.graph-node[data-kind=orchestrator]').click();
  await page.locator('#graph-node-detail').getByRole('button',{name:'Planning rounds',exact:true}).click();
  await inspector.getByRole('button',{name:'Read this round',exact:true}).last().click();
  await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Activity'}).waitFor();
  const latestHeading=await inspector.locator('h3').textContent();
  await inspector.getByRole('button',{name:'Planning rounds',exact:true}).click();
- await page.locator('.graph-node[data-kind=planner]').click();await page.getByRole('button',{name:'Latest coordinator update',exact:true}).click();
+ await page.locator('.graph-node[data-kind=orchestrator]').click();await page.getByRole('button',{name:'Latest orchestrator update',exact:true}).click();
  await inspector.locator('.graph-tabs button[aria-current=page]').filter({hasText:'Activity'}).waitFor();
  assert.equal(await inspector.locator('h3').textContent(),latestHeading);
- await page.locator('.graph-node[data-kind=planner]').first().click();
- assert.equal(await page.locator('#graph-node-kind').textContent(),'Coordinator');
- await page.locator('.graph-node[data-kind=planner]').click();await page.getByRole('button',{name:'Latest coordinator update',exact:true}).click();
+ await page.locator('.graph-node[data-kind=orchestrator]').first().click();
+ assert.equal(await page.locator('#graph-node-kind').textContent(),'Orchestrator');
+ await page.locator('.graph-node[data-kind=orchestrator]').click();await page.getByRole('button',{name:'Latest orchestrator update',exact:true}).click();
  await inspector.getByRole('heading',{name:latestHeading,exact:true}).waitFor();
- await page.locator('#graph-inspector-close').click();await page.locator('[data-tree-key=planner]').click();
+ await page.locator('#graph-inspector-close').click();await page.locator('[data-tree-key=orchestrator]').click();
  await inspector.getByRole('heading',{name:latestHeading,exact:true}).waitFor();
- await page.locator('#graph-node-detail').getByRole('button',{name:'Planning rounds',exact:true}).click();await page.getByRole('button',{name:'Read this round',exact:true}).first().click();await page.locator('.graph-plan-output').waitFor();await page.getByRole('heading',{name:'Coordinator summary',exact:true}).waitFor();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Planning rounds',exact:true}).click();await page.getByRole('button',{name:'Read this round',exact:true}).first().click();await page.locator('.graph-plan-output').waitFor();await page.getByRole('heading',{name:'Orchestrator summary',exact:true}).waitFor();
  assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>=560,'output pane is too narrow');
  assert.equal(await page.locator('.graph-structured-output details[data-read-key=raw]').getAttribute('open'),null,'raw JSON should start collapsed');
- const assignment=page.locator('.graph-plan-output details[data-read-key="step:0"]');assert.equal(await assignment.getAttribute('open'),'');await assignment.locator('summary').first().click();
+ const assignment=page.locator('.graph-plan-output details[data-read-key="operation:0"]');assert.equal(await assignment.getAttribute('open'),'');await assignment.locator('summary').first().click();
  await page.locator('#graph-inspector-expand').click();assert.equal(await page.locator('.graph-map').isVisible(),false);assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>1000);
  await page.waitForTimeout(1600);assert.equal(await assignment.getAttribute('open'),null,'polling reset disclosure');
- await page.screenshot({path:'/tmp/mitos-planner-reader.png'});await page.locator('#graph-inspector-expand').click();assert.ok(await page.locator('.graph-map').isVisible());
+ await page.screenshot({path:'/tmp/mitos-orchestrator-reader.png'});await page.locator('#graph-inspector-expand').click();assert.ok(await page.locator('.graph-map').isVisible());
  await page.locator(`[data-tree-key="${worker.spec.id}"]`).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.ok(await page.locator('#graph-node-detail').getByText('The answer is', {exact:false}).count());
  await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).waitFor();await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();await page.getByRole('button',{name:'Back to graph',exact:true}).click();
  const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByRole('button',{name:'Browse saved files',exact:true}).waitFor();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
@@ -135,7 +135,7 @@ try{
  await wait(async()=>await page.locator('.graph-attempt-card').count()===1);
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/mitos-output-mobile.png'});assert.ok(await page.locator('#graph-inspector').evaluate(n=>n.getBoundingClientRect().width)>320);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.setViewportSize({width:1600,height:1040});
  // Stored output is untrusted; JSON and Markdown cannot inject HTML or scripts.
- const safe=await page.evaluate(()=>{const n=window.MitosGraphOutput.render(JSON.stringify({explanation:'<img src=x onerror="window.injected=true">',steps:[null,{title:'<script>bad()</script>',assignment:'**Readable**',criteria:'done',after:[]}]}),{planner:true});document.body.append(n);const result={html:n.querySelectorAll('img,script').length,bold:!!n.querySelector('strong')};n.remove();return result});assert.deepEqual(safe,{html:0,bold:true});
+ const safe=await page.evaluate(()=>{const n=window.MitosGraphOutput.render(JSON.stringify({explanation:'<img src=x onerror="window.injected=true">',operations:[null,{kind:'add',spec:{criteria:'done',brief:{title:'<script>bad()</script>',intent:'**Readable**',scheduling:{join:{rule:'any'},deps:[{from:'signal',guard:'inbox_received',inbox:{project:'project',mailbox:'graph',type:'workflow.signal'}}]}}}}]}),{orchestrator:true});document.body.append(n);const result={html:n.querySelectorAll('img,script').length,bold:!!n.querySelector('strong'),inbox:n.textContent.includes('MQTT project/graph'),join:n.textContent.includes('Join: any')};n.remove();return result});assert.deepEqual(safe,{html:0,bold:true,inbox:true,join:true});
  await page.locator('[data-view=result]').click();await page.locator('#graph-result .graph-result-reader').waitFor();assert.ok(await page.locator('#graph-result').getByText('The answer is', {exact:false}).count());assert.equal(await page.locator('.graph-body').isVisible(),false);
  assert.equal(await page.locator('.graph-result-content input[type=checkbox]').count(),1);await page.locator('.graph-result-content').getByRole('button',{name:'source',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();assert.ok((await page.locator('.graph-source-lines').textContent()).includes('Answer project'));await page.getByRole('button',{name:'Final answer',exact:true}).click();await page.locator('.graph-result-content').getByRole('button',{name:'Answer file',exact:true}).click();await page.locator('.graph-result-heading').getByRole('heading',{name:'answer.txt',exact:true}).waitFor();await wait(async()=> (await page.locator('.graph-result-content .md-preview').textContent()).trim()==='42');
  const savedDownload=page.waitForEvent('download');await page.getByRole('link',{name:'Download file',exact:true}).click();assert.equal((await savedDownload).suggestedFilename(),'answer.txt');
@@ -172,9 +172,9 @@ try{
  await page.locator('[data-view=result]').click();await page.locator('#graph-followup').fill('Continue from the saved answer and produce it again');await page.locator('#graph-followup-send').click();await wait(async()=>new URL(page.url()).searchParams.get('graph')!==graphID);const continuationID=new URL(page.url()).searchParams.get('graph');await wait(async()=>(await api('/api/graphs/'+continuationID)).status==='accepted');const continuation=await api('/api/graphs/'+continuationID);assert.equal(continuation.predecessor,graphID);await page.locator('.conversation-history').waitFor();assert.equal((await api('/api/graphs/'+graphID)).status,'accepted');
  // Editing definitions is a normal product flow, with persisted revisions.
  await page.getByRole('link',{name:'Agent library',exact:true}).click();await page.locator('#agent-library-list .panel').first().waitFor();await page.locator('#agent-new').click();await page.locator('#agent-editor [name=name]').fill('Accessibility reviewer');await page.locator('#agent-editor [name=description]').fill('Review keyboard navigation and accessible names');await page.locator('#agent-editor [name=instructions]').fill('Inspect focus order, test keyboard access, and report evidence.');await page.getByRole('button',{name:'Save agent',exact:true}).click();await page.locator('#agent-editor').waitFor({state:'hidden'});await page.reload();const card=page.locator('#agent-library-list .panel').filter({has:page.getByRole('heading',{name:'Accessibility reviewer',exact:true})});await card.waitFor();await card.getByRole('button',{name:'Edit agent'}).click();await page.locator('#agent-editor [name=instructions]').fill('Also check dialogs and focus restoration.');await page.getByRole('button',{name:'Save agent',exact:true}).click();await page.locator('#agent-editor').waitFor({state:'hidden'});await card.getByText('Custom · Revision 2').waitFor();
- await page.getByRole('link',{name:'Plugins',exact:true}).first().click();await page.getByRole('heading',{name:'Plugins',exact:true}).waitFor();assert.equal(await page.getByText('Set up a graph planner').count(),0);await page.getByRole('link',{name:'Devices',exact:true}).click();await page.getByRole('heading',{name:'Devices',exact:true}).waitFor();
+ await page.getByRole('link',{name:'Plugins',exact:true}).first().click();await page.getByRole('heading',{name:'Plugins',exact:true}).waitFor();assert.equal(await page.getByText('Set up a graph orchestrator').count(),0);await page.getByRole('link',{name:'Devices',exact:true}).click();await page.getByRole('heading',{name:'Devices',exact:true}).waitFor();
  // Existing idle work is not launched by reading it; explicit start is required.
- const limits={tasks:64,amendments:128,attempts:96,retries:2,expansions:24,controller_calls:24,depth:12,fanout:64,deadline:new Date(Date.now()+3600000).toISOString()};const old=await api('/api/graphs',{profile:'work-graph/v1',key:crypto.randomUUID(),project_id:project.id,goal_revision:1,activation:'manual',policy:{mode:'adaptive',applications:[]},limits,tasks:[{id:'goal',kind:'scope',required:true,criteria:'Produce answer',acceptance:'operator',brief:{title:'Earlier goal',intent:'Produce and review the answer'}}],seal:false});
+ const limits={tasks:64,amendments:128,attempts:96,retries:2,expansions:24,orchestrator_calls:24,depth:12,fanout:64,deadline:new Date(Date.now()+3600000).toISOString()};const old=await api('/api/graphs',{profile:'work-graph/v1',key:crypto.randomUUID(),project_id:project.id,goal_revision:1,activation:'manual',policy:{mode:'adaptive',applications:[]},limits,tasks:[{id:'goal',kind:'scope',required:true,criteria:'Produce answer',acceptance:'operator',brief:{title:'Earlier goal',intent:'Produce and review the answer'}}],seal:false});
  await page.goto(base+'/projects/'+project.id+'?graph='+old.id);await page.getByRole('button',{name:'Start automatic work',exact:true}).waitFor();assert.equal((await api('/api/graphs/'+old.id)).attempts,0);await page.getByRole('button',{name:'Start automatic work',exact:true}).click();await wait(async()=>(await api('/api/graphs/'+old.id)).status==='accepted');
  await page.setViewportSize({width:390,height:844});await page.reload();await page.locator('#graph-status.accepted').waitFor();assert.ok(await page.locator('#work-tree').isVisible());let sizes=await page.evaluate(()=>({width:document.documentElement.scrollWidth,viewport:innerWidth,height:document.documentElement.scrollHeight,vh:innerHeight}));assert.ok(sizes.width<=sizes.viewport+1,JSON.stringify(sizes));assert.ok(sizes.height<=sizes.vh+1,JSON.stringify(sizes));
  await page.setViewportSize({width:1600,height:1040});await page.screenshot({path:'/tmp/mitos-automatic-desktop.png'});await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/mitos-automatic-mobile.png'});

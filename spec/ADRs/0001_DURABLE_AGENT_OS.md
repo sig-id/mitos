@@ -17,7 +17,7 @@ The Orca review inspected source and documentation at commit
 [`1a4b0c76b1859d2ec4b905299cf7b7596fed11c6`](https://github.com/stablyai/orca/commit/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6).
 It was a static review, not a runtime benchmark or exhaustive security assessment.
 Orca already implements meaningful parts of durable coordination; Mitos cannot
-claim that persistent Tasks or coordinator replacement alone are novel.
+claim that persistent Tasks or orchestrator replacement alone are novel.
 
 ## Evidence and adopted lessons
 
@@ -27,7 +27,7 @@ claim that persistent Tasks or coordinator replacement alone are novel.
 | Background daemon owns PTYs across app exit; reboot still ends processes | [Session restore](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/docs/site/content/docs/model/session-restore.mdx) | Advertise process survival separately from durable work and host recovery. |
 | Run namespace, Tasks, Dispatch attempts, messages and gates | [Orchestration](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/docs/site/content/docs/cli/orchestration.mdx) | Preserve assignment/attempt separation and a stable supervisory inbox. Keep Mitos Run meaning. |
 | SQLite WAL and transactions persist orchestration state | [Database](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/orchestration-db.ts) | Adopt atomic admission/settlement; retain Mitos's canonical journal pending a separate storage decision. |
-| Coordinator rebinding advances consumer generation and fences deliveries | [Binding](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/runs/run-binding.ts), [delivery](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/runs/run-delivery.ts) | Make coordinator ownership and consumer fencing runtime contracts. |
+| Orchestrator rebinding advances consumer generation and fences deliveries | [Binding](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/runs/run-binding.ts), [delivery](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/runs/run-delivery.ts) | Make orchestrator ownership and consumer fencing runtime contracts. |
 | Caller/request identity and payload hash bind pending/completed mutation receipts | [Receipts](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/mutation-receipts/mutation-receipt-store.ts) | Make retriable mutations durable; preserve ambiguous outcomes. |
 | Worker authority binds attempt, process identity, launch-token commitment and terminal custody | [Worker authority](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/worker-dispatch/worker-dispatch-authority.ts) | Fence stale workers and retain resource custody through recovery. |
 | Inspected worker-report settlement accepts an authorized reported outcome | [Settlement](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/dispatch-context/worker-report-settlement.ts) | Keep reported success separate from independently accepted completion. |

@@ -1,7 +1,7 @@
 # Adaptive work graphs
 
 The backend composes existing Tasks and Run attempts into durable, mutable work
-graphs. An operator, registered controller application, or deterministic client can
+graphs. An operator, registered orchestrator application, or deterministic client can
 discover tasks during execution. The scheduler launches eligible work without a
 supervisor issuing individual launch commands. No worker reply tags are required.
 
@@ -15,7 +15,7 @@ service activations do not yet create graph templates.
 
 1. Open a project and describe a goal. **Start work** atomically creates a bounded
    graph with a planning obligation. Codex uses its existing local authentication.
-2. A read-only planner chooses agents from the library and proposes assignments,
+2. A read-only orchestrator chooses agents from the library and proposes assignments,
    dependencies, retries or replacements. A task-specific role can specialize a
    base definition without changing invocation, policy or permissions.
 3. The scheduler admits real Codex attempts into its existing two-slot work pool.
@@ -23,7 +23,7 @@ service activations do not yet create graph templates.
    supplied as input; clean patches are applied before launch. Conflicting patches
    are reported to the worker for reconciliation. Originals remain untouched.
 4. Workers return ordinary text. Reports, logs, changes and workspace archives are
-   saved separately. The planner reads these artifacts, evaluates the goal and
+   saved separately. The orchestrator reads these artifacts, evaluates the goal and
    criteria, and either extends the graph or accepts the evidenced result. Worker
    exit status is not a verifier verdict. Completion is labelled agent-reviewed.
 
@@ -34,17 +34,17 @@ selected saved agent patch without entering the older native-session interface.
 **Automations** configures repeated plugin jobs (not adaptive graph occurrences);
 **Project setup** holds project context, device information and session limits.
 
-The planner chooses a presentation suited to the request: narrative, checklist,
+The orchestrator chooses a presentation suited to the request: narrative, checklist,
 table, saved files/diffs and labelled links to actual issues or pull requests.
 `result.items` contains bounded `file`, `changes` or `link` items; source-bound file
 items and HTTP links are validated, and the UI never executes generated HTML.
 Ordinary worker output remains unconstrained prose. Formatting the final answer
-uses the existing planner rather than requiring another review task.
+uses the existing orchestrator rather than requiring another review task.
 
 After completion, the message composer starts a continuation with `from_graph` and
 `from_revision`. The creation key deduplicates uncertain retries. The predecessor
 stays settled; the continuation gets fresh bounded work allowances and freezes the
-prior answer and its accepted source runs. Planner and worker attempts receive
+prior answer and its accepted source runs. Orchestrator and worker attempts receive
 checksum-verified reports, manifests, patches and archives in a separate read-only
 input directory. Old patches are not implicitly applied. External publication must
 be expressly requested by the current user; saved output cannot authorize it.
@@ -54,18 +54,18 @@ sends once an answer is ready, rather than implying that messages steer an alrea
 running native attempt.
 
 The left work tree selects goals and agents. The goal remains the page title; a
-single Coordinator card anchors the graph and connects to worker assignments.
+single Orchestrator card anchors the graph and connects to worker assignments.
 Selecting it opens activity, planning rounds, the original request and final result.
-One Coordinator entry in the tree groups planning rounds into a chronological
+One Orchestrator entry in the tree groups planning rounds into a chronological
 history; arrows between assignments show their dependencies. Replaced assignments are available through **Show replaced work**.
 The graph also supports zoom, collapse and a list view. Selecting an agent opens its output in a wide reader, which can
-expand to the full content area. Planner proposals become readable summaries and
+expand to the full content area. Orchestrator proposals become readable summaries and
 expandable assignments; raw data is available separately. Attempt history opens
 saved output and files in place, with technical execution pages under Diagnostics.
-**View result** opens the goal's saved final answer, separately from planner
+**View result** opens the goal's saved final answer, separately from orchestrator
 acceptance notes and worker reviews. Automatic completion requires a bounded
 `result` with a title, Markdown answer and accepted worker `source_tasks`; the
-runtime freezes those sources to their accepted run IDs. The planner synthesizes
+runtime freezes those sources to their accepted run IDs. The orchestrator synthesizes
 the answer to the original request from existing evidence. For audits, this means
 concrete findings, requirements, evidence and limitations, rather than review status.
 Older accepted graphs without an answer say so; an operator can publish a missing
@@ -99,10 +99,10 @@ to explicitly start an untouched old goal. Merely opening an old graph never sta
 it. `GET /api/graphs/agents` reports runtime readiness and library summaries.
 `GET /api/agent-library` reads definitions; `POST /api/agent-library` publishes a
 worker revision with `{key, id, revision, name, description, instructions}` (empty
-`id` creates an agent). The built-in control planner is not editable through this API.
+`id` creates an agent). The built-in control orchestrator is not editable through this API.
 
-Goal limits are 64 tasks, 96 attempts, 24 planner calls, two retries per worker and
-a two-hour deadline. Rejected planner proposals get at most two repair calls using
+Goal limits are 64 tasks, 96 attempts, 24 orchestrator calls, two retries per worker and
+a two-hour deadline. Rejected orchestrator proposals get at most two repair calls using
 the rejection reason. Runtime/authentication failures remain visible for inspection;
 the system does not repeatedly retry invalid credentials. Stopping uses process-group
 cancellation and preserves harvested output. Server restart parks interrupted runs;
@@ -161,7 +161,7 @@ instructions, not spending enforcement or permission to publish. The assistant m
 not invent numeric limits from qualitative descriptions.
 
 New automatic goals, continuations and explicitly started old goals freeze the
-effective setup. The full project document and personal guidance enter the planner's
+effective setup. The full project document and personal guidance enter the orchestrator's
 prompt. Every attempt receives the same root instructions in its workspace baseline,
 alongside normal nested instruction files; later edits do not change existing work.
 If no file exists, legacy saved context/Git guidance seeds a draft until the user saves.
@@ -192,12 +192,121 @@ same safe Markdown parser for all previews; it never evaluates authored HTML.
 File-link callbacks remain attached when switching modes. JSON editors, terminal
 input and short chat composers remain plain inputs rather than Markdown documents.
 
-## Registered controller integrations
+## Registered orchestrator integrations
 
-Advanced API clients can still register deterministic controller applications with
-`graph_controller: true` in `app.json`. These receive `graph.context` on stdin and
+Native agents and registered applications use one `OrchestratorPlan` contract:
+`operations`, `accept`, `complete`, `result`, and `explanation`. Scheduling uses
+the same `GraphSpec.brief.scheduling` and `GraphOperation` types in every adapter;
+there is no separate `steps`/`after`/`retry` shorthand. Discover the exact native
+structured-output schema at `GET /api/graphs/orchestrator-schema` and supported
+sources, guards, and joins at `GET /api/graphs/capabilities`.
+
+`operations` contains graph amendments such as `add`, `dependencies`, `retry`, and
+`supersede`. An `add` carries the full task `spec`; a native agent uses an
+`app_id` such as `agent:mitos.engineer`. `accept` contains observed worker task IDs
+and evidence-based rationales. Automatic graphs permit this agent review and
+`complete` with a final `result`; operator-reviewed integrations still require
+operator authority to accept work. A contract does not grant new authority.
+
+For example, put the following inside a consumer's `brief.scheduling` to wait
+for two matching sources. References can be task IDs or proposal-local task IDs:
+
+```json
+{
+  "deps": [
+    {"from": "implementation", "guard": "candidate_available", "payload": "data", "artifacts": ["report.md", "changes.patch"]},
+    {"from": "audit", "guard": "done", "payload": "control"}
+  ],
+  "join": {"rule": "all"}
+}
+```
+
+No dependencies means independent work. `all` waits for every hard source;
+`any` waits for one; `k_of_n` with `k` waits for that many. Race/quorum witnesses
+are selected deterministically by journal sequence, then source ID. Other work
+is not cancelled, and required obligations still need acceptance. Soft sources
+never block readiness. Relations are finish-to-start (`FS`) only.
+
+Task guards are `candidate_available` (successful settled output, not yet
+necessarily accepted), `done` (accepted result), `failed`, and `cancelled`.
+Guard mismatches remain waiting; they are not automatically skipped or counted
+as accepted work. Recovery uses explicit retries, replacements, or amendments.
+Content-based decisions use an orchestration round that reads evidence and adds
+the selected branch; there is no executable predicate language. Automatic
+orchestration currently waits for running/ready workers to settle before its
+next round. Predeclared downstream tasks can start independently of that round.
+
+### MQTT inbox sources
+
+An inbox is a dependency source; `inbox_received` is its guard. It participates
+in exactly the same all/any/quorum join as task outcomes. For example:
+
+```json
+{
+  "from": "release-signal",
+  "relation": "FS",
+  "guard": "inbox_received",
+  "strength": "hard",
+  "payload": "data",
+  "inbox": {
+    "project": "PROJECT_ID",
+    "mailbox": "GRAPH_ID",
+    "sender": "PEER_ID",
+    "kind": "event",
+    "type": "workflow.signal",
+    "correlation": "release-v1",
+    "generation": 1,
+    "after_sequence": 0
+  }
+}
+```
+
+`from` is a unique local source name for an inbox dependency. The orchestrator
+receives the current graph inbox address, generation, and journal cursor in its
+context. A zero cursor freezes the current journal position when the dependency
+is committed, so old messages do not accidentally launch new work. An explicit
+earlier cursor permits replay from that position. Cursors are exclusive.
+
+Messages must first pass the existing signed-envelope and peer-grant admission
+path. A graph accepts `event` / `workflow.signal` at its own project/graph mailbox
+only while active, within its deadline, and for its current orchestrator generation.
+Existing admitted project inbox messages can also be selected. Project, mailbox,
+kind, type, and generation match exactly; nonempty sender and correlation add
+exact filters. Wildcards are not evaluated. Cross-project sources are rejected.
+The topic is `mitos/v1/DESTINATION/PROJECT_ID/GRAPH_ID/event`; declaring a workflow
+dependency neither adds a broker subscription nor grants a peer permission.
+
+Only `accepted` or `applied` inbox receipts enable work. Rejected and expired
+deliveries never match. The earliest matching admitted message is bound at task
+admission, including its sequence, digest and original envelope (at most 1 MiB of
+inbox evidence per admission). Data dependencies
+receive a checksum-verified, read-only `message.json` through the existing input
+mechanism; inbox sources do not take artifact names. A control dependency only
+gates execution. Redelivery is deduplicated by the inbox and cannot launch another
+attempt. Bindings survive restart and do not drift to newer messages. An admitted
+message remains evidence after its delivery deadline passes.
+
+These are one-shot task activations, not consuming queue reads or recurring
+subscriptions: one admitted message may enable multiple matching tasks. Waiting
+uses no worker slot. A later occurrence requires a new task/graph and cursor;
+retrying a task retains its original selector. Empty operations may wait for
+already scheduled tasks or inbox signals without spending repeated orchestration
+calls. Inbox content is evidence, never authority to change grants or instructions.
+
+### Terminology and saved-state compatibility
+
+The role, built-in agent, UI, and API use **orchestrator** (`mitos.orchestrator`,
+`orchestrator_application`, `orchestrator_calls`, `orchestrator_for`, and
+`replace_orchestrator`). Historical graph fields and stored session lineage are
+read through migration aliases; new writes emit the canonical names. Frozen old
+agent identities remain executable. New proposals must use the shared operations
+contract; the old automatic-plan shorthand is rejected rather than interpreted
+with different scheduling semantics.
+
+Advanced API clients can still register deterministic orchestrator applications with
+`graph_orchestrator: true` in `app.json`. These receive `graph.context` on stdin and
 write `graph-proposal.json` as described below. They are independent of the built-in
-automatic Codex planner and are not required to use the product.
+automatic Codex orchestrator and are not required to use the product.
 
 ## Implemented behavior
 
@@ -216,7 +325,7 @@ automatic Codex planner and are not required to use the product.
   edges; existing artifact-copy validation; dependency witnesses frozen at admission.
 - New attempts for retries, new tasks for changed work, supersession lineage,
   retained evidence, cancellation intent, and shared finite responsibility limits.
-- Outcome-triggered planning, fenced controller replacement, optional typed model
+- Outcome-triggered planning, fenced orchestrator replacement, optional typed model
   choice over validated candidates, and durable inference/application receipts.
 - Explicit scope closure and operator root acceptance. Finishing a command, an empty
   queue, or an agent's narrative never accepts the root goal.
@@ -229,13 +338,13 @@ configuration, not enforcement of arbitrary natural-language criteria.
 ## HTTP contract
 
 These routes use the existing localhost/operator trust boundary, cross-origin
-protection, and home-server checks. Controller execution is trusted local code;
+protection, and home-server checks. Orchestrator execution is trusted local code;
 this implementation does not introduce a sandbox or multi-tenant authorization.
 
 | Method and route | Operation |
 |---|---|
 | `GET /api/graphs/capabilities` | Implemented adapters and limitations |
-| `GET /api/graphs/applications` | Registered executor choices and planner discoverability |
+| `GET /api/graphs/applications` | Registered executor choices and orchestrator discoverability |
 | `GET /api/graphs/{id}/snapshot?node=…` | Status projection; assignment details only for root/selected node; no executor history |
 | `GET /api/graphs/{id}/nodes/{task}/runs/{run}` | Bound attempt details without events or frozen execution configuration |
 | `POST /api/graphs` | Idempotently create a concrete graph/activation |
@@ -284,7 +393,7 @@ future RFC3339 deadline. Application IDs must already be installed on the server
   },
   "limits": {
     "tasks": 32, "amendments": 64, "attempts": 48, "retries": 2,
-    "expansions": 16, "controller_calls": 16, "depth": 8, "fanout": 16,
+    "expansions": 16, "orchestrator_calls": 16, "depth": 8, "fanout": 16,
     "deadline": "REPLACE_WITH_FUTURE_RFC3339"
   },
   "tasks": [{
@@ -298,9 +407,9 @@ future RFC3339 deadline. Application IDs must already be installed on the server
 ```
 
 An adaptive/hybrid graph begins with an `initial` expansion obligation. With no
-controller application configured, a caller supplies amendments. Read the graph,
+orchestrator application configured, a caller supplies amendments. Read the graph,
 then POST an envelope containing `profile`, a fresh `key`, `graph_id`, `revision`,
-`policy_revision`, `generation` (the current `controller_generation`), `deadline`,
+`policy_revision`, `generation` (the current `orchestrator_generation`), `deadline`,
 and `operations`. A typical first amendment contains:
 
 ```json
@@ -330,7 +439,7 @@ input witnesses freeze later at scheduler admission. Existing attempts keep them
 
 Supported operation kinds are `add`, `amend`, `dependencies`, `priority`,
 `supersede`, `retry`, `open_expansion`, `close_expansion`, `classify_trigger`, `seal`,
-`reopen`, `cancel`, `replace_controller`, `dismiss_decision`, and `accept`.
+`reopen`, `cancel`, `replace_orchestrator`, `dismiss_decision`, and `accept`.
 A `dependencies` operation replaces the pending consumer's dependency/join set.
 Supersession preserves requiredness, criteria, acceptance, and parentage. Cancelling
 or superseding work does not discharge its obligation or release process claims.
@@ -344,32 +453,32 @@ provide evidence/rationale and a `reads` entry for **every** descendant and the 
 All required obligations must be accepted (possibly through an accepted replacement),
 and all execution/claims must be settled. Acceptance records an exact manifest.
 
-## Controllers and native output
+## Orchestrators and native output
 
-Set `policy.controller_application` to an installed application also listed in
+Set `policy.orchestrator_application` to an installed application also listed in
 `policy.applications`. Mitos schedules it when an expansion needs planning or a
 worker outcome introduces a relevant trigger. Its stdin has the normal application
 input plus `graph.context`, a JSON string containing bounded goal/task facts,
 result summaries, artifact references, policy, and triggers. Settled worker output
 and report artifacts are delivered through the existing immutable dependency-input
-mechanism. The automatic planner prioritizes worker reports and receives saved
+mechanism. The automatic orchestrator prioritizes worker reports and receives saved
 patches and manifests for unaccepted results when they fit the dependency limits
 (each supplementary file is capped at 1 MiB). It inspects this evidence before
-requesting further review. Workers never need to know this controller protocol.
+requesting further review. Workers never need to know this orchestrator protocol.
 
-The controller may use any planning technology. It writes **`graph-proposal.json`**
+The orchestrator may use any planning technology. It writes **`graph-proposal.json`**
 in its workspace with an object containing `operations` and `explanation`. Mitos
-captures this file from the harvested snapshot, waits for the controller's registered
+captures this file from the harvested snapshot, waits for the orchestrator's registered
 verification, and validates the proposal. Native stdout remains `output.txt` and
-is never executed or parsed as control. A controller's typed tool interface is
+is never executed or parsed as control. A orchestrator's typed tool interface is
 separate from its normal prose and from ordinary worker output.
 
-The kernel closes the controller's expansion and classifies the triggering cursor
-in the same amendment. A controller must not duplicate those operations. A stale or
-malformed proposal leaves a visible review blocker. `replace_controller` fences the
-old generation, requests cancellation of superseded planners, and rebuilds planning
+The kernel closes the orchestrator's expansion and classifies the triggering cursor
+in the same amendment. A orchestrator must not duplicate those operations. A stale or
+malformed proposal leaves a visible review blocker. `replace_orchestrator` fences the
+old generation, requests cancellation of superseded orchestrators, and rebuilds planning
 from durable facts without resetting budgets or restarting existing workers.
-Controller capacity is shared with workers. Planning is serialized per graph; the
+Orchestrator capacity is shared with workers. Planning is serialized per graph; the
 runtime does not hold a process slot merely to supervise children.
 
 ## Optional model decisions
@@ -391,14 +500,14 @@ Confidence never authorizes new actions or establishes goal acceptance.
 Pending inference after a crash becomes `interrupted_unknown_consumption`. It is
 not resent. Failed/low-confidence responses remain evidence; explicit review may
 `dismiss_decision` or request a new bounded evaluation. Graph call/attempt limits
-survive retries and controller replacement; token usage is observed, not an enforced
-monetary reservation. Configuring automatic controller proposal application does
+survive retries and orchestrator replacement; token usage is observed, not an enforced
+monetary reservation. Configuring automatic orchestrator proposal application does
 not implicitly enable model routing: clients explicitly request typed choices.
 
 ## Bounds and remaining integration
 
 The local adapter permits at most 256 graphs; each graph has at most 512 members,
-2,048 amendments/attempts, 256 expansions/controller calls, depth 32 and fanout 128,
+2,048 amendments/attempts, 256 expansions/orchestrator calls, depth 32 and fanout 128,
 with a deadline no more than 30 days after creation. Actual limits are explicit and
 usually smaller. A complete journal record is capped at 8 MiB. Exhaustion refuses
 new work while retaining history. Archival and a 1,000-agent capacity claim are not

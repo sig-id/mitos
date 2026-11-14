@@ -20,7 +20,7 @@ distinguishes current implementation from required behavior;
 A Project groups goals, tasks, resources, and policy. A Goal describes the desired
 outcome. A Service preserves activation and lifecycle policy between tasks. A
 supervisory responsibility binds a task or service to an inbox and a replaceable
-coordinator. These compositions MUST retain distinct identities.
+orchestrator. These compositions MUST retain distinct identities.
 
 An Attempt is one execution of a task; existing Mitos **Run** IDs retain this
 meaning. A Session binds interaction and history to execution. Orca's Run is a
@@ -49,18 +49,18 @@ Run's meaning. The whole graph need not be known before execution; each admitted
 Attempt MUST nevertheless have a complete, frozen execution contract.
 
 Planning, decision evaluation, admission, and scheduling are separate responsibilities.
-A planner produces concrete candidate work; a decision provider evaluates supplied
+A orchestrator produces concrete candidate work; a decision provider evaluates supplied
 alternatives or evidence; the kernel validates and commits mutations; the scheduler
-admits eligible tasks. Rules, people, and agent controllers use the same contracts.
+admits eligible tasks. Rules, people, and agent orchestrators use the same contracts.
 Runtime mutation semantics and executor adapter contracts are defined in advance;
 future tasks, their topology, agent specializations, and domain operations need not
 be. Adaptive composition is the default product path. Fixed recipes remain an
-explicit policy option, not a prerequisite for admitting work. A supervisor is one replaceable controller, not a
+explicit policy option, not a prerequisite for admitting work. A supervisor is one replaceable orchestrator, not a
 mandatory process through which every launch must pass.
 
 ```mermaid
 flowchart LR
-    F[Committed facts] --> C[Rules or planning controller]
+    F[Committed facts] --> C[Rules or planning orchestrator]
     C --> P[Concrete proposals and optional decision evaluation]
     P --> K[Validate and commit graph amendment]
     K --> S[Deterministic scheduler]
@@ -77,8 +77,8 @@ conversations and output formats; adapters own translation into runtime observat
 A fixed workflow, a supervisor-discovered plan, and a hybrid with mandatory checks
 are policies over this composition. Scheduling/event activation is independent of
 planning policy and executor type. [Runtime](02_RUNTIME.md#adaptive-work-graphs) owns
-graph transactions and closure; [orchestration](03_ORCHESTRATION.md#adaptive-controllers)
-owns controller policy; [ADR 0004](../ADRs/0004_ADAPTIVE_WORK_GRAPHS.md) records the design.
+graph transactions and closure; [orchestration](03_ORCHESTRATION.md#adaptive-orchestrators)
+owns orchestrator policy; [ADR 0004](../ADRs/0004_ADAPTIVE_WORK_GRAPHS.md) records the design.
 
 ## Servers, clients, and execution hosts
 

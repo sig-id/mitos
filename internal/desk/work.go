@@ -42,13 +42,13 @@ type Goal struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Responsibility struct {
-	ID                   string        `json:"id"`
-	ProjectID            string        `json:"project_id"`
-	TaskID               string        `json:"task_id"`
-	Title                string        `json:"title"`
-	Generation           int           `json:"generation"`
-	CoordinatorSessionID string        `json:"coordinator_session_id"`
-	Messages             []WorkMessage `json:"messages"`
+	ID                    string        `json:"id"`
+	ProjectID             string        `json:"project_id"`
+	TaskID                string        `json:"task_id"`
+	Title                 string        `json:"title"`
+	Generation            int           `json:"generation"`
+	OrchestratorSessionID string        `json:"orchestrator_session_id"`
+	Messages              []WorkMessage `json:"messages"`
 }
 type WorkMessage struct {
 	ID        string    `json:"id"`
@@ -186,8 +186,8 @@ func (m *Manager) bindWorkLocked(p Project, s *Session, options startOptions) er
 			return fmt.Errorf("%w: stop and settle the previous executor before replacement", ErrConflict)
 		}
 	}
-	if assignment.RequestedBy == "" && s.CoordinatorID != "" {
-		assignment.RequestedBy = s.CoordinatorID
+	if assignment.RequestedBy == "" && s.OrchestratorID != "" {
+		assignment.RequestedBy = s.OrchestratorID
 	}
 	parentID, goalID := "", assignment.GoalID
 	if assignment.RequestedBy != "" && assignment.RequestedBy != "operator" {
@@ -248,7 +248,7 @@ func (m *Manager) bindWorkLocked(p Project, s *Session, options startOptions) er
 			s.Generation = max(s.Generation, previous.Generation+1)
 		}
 	}
-	if s.Role == "coordinator" {
+	if s.Role == "orchestrator" {
 		var responsibility *Responsibility
 		for i := range m.state.Responsibilities {
 			if m.state.Responsibilities[i].TaskID == task.ID {
@@ -260,7 +260,7 @@ func (m *Manager) bindWorkLocked(p Project, s *Session, options startOptions) er
 			responsibility = &m.state.Responsibilities[len(m.state.Responsibilities)-1]
 		}
 		responsibility.Generation++
-		responsibility.CoordinatorSessionID = s.ID
+		responsibility.OrchestratorSessionID = s.ID
 		s.ResponsibilityID = responsibility.ID
 		task.ResponsibilityID = responsibility.ID
 	}
@@ -431,7 +431,7 @@ func (m *Manager) CreateWork(project string, in NewWork) (WorkAssignment, error)
 	if !validText(in.Key, 100) || !validText(in.Title, 160) || !validText(in.Intent, 32000) || !validText(in.Criteria, 16000) {
 		return WorkAssignment{}, errors.New("provide an outcome, assignment, completion criteria, and request key")
 	}
-	if in.Role != "agent" && in.Role != "coordinator" {
+	if in.Role != "agent" && in.Role != "orchestrator" {
 		return WorkAssignment{}, errors.New("choose a worker or coordinated execution")
 	}
 	b, _ := json.Marshal(in)
@@ -475,7 +475,7 @@ func (m *Manager) CreateWork(project string, in NewWork) (WorkAssignment, error)
 	}
 	t := WorkAssignment{ID: id("task"), ProjectID: project, GoalID: in.GoalID, ParentID: in.ParentID, Title: in.Title, Intent: in.Intent, Criteria: in.Criteria, Role: in.Role, CriteriaRevision: 1, Revision: 1, Status: "queued", RequestKey: in.Key, RequestDigest: digest, CreatedAt: now, UpdatedAt: now}
 	m.state.Work = append(m.state.Work, t)
-	if in.Role == "coordinator" {
+	if in.Role == "orchestrator" {
 		r := Responsibility{ID: id("responsibility"), ProjectID: project, TaskID: t.ID, Title: t.Title, Messages: []WorkMessage{}}
 		m.state.Responsibilities = append(m.state.Responsibilities, r)
 		m.state.Work[len(m.state.Work)-1].ResponsibilityID = r.ID

@@ -238,7 +238,7 @@ func (m *Manager) ReleaseNotice(id, author string) error {
 		allowed := author == "operator" || author == n.Author
 		if !allowed {
 			s, err := m.sessionLocked(author)
-			allowed = err == nil && s.Role == "coordinator" && activeSession(*s)
+			allowed = err == nil && s.Role == "orchestrator" && activeSession(*s)
 		}
 		if !allowed {
 			return ErrConflict
@@ -263,7 +263,7 @@ func (m *Manager) ReleaseNotice(id, author string) error {
 	return ErrNotFound
 }
 
-// notifyLocked records controller events in the same transaction as the state
+// notifyLocked records orchestrator events in the same transaction as the state
 // change. Native delivery is scheduled only after that transaction is saved.
 func (m *Manager) notifyLocked(project, body string, targetID string) *Notice {
 	if len(m.state.Notices) >= 2048 {

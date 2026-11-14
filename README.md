@@ -65,7 +65,7 @@ configuration are required. Codex must be installed and signed in on the worksta
 
 Work appears as a tree in the left sidebar. The graph shows the goal, planning
 calls, agents, dependencies, and current states. Select an agent to inspect its
-assignment, formatted report, logs, changes, or attempts. The planner reviews saved
+assignment, formatted report, logs, changes, or attempts. The orchestrator reviews saved
 evidence before completing a goal; process exit alone never accepts worker output.
 Changes stay in workspace copies, with patches and complete workspace artifacts.
 Older untouched goals require **Start automatic work**; viewing them does not launch
@@ -136,7 +136,7 @@ a separately reconstructed result. See [applications](spec/system/05_INTERFACES_
 ## Adaptive work graphs
 
 The [adaptive runtime](docs/adaptive-runtime.md) supports dynamically added
-work, atomic graph amendments, automatic application dispatch, registered controller
+work, atomic graph amendments, automatic application dispatch, registered orchestrator
 applications, and optional typed decisions. Native worker output stays intact.
 The project **Work** page creates and displays these graphs. `/api/graphs` provides
 the programmatic interface; `/api/graphs/capabilities` reports the implemented
@@ -162,7 +162,7 @@ The [default library](agents/README.md) ships eight adaptable definitions ported
 Chief Wiggum. The native Codex adapter loads these definitions, freezes them for each
 attempt, and supports graph-scoped specializations. Custom worker definitions can be
 added or edited in **Agent library**; subsequent goals make them available to the
-planner. The full [agent-library specification](spec/system/07_AGENT_LIBRARY.md)
+orchestrator. The full [agent-library specification](spec/system/07_AGENT_LIBRARY.md)
 additionally describes future runtime negotiation, knowledge and publication features.
 
 ## System Configuration
@@ -237,7 +237,7 @@ it is not the full remote-client contract. See
 Project setup shows **Runtime & resource limits** with two scopes:
 
 - **Workflow budgets:** elapsed time (including waiting), agent attempts shared
-  across planners/workers/retries, and model tokens.
+  across orchestrators/workers/retries, and model tokens.
 - **Per-agent resources:** CPU capacity and memory for an agent and its children.
 
 Elapsed time and attempt budgets are enforced today. CPU and memory caps require
@@ -283,7 +283,7 @@ well as the Mitos data directory for native continuation.
 The resume API is `POST /api/graphs/{id}/resume`, with an idempotency `key`, current
 `revision`, full replacement `limits` (including a future `deadline`), and
 `attempt_minutes` (1–120). An untouched goal can also set `start_automatic: true`
-to start its coordinator under the new limits. Limits can only increase, within runtime maximums.
+to start its orchestrator under the new limits. Limits can only increase, within runtime maximums.
 Resume waits for stopped processes and released claims, preserves supervision holds,
 and rejects completed, explicitly cancelled, or service-owned workflows. Recurring
 occurrences remain controlled by their service lifecycle. Pending graph decisions

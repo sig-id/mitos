@@ -35,7 +35,7 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, state := range []string{"closed", "archived"} {
-		req := studio.CreateGraph{Profile: studio.GraphProfile, Key: "overview-" + state, ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, ControllerCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Hour)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Review result", Acceptance: "operator", Brief: studio.Brief{Title: state + " work"}}}}
+		req := studio.CreateGraph{Profile: studio.GraphProfile, Key: "overview-" + state, ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, OrchestratorCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Hour)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Review result", Acceptance: "operator", Brief: studio.Brief{Title: state + " work"}}}}
 		body, _ := json.Marshal(req)
 		response := request(s, "POST", "/api/graphs", string(body), false)
 		var g studio.WorkGraph

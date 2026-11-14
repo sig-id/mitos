@@ -44,12 +44,12 @@ func TestAgentLibraryRevisionsAndReplay(t *testing.T) {
 		t.Fatal("definition identity did not change")
 	}
 	for _, d := range initial {
-		if d.Kind == "planner" {
+		if isOrchestratorKind(d.Kind) {
 			request.ID = d.ID
 			request.Revision = d.Revision
-			request.Key = "edit-planner"
+			request.Key = "edit-orchestrator"
 			if _, err = e.SaveAgent(request); err == nil {
-				t.Fatal("planner authority editable")
+				t.Fatal("orchestrator authority editable")
 			}
 		}
 	}

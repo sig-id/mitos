@@ -1,10 +1,10 @@
 {
   "profile": "agent-definition/v1",
-  "id": "mitos.planner",
-  "revision": 2,
-  "name": "Coordinator",
+  "id": "mitos.orchestrator",
+  "revision": 3,
+  "name": "Orchestrator",
   "description": "Turn a goal and evolving evidence into bounded work, selecting or creating agent roles as needed.",
-  "kind": "planner",
+  "kind": "orchestrator",
   "match": {
     "use_for": [
       "Automatic goal decomposition",
@@ -18,7 +18,7 @@
   },
   "instructions": {
     "path": "instructions.md",
-    "sha256": "c121e32166b48c653f80508c6de35936c01f85a0efa054f9a7675183ad5385b5"
+    "sha256": "096b9ae61bc7b424da56b737f21c11375c5d63e5c2879e49456972ee5aed9c35"
   },
   "runtime": {
     "requires": [

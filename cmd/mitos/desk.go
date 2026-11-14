@@ -34,7 +34,7 @@ func deskClient(args []string) error {
 	query := f.String("query", "", "Topic title, summary or path filter")
 	agentID := f.String("agent", "", "Discovered agent or application ID")
 	profileID := f.String("profile", "", "Named agent environment profile")
-	role := f.String("role", "agent", "Agent or coordinator role")
+	role := f.String("role", "agent", "Agent or orchestrator role")
 	prompt := f.String("prompt", "", "Initial or follow-up prompt")
 	criteria := f.String("criteria", "", "Completion criteria for newly delegated work")
 	expectedRevision := f.Int("expected-revision", 0, "Expected task revision when assigning an executor")

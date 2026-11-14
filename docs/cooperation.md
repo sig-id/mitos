@@ -41,6 +41,6 @@ is not advertised by this version.
 
 These messages record proposals and evidence. They do not directly launch work,
 grant permissions, steer a native conversation, or accept a result. Native questions
-and approvals use the agent bridge's request/response protocol. The coordinator
+and approvals use the agent bridge's request/response protocol. The orchestrator
 consumes cooperation evidence when revising work. Each adapter must declare which
 native request types and live input operations it supports.

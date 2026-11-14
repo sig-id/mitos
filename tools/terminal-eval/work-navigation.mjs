@@ -18,7 +18,7 @@ try{
  for(const name of ['mitos','sigid'])await mkdir(path.join(temporary,name));
  const project=await api('/api/projects',{name:'mitos',directory:path.join(temporary,'mitos')});
  const other=await api('/api/projects',{name:'sigid',directory:path.join(temporary,'sigid')});
- const limits={tasks:32,amendments:64,attempts:32,retries:2,expansions:16,controller_calls:8,depth:8,fanout:16,deadline:new Date(Date.now()+3600000).toISOString()};
+ const limits={tasks:32,amendments:64,attempts:32,retries:2,expansions:16,orchestrator_calls:8,depth:8,fanout:16,deadline:new Date(Date.now()+3600000).toISOString()};
  const scope=(id,parent,title)=>({id,parent,kind:'scope',required:true,criteria:'Review saved evidence',acceptance:'operator',brief:{title,intent:title}});
  async function create(title,projectID=project.id){return api('/api/graphs',{profile:'work-graph/v1',key:crypto.randomUUID(),project_id:projectID,goal_revision:1,activation:'manual',policy:{mode:'adaptive',applications:[]},limits,tasks:[scope('goal',undefined,title),scope('child','goal',title+' child'),scope('nested','child',title+' nested')],seal:false})}
  const first=await create('First work'),second=await create('Second work');await create('Other project work',other.id);

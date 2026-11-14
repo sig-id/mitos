@@ -26,7 +26,7 @@ try{
   await window.MitosGraphResult.open({graph,request:async path=>{const response=await fetch(path),value=await response.json();if(!response.ok)throw Error(value.error);return value},container:document.querySelector('#result'),onClose:()=>{}});
  });
  await page.getByText('No final answer yet',{exact:true}).waitFor();
- assert.equal(await page.getByText('Coordinator completion review',{exact:true}).count(),0);
+ assert.equal(await page.getByText('Orchestrator completion review',{exact:true}).count(),0);
  await page.getByRole('combobox',{name:'Saved assignment'}).selectOption('1');await page.getByRole('heading',{name:'No saved report',exact:true}).waitFor();await page.getByRole('combobox',{name:'Saved assignment'}).selectOption('0');
  await page.locator('mitos-file-browser button[data-path="report.md"]').click();await page.getByRole('heading',{name:'Partial diagnosis',exact:true}).waitFor();
  assert.equal(await page.locator('#result img,#result script').count(),0);

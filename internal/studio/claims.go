@@ -75,7 +75,7 @@ func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, er
 		if g := s.graphs[bound.GraphID]; g != nil {
 			bound.GraphRevision = g.Revision
 			bound.PolicyRevision = g.PolicyRevision
-			bound.Generation = g.ControllerGeneration
+			bound.Generation = g.OrchestratorGeneration
 		}
 		bound.Witnesses = append([]workpool.Witness(nil), witnesses...)
 		c.GraphAttempt = &bound

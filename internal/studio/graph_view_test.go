@@ -64,23 +64,23 @@ func TestGraphViewKeepsStatusesWithoutExecutionHistory(t *testing.T) {
 		t.Fatal("finished state not projected")
 	}
 }
-func TestGraphPlannerDiscoveryIsExplicit(t *testing.T) {
+func TestGraphOrchestratorDiscoveryIsExplicit(t *testing.T) {
 	e, _ := graphEngine(t, false)
 	app := executionApp(t, "true")
-	app.GraphController = true
+	app.GraphOrchestrator = true
 	e.Apps = append(e.Apps, app)
 	got := e.GraphApplications()
 	found := false
 	for _, a := range got {
 		if a["id"] == app.ID {
-			found = a["controller"] == true
+			found = a["orchestrator"] == true
 		}
-		if a["id"] == "workspace-inventory" && a["controller"] != false {
-			t.Fatal("inventory advertised as planner")
+		if a["id"] == "workspace-inventory" && a["orchestrator"] != false {
+			t.Fatal("inventory advertised as orchestrator")
 		}
 	}
 	if !found {
-		t.Fatal("registered planner undiscoverable")
+		t.Fatal("registered orchestrator undiscoverable")
 	}
 }
 

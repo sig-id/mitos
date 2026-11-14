@@ -12,11 +12,11 @@ journal; their execution adapters still have different admission and scheduling 
 
 | Area | Existing foundation | Material limit |
 |---|---|---|
-| Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general coordinator fencing remain incomplete. |
+| Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general orchestrator fencing remain incomplete. |
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
-| Agent library | Eight authored default definitions, JSON authoring schema, provenance and native Markdown instructions | Library registration, compatible runtime binding, automatic goal planning and on-demand specialist admission remain design targets; bundled data is not a running planner. |
-| Adaptive graphs | Local application adapter: atomic graph amendments, shared Task/Run queue, frozen specs, obligation/closure checks, registered controllers, fenced candidate decisions, native output evidence | PTY admission, cross-graph imports, graph service templates, autonomous root acceptance, and complete G1–G5 conformance remain. See the [backend contract](../../docs/adaptive-runtime.md). |
+| Agent library | Eight authored default definitions, JSON authoring schema, provenance and native Markdown instructions | Library registration, compatible runtime binding, automatic goal planning and on-demand specialist admission remain design targets; bundled data is not a running orchestrator. |
+| Adaptive graphs | Local application adapter: atomic graph amendments, shared Task/Run queue, frozen specs, obligation/closure checks, registered orchestrators, fenced candidate decisions, native output evidence | PTY admission, cross-graph imports, graph service templates, autonomous root acceptance, and complete G1–G5 conformance remain. See the [backend contract](../../docs/adaptive-runtime.md). |
 | Decision inference | Optional System One (Jev/Laya-compatible) and OpenAI Decisions Choice adapters; journaled segment/recovery gates, probability thresholds, bounded calls, cancellation fencing | Batch hooks plus separately journaled graph candidate choices; no predicate/score hooks, model spend enforcement, or automatic replay of unknown inference. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
 | Messaging | MQTT 5 via external broker, signed peers and exact grants, journal outbox/inbox receipts, durable notes and atomic service events, local HTTP/CLI; cron/interval/manual services can also subscribe to events through the same queue | Broker/key configuration is explicit; general control leases and automatic bridges remain outside this adapter. |
@@ -44,7 +44,7 @@ runtime. In particular, the batch drainer excludes interactive attempts; a share
 Task reader does not establish shared scheduling. The graph application adapter adds automatic dispatch for its registered applications
 and decision Tasks, while existing PTYs still use the desk adapter. The local provider's unattended grant remains zero.
 Broad remote placement,
-hard confinement, general coordinator fencing, and unknown-effect reconciliation
+hard confinement, general orchestrator fencing, and unknown-effect reconciliation
 MUST NOT be advertised as complete without the gates below.
 
 ## Delivery order
@@ -73,7 +73,7 @@ holds when inspection cannot establish an outcome. Client exit MUST leave work r
 
 ### M3 – Durable supervision and waiting
 
-Persist coordinator generations, bounded mailboxes, application receipts, wake
+Persist orchestrator generations, bounded mailboxes, application receipts, wake
 conditions, and child-cancellation scope. Build replacement context from runtime
 facts and selected supporting records.
 
@@ -82,11 +82,11 @@ outbox/inbox receipts. The initial MQTT adapter implements notes and service-eve
 admission; this alone does not complete the supervision milestone. Acceptance
 MUST cover duplicate delivery, lost PUBACK/application receipts, automatic client
 acknowledgment before application commit, broker restart, session expiry, deadline
-expiry, revoked topic access, and stale coordinator generations. These cases MUST
+expiry, revoked topic access, and stale orchestrator generations. These cases MUST
 preserve pending work and prevent duplicate task transitions. Cross-server checks
 in M5 MUST preserve these guarantees across independent broker connections.
 
-Acceptance MUST reject stale coordinator proposals and acknowledgments, recover a
+Acceptance MUST reject stale orchestrator proposals and acknowledgments, recover a
 crash between message consumption and dispatch, and deliver a result arriving
 during wait registration. Waiting MUST preserve resource accounting and deadlines.
 Parent cancellation MUST settle or explicitly detach children.
@@ -127,11 +127,11 @@ duplicate work; revoking access to one server MUST NOT revoke or expand the othe
 receipts, custody, or enforcement requirements. Local trusted execution MAY implement
 the graph contracts while explicitly declining strict isolation/spend capabilities.
 A graph UI or successful model call alone establishes none of these gates. Implement
-G1 and G2 before adaptive mutation, then G3 before general controller activation.
+G1 and G2 before adaptive mutation, then G3 before general orchestrator activation.
 
 ### G1 – Common admission and automatic dispatch
 
-Route agent, command, planner, decision, and verifier execution through common
+Route agent, command, orchestrator, decision, and verifier execution through common
 Task/Attempt admission, capacity, receipts, and resource custody. Preserve existing
 Run IDs, batch segment semantics, and native session access. Acceptance MUST admit a
 mixed agent/program dependency chain without a supervisor issuing launches, exhaust
@@ -157,8 +157,8 @@ Implement exact artifact inputs, frozen joins, expansion obligations, seal/reope
 root acceptance, cancellation, and supersession with settlement. Acceptance MUST
 race fanout against sealing, root completion against a new trigger, and any/k-of-n
 admission against late producers. Reject empty-queue completion with an unresolved
-planner or unconsumed relevant event; reject dropping a failed required check as a
-completion shortcut. Crash after event admission but before controller delivery must
+orchestrator or unconsumed relevant event; reject dropping a failed required check as a
+completion shortcut. Crash after event admission but before orchestrator delivery must
 leave the closure blocker visible. A repair
 must produce a new candidate and cannot reuse a verdict over different content.
 Verify a candidate before producer acceptance without a dependency deadlock, and
@@ -166,9 +166,9 @@ record its declared verdict without recursively spawning verification of verific
 Superseded running work MUST retain custody until settled. Test bounded correction
 loops and prove that attempts/replacement do not reset responsibility allowances.
 
-### G4 – Adaptive controllers and native-agent observations
+### G4 – Adaptive orchestrators and native-agent observations
 
-Implement deterministic and agent planners, optional typed decisions, the
+Implement deterministic and agent orchestrators, optional typed decisions, the
 [agent library](07_AGENT_LIBRARY.md), frozen specialization/context, event cursors,
 generation fencing, and native-output adapters. Cover library revisions, scoped
 discovery, generated specialists and compatible runtime resolution.
@@ -183,16 +183,16 @@ Inject crashes before model dispatch, after a response, after answer commit, and
 before proposal commit. Replay MUST perform no inference; unresolved inference remains
 visible; a committed answer may apply only its original candidate after revalidation.
 Cover low confidence, refusal, invalid operands, revoked authority, model timeout,
-duplicate trigger delivery, controller replacement, and cancellation during inference.
-A retired controller cannot mutate the graph. A waiting root must not exhaust worker
+duplicate trigger delivery, orchestrator replacement, and cancellation during inference.
+A retired orchestrator cannot mutate the graph. A waiting root must not exhaust worker
 capacity solely by existing. Existing eligible work MUST progress
-while the controller is offline. Meaningful event coalescing MUST not lose triggers
+while the orchestrator is offline. Meaningful event coalescing MUST not lose triggers
 or repeatedly infer on unchanged state. Protocol fixtures prove runtime handling;
-labeled scenario evaluations separately establish decision/planner quality.
+labeled scenario evaluations separately establish decision/orchestrator quality.
 
 ### G5 – Adaptive service instances and operator journey
 
-Apply manual, schedule, and event activation to the same graph template and controller
+Apply manual, schedule, and event activation to the same graph template and orchestrator
 policies. Duplicate occurrences MUST return the same root; subsequent occurrences
 MUST get distinct graphs and cannot consume unrelated previous-cycle results.
 Graph-wide skip/queue/replace policy MUST be tested independently of per-task limits.
@@ -203,9 +203,9 @@ example executor selection. Use the default library, generate a specialist when
 no exact role fits, and distinguish missing runtime/authentication from busy capacity.
 Without a prewritten task pipeline it MUST discover parallel work, adapt an agent
 template, choose domain/Git operations from
-evidence, insert a previously unspecified recovery task, replace a controller,
+evidence, insert a previously unspecified recovery task, replace a orchestrator,
 restart the server, and accept an exact result. Repeat a defined-plan case without
-model calls and a hybrid case whose mandatory check the planner cannot remove.
+model calls and a hybrid case whose mandatory check the orchestrator cannot remove.
 Expose current graph, causal amendments, waiting reasons, evidence, and concrete
 human decisions through the same read model. Test bounded reads and backpressure
 with declared fleet/graph sizes; synthetic large graphs do not establish equivalent
@@ -258,7 +258,7 @@ response and reconcile the original operation without blindly repeating it.
 
 Demonstrate a personal-agent responsibility coordinating independent background
 negotiations. A negotiation MUST checkpoint and release capacity while waiting for
-an answer. Race the answer with wait registration, restart, and coordinator replacement;
+an answer. Race the answer with wait registration, restart, and orchestrator replacement;
 there MUST be no lost wake-up or duplicate application. Serialize personal-conversation
 updates and reject or reconsider results based on superseded preferences. Verify that
 candidate and company context stays within its authorized thread and that only

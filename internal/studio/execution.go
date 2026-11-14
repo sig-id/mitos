@@ -254,14 +254,14 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 		}
 		return errors.Join(runErr, fmt.Errorf("workspace harvest failed: %w", err))
 	}
-	// Only registered graph controller attempts expose this optional typed tool
+	// Only registered graph orchestrator attempts expose this optional typed tool
 	// artifact. Worker stdout is never parsed for commands or graph mutations.
 	if r.GraphAttempt != nil {
 		graph, graphErr := e.Store.Graph(r.GraphAttempt.GraphID)
 		if graphErr != nil {
 			return graphErr
 		}
-		if member := graph.Members[r.TaskID]; member != nil && member.ControllerFor != "" {
+		if member := graph.Members[r.TaskID]; member != nil && member.OrchestratorFor != "" {
 			for _, file := range harvested.Snapshot.Files {
 				if file.Path == "graph-proposal.json" && len(file.Data) <= graphMaxBytes {
 					if err = e.Store.SaveArtifact(r.ID, prefix+"graph-proposal.json", file.Data); err != nil {

@@ -5,7 +5,7 @@
   let policy=initial;
   const section=el('section');section.className='agent-policy setup-card';section.id='decisions-api';section.tabIndex=-1;section.append(el('h2','Decisions API & approvals'));
   const settings=el('a','System Configuration →');settings.href='/settings?project='+encodeURIComponent(document.body.dataset.project);settings.className='text-link';section.append(settings);
-  section.append(el('p','Approval review runs separately from the coordinator and workers, using the Decisions API. Configure a connection and approval boundaries to handle routine requests automatically. Saved changes also apply to pending requests.'));
+  section.append(el('p','Approval review runs separately from the orchestrator and workers, using the Decisions API. Configure a connection and approval boundaries to handle routine requests automatically. Saved changes also apply to pending requests.'));
   const form=el('form'),feedback=el('p');feedback.setAttribute('role','status');
   const field=(parent,label,input)=>{const l=el('label',label);input.setAttribute('aria-label',label);l.append(input);parent.append(l);return input};
   const select=(values,value)=>{const s=el('select');for(const [v,label] of values)s.append(new Option(label,v));s.value=value;return s};

@@ -61,10 +61,10 @@ work SHOULD be. Node kinds MUST NOT require a particular LLM or engineering pipe
 
 ### Graph amendment transactions
 
-A controller, operator, or deterministic policy MAY propose a bounded amendment.
+A orchestrator, operator, or deterministic policy MAY propose a bounded amendment.
 All proposers MUST use the same validation and receipt contract. A proposal MUST bind
 request identity and payload digest, graph ID and expected structural revision,
-authority/controller generation, deadline, policy revision, a read set of relevant
+authority/orchestrator generation, deadline, policy revision, a read set of relevant
 fact/specification revisions, and an ordered list of typed operations. Its explanation
 and model confidence are evidence, not authorization. Proposal data MUST NOT contain
 credentials or choose an unregistered execution destination.
@@ -108,7 +108,7 @@ recheck current grants, resources, input witnesses, and task eligibility.
 ### Attempts, dependencies, and iteration
 
 The common scheduler MUST admit eligible graph Tasks regardless of agent, command,
-planner, or verifier executor type. An eligible worker MUST NOT depend on a live
+orchestrator, or verifier executor type. An eligible worker MUST NOT depend on a live
 supervisor issuing a launch command. Deterministic selection, capacity reservation,
 and the committed dispatch outbox apply equally to interactive and batch adapters.
 Unsupported adapter capabilities MUST block with an explicit reason; compatibility
@@ -119,7 +119,7 @@ admission revision, executor and application revision, input witnesses, workspac
 baseline, grant generation, provider posture, verification policy, and limits.
 A later graph amendment MUST NOT mutate that envelope. Messages MAY guide execution
 within it; changing the assignment requires explicit settlement and replacement.
-Normal task failure, resource wait, human decision, controller absence, and uncertain
+Normal task failure, resource wait, human decision, orchestrator absence, and uncertain
 external effect MUST remain distinct observable blocking reasons.
 
 Dependencies use the [scheduling contract](#scheduling-and-dependencies). An edge
@@ -142,10 +142,10 @@ additional work, with explicit causal lineage. A correction loop MUST NOT reopen
 accepted historical result or reset counters. A segment/checkpoint recovery within
 one Run remains part of that Attempt; it is not a new Task or a hidden budget reset.
 
-Every graph MUST declare finite admitted-work, expansion, controller-call, retry,
+Every graph MUST declare finite admitted-work, expansion, orchestrator-call, retry,
 depth/fanout, and elapsed-time limits. Reservations MUST account for parallel proposals
 and children atomically. Remaining responsibility allowance is shared across tasks,
-controller replacement, and attempts; per-attempt limits may narrow it but never
+orchestrator replacement, and attempts; per-attempt limits may narrow it but never
 replenish it. Time or allowance exhaustion MUST prevent new work and invoke the
 recorded stop/settlement policy. Graph growth without accepted progress MUST have a
 bounded stall policy. Token/cost estimates MUST NOT be called enforced spend limits
@@ -154,15 +154,15 @@ unless the selected provider supports reservation and metering.
 ### Expansion, sealing, and completion
 
 A newly adaptive scope is open for expansion. A complete defined scope MAY be
-sealed in its creation transaction if the same closure checks pass. Every asynchronous planner/decision
+sealed in its creation transaction if the same closure checks pass. Every asynchronous orchestrator/decision
 that can introduce work MUST acquire a durable expansion obligation before dispatch;
 it records owner generation, triggering facts, deadline, allowance, and expected
 outcome. Committing or admitting a graph-relevant event MUST atomically register its
 pending trigger before that scope can be considered closed; broker delivery alone
 is insufficient. Consuming the trigger MUST atomically create its obligation or
 record why no expansion is required. Sealing MUST bind a closure cursor covered by
-the controller's processed relevant events, including durably classified no-change
-events. Controller silence MUST NOT imply that no more work is needed.
+the orchestrator's processed relevant events, including durably classified no-change
+events. Orchestrator silence MUST NOT imply that no more work is needed.
 
 Sealing a scope MUST freeze its membership, required obligations, policy revision,
 and acceptance target. It MUST refuse pending expansion obligations, unapplied
@@ -187,7 +187,7 @@ Root completion requires all of the following in one validated terminal transiti
 - Child execution, outstanding effects, and claims are settled, or explicitly detached
   under a recorded policy that names their new owner and excludes them from the result.
 
-An empty queue, controller-declared completion, or all currently visible leaves
+An empty queue, orchestrator-declared completion, or all currently visible leaves
 passing MUST NOT establish goal completion. Sealing is not acceptance. A failed or
 cancelled graph retains evidence and settlement status; terminal work outcome and
 resource release remain separate. Root acceptance MUST NOT consume an ancestor's
@@ -319,7 +319,7 @@ MUST NOT be advertised as hard limits. A waiting VM or shell remains accounted f
 ### Resource policy scopes and enforcement
 
 Resource policy separates aggregate **workflow budgets** from **per-agent
-execution limits**. One recurring occurrence is one workflow budget. Planner
+execution limits**. One recurring occurrence is one workflow budget. Orchestrator
 calls, workers, and retries share that budget; replacements and replay do not
 reset it. A later scheduled occurrence receives a new budget from the current
 project settings. Existing work keeps its frozen policy.
@@ -327,7 +327,7 @@ project settings. Existing work keeps its frozen policy.
 | Dimension | Scope and unit | Current enforcement |
 | --- | --- | --- |
 | `workflow.elapsed_minutes` | Wall-clock minutes, including waits and approvals | A finite graph deadline; expiry requests cancellation and waits for process settlement |
-| `workflow.attempts` | Attempts allocated across planners, workers, and retries | Durable admission count; allocation consumes an attempt even if it never starts |
+| `workflow.attempts` | Attempts allocated across orchestrators, workers, and retries | Durable admission count; allocation consumes an attempt even if it never starts |
 | `workflow.tokens` | Aggregate model input and output tokens | Unavailable with native CLI credentials; reported usage is not a reservation |
 | `agent.cpu_millicores` | CPU capacity per agent and its descendants; 1000 = one core | Requires an explicit provider quota guarantee; unavailable in the local process provider |
 | `agent.memory_mib` | Aggregate memory cap for an agent and its descendants | Requires an explicit provider memory boundary; unavailable in the local process provider |

@@ -16,7 +16,7 @@ func resumeRequest(g WorkGraph) ResumeGraph {
 	limits := g.Limits
 	limits.Deadline = time.Now().UTC().Add(2 * time.Hour)
 	limits.Attempts += 8
-	limits.ControllerCalls += 4
+	limits.OrchestratorCalls += 4
 	limits.Retries += 1
 	return ResumeGraph{Key: "resume", Revision: g.Revision, Limits: limits, AttemptMinutes: 60}
 }
@@ -72,7 +72,7 @@ func TestResumeGraphPreservesIdentityEvidenceAndUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.ID != g.ID || next.RootTask != g.RootTask || len(next.Members) != len(g.Members) || next.Attempts != g.Attempts || next.ControllerCalls != g.ControllerCalls {
+	if next.ID != g.ID || next.RootTask != g.RootTask || len(next.Members) != len(g.Members) || next.Attempts != g.Attempts || next.OrchestratorCalls != g.OrchestratorCalls {
 		t.Fatal("workflow or accounting replaced")
 	}
 	if !reflect.DeepEqual(next.Members[finished], g.Members[finished]) {
@@ -82,8 +82,8 @@ func TestResumeGraphPreservesIdentityEvidenceAndUsage(t *testing.T) {
 	if m.ContinueFrom != old.CurrentRunID || m.CurrentRunID != "" || m.State != "queued" || !reflect.DeepEqual(m.Attempts, old.Attempts) || !reflect.DeepEqual(m.Spec.Brief.Scheduling.Deps, old.Spec.Brief.Scheduling.Deps) || !reflect.DeepEqual(m.Executor, old.Executor) {
 		t.Fatal("lost agent, dependencies, or lineage")
 	}
-	if next.PolicyRevision != g.PolicyRevision+1 || next.ControllerGeneration != g.ControllerGeneration+1 {
-		t.Fatal("old controller authority retained")
+	if next.PolicyRevision != g.PolicyRevision+1 || next.OrchestratorGeneration != g.OrchestratorGeneration+1 {
+		t.Fatal("old orchestrator authority retained")
 	}
 	if err = e.reconcileGraphs(); err != nil {
 		t.Fatal(err)
@@ -182,7 +182,7 @@ func TestResumeUntouchedGoalStartsInPlaceWithChosenLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.ID != g.ID || next.RootTask != g.RootTask || len(next.Members) != 1 || !next.Policy.Automatic || next.Policy.ControllerApplication == "" || next.Setup == nil || !reflect.DeepEqual(next.Limits, req.Limits) {
+	if next.ID != g.ID || next.RootTask != g.RootTask || len(next.Members) != 1 || !next.Policy.Automatic || next.Policy.OrchestratorApplication == "" || next.Setup == nil || !reflect.DeepEqual(next.Limits, req.Limits) {
 		t.Fatal("untouched goal was recreated or limits reset")
 	}
 	replay, err := e.ResumeGraph(g.ID, req)
@@ -194,6 +194,6 @@ func TestResumeUntouchedGoalStartsInPlaceWithChosenLimits(t *testing.T) {
 	}
 	scheduled, _ := e.Store.Graph(g.ID)
 	if len(scheduled.Members) != 2 || scheduled.Attempts != 1 {
-		t.Fatal("coordinator was not scheduled")
+		t.Fatal("orchestrator was not scheduled")
 	}
 }

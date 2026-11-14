@@ -41,22 +41,22 @@ func TestProjectProfileRevisionAndDurability(t *testing.T) {
 	}
 }
 
-func TestCoordinatorDelegationContextAndCompletion(t *testing.T) {
+func TestOrchestratorDelegationContextAndCompletion(t *testing.T) {
 	m, p := continuationManager(t)
-	coordinator, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "coordinator", Prompt: "Deliver a parser"}, "http://localhost")
+	orchestrator, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "orchestrator", Prompt: "Deliver a parser"}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "target", Prompt: "Write parser tests", Assignment: &agentcli.Assignment{RequestedBy: coordinator.ID, TaskID: "parser-tests"}}, "http://localhost")
+	worker, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "target", Prompt: "Write parser tests", Assignment: &agentcli.Assignment{RequestedBy: orchestrator.ID, TaskID: "parser-tests"}}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if worker.CoordinatorID != coordinator.ID || worker.Workspace != p.Directory {
+	if worker.OrchestratorID != orchestrator.ID || worker.Workspace != p.Directory {
 		t.Fatal(worker)
 	}
 	await(t, func() bool {
-		out, _ := m.ReadOutput(coordinator.ID, 0)
-		return strings.Contains(string(out.Data), "You are the Mitos coordinator") && strings.Contains(string(out.Data), "desk start-session") && strings.Contains(string(out.Data), "Before implementation") && strings.Contains(string(out.Data), "do not make implementation edits yourself")
+		out, _ := m.ReadOutput(orchestrator.ID, 0)
+		return strings.Contains(string(out.Data), "You are the Mitos orchestrator") && strings.Contains(string(out.Data), "desk start-session") && strings.Contains(string(out.Data), "Before implementation") && strings.Contains(string(out.Data), "do not make implementation edits yourself")
 	})
 	profile := DefaultProjectProfile()
 	profile.MaxAgents = 1
@@ -70,11 +70,11 @@ func TestCoordinatorDelegationContextAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal("replacement counts twice against agent limit", err)
 	}
-	if replacement.CoordinatorID != coordinator.ID {
+	if replacement.OrchestratorID != orchestrator.ID {
 		t.Fatal("handover lost parent", replacement)
 	}
 	stopContinuation(t, m, replacement)
-	inbox, err := m.Inbox(coordinator.ID)
+	inbox, err := m.Inbox(orchestrator.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +85,13 @@ func TestCoordinatorDelegationContextAndCompletion(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("coordinator not notified of exit", inbox)
+		t.Fatal("orchestrator not notified of exit", inbox)
 	}
 }
 
 func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 	m, p := testManager(t)
-	coordinator, err := startTestCommand(m, p.ID, "Coordinator", "coordinator", "sleep 60", "http://localhost")
+	orchestrator, err := startTestCommand(m, p.ID, "Orchestrator", "orchestrator", "sleep 60", "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +99,14 @@ func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := m.Broadcast(p.ID, coordinator.ID, "Hold the shared index", true)
+	n, err := m.Broadcast(p.ID, orchestrator.ID, "Hold the shared index", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(n.Targets) != 1 || n.Targets[0].SessionID != worker.ID {
 		t.Fatal(n)
 	}
-	if err = m.Acknowledge(n.ID, coordinator.ID); !errors.Is(err, ErrNotFound) {
+	if err = m.Acknowledge(n.ID, orchestrator.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatal("non-target acknowledged", err)
 	}
 	if err = m.NoticeDelivery(n.ID, worker.ID, "context_queued", "Hook delivered"); err != nil {
@@ -132,9 +132,9 @@ func TestAttentionAcknowledgmentReleaseAndRestart(t *testing.T) {
 		t.Fatal("new worker missed breakpoint")
 	}
 	if err = m.ReleaseNotice(n.ID, worker.ID); !errors.Is(err, ErrConflict) {
-		t.Fatal("worker released coordinator breakpoint", err)
+		t.Fatal("worker released orchestrator breakpoint", err)
 	}
-	if err = m.ReleaseNotice(n.ID, coordinator.ID); err != nil {
+	if err = m.ReleaseNotice(n.ID, orchestrator.ID); err != nil {
 		t.Fatal(err)
 	}
 	inbox, _ = m.Inbox(worker.ID)

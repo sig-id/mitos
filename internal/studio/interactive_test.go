@@ -89,11 +89,11 @@ func TestInteractiveJournalIdentityReplacementAndAcceptance(t *testing.T) {
 		t.Fatal("migration invented historical lineage")
 	}
 
-	task, err := engine.Desk.CreateWork(project.ID, desk.NewWork{Key: "work", Title: "Audit architecture", Intent: "Produce findings", Criteria: "Findings cite source files", Role: "coordinator"})
+	task, err := engine.Desk.CreateWork(project.ID, desk.NewWork{Key: "work", Title: "Audit architecture", Intent: "Produce findings", Criteria: "Findings cite source files", Role: "orchestrator"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := agentcli.Request{Key: "launch", AgentID: "worker", Role: "coordinator", Prompt: task.Intent, ExpectedRevision: task.Revision, Assignment: &agentcli.Assignment{TaskID: task.ID}}
+	request := agentcli.Request{Key: "launch", AgentID: "worker", Role: "orchestrator", Prompt: task.Intent, ExpectedRevision: task.Revision, Assignment: &agentcli.Assignment{TaskID: task.ID}}
 	first, err := engine.Desk.StartAgent(project.ID, request, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestInteractiveJournalIdentityReplacementAndAcceptance(t *testing.T) {
 		t.Fatal("obsolete report accepted", err)
 	}
 	if _, err = engine.Desk.StartAgent(project.ID, agentcli.Request{AgentID: "worker", Prompt: "obsolete delegation", Assignment: &agentcli.Assignment{RequestedBy: first.ID}}, "http://localhost"); !errors.Is(err, desk.ErrConflict) {
-		t.Fatal("obsolete coordinator delegated", err)
+		t.Fatal("obsolete orchestrator delegated", err)
 	}
 	stopInteractive(t, engine.Desk, second.ID)
 	current = findWork(t, engine.Desk, project.ID, task.ID)

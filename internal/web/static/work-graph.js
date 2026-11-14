@@ -80,30 +80,30 @@
    if (old.kind === 'create') { createBody = null; await loadSummaries(true); await chooseGraph(result.id); } else await refreshSelected();
   } catch (error) { if (error.status && error.status < 500) rememberPending(null); showError(error); }
  }
- function envelope(g, operations, reads) { return { profile:g.profile, key:crypto.randomUUID(), graph_id:g.id, revision:g.revision, policy_revision:g.policy_revision, generation:g.controller_generation, deadline:g.limits.deadline, operations, ...(reads ? {reads} : {}) }; }
+ function envelope(g, operations, reads) { return { profile:g.profile, key:crypto.randomUUID(), graph_id:g.id, revision:g.revision, policy_revision:g.policy_revision, generation:g.orchestrator_generation, deadline:g.limits.deadline, operations, ...(reads ? {reads} : {}) }; }
  function allReads(g) { return Object.fromEntries(Object.entries(g.members).map(([id,m]) => [id, {specification:m.revision, fact:m.fact_revision}])); }
  async function amend(g, operations, reads) { const result = await sendMutation(endpoint(g.id) + '/amendments', envelope(g,operations,reads)); if (graphID === g.id) await refreshSelected(); return result; }
  function title(m) { return m.spec.brief.title || (m.spec.kind === 'scope' ? 'Goal' : 'Untitled step'); }
- function kind(m) { return m.spec.kind === 'scope' ? 'scope' : m.controller_for?.startsWith('decision:') ? 'decision' : m.controller_for ? 'planner' : 'step'; }
- function kindLabel(m) { return {scope:'Goal', planner:'Coordinator', decision:'Decision', step:'Agent'}[kind(m)]; }
- function plannerRounds(g=graph,view=snapshot){return Object.keys(g.members).filter(id=>kind(g.members[id])==='planner').sort((a,b)=>(g.members[a].attempts?.length?0:1)-(g.members[b].attempts?.length?0:1)||(view.nodes[a]?.created_at||'').localeCompare(view.nodes[b]?.created_at||'')||a.localeCompare(b))}
- function latestPlanner(){const rounds=plannerRounds();return rounds.at(-1)}
- function coordinatorStatus(){
+ function kind(m) { return m.spec.kind === 'scope' ? 'scope' : m.orchestrator_for?.startsWith('decision:') ? 'decision' : m.orchestrator_for ? 'orchestrator' : 'step'; }
+ function kindLabel(m) { return {scope:'Goal', orchestrator:'Orchestrator', decision:'Decision', step:'Agent'}[kind(m)]; }
+ function orchestratorRounds(g=graph,view=snapshot){return Object.keys(g.members).filter(id=>kind(g.members[id])==='orchestrator').sort((a,b)=>(g.members[a].attempts?.length?0:1)-(g.members[b].attempts?.length?0:1)||(view.nodes[a]?.created_at||'').localeCompare(view.nodes[b]?.created_at||'')||a.localeCompare(b))}
+ function latestOrchestrator(){const rounds=orchestratorRounds();return rounds.at(-1)}
+ function orchestratorStatus(){
   if(graph.status==='accepted')return 'Complete';
   if(graph.status==='cancelled'||Date.parse(graph.limits.deadline)<=Date.now())return 'Stopped';
-  const id=latestPlanner(),m=graph.members[id];
+  const id=latestOrchestrator(),m=graph.members[id];
   if(!m)return 'Preparing assignments';
   if(['waiting_input','reviewing_approval','resuming'].includes(displayState(id)))return labels[displayState(id)];
-  if(m.state==='running')return plannerRounds().length===1?'Planning assignments':'Reviewing results';
+  if(m.state==='running')return orchestratorRounds().length===1?'Planning assignments':'Reviewing results';
   if(m.state==='queued')return 'Preparing next round';
   if(Object.values(graph.expansions).some(x=>x.error&&!x.outcome))return 'Needs attention';
   return 'Coordinating assignments';
  }
  const approvalSettingsURL=()=>`?graph=${encodeURIComponent(graphID)}&view=resources#decisions-api`;
  const approvalSettings=()=>link('Configure Decisions API',approvalSettingsURL());
- const mapKind=id=>id===graph.root_task?'planner':kind(graph.members[id]);
- const mapTitle=id=>id===graph.root_task?coordinatorStatus():title(graph.members[id]);
- const mapLabel=id=>id===graph.root_task?'Coordinator':kindLabel(graph.members[id]);
+ const mapKind=id=>id===graph.root_task?'orchestrator':kind(graph.members[id]);
+ const mapTitle=id=>id===graph.root_task?orchestratorStatus():title(graph.members[id]);
+ const mapLabel=id=>id===graph.root_task?'Orchestrator':kindLabel(graph.members[id]);
  $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
  function closeResult(){ resultViewKey='';$('graph-result').hidden=true;$('graph-current').classList.remove('showing-result'); }
  function applyWorkView(){
@@ -153,7 +153,7 @@
   if (values.some(n => n.state === 'resuming')) return 'resuming';
   if (values.some(n => n.state === 'running')) return 'in_progress';
   if (reviewable(graph.root_task)) return 'review';
-  if (!graph.policy.controller_application && Object.keys(graph.members).length===1) return 'idle';
+  if (!graph.policy.orchestrator_application && Object.keys(graph.members).length===1) return 'idle';
   if (Object.values(graph.expansions).some(x => !x.outcome)) return 'planning';
   return 'queued';
  }
@@ -165,8 +165,8 @@
   if (m.spec.kind !== 'scope') return m.state === 'done' && snapshot.nodes[id]?.settled;
   if (descendants(graph,id).length < 2) return false;
   if (Object.values(graph.decisions || {}).some(d => ['queued','pending','selected'].includes(d.outcome))) return false;
-  // Human review may close manual planning obligations, never a live planner.
-  if (Object.values(graph.expansions).some(x => !x.outcome && x.controller_task && !snapshot.nodes[x.controller_task]?.settled)) return false;
+  // Human review may close manual planning obligations, never a live orchestrator.
+  if (Object.values(graph.expansions).some(x => !x.outcome && x.orchestrator_task && !snapshot.nodes[x.orchestrator_task]?.settled)) return false;
   return descendants(graph,id).filter(key => key !== id).every(key => {
    const child = graph.members[key]; return snapshot.nodes[key]?.settled && (!child.spec.required || obligationAccepted(graph,child));
   });
@@ -174,7 +174,7 @@
  async function loadOptions() {
   const library = await request('/api/graphs/agents');
   optionsLoaded=true; $('graph-create').disabled=!library.ready;
-  $('graph-planner-note').textContent=library.ready ? `${library.agents.length} agent roles · ${library.runtime}` : library.reason;
+  $('graph-orchestrator-note').textContent=library.ready ? `${library.agents.length} agent roles · ${library.runtime}` : library.reason;
  }
  function scrollWorkTo(element) { const view=$('work-view'); view.scrollTop += element.getBoundingClientRect().top-view.getBoundingClientRect().top-16; }
  function compose() { window.MitosProjectNav.select('work');$('graph-followup-form').hidden=true; $('graph-compose').hidden = false; $('graph-compose-close').hidden = !graph; $('graph-current').hidden = true; $('graph-prompt').focus({preventScroll:true}); scrollWorkTo($('graph-compose')); }
@@ -257,8 +257,8 @@
       const dot=statusIcon(state);b.setAttribute('aria-label',b.title);b.replaceChildren(dot,node('span',title(m),'work-tree-title'));line.append(b);li.append(line);
       if(children&&isOpen){const nested=node('ul');append(id,nested);li.append(nested)}container.append(li);
      }};
-     const planner=plannerRounds(g,view).at(-1);if(planner){const li=node('li'),b=button('',()=>openNode(planner),'work-tree-node'),state=view.nodes[planner]?.state||g.members[planner].state;b.append(statusIcon(state),node('span','Coordinator','work-tree-title'));b.title='Coordinator · '+(labels[state]||state);b.setAttribute('aria-label',b.title);b.dataset.treeKey=current?'planner':'planner:'+row.id;if(current&&window.MitosProjectNav.current()!=='overview'&&selected&&g.members[selected]&&kind(g.members[selected])==='planner')b.setAttribute('aria-current','page');li.append(b);list.append(li)}
-     append(g.root_task,list);if(!list.children.length)list.append(node('li',g.policy.automatic?'Preparing coordinator…':'Not started','work-tree-empty'));item.append(list);
+     const orchestrator=orchestratorRounds(g,view).at(-1);if(orchestrator){const li=node('li'),b=button('',()=>openNode(orchestrator),'work-tree-node'),state=view.nodes[orchestrator]?.state||g.members[orchestrator].state;b.append(statusIcon(state),node('span','Orchestrator','work-tree-title'));b.title='Orchestrator · '+(labels[state]||state);b.setAttribute('aria-label',b.title);b.dataset.treeKey=current?'orchestrator':'orchestrator:'+row.id;if(current&&window.MitosProjectNav.current()!=='overview'&&selected&&g.members[selected]&&kind(g.members[selected])==='orchestrator')b.setAttribute('aria-current','page');li.append(b);list.append(li)}
+     append(g.root_task,list);if(!list.children.length)list.append(node('li',g.policy.automatic?'Preparing orchestrator…':'Not started','work-tree-empty'));item.append(list);
     }else item.append(node('p',treeLoading.has(row.id)?'Loading…':'No details loaded','work-tree-empty'));
     if(treeErrors.has(row.id))item.append(node('p',treeErrors.get(row.id),'work-tree-error'),button('Retry',()=>loadTreeSnapshot(row.id)));
    }
@@ -301,11 +301,11 @@
   if ($('graph-compose').hidden) $('graph-current').hidden = false;
   const state=workState(graph);$('graph-work-state').textContent={open:'Open',closed:'Closed',archived:'Archived'}[state];$('graph-close').hidden=state!=='open';$('graph-reopen').hidden=state!=='closed';$('graph-archive').hidden=state==='archived';$('graph-restore').hidden=state!=='archived';$('graph-close').textContent=graph.status==='active'?'Close and stop work':'Close work';$('graph-archive').textContent=graph.status==='active'?'Archive and stop work':'Archive work';
   $('graph-title').textContent = title(graph.members[graph.root_task]); const status = overall(); $('graph-status').className = 'graph-badge ' + status; $('graph-status').textContent = labels[status] || status;
-  const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.controller_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
+  const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.orchestrator_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
   const awaiting=workers.filter(([,m])=>!m.accepted&&m.state==='done').length;
   $('graph-approval-settings').href=approvalSettingsURL();
-  $('graph-progress').textContent = `${finished} of ${workers.length} steps complete`+(awaiting?` · ${awaiting} awaiting review`:'') + (graph.policy.controller_application ? ' · Coordinator managed' : ' · Not started');
-  $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.controller_application || graph.status !== 'active' || Date.parse(graph.limits.deadline)<=Date.now();
+  $('graph-progress').textContent = `${finished} of ${workers.length} steps complete`+(awaiting?` · ${awaiting} awaiting review`:'') + (graph.policy.orchestrator_application ? ' · Orchestrator managed' : ' · Not started');
+  $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.orchestrator_application || graph.status !== 'active' || Date.parse(graph.limits.deadline)<=Date.now();
   renderMessage(); renderMap(); renderInspector(); renderActivity(); renderTree();renderConversation();applyWorkView();document.dispatchEvent(new CustomEvent("mitos-graph",{detail:graph}));
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
@@ -327,13 +327,13 @@
    if(expired||exhausted)box.append(node('p','The goal is unfinished. Resume with more resources to keep this workflow, its agents, completed steps and saved work.'),node('p','Review any reported failure before continuing. Saved agent conversations and workspace changes are reused when available.'));
    if(waiting){box.append(node('p',snapshot.nodes[waiting].decision_setup?'Configure the Decisions API and approval boundaries so routine requests can be reviewed automatically.':title(graph.members[waiting])+' has a request that needs your input.'));const controls=node('div',undefined,'actions');if(snapshot.nodes[waiting].decision_setup)controls.append(approvalSettings());controls.append(button('Review request',()=>selectNode(waiting,'output')));box.append(controls);}
    for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.';item.append(node('strong',title(graph.members[id])),node('p',summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
-   const reasons={controller_proposal_missing:'The coordinator did not save a work proposal.',controller_proposal_invalid:'The coordinator returned an unreadable proposal.',controller_proposal_stale_or_rejected:'The coordinator’s proposal did not match the current work.',controller_execution_needs_review:'The coordinator stopped before producing a verified proposal.',controller_allowance_exhausted:'The planning allowance has been used.',controller_context_limit:'The work exceeds the coordinator’s context limit.'};
-   for(const error of errors)if(!failures.includes(error.controller_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect coordinator',()=>selectNode(error.controller_task||graph.root_task,'output')));
+   const reasons={orchestrator_proposal_missing:'The orchestrator did not save a work proposal.',orchestrator_proposal_invalid:'The orchestrator returned an unreadable proposal.',orchestrator_proposal_stale_or_rejected:'The orchestrator’s proposal did not match the current work.',orchestrator_execution_needs_review:'The orchestrator stopped before producing a verified proposal.',orchestrator_allowance_exhausted:'The planning allowance has been used.',orchestrator_context_limit:'The work exceeds the orchestrator’s context limit.'};
+   for(const error of errors)if(!failures.includes(error.orchestrator_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect orchestrator',()=>selectNode(error.orchestrator_task||graph.root_task,'output')));
    if(expired&&!failures.length){const earlier=Object.keys(graph.members).filter(id=>graph.members[id].replacement&&graph.members[id].state==='failed');if(earlier.length){const history=node('details');history.append(node('summary',earlier.length+' earlier failed assignments'));for(const id of earlier)history.append(node('p',snapshot.nodes[id]?.summary||title(graph.members[id])),button('Inspect '+title(graph.members[id]),()=>selectNode(id,'output')));box.append(history)}}
    const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(!waiting&&!graph.service_run_id)actions.append(button('Resume with more resources',openResume,'primary'));if(expired||exhausted)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()}));box.append(actions);return;
   }
   if(Object.values(snapshot.nodes).some(n=>n.reviewing_requests)){box.hidden=false;box.append(node('span','Approval review is running separately through the Decisions API.'));return;}
-  if(!graph.policy.controller_application&&Object.values(graph.expansions).some(x=>!x.outcome)&&Object.keys(graph.members).length===1){box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));box.hidden=false}
+  if(!graph.policy.orchestrator_application&&Object.values(graph.expansions).some(x=>!x.outcome)&&Object.keys(graph.members).length===1){box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));box.hidden=false}
   else if(graph.status==='accepted'){box.append(node('span','Work complete.'),button('Read final answer',()=>openResult()));box.hidden=false}
   else if(Object.values(graph.decisions||{}).some(d=>d.outcome==='selected')){const d=Object.values(graph.decisions).find(d=>d.outcome==='selected');box.append(node('span','A decision is ready to apply.'),button('Review decision',()=>selectNode(d.task_id)));box.hidden=false}
  }
@@ -348,22 +348,22 @@
   field(form,'attempts','Total agent attempts (including '+g.attempts+' already used)',Math.min(2048,g.limits.attempts+32),g.limits.attempts,2048);
   field(form,'attempt_minutes','Time per resumed attempt (minutes)',Math.min(120,Math.max(30,...Object.values(g.members).map(m=>m.spec.brief.timeout_minutes||0))),1,120);
   const advanced=node('details');advanced.append(node('summary','Planning and workflow allowances'));
-  for(const [key,label,max] of [['controller_calls','Total planning calls',256],['tasks','Total tasks',512],['amendments','Total workflow updates',2048],['expansions','Total planning rounds',256],['retries','Retries per task',16]]){
-   const used={controller_calls:g.controller_calls,tasks:Object.keys(g.members).length,amendments:g.limits.amendments,expansions:Object.keys(g.expansions).length,retries:Math.max(0,...Object.values(g.members).map(m=>(m.attempts||[]).length))}[key];
+  for(const [key,label,max] of [['orchestrator_calls','Total planning calls',256],['tasks','Total tasks',512],['amendments','Total workflow updates',2048],['expansions','Total planning rounds',256],['retries','Retries per task',16]]){
+   const used={orchestrator_calls:g.orchestrator_calls,tasks:Object.keys(g.members).length,amendments:g.limits.amendments,expansions:Object.keys(g.expansions).length,retries:Math.max(0,...Object.values(g.members).map(m=>(m.attempts||[]).length))}[key];
    field(advanced,key,label,Math.min(max,Math.max(g.limits[key],used+(key==='retries'?1:8))),g.limits[key],max);
   }
   form.append(advanced,node('p','Used attempts are retained. Agents must finish stopping before this workflow can resume.','muted'));
   const error=node('p','','form-error');error.setAttribute('role','alert');const actions=node('div',undefined,'actions'),submit=node('button','Resume workflow','primary');submit.type='submit';actions.append(button('Cancel',()=>dialog.close()),submit);form.append(error,actions);dialog.append(form);document.body.append(dialog);
   form.onsubmit=async event=>{event.preventDefault();submit.disabled=true;error.textContent='';try{
-   const limits={...g.limits};for(const key of ['attempts','controller_calls','tasks','amendments','expansions','retries'])limits[key]=Number(inputs[key].value);
+   const limits={...g.limits};for(const key of ['attempts','orchestrator_calls','tasks','amendments','expansions','retries'])limits[key]=Number(inputs[key].value);
    limits.deadline=new Date(Math.max(Date.now(),Date.parse(g.limits.deadline))+Number(inputs.minutes.value)*60000).toISOString();
-   await sendMutation(endpoint(g.id)+'/resume',{key:crypto.randomUUID(),revision:g.revision,limits,attempt_minutes:Number(inputs.attempt_minutes.value),start_automatic:!g.policy.controller_application&&Object.keys(g.members).length===1&&g.attempts===0});
+   await sendMutation(endpoint(g.id)+'/resume',{key:crypto.randomUUID(),revision:g.revision,limits,attempt_minutes:Number(inputs.attempt_minutes.value),start_automatic:!g.policy.orchestrator_application&&Object.keys(g.members).length===1&&g.attempts===0});
    dialog.close();await refreshSelected();await loadSummaries(true);
   }catch(e){error.textContent=e.message}finally{submit.disabled=false}};
   dialog.showModal();
  }
  function workflowOrder(g=graph,view=snapshot,history=showHistory) {
-  const ids=Object.keys(g.members).filter(id=>kind(g.members[id])!=='planner'&&(history||!g.members[id].replacement));
+  const ids=Object.keys(g.members).filter(id=>kind(g.members[id])!=='orchestrator'&&(history||!g.members[id].replacement));
   const included=new Set(ids),ranks=new Map(),remaining=new Set(ids);
   const predecessors=id=>[g.members[id].spec.parent,...(g.members[id].spec.brief.scheduling?.deps||[]).map(d=>d.from)].filter(p=>included.has(p));
   while(remaining.size){let progress=false;for(const id of remaining){const deps=predecessors(id);if(deps.every(p=>ranks.has(p))){ranks.set(id,Math.max(0,...deps.map(p=>ranks.get(p)+1)));remaining.delete(id);progress=true}}if(!progress){for(const id of remaining)ranks.set(id,1);break}}
@@ -372,11 +372,11 @@
  function visibleNodes() {
   const members = graph.members;
   order = workflowOrder();
-  const visible = order.filter(id => {if(kind(members[id])==='planner'||(!showHistory&&members[id]?.replacement))return false; let at = members[id]?.spec.parent, seen = new Set(); while (at && !seen.has(at)) { if (collapsed.has(at)) return false; seen.add(at); at = members[at]?.spec.parent; } return !!members[id]; });
+  const visible = order.filter(id => {if(kind(members[id])==='orchestrator'||(!showHistory&&members[id]?.replacement))return false; let at = members[id]?.spec.parent, seen = new Set(); while (at && !seen.has(at)) { if (collapsed.has(at)) return false; seen.add(at); at = members[at]?.spec.parent; } return !!members[id]; });
   return visible;
  }
  function layout(ids) {
-  const membersVisible=id=>graph.members[id]&&kind(graph.members[id])!=='planner'&&(showHistory||!graph.members[id].replacement);
+  const membersVisible=id=>graph.members[id]&&kind(graph.members[id])!=='orchestrator'&&(showHistory||!graph.members[id].replacement);
   const shown = new Set(ids), incoming = new Map(ids.map(id => [id,new Set()])), edges = [];
   const representative = id => {if(!membersVisible(id))return null;let at = id, result = id, seen = new Set(); while (at && !seen.has(at)) { if (shown.has(at)) result = at; if (collapsed.has(at)) return at; seen.add(at); at = graph.members[at]?.spec.parent; } return shown.has(id) ? id : result; };
   for (const id of ids) {
@@ -406,9 +406,9 @@
    const m = graph.members[id], p = positions.get(id), status = displayState(id); let card = existing.get(id);
    if (!card) { card = button('',() => selectNode(id),'graph-node'); card.dataset.id = id; stage.append(card); }
    existing.delete(id); card.style.left = p.x + 'px'; card.style.top = p.y + 'px'; card.style.height = '132px'; card.dataset.status = status; card.dataset.kind = mapKind(id); card.setAttribute('aria-pressed',String(id === selected)); card.setAttribute('aria-label',`${mapLabel(id)} · ${mapTitle(id)} · ${labels[status] || status}`);
-   const contentKey = JSON.stringify([mapTitle(id),status,mapKind(id),snapshot.nodes[id]?.executor,m.attempts?.length,m.spec.required,m.sealed,plannerRounds().length]);
-   if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',planner:'✦',decision:'◈',step:'○'}[mapKind(id)]),document.createTextNode(mapLabel(id))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',id===graph.root_task ? `${plannerRounds().length} planning ${plannerRounds().length===1?'round':'rounds'}` : m.spec.kind === 'scope' ? 'Work group' : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.controller_for ? 'Coordinator' : '')); card.replaceChildren(top,node('strong',mapTitle(id),'graph-node-title'),footer); }
-   const count = Object.values(graph.members).filter(child => child.spec.parent === id && kind(child)!=='planner' && (showHistory||!child.replacement)).length;
+   const contentKey = JSON.stringify([mapTitle(id),status,mapKind(id),snapshot.nodes[id]?.executor,m.attempts?.length,m.spec.required,m.sealed,orchestratorRounds().length]);
+   if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',orchestrator:'✦',decision:'◈',step:'○'}[mapKind(id)]),document.createTextNode(mapLabel(id))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',id===graph.root_task ? `${orchestratorRounds().length} planning ${orchestratorRounds().length===1?'round':'rounds'}` : m.spec.kind === 'scope' ? 'Work group' : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.orchestrator_for ? 'Orchestrator' : '')); card.replaceChildren(top,node('strong',mapTitle(id),'graph-node-title'),footer); }
+   const count = Object.values(graph.members).filter(child => child.spec.parent === id && kind(child)!=='orchestrator' && (showHistory||!child.replacement)).length;
    if (m.spec.kind === 'scope' && count) { const toggle = button(collapsed.has(id) ? '+' : '−',() => { if (collapsed.has(id)) collapsed.delete(id); else { collapsed.add(id); if (selected && descendants(graph,id).includes(selected) && selected !== id) selectNode(id); } renderMap(); },'graph-collapse'); toggle.setAttribute('aria-expanded',String(!collapsed.has(id))); toggle.setAttribute('aria-label',(collapsed.has(id)?'Expand ':'Collapse ')+title(m)); toggle.style.left = (p.x+224)+'px'; toggle.style.top = (p.y+118)+'px'; stage.append(toggle); }
   }
   for (const card of existing.values()) card.remove();
@@ -440,20 +440,20 @@
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
   if(m.spec.kind==='scope'&&!['progress','planning','details','result'].includes(selectedTab))selectedTab='progress';
-  $('graph-node-kind').textContent=mapLabel(selected); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,Date.parse(graph.limits.deadline)<=Date.now(),m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',selected===graph.root_task?'Coordinator':kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
+  $('graph-node-kind').textContent=mapLabel(selected); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,Date.parse(graph.limits.deadline)<=Date.now(),m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',selected===graph.root_task?'Orchestrator':kind(m)==='orchestrator'?'Orchestrator · Round '+(orchestratorRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
   if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(Date.parse(graph.limits.deadline)>Date.now()&&m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
-  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(m.spec.kind==='scope'?[['progress','Activity'],['planning','Planning rounds'],['details','Request'],['result','Result']]:kind(m)==='planner'?[['output','Activity'],['planning','Planning rounds'],['details','Assignment']]:[['output','Activity'],['details','Assignment'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
+  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(m.spec.kind==='scope'?[['progress','Activity'],['planning','Planning rounds'],['details','Request'],['result','Result']]:kind(m)==='orchestrator'?[['output','Activity'],['planning','Planning rounds'],['details','Assignment']]:[['output','Activity'],['details','Assignment'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
   if(selectedTab==='progress'){renderGoalProgress(box,m)}else if(selectedTab==='result'){renderGoalResult(box)}else if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
-   const deps=m.spec.brief.scheduling?.deps||[];if(deps.length){box.append(node('h4','Depends on'));for(const dep of deps){box.append(button((graph.members[dep.from]?title(graph.members[dep.from]):dep.from)+(snapshot.nodes[selected].waiting?.includes(dep.from)?' · waiting':''),()=>selectNode(dep.from),'graph-dependency-link'))}}
+   const schedule=m.spec.brief.scheduling||{},deps=schedule.deps||[];if(deps.length){const rule=schedule.join?.rule||'all';box.append(node('h4',rule==='any'?'Wait for any matching source':rule==='k_of_n'?`Wait for ${schedule.join.k} matching sources`:'Wait for all required sources'));for(const dep of deps){const waiting=snapshot.nodes[selected].waiting?.includes(dep.from)?' · waiting':'',condition=` · ${dep.guard||'terminal'}${dep.strength==='soft'?' · optional':''}`;if(dep.inbox){const i=dep.inbox;box.append(node('p',`MQTT inbox ${i.project}/${i.mailbox} · ${i.type}${i.correlation?' · '+i.correlation:''}${condition}${waiting}`,'graph-dependency-link'))}else{box.append(button((graph.members[dep.from]?title(graph.members[dep.from]):dep.from)+condition+waiting,()=>selectNode(dep.from),'graph-dependency-link'))}}}
    if(m.replacement)box.append(node('h4','Replacement'),button(title(graph.members[m.replacement]),()=>selectNode(m.replacement),'graph-dependency-link'));
    if(m.accepted)box.append(node('h4','Accepted result'),window.MitosFormat?window.MitosMarkdown.view(m.accepted.rationale):node('p',m.accepted.rationale),node('p',m.accepted.evidence,'muted'));
    const decision=Object.values(graph.decisions||{}).find(d=>d.task_id===selected);if(decision)renderDecision(box,decision);
    if(m.spec.kind==='scope'){
-    const unresolved=Object.values(graph.expansions).filter(x=>!x.outcome);if(unresolved.length){box.append(node('h4','Planning'));for(const x of unresolved)box.append(node('p',x.error?x.error.replaceAll('_',' '):x.controller_task?'Coordinator is considering the next steps.':'Waiting for steps to be defined.'))}
+    const unresolved=Object.values(graph.expansions).filter(x=>!x.outcome);if(unresolved.length){box.append(node('h4','Planning'));for(const x of unresolved)box.append(node('p',x.error?x.error.replaceAll('_',' '):x.orchestrator_task?'Orchestrator is considering the next steps.':'Waiting for steps to be defined.'))}
    }
   }else if(selectedTab==='planning'){renderPlanningHistory(box)}else if(selectedTab==='output'){renderOutput(box,m,selectedAttempt||m.current_run_id)}else{renderAttempts(box,m)}
   restoreReader();
@@ -468,7 +468,7 @@
    holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)));if(run.id!==m.current_run_id)attemptHeader.append(badge(run.status==='done'?'finished':run.status));if(showAttempt)holder.append(attemptHeader);const files=run.artifacts||[];if(run.status==='failed'||run.status==='parked'){const failure=node('section',undefined,'graph-run-failure');failure.append(node('h4','Why this attempt stopped'),node('p',run.summary||'No failure explanation was saved.'),node('p',failureHelp(run.summary||'')));holder.append(failure)}const events=renderRunActivity(holder,m,run);
    const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);const report=readable.find(a=>/report\.md$/.test(a.name))||[...readable].reverse().find(a=>/output\.txt$/.test(a.name))||readable[0];
    if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run)}else if(!report){holder.append(node('p','This attempt finished without a saved report.','muted'));}
-   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');select.dataset.runId=run.id;for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Coordinator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifacts?.[run.id]||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
+   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');select.dataset.runId=run.id;for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Orchestrator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifacts?.[run.id]||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{orchestrator:!!m.orchestrator_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
    if(files.length){const actions=node('div',undefined,'graph-deliverable-links');actions.append(button('Browse saved files',()=>openResult({task:m.spec.id,run:run.id})));if(files.some(a=>a.name==='changes.patch'))actions.append(button('Preview changes',()=>openResult({task:m.spec.id,run:run.id,path:'changes.patch',artifact:true})));holder.append(actions,node('p','Reports, logs and workspace files are saved for this attempt. Read them in the file browser; downloading is optional.','muted'))}
    // Restore only the newly mounted content; live updates must preserve current reader state.
    holder.append(events);restoreDisclosures(holder);
@@ -544,25 +544,25 @@
   card.append(form);box.append(card);
  }
  function renderGoalProgress(box){
-  box.append(node('p',coordinatorStatus(),'muted'));const latest=latestPlanner();if(latest)box.append(button('Latest coordinator update',()=>selectNode(latest,'output')));
+  box.append(node('p',orchestratorStatus(),'muted'));const latest=latestOrchestrator();if(latest)box.append(button('Latest orchestrator update',()=>selectNode(latest,'output')));
   const budgets=node('details',undefined,'graph-resource-budgets');budgets.dataset.readKey='goal-resource-budgets';budgets.append(node('summary','Resource budgets'),node('p',`${graph.attempts} of ${graph.limits.attempts} agent attempts allocated, including planning and retries.`),node('p','Workflow deadline: '+date(graph.limits.deadline)+'. Waiting time counts.'));if(graph.setup?.resources){const resources=graph.setup.resources;for(const [label,limit,unit]of [['Model tokens',resources.workflow?.tokens,'tokens'],['CPU per agent',resources.agent?.cpu_millicores,'millicores'],['Memory per agent',resources.agent?.memory_mib,'MiB']])budgets.append(node('p',label+': '+(limit?.mode==='limit'?`${limit.amount} ${unit}`:'No enforced cap')+'.'))}box.append(budgets);
-  const members=workflowOrder().filter(id=>graph.members[id].spec.kind!=='scope'&&!graph.members[id].replacement),workers=members.filter(id=>kind(graph.members[id])!=='planner');
+  const members=workflowOrder().filter(id=>graph.members[id].spec.kind!=='scope'&&!graph.members[id].replacement),workers=members.filter(id=>kind(graph.members[id])!=='orchestrator');
   box.append(node('h4','Assignments'));
-  if(!workers.length)box.append(node('p',graph.policy.automatic?'The coordinator is preparing the first assignments.':'This goal has no assignments yet.','muted'));
+  if(!workers.length)box.append(node('p',graph.policy.automatic?'The orchestrator is preparing the first assignments.':'This goal has no assignments yet.','muted'));
   for(const id of workers){const row=node('div',undefined,'graph-goal-assignment');row.append(button(title(graph.members[id]),()=>selectNode(id),'graph-dependency-link'),badge(displayState(id)));if(snapshot.nodes[id]?.pending_requests)row.append(node('span',snapshot.nodes[id].pending_requests+' pending request'+(snapshot.nodes[id].pending_requests===1?'':'s'),'muted'));box.append(row)}
   const current=workers.find(id=>displayState(id)==='waiting_input')||workers.find(id=>['running','resuming'].includes(displayState(id)));
   if(current){const section=node('section',undefined,'graph-goal-current');section.append(node('h4','Current agent · '+title(graph.members[current])));box.append(section);renderOutput(section,graph.members[current]);}
-  const planner=latestPlanner();if(planner){const details=node('details',undefined,'graph-goal-coordinator');details.dataset.readKey='goal-coordinator';details.open=!current;details.append(node('summary','Latest coordinator update'));const content=node('div');details.append(content);box.append(details);let opened=false;const show=()=>{if(details.open&&!opened){opened=true;renderOutput(content,graph.members[planner]);}};details.ontoggle=show;show();}
+  const orchestrator=latestOrchestrator();if(orchestrator){const details=node('details',undefined,'graph-goal-orchestrator');details.dataset.readKey='goal-orchestrator';details.open=!current;details.append(node('summary','Latest orchestrator update'));const content=node('div');details.append(content);box.append(details);let opened=false;const show=()=>{if(details.open&&!opened){opened=true;renderOutput(content,graph.members[orchestrator]);}};details.ontoggle=show;show();}
   if(graph.result)box.append(button('View final result',()=>openResult(),'primary'));
  }
  function renderGoalResult(box){
   if(graph.result){box.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));return}
-  box.append(node('p',graph.status==='active'?'The final result is not ready yet. Progress shows the current agent activity and coordinator updates.':'This goal ended without a final result. Its agent activity and saved files remain available.'));
+  box.append(node('p',graph.status==='active'?'The final result is not ready yet. Progress shows the current agent activity and orchestrator updates.':'This goal ended without a final result. Its agent activity and saved files remain available.'));
   box.append(button('View progress',()=>{selectedTab='progress';detailSignature='';renderInspector()}));
  }
  function renderPlanningHistory(box){
-  box.append(node('p','The coordinator plans the work and reviews agent results. Select a round to read its output.','muted'));
-  for(const [i,id]of plannerRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id,'output')));box.append(row)}
+  box.append(node('p','The orchestrator plans the work and reviews agent results. Select a round to read its output.','muted'));
+  for(const [i,id]of orchestratorRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id,'output')));box.append(row)}
  }
  function renderAttempts(box,m){
   if(!m.attempts?.length){box.append(node('p','No attempt has been scheduled for this assignment.','muted'));return}
@@ -578,12 +578,12 @@
  function openAction(type,target=graph.root_task){
   actionSnapshot=structuredClone(graph);actionType=type;actionTarget=target;const form=$('graph-action-form');form.reset();form.querySelector('.form-error').textContent='';const context=$('graph-action-context');context.replaceChildren();
   const accepting=type==='accept',m=graph.members[target];$('graph-evidence-label').hidden=!accepting;form.elements.evidence.required=accepting;
-  const titles={accept:m?.spec.kind==='scope'?'Review the result':'Review this step',cancel:target===graph.root_task?'Stop this work?':'Stop this step?',retry:'Retry this step?',replan:'Replace the planner?', 'apply-decision':'Apply the selected changes?', 'dismiss-decision':'Dismiss this decision?'};
-  $('graph-action-title').textContent=titles[type];$('graph-action-submit').textContent={accept:'Accept result',cancel:'Stop work',retry:'Start another attempt',replan:'Replace planner','apply-decision':'Apply changes','dismiss-decision':'Dismiss decision'}[type];
+  const titles={accept:m?.spec.kind==='scope'?'Review the result':'Review this step',cancel:target===graph.root_task?'Stop this work?':'Stop this step?',retry:'Retry this step?',replan:'Replace the orchestrator?', 'apply-decision':'Apply the selected changes?', 'dismiss-decision':'Dismiss this decision?'};
+  $('graph-action-title').textContent=titles[type];$('graph-action-submit').textContent={accept:'Accept result',cancel:'Stop work',retry:'Start another attempt',replan:'Replace orchestrator','apply-decision':'Apply changes','dismiss-decision':'Dismiss decision'}[type];
   if(accepting){context.append(node('p',m.spec.criteria||m.spec.brief.intent,'prose'));const list=node('div',undefined,'graph-review-list');for(const id of descendants(graph,target).filter(id=>id!==target)){const child=graph.members[id];if(!child.spec.required)continue;const row=node('div',title(child),'graph-review-item');row.append(node('span',obligationAccepted(graph,child)?'Accepted evidence available':labels[displayState(id)]||displayState(id)));if(child.current_run_id)row.append(link('Inspect result','/runs/'+encodeURIComponent(child.current_run_id)));list.append(row)}context.append(list);if(m.spec.kind==='scope')context.append(node('p','Accepting settles outstanding planning for this work and closes this scope. Confirm the evidence meets the goal and no further work is needed.','muted'));}
   else if(type==='cancel')context.append(node('p','Requests a stop for this work and its child steps. Saved output and history remain available.'));
   else if(type==='retry')context.append(node('p','Creates a new attempt with the same assignment. The previous attempt and its evidence remain in the graph.'));
-  else if(type==='replan')context.append(node('p','A new planner will read the current graph. Existing worker steps keep running.'));
+  else if(type==='replan')context.append(node('p','A new orchestrator will read the current graph. Existing worker steps keep running.'));
   else if(type==='apply-decision'){const d=graph.decisions[target];context.append(node('p',d.candidates?.[Number(d.answer?.choice)]?.explanation||'Apply the recorded model choice to the current graph.'));}
   else context.append(node('p','Retains the decision record and closes its outstanding planning obligation.'));
   $('graph-action-dialog').showModal();
@@ -603,7 +603,7 @@
       if(!m.sealed)operations.push({kind:'seal',task:target,cursor:g.cursor});
      }
      operations.push({kind:'accept',task:target,evidence:form.elements.evidence.value.trim(),rationale});reads=allReads(g);
-    }else if(actionType==='replan')operations=[{kind:'replace_controller',rationale}];
+    }else if(actionType==='replan')operations=[{kind:'replace_orchestrator',rationale}];
     else if(actionType==='dismiss-decision')operations=[{kind:'dismiss_decision',expansion:target,rationale}];
     else if(actionType==='retry')operations=[{kind:'retry',task:target}];
     else operations=[{kind:'cancel',task:target,rationale}];
@@ -625,7 +625,7 @@
  window.addEventListener('pagehide',()=>{alive=false;epoch++});
  async function start(){
   try{await Promise.all([loadOptions(),loadSummaries(true)]);if(graphID){await chooseGraph(graphID,true)}else if(window.MitosProjectNav.current()==='work'&&!new URLSearchParams(location.search).has('task')){compose()}if(pending)showError(new Error('A previous request has no confirmed response. Reconcile it before starting another action.'));}
-  catch(error){showError(error);$('graph-planner-note').textContent='Could not load the graph service. Reconnect to try again.';}
+  catch(error){showError(error);$('graph-orchestrator-note').textContent='Could not load the graph service. Reconnect to try again.';}
   finally{poll()}
  }
  start();

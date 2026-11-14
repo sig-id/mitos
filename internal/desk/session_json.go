@@ -8,14 +8,37 @@ func (s *Session) UnmarshalJSON(raw []byte) error {
 	type stored Session
 	var value struct {
 		*stored
-		PreviousCoordinator string `json:"supervisor_id"`
+		PreviousOrchestrator string `json:"supervisor_id"`
+		LegacyOrchestrator   string `json:"coordinator_id"`
 	}
 	value.stored = (*stored)(s)
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return err
 	}
-	if s.CoordinatorID == "" {
-		s.CoordinatorID = value.PreviousCoordinator
+	if s.Role == "coordinator" {
+		s.Role = "orchestrator"
+	}
+	if s.OrchestratorID == "" {
+		s.OrchestratorID = value.LegacyOrchestrator
+	}
+	if s.OrchestratorID == "" {
+		s.OrchestratorID = value.PreviousOrchestrator
+	}
+	return nil
+}
+
+func (r *Responsibility) UnmarshalJSON(raw []byte) error {
+	type stored Responsibility
+	var value struct {
+		*stored
+		LegacyOrchestrator string `json:"coordinator_session_id"`
+	}
+	value.stored = (*stored)(r)
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	if r.OrchestratorSessionID == "" {
+		r.OrchestratorSessionID = value.LegacyOrchestrator
 	}
 	return nil
 }
