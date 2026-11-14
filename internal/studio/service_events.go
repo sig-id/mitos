@@ -102,7 +102,7 @@ func (s *Store) allocateEventRecipients(names []string, depth, used int, sourceT
 	units := activeServiceUnits(s.services)
 	ids := []string{}
 	for unitID, u := range units {
-		if u.TriggerKind() == "event" {
+		if u.TriggerKind() == "event" || len(u.Events) > 0 {
 			ids = append(ids, unitID)
 		}
 	}
@@ -396,7 +396,7 @@ func (e *Engine) reconcileServiceEvents() error {
 		unit, active := units[d.Recipient.ServiceID]
 		patterns, _ := unit.EventPatterns()
 		status, detail := "", ""
-		if d.Recipient.Replacement != nil && unit.Concurrency.Effective().IfRunning != "kill" || !active || unit.TriggerKind() != "event" || !sameServiceDependencies(unit.DependsOn, d.Recipient.DependsOn) || !reflect.DeepEqual(patterns, d.Recipient.Patterns) || d.Recipient.Work == nil || !reflect.DeepEqual(catalog.Work[d.Recipient.ServiceID], *d.Recipient.Work) {
+		if d.Recipient.Replacement != nil && unit.Concurrency.Effective().IfRunning != "kill" || !active || (unit.TriggerKind() != "event" && len(unit.Events) == 0) || !sameServiceDependencies(unit.DependsOn, d.Recipient.DependsOn) || !reflect.DeepEqual(patterns, d.Recipient.Patterns) || d.Recipient.Work == nil || !reflect.DeepEqual(catalog.Work[d.Recipient.ServiceID], *d.Recipient.Work) {
 			status = "suppressed"
 			detail = "Subscription, work binding, or service activation changed."
 		}

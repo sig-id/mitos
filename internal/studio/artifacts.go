@@ -22,6 +22,13 @@ func (s *Store) SaveArtifact(id, name string, data []byte) error {
 // are synced, shared directories are synced once, and the individual artifact
 // events share one log flush. Readers see artifacts only after that flush.
 func (s *Store) SaveArtifacts(id string, artifacts ...ArtifactData) error {
+	return s.saveArtifacts(id, false, artifacts...)
+}
+
+// replaceUncommitted is reserved for results reproducible from durable state.
+// Committed names are still immutable; only files without an artifact record
+// may be discarded and rewritten after an interrupted save.
+func (s *Store) saveArtifacts(id string, replaceUncommitted bool, artifacts ...ArtifactData) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.runs[id]
@@ -82,7 +89,15 @@ func (s *Store) SaveArtifacts(id string, artifacts ...ArtifactData) error {
 			}
 		}()
 		for _, a := range artifacts {
-			f, err := os.OpenFile(filepath.Join(dir, a.Name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			path := filepath.Join(dir, a.Name)
+			if replaceUncommitted {
+				// The journal has no record for this name (checked above under
+				// the store lock). The durable graph can reconstruct its bytes.
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 			if err != nil {
 				return err
 			}

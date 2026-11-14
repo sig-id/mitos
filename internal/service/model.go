@@ -20,6 +20,7 @@ type Relations struct {
 	PartOf        []string `json:"part_of,omitempty"`
 }
 type Unit struct {
+	Events         EventPatterns `json:"events,omitempty"`
 	DependsOn      []string      `json:"depends_on,omitempty"`
 	Condition      *Condition    `json:"condition,omitempty"`
 	Health         *Health       `json:"health,omitempty"`

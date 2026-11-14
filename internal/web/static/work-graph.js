@@ -48,6 +48,7 @@
   const old = pending;
   try { const result = await request(old.path, old.body); rememberPending(null); $('action-error').hidden = true;
    document.querySelectorAll('#graph-step-dialog[open],#graph-action-dialog[open]').forEach(d => d.close());
+   if (old.kind === 'schedule') { location.href='/services'; return; }
    if (old.kind === 'create') { createBody = null; await loadSummaries(true); await chooseGraph(result.id); } else await refreshSelected();
   } catch (error) { if (error.status && error.status < 500) rememberPending(null); showError(error); }
  }
@@ -136,10 +137,30 @@
  function compose() { window.MitosProjectNav.select('work');$('graph-followup-form').hidden=true; $('graph-compose').hidden = false; $('graph-compose-close').hidden = !graph; $('graph-current').hidden = true; $('graph-prompt').focus({preventScroll:true}); scrollWorkTo($('graph-compose')); }
  $('new-work').addEventListener('click', compose);
  $('graph-compose-close').onclick = () => { $('graph-compose').hidden = true; $('graph-current').hidden = !graph; };
+ $('graph-trigger').onchange=()=>{
+  const mode=$('graph-trigger').value;
+  $('graph-recurring-fields').hidden=mode==='once';
+  $('graph-cron-fields').hidden=mode==='event';
+  $('graph-event-fields').hidden=mode==='cron';
+  $('graph-recurring-fields').querySelectorAll('input').forEach(input=>{
+   input.disabled=mode==='once'||(mode==='event'&&!!input.closest('#graph-cron-fields'))||(mode==='cron'&&!!input.closest('#graph-event-fields'));
+  });
+  $('graph-create').textContent=mode==='once'?'Start work →':'Save workflow →';
+ };
+ $('graph-trigger').onchange();
  $('graph-create-form').onsubmit = async event => {
   event.preventDefault(); const form = event.target, submit = $('graph-create'); submit.disabled = true; form.querySelector('.form-error').textContent = '';
   try {
    const goal = form.elements.goal.value.trim(); if (goal.length < 3) throw new Error('Describe what you want to accomplish.');
+   const mode=form.elements.trigger.value;
+   if(mode!=='once'){
+    const id=form.elements.workflow_name.value.trim();if(!id)throw new Error('Give the recurring workflow a name.');
+    const catalog=await request('/api/services');
+    const body={id,project_id:project,goal,cron:mode==='event'?'':form.elements.cron.value.trim(),timezone:mode==='event'?'':form.elements.timezone.value.trim(),event:mode==='cron'?'':form.elements.event.value.trim(),minutes:Number(form.elements.minutes.value),expected_revision:catalog.catalog.revision};
+    if(mode!=='event'&&!body.cron)throw new Error('Enter a cron schedule.');
+    if(mode!=='cron'&&!body.event)throw new Error('Enter the external event name.');
+    await sendMutation('/api/services/workflows',body,'schedule');location.href='/services';return;
+   }
    createBody={key:crypto.randomUUID(),project_id:project,goal};
    const result=await sendMutation('/api/graphs/automatic',createBody,'create');createBody=null;form.elements.goal.value='';await loadSummaries(true);await chooseGraph(result.id);
 

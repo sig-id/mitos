@@ -55,6 +55,9 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	if !ok {
 		return errors.New("application is no longer installed")
 	}
+	if app.ID == WorkflowAppID {
+		return errors.New("agent workflows are dispatched through the graph scheduler")
+	}
 	if err := e.Store.TransitionAfterDecision(r.ID, "advance", "Prepare a fresh workspace for the brief.", "run_started", "running", "Preparing workspace", "Selecting tracked and untracked non-ignored files. The source stays untouched."); err != nil {
 		return err
 	}

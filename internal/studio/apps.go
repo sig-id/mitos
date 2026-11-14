@@ -38,6 +38,7 @@ type Application struct {
 
 func LoadApps(dir string) ([]Application, error) {
 	apps := []Application{{ID: "workspace-inventory", Name: "Workspace inventory", Description: "Get a file inventory, a content fingerprint, and a portable report of a local workspace.", Category: "Workspace", Entrypoint: "Inspect workspace", Builtin: true}}
+	apps = append(apps, Application{ID: WorkflowAppID, Name: "Recurring agent workflow", Description: "Execute saved instructions with agents on a schedule or external event.", Category: "Automation", Entrypoint: "Run workflow", Builtin: true})
 	if dir == "" {
 		return apps, nil
 	}
@@ -49,7 +50,7 @@ func LoadApps(dir string) ([]Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{"workspace-inventory": true}
+	seen := map[string]bool{"workspace-inventory": true, WorkflowAppID: true}
 	pattern := regexp.MustCompile(`^[a-z][a-z0-9-]{1,63}$`)
 	for _, entry := range entries {
 		if !entry.IsDir() {

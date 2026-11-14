@@ -96,6 +96,12 @@ func (s *Store) graphCanDispatch(t *Task) bool {
 	if g == nil || g.Status != "active" || !time.Now().Before(g.Limits.Deadline) {
 		return false
 	}
+	if g.ServiceRunID != "" {
+		parent := s.runs[g.ServiceRunID]
+		if parent == nil || parent.Status != "running" || s.lifecycleTaskHeld(s.tasks[parent.TaskID]) {
+			return false
+		}
+	}
 	m := g.Members[t.ID]
 	return m != nil && !m.CancelRequested && m.Replacement == "" && m.Accepted == nil && m.CurrentRunID == t.CurrentRunID
 }
