@@ -35,16 +35,17 @@ type Question struct {
 	Schema json.RawMessage `json:"schema,omitempty"`
 }
 type Request struct {
-	Key       string          `json:"key"`
-	Thread    string          `json:"thread"`
-	Turn      string          `json:"turn"`
-	Questions []Question      `json:"questions"`
-	Cards     []decision.Card `json:"cards"`
-	Payload   json.RawMessage `json:"payload"`
-	Method    string          `json:"method"`
-	RPCID     json.RawMessage `json:"rpc_id"`
-	ToolInput json.RawMessage `json:"tool_input,omitempty"`
-	Denial    string          `json:"denial,omitempty"`
+	Elicitation []ElicitationField `json:"elicitation,omitempty"`
+	Key         string             `json:"key"`
+	Thread      string             `json:"thread"`
+	Turn        string             `json:"turn"`
+	Questions   []Question         `json:"questions"`
+	Cards       []decision.Card    `json:"cards"`
+	Payload     json.RawMessage    `json:"payload"`
+	Method      string             `json:"method"`
+	RPCID       json.RawMessage    `json:"rpc_id"`
+	ToolInput   json.RawMessage    `json:"tool_input,omitempty"`
+	Denial      string             `json:"denial,omitempty"`
 }
 
 func digest(raw []byte) string { return fmt.Sprintf("%x", sha256.Sum256(raw)) }
@@ -81,12 +82,16 @@ func Normalize(adapter string, raw json.RawMessage) (Request, error) {
 			Command   *string           `json:"command"`
 			Decisions []json.RawMessage `json:"availableDecisions"`
 		}
-		if json.Unmarshal(e.Params, &p) != nil || p.Thread == "" || p.Turn == "" {
+		if json.Unmarshal(e.Params, &p) != nil || p.Thread == "" || p.Turn == "" && e.Method != "mcpServer/elicitation/request" {
 			return out, ErrUnsupported
 		}
 		out.Thread, out.Turn = p.Thread, p.Turn
 		out.Key = digest([]byte(p.Thread + "\x00" + string(e.ID)))
 		switch e.Method {
+		case "mcpServer/elicitation/request":
+			if err := normalizeElicitation(&out, e.Params); err != nil {
+				return out, err
+			}
 		case "item/commandExecution/requestApproval":
 			if p.Command == nil {
 				return out, ErrUnsupported
@@ -230,6 +235,9 @@ func Response(adapter string, r Request, answers []decision.Resolution) (json.Ra
 		if !r.Cards[i].HasOption(a.Choice) || r.Cards[i].ValidateValue(a.Value) != nil {
 			return nil, ErrUnsupported
 		}
+	}
+	if adapter == "codex" && r.Method == "mcpServer/elicitation/request" {
+		return elicitationResponse(r, answers)
 	}
 	var result any
 	if len(r.Questions) == 0 {

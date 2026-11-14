@@ -3,6 +3,7 @@ package studio
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"time"
 
 	"mitos/internal/fleet"
@@ -37,13 +38,19 @@ func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, er
 		return false, errors.New("previous execution claims require inspection before reuse")
 	}
 	ownership := r.Brief.Ownership
+	claimWorkspace := r.Brief.Workspace
+	// Native graph workers write to distinct copies, not the source tree. Named
+	// leases still serialize shared resources across copies and projects.
+	if r.GraphAttempt != nil && r.GraphAttempt.Executor.Application.Agent != nil {
+		claimWorkspace = filepath.Join(s.Dir(), "workspaces", r.ID, "workspace")
+	}
 	held := []fleet.Claim{}
 	for _, other := range s.runs {
 		if other.ID != id && other.Claim != nil && other.Claim.ReleasedAt == nil {
 			held = append(held, *other.Claim)
 		}
 	}
-	conflicts := fleet.Conflicts(r.Brief.Workspace, ownership, held)
+	conflicts := fleet.Conflicts(claimWorkspace, ownership, held)
 	if len(conflicts) > 0 {
 		b, _ := json.Marshal(conflicts)
 		previous, _ := json.Marshal(r.ClaimConflicts)
@@ -57,7 +64,7 @@ func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, er
 	kind := "task_scheduled"
 	c := change{Status: "running", Stage: "Preparing execution", Summary: "The task was scheduled within its pool's capacity."}
 	if len(ownership.Paths) > 0 || len(ownership.Leases) > 0 {
-		claim := fleet.Claim{ID: newID("claim"), RunID: id, Workspace: r.Brief.Workspace, Ownership: ownership, AcquiredAt: time.Now().UTC()}
+		claim := fleet.Claim{ID: newID("claim"), RunID: id, Workspace: claimWorkspace, Ownership: ownership, AcquiredAt: time.Now().UTC()}
 		kind = "claims_acquired"
 		c.Claim = &claim
 		c.Summary = "Ownership and resource claims were acquired before dispatch."

@@ -404,7 +404,7 @@ func TestInvalidObservationExplainsFailureWithoutEchoingPayload(t *testing.T) {
 	e := &Engine{}
 	for _, tc := range []struct{ name, raw, want string }{
 		{"malformed", `{"private":"secret",`, "contains invalid JSON"},
-		{"oversized", `{"private":"` + strings.Repeat("s", harness.MaxObservationBytes) + `"}`, "received 1048590 bytes, limit 1048576 bytes"},
+		{"oversized", `{"private":"` + strings.Repeat("s", harness.MaxObservationBytes) + `"}`, fmt.Sprintf("received %d bytes, limit %d bytes", harness.MaxObservationBytes+14, harness.MaxObservationBytes)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := e.ObserveAgent(context.Background(), "", "", json.RawMessage(tc.raw))

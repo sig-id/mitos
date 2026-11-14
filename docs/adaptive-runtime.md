@@ -83,6 +83,12 @@ show the authored finding state; audit completion does not mark gaps fixed.
 
 The work tree and graph use the same dependency order, with stable ordering for
 parallel assignments.
+Native graph agents claim paths in their individual workspace copies, so independent
+audits can execute concurrently. Named resource leases still conflict across copies;
+dependencies still order assignments that consume earlier results. Other application
+executors retain their existing source-workspace claim semantics. Native agents also
+receive a per-attempt writable Go build cache in the temporary directory, removed
+after execution and harvesting, so cache access does not require sandbox escalation.
 Only the selected graph is polled each second; summary status is
 refreshed every five seconds. Hidden tabs pause polling and connection failures
 back off. Reports are fetched on demand after an attempt finishes.

@@ -12,6 +12,9 @@ import (
 
 func (e *Engine) reconcileGraphOrchestrators() error {
 	for _, snapshot := range e.Store.Graphs() {
+		if e.Store.GraphPrerequisiteBlocked(snapshot.ID) {
+			continue
+		}
 		if e.Store.SupervisionHeld(snapshot.ProjectID) || snapshot.Status != "active" || snapshot.Policy.OrchestratorApplication == "" || !time.Now().Before(snapshot.Limits.Deadline) {
 			continue
 		}
@@ -87,6 +90,9 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 	slices.Sort(ids)
 	for _, id := range ids {
 		old := s.graphs[id]
+		if s.graphPrerequisiteBlocked(old) {
+			continue
+		}
 		if s.supervisionHeld(old.ProjectID) || old.Status != "active" || old.Policy.OrchestratorApplication == "" || !time.Now().Before(old.Limits.Deadline) {
 			continue
 		}

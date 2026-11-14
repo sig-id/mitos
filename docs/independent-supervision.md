@@ -22,7 +22,7 @@ directory; outside targets and symlink escapes are vetoed before approval. In mo
 before either a person or automation can resolve them. Codex command, file-change
 and MCP-tool lifecycle events also receive independent review. Duplicate evidence
 reuses its receipt; changing policy does not reset the per-session call allowance.
-Native observations and all bridge readers share an inclusive 1 MiB JSON payload
+Native observations and all bridge readers share an inclusive 16 MiB JSON payload
 limit, excluding LF or CRLF line terminators and independently of the smaller
 approval-request limit. The HTTP bridge sends the original observation bytes so
 HTML escaping cannot inflate a valid event past the limit. Stream errors retain

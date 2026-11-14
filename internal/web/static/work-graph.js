@@ -310,6 +310,7 @@
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
  function failureHelp(summary){
+  if(/Stopped while waiting for an answer/i.test(summary))return 'The unanswered request ended with this attempt. Review the missing input or approval settings, then explicitly resume to continue the saved conversation. No permission is inferred from resuming.';
   if(/invalid supervision observation/i.test(summary))return 'The runtime could not validate an agent activity event. Older versions used this error for both oversized events and malformed JSON; this saved run does not identify which. Check the runtime version and supervision diagnostics before trying again.';
   if(/supervision observation/i.test(summary))return 'The runtime stopped because it could not check an agent activity event. Resolve the reported event format or size problem before retrying.';
   if(/supervision|project is held/i.test(summary))return 'Review the supervision incident in Project setup before retrying this work.';
@@ -321,16 +322,18 @@
   const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input')||Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].human_requests);
   const expired=Date.parse(graph.limits.deadline)<=Date.now()&&graph.status==='active',exhausted=attemptsExhausted();
   const failures=Object.keys(snapshot.nodes).filter(id=>['failed','needs_attention'].includes(snapshot.nodes[id].state)&&id!==graph.root_task);
+  const prerequisite=failures.some(id=>snapshot.nodes[id].blocked_reason);
   const errors=Object.values(graph.expansions).filter(x=>!x.outcome&&x.error);
   if(graph.status==='active'&&(waiting||expired||exhausted||failures.length||errors.length)){
-   box.hidden=false;box.dataset.attention='true';box.append(node('h3',expired?'Work stopped: time limit reached':exhausted?'Work stopped: attempt limit reached':waiting?(snapshot.nodes[waiting].decision_setup?'Set up automatic approval review':'Your answer is needed'):'Work needs attention'));
-   if(expired||exhausted)box.append(node('p','The goal is unfinished. Resume with more resources to keep this workflow, its agents, completed steps and saved work.'),node('p','Review any reported failure before continuing. Saved agent conversations and workspace changes are reused when available.'));
+   box.hidden=false;box.dataset.attention='true';box.append(node('h3',prerequisite?'Work stopped waiting for an answer':expired?'Work stopped: time limit reached':exhausted?'Work stopped: attempt limit reached':waiting?(snapshot.nodes[waiting].decision_setup?'Set up automatic approval review':'Your answer is needed'):'Work needs attention'));
+   if(prerequisite)box.append(node('p','Resolve the missing input or approval setup before resuming. More time alone will repeat the wait. Saved work and conversations are preserved.'),approvalSettings());
+   if(!prerequisite&&(expired||exhausted))box.append(node('p','The goal is unfinished. Resume with more resources to keep this workflow, its agents, completed steps and saved work.'),node('p','Review any reported failure before continuing. Saved agent conversations and workspace changes are reused when available.'));
    if(waiting){box.append(node('p',snapshot.nodes[waiting].decision_setup?'Configure the Decisions API and approval boundaries so routine requests can be reviewed automatically.':title(graph.members[waiting])+' has a request that needs your input.'));const controls=node('div',undefined,'actions');if(snapshot.nodes[waiting].decision_setup)controls.append(approvalSettings());controls.append(button('Review request',()=>selectNode(waiting,'output')));box.append(controls);}
    for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.';item.append(node('strong',title(graph.members[id])),node('p',summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
    const reasons={orchestrator_proposal_missing:'The orchestrator did not save a work proposal.',orchestrator_proposal_invalid:'The orchestrator returned an unreadable proposal.',orchestrator_proposal_stale_or_rejected:'The orchestrator’s proposal did not match the current work.',orchestrator_execution_needs_review:'The orchestrator stopped before producing a verified proposal.',orchestrator_allowance_exhausted:'The planning allowance has been used.',orchestrator_context_limit:'The work exceeds the orchestrator’s context limit.'};
    for(const error of errors)if(!failures.includes(error.orchestrator_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect orchestrator',()=>selectNode(error.orchestrator_task||graph.root_task,'output')));
    if(expired&&!failures.length){const earlier=Object.keys(graph.members).filter(id=>graph.members[id].replacement&&graph.members[id].state==='failed');if(earlier.length){const history=node('details');history.append(node('summary',earlier.length+' earlier failed assignments'));for(const id of earlier)history.append(node('p',snapshot.nodes[id]?.summary||title(graph.members[id])),button('Inspect '+title(graph.members[id]),()=>selectNode(id,'output')));box.append(history)}}
-   const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(!waiting&&!graph.service_run_id)actions.append(button('Resume with more resources',openResume,'primary'));if(expired||exhausted)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()}));box.append(actions);return;
+   const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(!waiting&&!graph.service_run_id)actions.append(button(prerequisite?'Resume after resolving prerequisite':'Resume with more resources',openResume,'primary'));if(expired||exhausted)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()}));box.append(actions);return;
   }
   if(Object.values(snapshot.nodes).some(n=>n.reviewing_requests)){box.hidden=false;box.append(node('span','Approval review is running separately through the Decisions API.'));return;}
   if(!graph.policy.orchestrator_application&&Object.values(graph.expansions).some(x=>!x.outcome)&&Object.keys(graph.members).length===1){box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));box.hidden=false}
@@ -340,11 +343,12 @@
  function openResume(){
   const g=structuredClone(graph),existing=$('graph-resume-dialog');if(existing)existing.remove();
   const dialog=node('dialog');dialog.id='graph-resume-dialog';dialog.setAttribute('aria-labelledby','graph-resume-title');
-  const form=node('form'),heading=node('h2','Resume with more resources');heading.id='graph-resume-title';
+  const prerequisite=Object.values(snapshot.nodes).some(n=>n.blocked_reason&&n.state==='needs_attention');
+  const form=node('form'),heading=node('h2',prerequisite?'Resume after resolving prerequisite':'Resume with more resources');heading.id='graph-resume-title';
   form.append(heading,node('p','Continue this workflow with the same assignments and agents. Completed steps and previous attempts stay saved. Older attempts without a saved conversation continue from their saved files and output.'));
   const inputs={};
   function field(parent,key,label,value,min,max){const row=node('label',label),input=node('input');input.type='number';input.name=key;input.value=value;input.min=min;input.max=max;input.step=1;input.required=true;row.append(input);parent.append(row);inputs[key]=input;}
-  field(form,'minutes','Additional workflow time (minutes)',60,0,43200);
+  field(form,'minutes','Additional workflow time (minutes)',prerequisite&&Date.parse(g.limits.deadline)>Date.now()?0:60,0,43200);
   field(form,'attempts','Total agent attempts (including '+g.attempts+' already used)',Math.min(2048,g.limits.attempts+32),g.limits.attempts,2048);
   field(form,'attempt_minutes','Time per resumed attempt (minutes)',Math.min(120,Math.max(30,...Object.values(g.members).map(m=>m.spec.brief.timeout_minutes||0))),1,120);
   const advanced=node('details');advanced.append(node('summary','Planning and workflow allowances'));

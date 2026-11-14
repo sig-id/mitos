@@ -330,6 +330,9 @@ func (s *Store) apply(e Event) error {
 	if c.Status != "" {
 		r.Status = c.Status
 	}
+	if c.BlockedReason != "" {
+		r.BlockedReason = c.BlockedReason
+	}
 	if c.Stage != "" {
 		r.Stage = c.Stage
 	}

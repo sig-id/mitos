@@ -489,6 +489,10 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		return
 	}
 	if current.Status == "stopping" {
+		var prerequisite *agentPrerequisiteError
+		if errors.As(err, &prerequisite) && e.Store.blockAgentPrerequisite(r.ID, prerequisite.Error()) == nil {
+			return
+		}
 		_ = e.Store.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "Stopped. Available output and workspace changes were preserved.")
 		return
 	}
@@ -525,6 +529,11 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		return
 	}
 	message := err.Error()
+	var prerequisite *agentPrerequisiteError
+	if errors.As(err, &prerequisite) {
+		_ = e.Store.blockAgentPrerequisite(r.ID, prerequisite.Error())
+		return
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		message = "The time limit was reached. Review the output and try again with a longer limit."
 	}
