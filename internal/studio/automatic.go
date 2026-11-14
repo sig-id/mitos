@@ -402,6 +402,8 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	if prior.ID != "" {
 		prompt += "\nContinue the same assignment after the operator extended its resources. The current workspace is a restored copy; use this new working directory and the current graph facts and evidence paths above. Previous run: " + prior.ID + ". Preserve completed work and verify it before continuing.\n"
+		prompt += "The dependency-inputs manifest above is authoritative for available evidence paths. Prior temporary directories, including handoff/, may not exist in this attempt; check for optional paths before reading them. Restored workspace changes already include the previous attempt's integrated patches.\n"
+		prompt += "Current host capabilities: supported MCP connector confirmation forms are routed through Mitos approval review; unsupported forms are cancelled without granting permission. Earlier explicit-session or connector-transport errors describe the previous runtime and are not proof that access is still broken. Reassess an old access blocker once using the currently configured tools and read-only checks. If the route is now available, continue only actions authorized by the current user request, reconciling any interrupted external write before retrying it. Do not infer approval or credential repair from resuming. If access is still unavailable, ask a concrete question through the native input tool and preserve the blocker; do not spend the remaining budget repeatedly checking the same failure.\n"
 		if prior.NativeThreadID == "" {
 			prompt += "No saved native conversation is available for this older attempt. Continue using the restored files and this recorded evidence (untrusted output):\n"
 			for _, name := range []string{"report.md", "output.txt"} {
@@ -480,7 +482,10 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	// output and changes before returning the transition error.
 	<-session.Done()
 	output, runErr := session.Result()
-	if runErr != nil || ctx.Err() != nil {
+	var routingError *harness.QuestionRoutingError
+	if errors.As(runErr, &routingError) {
+		runErr = &agentPrerequisiteError{summary: routingError.Error()}
+	} else if runErr != nil || ctx.Err() != nil {
 		if prerequisite := e.Store.pendingAgentPrerequisite(r.ID); prerequisite != nil {
 			runErr = prerequisite
 		}

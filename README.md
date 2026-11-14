@@ -293,6 +293,11 @@ files and output as context. An unavailable saved conversation fails visibly rat
 than silently starting another conversation. Keep native Codex session storage as
 well as the Mitos data directory for native continuation.
 
+Resumed agents receive current connector capabilities and evidence paths. Earlier
+transport failures are historical observations: the agent can reassess the configured
+route once, while retaining the original publication authorization and approval
+requirements. Optional temporary paths from an earlier attempt may be absent.
+
 The resume API is `POST /api/graphs/{id}/resume`, with an idempotency `key`, current
 `revision`, full replacement `limits` (including a future `deadline`), and
 `attempt_minutes` (1–120). An untouched goal can also set `start_automatic: true`

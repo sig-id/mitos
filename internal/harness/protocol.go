@@ -179,6 +179,12 @@ func Normalize(adapter string, raw json.RawMessage) (Request, error) {
 			questionTexts[q.Question] = true
 			c := baseCard(raw)
 			c.Question = q.Question
+			// Cards have a bounded display title, but native questions do not.
+			// Keep the exact question in Questions and the original payload in
+			// folded context so neither review nor answer delivery loses meaning.
+			if title := []rune(c.Question); len(title) > 200 {
+				c.Question = string(title[:199]) + "…"
+			}
 			if out.Method == "mitos/asyncQuestion" {
 				c.Context.BlockedBy = "An asynchronous clarification is pending; independent work may continue."
 			}
