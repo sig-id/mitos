@@ -8,18 +8,20 @@ import (
 
 // Summary reads never clone transcripts, graph receipts or executor configuration.
 type GraphSummary struct {
-	Predecessor string         `json:"predecessor,omitempty"`
-	ID          string         `json:"id"`
-	ProjectID   string         `json:"project_id"`
-	RootTask    string         `json:"root_task"`
-	Title       string         `json:"title"`
-	Status      string         `json:"status"`
-	WorkState   string         `json:"work_state"`
-	Revision    int64          `json:"revision"`
-	Members     int            `json:"members"`
-	Counts      map[string]int `json:"counts"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	Agents       int            `json:"agents"`
+	ActiveAgents int            `json:"active_agents"`
+	Predecessor  string         `json:"predecessor,omitempty"`
+	ID           string         `json:"id"`
+	ProjectID    string         `json:"project_id"`
+	RootTask     string         `json:"root_task"`
+	Title        string         `json:"title"`
+	Status       string         `json:"status"`
+	WorkState    string         `json:"work_state"`
+	Revision     int64          `json:"revision"`
+	Members      int            `json:"members"`
+	Counts       map[string]int `json:"counts"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 func (s *Store) GraphSummaries(project, after string, limit int, states ...string) ([]GraphSummary, string) {
@@ -45,12 +47,19 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 	for _, id := range ids {
 		g := s.graphs[id]
 		counts := map[string]int{}
+		agents, activeAgents := 0, 0
 		for _, m := range g.Members {
+			if m.Spec.Kind == "application" && m.Replacement == "" {
+				agents++
+				if run := s.runs[m.CurrentRunID]; run != nil && (run.Status == "running" || run.Status == "stopping" || run.Status == "parked") {
+					activeAgents++
+				}
+			}
 			if m.Spec.Kind != "scope" {
 				counts[s.graphDisplayState(g, m)]++
 			}
 		}
-		out = append(out, GraphSummary{ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, WorkState: g.WorkStateValue(), Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
+		out = append(out, GraphSummary{Agents: agents, ActiveAgents: activeAgents, ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, WorkState: g.WorkStateValue(), Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
 	}
 	return out, next
 }
