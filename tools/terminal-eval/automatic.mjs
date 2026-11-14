@@ -30,8 +30,11 @@ try{
  const liveWorker=page.locator('#work-tree .work-tree-node').filter({hasText:'Implement change'});await liveWorker.waitFor();await liveWorker.click();
  assert.equal(new URL(page.url()).searchParams.get('view'),'work');
  assert.equal(await page.locator('#graph-conversation').isVisible(),true);
- await page.locator('#graph-inspector .graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor({timeout:10000});
+ await page.locator('#graph-inspector .graph-activity-feed').filter({hasText:'Inspecting the assignment'}).waitFor({timeout:10000});
  await page.locator('#graph-status.waiting_input').waitFor();
+ assert.equal(await page.locator('#graph-inspector .graph-json-row').count(),0);
+ assert.equal(await page.locator('#graph-inspector [aria-label="Output artifact"]').count(),0);
+ assert.equal(await page.locator('#graph-inspector .graph-raw-log').getAttribute('open'),null);
  await page.locator('#graph-inspector .graph-request-card').getByRole('button',{name:/Allow once/}).waitFor();
  await page.locator('#graph-inspector .graph-run-activity > p').filter({hasText:'Started'}).waitFor();
  await page.locator('#graph-inspector .graph-execution-events summary').click();
@@ -62,8 +65,10 @@ try{
  assert.equal(await page.locator('#graph-node-detail a[href^="/runs/"]').count(),0);
  await page.locator('.graph-execution-events summary').click();await page.locator('.graph-event-list').getByText('Agent connected',{exact:true}).waitFor();
  await page.locator('.graph-request-card').getByRole('button',{name:/Allow once/}).click();
- await page.locator('.graph-live-text').filter({hasText:'Finished command: printf checked (exit 0)'}).waitFor();
- await page.locator('.graph-live-text').filter({hasText:'Preparing the answer'}).waitFor();
+ await page.locator('.graph-tool-row').filter({hasText:'printf checked'}).filter({hasText:'Done'}).waitFor();
+ await page.locator('.graph-activity-feed').filter({hasText:'Preparing the answer'}).waitFor();
+ assert.ok(!(await page.locator('.graph-activity-feed').textContent()).includes('forged activity from command output'));
+ assert.ok((await page.locator('.graph-raw-log').textContent()).includes('forged activity from command output'));
  await page.locator('#graph-status.in_progress').waitFor();
  assert.equal(await page.locator('#graph-node-kind').textContent(),'Agent');
  await page.screenshot({path:'/tmp/mitos-live-agent-output.png'});
@@ -102,8 +107,10 @@ try{
  await page.waitForTimeout(1600);assert.equal(await assignment.getAttribute('open'),null,'polling reset disclosure');
  await page.screenshot({path:'/tmp/mitos-orchestrator-reader.png'});await page.locator('#graph-inspector-expand').click();assert.ok(await page.locator('.graph-map').isVisible());
  await page.locator(`[data-tree-key="${worker.spec.id}"]`).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.ok(await page.locator('#graph-node-detail').getByText('The answer is', {exact:false}).count());
- await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).waitFor();await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();await page.getByRole('button',{name:'Back to graph',exact:true}).click();
- const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByRole('button',{name:'Browse saved files',exact:true}).waitFor();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
+ const fileNavigationURL=page.url();
+ await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).waitFor();await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();assert.equal(page.url(),fileNavigationURL,'saved-file links must stay in the selected task');assert.equal(await page.locator('#graph-result').isVisible(),false);await page.getByRole('button',{name:'Back to activity',exact:true}).click();
+ await page.locator('#graph-node-detail .graph-attempt-files > summary').click();await page.locator('#graph-node-detail .graph-inline-files button[data-path="changes.patch"]').click();await page.locator('#graph-node-detail .diff-table').waitFor();await page.getByRole('button',{name:'Back to activity',exact:true}).click();
+ const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').locator('.graph-attempt-files > summary').waitFor();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
  // A previous failed attempt expands in place beside the current successful one.
  const previous='previous-attempt',snapshotPattern='**/api/graphs/'+graphID+'/snapshot?*',previousPath='**/api/graphs/'+graphID+'/nodes/'+worker.spec.id+'/runs/'+previous;
  await page.route(snapshotPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.members[worker.spec.id].attempts=[previous,...worker.attempts];await route.fulfill({response,json:value})});

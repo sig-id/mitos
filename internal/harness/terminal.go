@@ -27,6 +27,8 @@ type CodexOptions struct {
 	ThreadStarted            func(string) error
 	OutputSchema             json.RawMessage
 	Result                   func(string) error
+	// Activity receives public records separately from stdout, stderr, and tool output.
+	Activity io.Writer
 }
 
 func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io.Reader, output io.Writer, workspace, prompt string, options CodexOptions) error {
@@ -232,7 +234,7 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 				return errors.New("invalid app-server event")
 			}
 			if options.Headless {
-				writeCodexActivity(output, event)
+				writeCodexActivity(output, options.Activity, event)
 			}
 			if len(event.ID) > 0 && event.Method != "" {
 				if options.Headless {
