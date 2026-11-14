@@ -56,13 +56,16 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 }
 
 type GraphNodeView struct {
-	Summary         string    `json:"summary,omitempty"`
-	PendingRequests int       `json:"pending_requests,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	State           string    `json:"state"`
-	Executor        string    `json:"executor,omitempty"`
-	Settled         bool      `json:"settled"`
-	Waiting         []string  `json:"waiting,omitempty"`
+	HumanRequests     int       `json:"human_requests,omitempty"`
+	ReviewingRequests int       `json:"reviewing_requests,omitempty"`
+	DecisionSetup     bool      `json:"decision_setup,omitempty"`
+	Summary           string    `json:"summary,omitempty"`
+	PendingRequests   int       `json:"pending_requests,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	State             string    `json:"state"`
+	Executor          string    `json:"executor,omitempty"`
+	Settled           bool      `json:"settled"`
+	Waiting           []string  `json:"waiting,omitempty"`
 }
 type GraphView struct {
 	Graph      WorkGraph                `json:"graph"`
@@ -96,14 +99,21 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 		return "review"
 	}
 	if m.State == "running" || m.State == "parked" {
-		resuming := false
+		resuming, reviewing := false, false
 		for _, request := range s.graphPendingRequests(m.CurrentRunID) {
 			if request.Blocking {
 				if request.Decision.Choice == "" {
-					return "waiting_input"
+					if request.Resolver == "human" {
+						return "waiting_input"
+					}
+					reviewing = true
+					continue
 				}
 				resuming = true
 			}
+		}
+		if reviewing {
+			return "reviewing_approval"
 		}
 		if resuming {
 			return "resuming"
@@ -164,7 +174,19 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		if r := s.runs[m.CurrentRunID]; r != nil {
 			n.Summary = r.Summary
 		}
-		n.PendingRequests = len(s.graphPendingRequests(m.CurrentRunID))
+		requests := s.graphPendingRequests(m.CurrentRunID)
+		n.PendingRequests = len(requests)
+		for _, request := range requests {
+			if request.Decision.Choice != "" {
+				continue
+			}
+			if request.Resolver == "human" {
+				n.HumanRequests++
+			} else {
+				n.ReviewingRequests++
+			}
+			n.DecisionSetup = n.DecisionSetup || request.SetupRequired
+		}
 		if len(m.Attempts) > 0 {
 			if r := s.runs[m.Attempts[0]]; r != nil {
 				n.CreatedAt = r.CreatedAt

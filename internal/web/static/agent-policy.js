@@ -3,8 +3,8 @@
  const el=(tag,text)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e};
  window.MitosAgentPolicy={render(root,initial,base,api){
   let policy=initial;
-  const section=el('section');section.className='agent-policy setup-card';section.append(el('h2','Decisions API & approvals'));
-  section.append(el('p','Coordinated work plans and runs agents automatically. Choose here how their questions and approvals are handled. Saved changes also apply to pending requests.'));
+  const section=el('section');section.className='agent-policy setup-card';section.id='decisions-api';section.tabIndex=-1;section.append(el('h2','Decisions API & approvals'));
+  section.append(el('p','Approval review runs separately from the coordinator and workers, using the Decisions API. Configure a connection and approval boundaries to handle routine requests automatically. Saved changes also apply to pending requests.'));
   const form=el('form'),feedback=el('p');feedback.setAttribute('role','status');
   const field=(parent,label,input)=>{const l=el('label',label);input.setAttribute('aria-label',label);l.append(input);parent.append(l);return input};
   const select=(values,value)=>{const s=el('select');for(const [v,label] of values)s.append(new Option(label,v));s.value=value;return s};
@@ -42,7 +42,7 @@
    row.append(button('Remove rule',()=>{row.remove()}));rules.append(row);rows.push({row,value,command,directory,action});
   }
   for(const r of policy.rules||[])addRule(r);
-  advanced.append(button('Add command rule',()=>addRule()));const save=el('button','Save autonomy & approvals');save.type='submit';form.append(save,feedback);section.append(form);root.insertBefore(section,root.querySelector('.setup-agent-layout'));
+  advanced.append(button('Add command rule',()=>addRule()));const save=el('button','Save autonomy & approvals');save.type='submit';form.append(save,feedback);section.append(form);root.insertBefore(section,root.querySelector('.setup-agent-layout'));if(location.hash==='#decisions-api'){section.scrollIntoView({block:'start'});section.focus({preventScroll:true})}
   form.onsubmit=async event=>{event.preventDefault();save.disabled=true;try{policy=await api(base+'/agent-policy',{...policy,supervision:{mode:supervisionMode.value,application:supervisionApp.value.trim(),guidance:boundaries.value,workspace_only:workspaceOnly.checked,max_calls:Number(supervisionBudget.value)},autonomy:mode.value,guidance:guidance.value,decision_application:source.value==='application'?provider.value.trim():'',decision_provider:source.value==='direct'?providerConfig():null,fallback:fallback.value,max_calls:Number(budget.value),rules:rows.filter(r=>r.row.isConnected).map(r=>({id:r.value.id,command:r.command.value,directory:r.directory.value,action:r.action.value}))},'PUT');feedback.textContent='Saved. Approval handling is now '+(policy.autonomy==='manual'?'Ask me':policy.autonomy==='decision'?'Decisions API review':'Exact command rules')+'.'}catch(e){feedback.textContent=e.message}finally{save.disabled=false}};
  }};
 })();

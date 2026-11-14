@@ -8,7 +8,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const temp=await mkdtemp(path.join(tmpdir(),'mitos-notifications-')),repo=path.join(temp,'project');await mkdir(repo);
-const provider=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;const q=JSON.parse(body).questions.action;const choices=Object.keys(q.criteria),choice=choices.includes('connected')?'connected':'approve';res.setHeader('Content-Type','application/json');res.end(JSON.stringify({model:'fixture',answers:{action:{type:'choice',choice,confidence:1,probabilities:Object.fromEntries(choices.map(c=>[c,c===choice?1:0]))}}}))});
+let reviewGate=null;
+const provider=createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;const q=JSON.parse(body).questions.action;const choices=Object.keys(q.criteria),choice=choices.includes('connected')?'connected':'approve';if(choice!=='connected'&&reviewGate)await reviewGate;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({model:'fixture',answers:{action:{type:'choice',choice,confidence:1,probabilities:Object.fromEntries(choices.map(c=>[c,c===choice?1:0]))}}}))});
 await new Promise(r=>provider.listen(0,'127.0.0.1',r));
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));const base=`http://127.0.0.1:${port}`;
 const server=spawn(process.env.MITOS_BIN||path.join(root,'bin/mitos'),['serve','--addr',`127.0.0.1:${port}`,'--data',path.join(temp,'data'),'--workspace-root',repo],{cwd:root,stdio:['ignore','ignore','pipe']});let log='';server.stderr.on('data',b=>log=(log+b).slice(-8000));const exited=new Promise(r=>server.once('exit',r));
@@ -46,10 +47,21 @@ try{
   const delivered=await api(`/api/agent-sessions/${active.session.session_id}/requests/${pendingText.request_id}`,undefined,'GET',active.token);
   assert.equal(delivered.state,'accepted');assert.ok(JSON.stringify(delivered.body).includes(text),'native response lost text answer');
  }
- await page.goto(base+`/projects/${project.id}?view=resources`);await page.getByRole('heading',{name:'Decisions API & approvals'}).waitFor();
+ await page.goto(base+`/projects/${project.id}?view=resources#decisions-api`);await page.getByRole('heading',{name:'Decisions API & approvals'}).waitFor();assert.equal(await page.locator('#decisions-api').evaluate(n=>document.activeElement===n),true);
  await page.getByLabel('Automatic handling',{exact:true}).selectOption('decision');await page.getByLabel('Approval boundaries',{exact:true}).fill('Allow read-only GitHub PR inspection.');await page.getByLabel('Decision provider',{exact:true}).selectOption('direct');await page.getByLabel('API protocol',{exact:true}).selectOption('systemone');await page.getByLabel('Endpoint URL',{exact:true}).fill(`http://127.0.0.1:${provider.address().port}`);await page.getByLabel('Decision model',{exact:true}).fill('fixture');
  await page.getByRole('button',{name:'Test API connection',exact:true}).click();await page.getByText('Connected. The provider returned a valid decision.',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Save autonomy & approvals',exact:true}).click();await page.getByText('Saved. Approval handling is now Decisions API review.',{exact:true}).waitFor();await page.reload();await page.getByRole('heading',{name:'Decisions API & approvals'}).waitFor();assert.equal(await page.getByLabel('Automatic handling',{exact:true}).inputValue(),'decision');assert.equal(await page.getByLabel('Decision model',{exact:true}).inputValue(),'fixture');
  for(const width of [1500,390]){await page.setViewportSize({width,height:1000});await page.getByRole('heading',{name:'Decisions API & approvals'}).scrollIntoViewIfNeeded();if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,`decisions-setup-${width}.png`)});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1))}
- assert.deepEqual(errors,[]);console.log('PASS: notifications at desktop/mobile widths, direct approval and Codex/Claude/async text-answer round trips, Inbox summaries, provider test, save and reload');
+ // A slow independent reviewer must stay off the human notification banner.
+ let releaseReview;reviewGate=new Promise(resolve=>{releaseReview=resolve});
+ try{
+  const reviewing=await api(`/api/agent-sessions/${session.session.session_id}/requests`,{id:99,method:'item/commandExecution/requestApproval',params:{threadId:'t',turnId:'u',command:'gh api repos/example/project/pulls',cwd:repo,reason:'Read open pull requests'}},'POST',session.token);
+  await page.getByRole('button',{name:/Notifications/}).click();
+  await page.getByRole('dialog').getByText('Reviewing automatically',{exact:true}).waitFor();
+  assert.equal(await page.locator('.attention-banner').isVisible(),false);
+  assert.equal(await page.getByRole('dialog').getByRole('button',{name:'Allow once',exact:true}).count(),0);
+  releaseReview();reviewGate=null;
+  await wait(async()=>(await api(`/api/agent-sessions/${session.session.session_id}/requests/${reviewing.request_id}`,undefined,'GET',session.token)).state==='accepted');
+ }finally{releaseReview();reviewGate=null}
+ assert.deepEqual(errors,[]);console.log('PASS: notifications at desktop/mobile widths, direct approval and Codex/Claude/async text-answer round trips, Inbox summaries, provider test, save and reload, and independent automatic approval without human prompts');
 }finally{await browser?.close();server.kill('SIGTERM');await exited;provider.close();await rm(temp,{recursive:true,force:true})}
