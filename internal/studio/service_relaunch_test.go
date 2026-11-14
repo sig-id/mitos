@@ -289,3 +289,108 @@ func TestServiceRelaunchRejectsOutsidePrerequisiteBeforeStopping(t *testing.T) {
 		t.Fatal("invalid restart mutated lifecycle")
 	}
 }
+
+func TestServiceRelaunchRefreshesProjectLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		minutes         int
+		explicitCap     int
+		deadlineMinutes int
+	}{
+		{name: "increased", minutes: 240},
+		{name: "decreased", minutes: 60},
+		{name: "earlier deadline", minutes: 240, deadlineMinutes: 30},
+		{name: "later deadline", minutes: 240, deadlineMinutes: 300},
+		{name: "explicit cap", minutes: 240, explicitCap: 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, req := workflowEngine(t)
+			req.Minutes = tc.explicitCap
+			prefs, err := e.SavePreferences(req.ProjectID, RuntimePreferences{Minutes: 120, Attempts: 18})
+			if err != nil {
+				t.Fatal(err)
+			}
+			view, err := e.ScheduleGoal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view.Catalog.Config.Targets = []service.Target{{ID: "group", Scope: "project"}}
+			view.Catalog.Config.Units[0].PartOf = []string{"group"}
+			var explicitDeadline *time.Time
+			if tc.deadlineMinutes != 0 {
+				deadline := time.Now().UTC().Add(time.Duration(tc.deadlineMinutes) * time.Minute)
+				explicitDeadline = &deadline
+				work := view.Catalog.Work[req.ID]
+				work.Scheduling.Deadline = explicitDeadline
+				view.Catalog.Work[req.ID] = work
+			}
+			if _, err := e.ConfigureServices(view.Catalog, view.Catalog.Revision); err != nil {
+				t.Fatal(err)
+			}
+			prefs, err = e.SavePreferences(req.ProjectID, RuntimePreferences{Revision: prefs.Revision, Minutes: tc.minutes, Attempts: 12})
+			if err != nil {
+				t.Fatal(err)
+			}
+			op, err := e.RestartService("group", "refresh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			minutes := tc.minutes
+			if tc.explicitCap != 0 {
+				minutes = tc.explicitCap
+			}
+			want := op.At.Add(time.Duration(minutes) * time.Minute)
+			if explicitDeadline != nil && explicitDeadline.Before(want) {
+				want = *explicitDeadline
+			}
+			if len(op.Relaunch) != 1 || !op.Relaunch[0].Deadline.Equal(want) {
+				t.Fatalf("restart deadline = %+v, want %s", op.Relaunch, want)
+			}
+			// Changing settings again cannot rewrite an existing restart plan,
+			// including when it is reconstructed from the event log.
+			if _, err := e.SavePreferences(req.ProjectID, RuntimePreferences{Revision: prefs.Revision, Minutes: 360, Attempts: 12}); err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			replay, err := OpenStore(e.Store.Dir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { replay.Close() })
+			e.Store = replay
+			again, err := e.RestartService("group", "refresh")
+			if err != nil || !reflect.DeepEqual(op, again) {
+				t.Fatal("restart plan changed after replay", err, again)
+			}
+			reconcileLifecycle(t, e)
+			done, err := replay.ServiceLifecycle(op.Seq)
+			if err != nil || done.Status != "restarted" {
+				t.Fatal("restart failed", err, done)
+			}
+			run, err := replay.Get(done.Relaunch[0].RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := replay.Schedule(run.ID, nil); err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			if err := e.startServiceGraph(run.ID); err != nil {
+				t.Fatal(err)
+			}
+			graph, ok := replay.serviceGraph(run.ID)
+			if !ok || !graph.Limits.Deadline.Equal(want) {
+				t.Fatal("workflow lost restart deadline", graph.Limits.Deadline, want)
+			}
+			if err := replay.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := OpenStore(replay.Dir())
+			if err != nil {
+				t.Fatal("completed restart could not replay", err)
+			}
+			restored.Close()
+		})
+	}
+}

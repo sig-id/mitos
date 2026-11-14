@@ -2,16 +2,18 @@ package studio
 
 import (
 	"errors"
+	"mitos/internal/resourcepolicy"
 	"strings"
 )
 
 // ExecutionPolicy is the optional, deterministic part of the instructions file.
 // Prose elsewhere in the file never silently changes enforced limits.
 type ExecutionPolicy struct {
-	Runtime  string `json:"runtime,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Minutes  int    `json:"minutes,omitempty"`
-	Attempts int    `json:"attempts,omitempty"`
+	Resources *resourcepolicy.Policy `json:"resources,omitempty"`
+	Runtime   string                 `json:"runtime,omitempty"`
+	Model     string                 `json:"model,omitempty"`
+	Minutes   int                    `json:"minutes,omitempty"`
+	Attempts  int                    `json:"attempts,omitempty"`
 }
 
 func documentPolicy(document string) (RuntimePreferences, error) {
@@ -38,7 +40,7 @@ func documentPolicy(document string) (RuntimePreferences, error) {
 		if err := DecodeGraphJSON([]byte(strings.Join(lines[start:i], "\n")), &v); err != nil {
 			return result, err
 		}
-		result = RuntimePreferences{Runtime: v.Runtime, Model: v.Model, Minutes: v.Minutes, Attempts: v.Attempts}
+		result = RuntimePreferences{Resources: v.Resources, Runtime: v.Runtime, Model: v.Model, Minutes: v.Minutes, Attempts: v.Attempts}
 		if err := validatePreferences(result); err != nil {
 			return result, err
 		}

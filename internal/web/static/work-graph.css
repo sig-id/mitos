@@ -90,3 +90,20 @@
 .graph-run-activity>details{margin:16px 0}.graph-run-activity summary{cursor:pointer;color:var(--muted)}.graph-event-list{list-style:none;padding:0;border-left:1px solid var(--line);margin:18px 0}.graph-event-list li{padding:0 0 18px 16px}.graph-event-list time{display:block;color:var(--muted);font-size:12px}.graph-event-list strong{font-size:14px;font-weight:500}.graph-event-list p{margin:5px 0}
 .graph-attempt-card>summary{display:flex;gap:16px;align-items:center;cursor:pointer;font-weight:600;list-style:disclosure-closed}.graph-attempt-card[open]>summary{list-style:disclosure-open;margin-bottom:12px}.graph-attempt-card>summary span{font-size:13px;font-weight:400}.graph-inspector .graph-tabs{flex-wrap:wrap}
 .work-tree-dot[data-status=waiting_input],.work-tree-dot[data-status=resuming]{background:#e7c490}.work-tree-dot[data-status=in_progress]{background:#a9cbff}.graph-execution-events{margin:18px 0}.graph-execution-events>summary{cursor:pointer;color:var(--muted)}
+
+/* Goal composer scheduling controls. */
+.graph-scheduling{margin-top:24px;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.graph-scheduling summary{cursor:pointer;font-size:14px;font-weight:600}
+.graph-scheduling>summary .muted{margin-left:12px;font-weight:400}
+.graph-scheduling-content,.graph-scheduling #graph-recurring-fields,.graph-scheduling #graph-cron-fields{display:grid;gap:20px}
+.graph-scheduling-content{margin-top:20px}
+.graph-scheduling label{display:flex;flex-direction:column;gap:8px;font-size:14px;min-width:0}
+.graph-scheduling label .muted,.graph-schedule-summary,.graph-schedule-help{font-size:13px;line-height:1.6;margin:0}
+.graph-schedule-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:20px}
+.graph-schedule-advanced{padding-top:16px;border-top:1px solid var(--line)}
+.graph-schedule-advanced>summary{color:var(--muted);font-weight:400}
+.graph-schedule-advanced>.graph-schedule-row{margin-top:18px}
+.graph-scheduling [hidden]{display:none!important}
+.graph-compose .graph-create-controls{align-items:center;justify-content:space-between;gap:20px;margin:24px 0 0}
+.graph-create-controls .muted{font-size:13px}
+@media(max-width:640px){.graph-schedule-row{grid-template-columns:minmax(0,1fr)}.graph-compose .graph-create-controls{align-items:stretch}}

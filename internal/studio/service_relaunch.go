@@ -73,6 +73,50 @@ func validLifecycleTransition(from, to string) bool {
 	}
 	return false
 }
+
+// Read project settings without the Store lock and return the catalog revision
+// for the caller to check. Persist these limits for deterministic replay.
+func (e *Engine) relaunchProjectMinutes(root, key string) (map[string]int, int64, error) {
+	s := e.Store
+	s.mu.RLock()
+	seq := s.serviceLifecycleKeys[lifecycleIdentity(root, "restart", key)]
+	s.mu.RUnlock()
+	if seq != 0 {
+		return nil, 0, nil // An idempotent retry keeps its original plan.
+	}
+	view, err := s.Services()
+	if err != nil {
+		return nil, 0, err
+	}
+	members, err := service.LifecycleMembers(view.Catalog.Config, root)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %s", ErrNotFound, err)
+	}
+	active := activeServiceUnits(&view.Catalog)
+	minutes := map[string]int{}
+	projects := map[string]int{}
+	for _, member := range members {
+		work := view.Catalog.Work[member.ID]
+		if active[member.ID].ID == "" || !work.ProjectLimits {
+			continue
+		}
+		limit, ok := projects[work.ProjectID]
+		if !ok {
+			setup, err := e.freezeSetup(work.ProjectID)
+			if err != nil {
+				return nil, 0, err
+			}
+			limit = setup.Minutes
+			projects[work.ProjectID] = limit
+		}
+		minutes[member.ID] = limit
+	}
+	if len(minutes) == 0 {
+		return nil, view.Catalog.Revision, nil
+	}
+	return minutes, view.Catalog.Revision, nil
+}
+
 func (s *Store) planServiceRelaunch(op ServiceLifecycleOperation, at time.Time) ([]serviceRelaunchBinding, error) {
 	active := activeServiceUnits(s.services)
 	members := map[string]bool{}
@@ -86,6 +130,11 @@ func (s *Store) planServiceRelaunch(op ServiceLifecycleOperation, at time.Time) 
 		}
 	}
 	sort.Strings(ids)
+	for id := range op.ProjectMinutes {
+		if !members[id] || active[id].ID == "" || !s.services.Work[id].ProjectLimits {
+			return nil, errors.New("restart project limit has no inherited work binding")
+		}
+	}
 	out := []serviceRelaunchBinding{}
 	for _, id := range ids {
 		u := active[id]
@@ -95,7 +144,11 @@ func (s *Store) planServiceRelaunch(op ServiceLifecycleOperation, at time.Time) 
 			}
 		}
 		work := s.services.Work[id]
-		deadline := at.Add(time.Duration(work.TimeoutMinutes) * time.Minute)
+		minutes := work.TimeoutMinutes
+		if limit, ok := op.ProjectMinutes[id]; ok {
+			minutes = limit
+		}
+		deadline := at.Add(time.Duration(minutes) * time.Minute)
 		if work.Scheduling.Deadline != nil && work.Scheduling.Deadline.Before(deadline) {
 			deadline = *work.Scheduling.Deadline
 		}

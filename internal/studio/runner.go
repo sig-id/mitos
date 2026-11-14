@@ -204,6 +204,16 @@ func (e *Engine) Launch(b Brief, parent string) (Run, error) {
 	return e.Store.Create(b, name, parent, false)
 }
 func (e *Engine) prepareBrief(b Brief) (Brief, string, error) {
+	if b.ProjectLimits {
+		if b.AppID != WorkflowAppID || b.ProjectID == "" {
+			return Brief{}, "", errors.New("project execution limits require an agent workflow and project")
+		}
+		setup, err := e.freezeSetup(b.ProjectID)
+		if err != nil {
+			return Brief{}, "", err
+		}
+		b.TimeoutMinutes = setup.Minutes
+	}
 	if b.AppID == WorkflowAppID && (b.ProjectID == "" || len(strings.TrimSpace(b.Intent)) < 3 || len(b.Ownership.Paths) > 0 || len(b.Ownership.Leases) > 0 || len(b.Scheduling.Deps) > 0) {
 		return Brief{}, "", errors.New("agent workflows require a project and instructions; worker agents own execution claims and dependencies")
 	}

@@ -21,7 +21,7 @@ type ScheduledGoal struct {
 	Cron      string `json:"cron,omitempty"`
 	Timezone  string `json:"timezone,omitempty"`
 	Event     string `json:"event,omitempty"`
-	Minutes   int    `json:"minutes"`
+	Minutes   int    `json:"minutes,omitempty"` // Zero inherits project execution limits.
 	Expected  int64  `json:"expected_revision"`
 }
 
@@ -45,8 +45,9 @@ func (e *Engine) ScheduleGoal(req ScheduledGoal) (ServiceView, error) {
 		if unit.ID == req.ID {
 			b := view.Catalog.Work[unit.ID]
 			sameClock := req.Cron == "" && unit.TriggerKind() == "manual" || unit.Schedule != nil && unit.Schedule.Type == "cron" && unit.Schedule.Cron == req.Cron && unit.Schedule.Timezone == req.Timezone
+			sameLimits := req.Minutes == 0 && b.ProjectLimits || req.Minutes != 0 && !b.ProjectLimits && b.TimeoutMinutes == req.Minutes
 			sameEvent := req.Event == "" && len(unit.Events) == 0 || len(unit.Events) == 1 && unit.Events[0] == req.Event
-			if b.AppID == WorkflowAppID && b.ProjectID == req.ProjectID && b.Intent == req.Goal && b.TimeoutMinutes == req.Minutes && sameClock && sameEvent {
+			if b.AppID == WorkflowAppID && b.ProjectID == req.ProjectID && b.Intent == req.Goal && sameLimits && sameClock && sameEvent {
 				return view, nil
 			}
 			return ServiceView{}, fmt.Errorf("%w: service %s already exists; edit its catalog settings", ErrConflict, req.ID)
@@ -58,7 +59,16 @@ func (e *Engine) ScheduleGoal(req ScheduledGoal) (ServiceView, error) {
 	if _, err := e.automaticPolicy(); err != nil {
 		return ServiceView{}, err
 	}
-	unit := service.Unit{ID: req.ID, Scope: "project", Description: "Recurring agent work", Trigger: "manual", Concurrency: service.Concurrency{MaxInstances: 1, IfRunning: "queue", QueueMax: 1}}
+	title := strings.Join(strings.Fields(req.Goal), " ")
+	if len(title) > 150 {
+		runes := []rune(title)
+		runes = runes[:min(147, len(runes))]
+		for len(string(runes)) > 147 {
+			runes = runes[:len(runes)-1]
+		}
+		title = string(runes) + "…"
+	}
+	unit := service.Unit{ID: req.ID, Scope: "project", Description: title, Trigger: "manual", Concurrency: service.Concurrency{MaxInstances: 1, IfRunning: "queue", QueueMax: 1}}
 	if req.Cron != "" {
 		unit.Trigger = "cron"
 		unit.Schedule = &service.Schedule{Type: "cron", Cron: req.Cron, Timezone: req.Timezone}
@@ -68,14 +78,14 @@ func (e *Engine) ScheduleGoal(req ScheduledGoal) (ServiceView, error) {
 	if req.Event != "" {
 		unit.Events = service.EventPatterns{req.Event}
 	}
-	brief := Brief{ProjectID: req.ProjectID, Title: "Recurring work: " + req.ID, Intent: req.Goal, AppID: WorkflowAppID, TimeoutMinutes: req.Minutes}
+	brief := Brief{ProjectID: req.ProjectID, Title: title, Intent: req.Goal, AppID: WorkflowAppID, TimeoutMinutes: req.Minutes, ProjectLimits: req.Minutes == 0}
 	view.Catalog.Config.Units = append(view.Catalog.Config.Units, unit)
 	view.Catalog.Config.Intent.Enable = append(view.Catalog.Config.Intent.Enable, req.ID)
 	view.Catalog.Work[req.ID] = brief
 	return e.ConfigureServices(view.Catalog, req.Expected)
 }
 
-func workflowDeadline(r Run) time.Time {
+func workflowDeadline(r Run, projectMinutes int) time.Time {
 	at := r.CreatedAt
 	for _, event := range r.Events {
 		if event.Kind == "workflow_started" {
@@ -83,7 +93,11 @@ func workflowDeadline(r Run) time.Time {
 			break
 		}
 	}
-	due := at.Add(time.Duration(r.Brief.TimeoutMinutes) * time.Minute)
+	minutes := r.Brief.TimeoutMinutes
+	if r.Brief.ProjectLimits {
+		minutes = projectMinutes
+	}
+	due := at.Add(time.Duration(minutes) * time.Minute)
 	if d := r.Brief.Scheduling.Deadline; d != nil && d.Before(due) {
 		due = *d
 	}

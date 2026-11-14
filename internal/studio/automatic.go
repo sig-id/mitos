@@ -18,6 +18,7 @@ import (
 	"mitos/internal/compute"
 	"mitos/internal/decision"
 	"mitos/internal/harness"
+	"mitos/internal/resourcepolicy"
 	"mitos/internal/workpool"
 	workspacefs "mitos/internal/workspace"
 )
@@ -194,7 +195,7 @@ func (e *Engine) StartAutomaticGoal(req AutomaticGoal) (WorkGraph, error) {
 		if err != nil {
 			return WorkGraph{}, err
 		}
-		deadline := workflowDeadline(r)
+		deadline := workflowDeadline(r, setup.Minutes)
 		if deadline.Before(limits.Deadline) {
 			limits.Deadline = deadline
 		}
@@ -444,7 +445,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			}
 		}
 	}()
-	launch, err := compileApplication(Application{})
+	resources := resourcepolicy.Agent{}
+	if currentGraph.Setup != nil {
+		resources = currentGraph.Setup.Resources.Agent
+	}
+	launch, err := compileWorkflowLaunch(resources)
 	if err != nil {
 		return err
 	}

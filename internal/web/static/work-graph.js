@@ -137,26 +137,16 @@
  function compose() { window.MitosProjectNav.select('work');$('graph-followup-form').hidden=true; $('graph-compose').hidden = false; $('graph-compose-close').hidden = !graph; $('graph-current').hidden = true; $('graph-prompt').focus({preventScroll:true}); scrollWorkTo($('graph-compose')); }
  $('new-work').addEventListener('click', compose);
  $('graph-compose-close').onclick = () => { $('graph-compose').hidden = true; $('graph-current').hidden = !graph; };
- $('graph-trigger').onchange=()=>{
-  const mode=$('graph-trigger').value;
-  $('graph-recurring-fields').hidden=mode==='once';
-  $('graph-cron-fields').hidden=mode==='event';
-  $('graph-event-fields').hidden=mode==='cron';
-  $('graph-recurring-fields').querySelectorAll('input').forEach(input=>{
-   input.disabled=mode==='once'||(mode==='event'&&!!input.closest('#graph-cron-fields'))||(mode==='cron'&&!!input.closest('#graph-event-fields'));
-  });
-  $('graph-create').textContent=mode==='once'?'Start work →':'Save workflow →';
- };
- $('graph-trigger').onchange();
+ const workSchedule = MitosWorkSchedule.init($('graph-create-form'));
  $('graph-create-form').onsubmit = async event => {
   event.preventDefault(); const form = event.target, submit = $('graph-create'); submit.disabled = true; form.querySelector('.form-error').textContent = '';
   try {
    const goal = form.elements.goal.value.trim(); if (goal.length < 3) throw new Error('Describe what you want to accomplish.');
    const mode=form.elements.trigger.value;
    if(mode!=='once'){
-    const id=form.elements.workflow_name.value.trim();if(!id)throw new Error('Give the recurring workflow a name.');
+    const id='workflow-'+crypto.randomUUID();
     const catalog=await request('/api/services');
-    const body={id,project_id:project,goal,cron:mode==='event'?'':form.elements.cron.value.trim(),timezone:mode==='event'?'':form.elements.timezone.value.trim(),event:mode==='cron'?'':form.elements.event.value.trim(),minutes:Number(form.elements.minutes.value),expected_revision:catalog.catalog.revision};
+    const body={id,project_id:project,goal,cron:mode==='event'?'':workSchedule.value().cron,timezone:mode==='event'?'':form.elements.timezone.value.trim(),event:mode==='cron'?'':form.elements.event.value.trim(),expected_revision:catalog.catalog.revision};
     if(mode!=='event'&&!body.cron)throw new Error('Enter a cron schedule.');
     if(mode!=='cron'&&!body.event)throw new Error('Enter the external event name.');
     await sendMutation('/api/services/workflows',body,'schedule');location.href='/services';return;
@@ -400,6 +390,7 @@
  }
  function renderGoalProgress(box){
   box.append(node('p','The coordinator plans and reviews; agents carry out the assignments.','muted'));
+  const budgets=node('details',undefined,'graph-resource-budgets');budgets.dataset.readKey='goal-resource-budgets';budgets.append(node('summary','Resource budgets'),node('p',`${graph.attempts} of ${graph.limits.attempts} agent attempts allocated, including planning and retries.`),node('p','Workflow deadline: '+date(graph.limits.deadline)+'. Waiting time counts.'));if(graph.setup?.resources){const resources=graph.setup.resources;for(const [label,limit,unit]of [['Model tokens',resources.workflow?.tokens,'tokens'],['CPU per agent',resources.agent?.cpu_millicores,'millicores'],['Memory per agent',resources.agent?.memory_mib,'MiB']])budgets.append(node('p',label+': '+(limit?.mode==='limit'?`${limit.amount} ${unit}`:'No enforced cap')+'.'))}box.append(budgets);
   const members=workflowOrder().filter(id=>graph.members[id].spec.kind!=='scope'&&!graph.members[id].replacement),workers=members.filter(id=>kind(graph.members[id])!=='planner');
   box.append(node('h4','Assignments'));
   if(!workers.length)box.append(node('p',graph.policy.automatic?'The coordinator is preparing the first assignments.':'This goal has no assignments yet.','muted'));

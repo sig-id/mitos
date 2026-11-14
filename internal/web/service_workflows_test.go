@@ -34,10 +34,13 @@ func TestScheduledWorkflowAPIAndUI(t *testing.T) {
 		t.Fatal("duplicate workflow")
 	}
 	page := request(s, "GET", "/projects/"+project.ID, "", false)
-	for _, want := range []string{"When to run", "On a schedule and external events", "workflow_name"} {
+	for _, want := range []string{"When to run", "On a schedule and external events", "Every few minutes", "Every day", "Every week", "Advanced options", "Each run inherits the project’s execution limits"} {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatal("missing control", want)
 		}
+	}
+	if strings.Contains(page.Body.String(), `name="workflow_name"`) {
+		t.Fatal("workflow name should be derived from the goal")
 	}
 	page = request(s, "GET", "/services", "", false)
 	if page.Code != 200 || !strings.Contains(page.Body.String(), "Follow the procedure I specified") {

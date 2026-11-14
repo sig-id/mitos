@@ -316,6 +316,58 @@ MUST survive retries and restoration. Concurrency, disk, memory, model spend, an
 external-service limits are separate resources. Estimates and prompt instructions
 MUST NOT be advertised as hard limits. A waiting VM or shell remains accounted for.
 
+### Resource policy scopes and enforcement
+
+Resource policy separates aggregate **workflow budgets** from **per-agent
+execution limits**. One recurring occurrence is one workflow budget. Planner
+calls, workers, and retries share that budget; replacements and replay do not
+reset it. A later scheduled occurrence receives a new budget from the current
+project settings. Existing work keeps its frozen policy.
+
+| Dimension | Scope and unit | Current enforcement |
+| --- | --- | --- |
+| `workflow.elapsed_minutes` | Wall-clock minutes, including waits and approvals | A finite graph deadline; expiry requests cancellation and waits for process settlement |
+| `workflow.attempts` | Attempts allocated across planners, workers, and retries | Durable admission count; allocation consumes an attempt even if it never starts |
+| `workflow.tokens` | Aggregate model input and output tokens | Unavailable with native CLI credentials; reported usage is not a reservation |
+| `agent.cpu_millicores` | CPU capacity per agent and its descendants; 1000 = one core | Requires an explicit provider quota guarantee; unavailable in the local process provider |
+| `agent.memory_mib` | Aggregate memory cap for an agent and its descendants | Requires an explicit provider memory boundary; unavailable in the local process provider |
+
+CPU capacity is a rate, not cumulative CPU time. Per-agent memory is not a host
+memory budget or a sum of unqualified RSS samples. A provider must account for
+all descendants, including subprocesses that change process groups. A container
+label alone does not establish either guarantee. CPU and memory requests are
+frozen in the launch posture, checked during compilation, and checked again by
+the provider before preparation. Unsupported caps MUST be rejected, including
+when another requested resource is supported. Provider selection MUST NOT remove
+a requested cap to find an eligible executor.
+
+Each dimension is `{ "mode": "inherit" }`,
+`{ "mode": "limit", "amount": POSITIVE_INTEGER }`, or
+`{ "mode": "unlimited" }`. Omission means inheritance, field by field, through
+built-in defaults, personal defaults, local project overrides, and the project
+`mitos` block. An amount on an inherited or unlimited dimension is invalid.
+Zero does not encode unlimited. The current graph runtime requires finite
+elapsed-time and attempt limits; explicit unlimited is available only for
+CPU, memory, and tokens. Built-in defaults are 120 minutes and 96 attempts,
+with no CPU, memory, or token cap. Legacy `minutes` and `attempts` retain their
+zero-means-inherit behavior; conflicting legacy and scoped values in the same
+settings layer are rejected.
+
+The settings API exposes supported controls and units. The UI distinguishes an
+uncapped dimension from an unavailable enforcement capability. It MUST NOT
+present token telemetry, prompt guidance, or process sampling as a hard cap.
+Unsupported structured policy in a directly edited instructions file blocks new
+work, just as unsupported policy submitted through the settings API does.
+
+A future hard token budget requires a shared metered gateway: reserve the maximum
+admitted request consumption before dispatch, settle actual input/output charges
+idempotently, and retain reservations for uncertain requests across retries and
+restart. Cache accounting and provider-specific token semantics must be explicit.
+Native credentials must not bypass that gateway. This change defines and
+validates the token policy dimension; it does not implement that gateway or claim
+a spending guarantee. Monetary budgets and total workflow CPU-time budgets are
+separate future dimensions, not conversions from elapsed time or token estimates.
+
 ## Atomic admission and persistence
 
 Admission MUST validate assignment/policy revision, caller grant, dependency

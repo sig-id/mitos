@@ -1,6 +1,10 @@
 package compute
 
-import "testing"
+import (
+	"context"
+	"mitos/internal/resourcepolicy"
+	"testing"
+)
 
 func strong() Capabilities {
 	return Capabilities{Isolation: "microvm", Remote: true, Egress: "broker", DataMount: "snapshot-ro", Snapshot: true, NetModes: []string{"deny-all-except-broker"}, WorkspaceConfined: true, Metered: true}
@@ -67,5 +71,35 @@ func TestStrictLocalPosturesAndBrokerReferences(t *testing.T) {
 		if _, err := Compile(request, map[string]Capabilities{"container": caps}, false); err == nil {
 			t.Fatal("invalid broker reference admitted")
 		}
+	}
+}
+
+func TestResourceCapsRequireProviderGuarantees(t *testing.T) {
+	request := Request{Resources: resourcepolicy.Agent{CPUMillicores: resourcepolicy.Capped(500), MemoryMiB: resourcepolicy.Capped(256)}}
+	if _, err := Compile(request, map[string]Capabilities{"local": (&Local{}).Capabilities()}, true); err == nil {
+		t.Fatal("local process admitted unsupported caps")
+	}
+	caps := strong()
+	caps.CPUQuota = true
+	caps.MemoryLimit = true
+	request.BrokerEndpoint = "https://broker.example.invalid"
+	spec, err := Compile(request, map[string]Capabilities{"bounded": caps}, false)
+	if err != nil || spec.Posture.Resources != request.Resources {
+		t.Fatal("resource posture was lost", err)
+	}
+	caps.MemoryLimit = false
+	if _, err := Compile(request, map[string]Capabilities{"bounded": caps}, false); err == nil {
+		t.Fatal("memory quota silently downgraded")
+	}
+	// Local.Prepare must reject caps even when a caller bypasses Compile or forges metadata.
+	localSpec, err := Compile(Request{}, map[string]Capabilities{"local": (&Local{}).Capabilities()}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSpec.Posture.Resources = request.Resources
+	localSpec.Capabilities.CPUQuota = true
+	localSpec.Capabilities.MemoryLimit = true
+	if _, err := (&Local{}).Prepare(context.Background(), localSpec); err == nil {
+		t.Fatal("forged quota capabilities admitted")
 	}
 }
