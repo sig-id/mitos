@@ -25,11 +25,18 @@ try{
  await page.reload();await page.getByRole('heading',{name:'AGENTS.md',exact:true}).waitFor();await page.locator('.setup-edit-surface .md-preview').getByText('saved evidence',{exact:true}).waitFor();
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:'/tmp/mitos-project-setup-mobile.png'});await page.setViewportSize({width:1600,height:1040});await page.screenshot({path:'/tmp/mitos-project-setup.png'});await page.locator('[data-view=work]').click();
  await page.locator('#graph-prompt').fill('Produce and review the answer');await page.locator('#graph-create').click();await page.locator('#graph-current').waitFor({state:'visible'});const graphID=new URL(page.url()).searchParams.get('graph');assert.ok(graphID);
- // A running worker exposes incremental messages before any report exists.
- await page.locator('[data-view=workflow]').click();
- const liveWorker=page.locator('.graph-node[data-kind=step]').first();await liveWorker.waitFor();await liveWorker.click();
- await page.locator('.graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor();
+ // The wide conversation inspector loads fresh output, status, requests, and events
+ // without first visiting Workflow (which would mask a stalled polling loop).
+ const liveWorker=page.locator('#work-tree .work-tree-node').filter({hasText:'Implement change'});await liveWorker.waitFor();await liveWorker.click();
+ assert.equal(new URL(page.url()).searchParams.get('view'),'work');
+ assert.equal(await page.locator('#graph-conversation').isVisible(),true);
+ await page.locator('#graph-inspector .graph-live-text').filter({hasText:'Inspecting the assignment'}).waitFor({timeout:10000});
  await page.locator('#graph-status.waiting_input').waitFor();
+ await page.locator('#graph-inspector .graph-request-card').getByRole('button',{name:/Allow once/}).waitFor();
+ await page.locator('#graph-inspector .graph-run-activity > p').filter({hasText:'Started'}).waitFor();
+ await page.locator('#graph-inspector .graph-execution-events summary').click();
+ await page.locator('#graph-inspector .graph-event-list').getByText('Agent connected',{exact:true}).waitFor();
+ await page.locator('#graph-inspector .graph-execution-events summary').click();
  await page.locator('[data-view=work]').click();await page.locator('#graph-conversation').getByRole('button',{name:'Review request',exact:true}).click();await page.locator('[data-view=workflow]').click();
  await page.locator('.graph-request-card').getByRole('button',{name:/Allow once/}).waitFor();
  const waitingURL=page.url();

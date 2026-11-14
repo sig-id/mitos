@@ -475,6 +475,9 @@
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
  }
  function elapsed(value){const seconds=Math.max(0,Math.floor((Date.now()-Date.parse(value))/1000));return seconds<60?seconds+'s':seconds<3600?Math.floor(seconds/60)+'m':Math.floor(seconds/3600)+'h '+Math.floor(seconds%3600/60)+'m'}
+ // Poll whichever inspector is actually displayed, including the wide conversation
+ // panel. Hidden views and collapsed attempt sections keep their readers paused.
+ function activityVisible(element){return !document.hidden&&!element.closest('[hidden], details:not([open])')&&element.getClientRects().length>0;}
  function renderLiveOutput(box,m,run){
   const section=node('section',undefined,'graph-live-output'),heading=node('h4','Live activity'),status=node('p','Connecting to agent activity…','muted'),content=node('pre',undefined,'graph-live-text');
   content.hidden=true;section.append(heading,status,content);box.append(section);
@@ -483,7 +486,7 @@
   const update=async()=>{
    if(!active())return;
    try{
-    if(!document.hidden&&workView==='workflow'&&!section.closest('details:not([open])')){
+    if(activityVisible(section)){
      const output=await request(path);if(!active())return;
      const at=Date.parse(output.updated_at)>0?output.updated_at:run.updated_at;
      heading.textContent=output.live?'Live activity':'Execution log';
@@ -505,7 +508,7 @@
   const update=async()=>{
    if(!active())return;
    try{
-    if(!document.hidden&&workView==='workflow'&&!panel.closest('details:not([open])')){
+    if(activityVisible(panel)){
      const activity=await request(path);if(!active())return;
      meta.textContent=(activity.started_at?'Started '+date(activity.started_at):'Created '+date(activity.created_at))+(Date.parse(activity.finished_at)>0?' · Finished '+date(activity.finished_at):activity.started_at?' · Elapsed '+elapsed(activity.started_at):'');
      const pending=activity.requests||[],key=JSON.stringify(pending);
