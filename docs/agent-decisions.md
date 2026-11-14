@@ -54,6 +54,10 @@ Other unsupported native requests fail visibly instead of receiving invented
 answers. Final reports are captured from final agent-message items, and failed or
 interrupted turns cannot be accepted as successful attempts.
 
+Successful supervised observations renew the active session lease after their
+evidence is journaled. A large journal write cannot expire the session merely by
+delaying its heartbeat; closed or already-expired sessions are not revived.
+
 The investigation route starts one bounded read-only Codex app-server investigation.
 It cannot ask recursive questions, and requested escalations are denied. Its result
 must match the original cards and current policy; uncertainty returns to the user.

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSupervisionHTTPExternalBridgeAndResolution(t *testing.T) {
@@ -91,13 +92,40 @@ func TestSupervisionHTTPLargeObservations(t *testing.T) {
 			if err = bridge.Start(context.Background(), "codex", "External", e.Root); err != nil {
 				t.Fatal(err)
 			}
-			for _, kind := range []string{"commandExecution", "fileChange", "mcpToolCall"} {
-				// Keep the session alive between full-size observations, as the
-				// native client does. Race-instrumented journaling can exceed the
-				// lease across this sequence even though each request succeeds.
-				if err = bridge.Heartbeat(context.Background()); err != nil {
-					t.Fatal("session heartbeat before observation", err)
+			// Like the native client, renew the lease while observations are
+			// in flight. Race-instrumented encoding and journaling of full-size
+			// events may take longer than a session lease across this sequence.
+			// A heartbeat can wait behind that journal write; give the fixture
+			// the same HTTP allowance as an observation, without changing leases.
+			bridge.HTTP.Timeout = 125 * time.Second
+			heartbeatCtx, stopHeartbeat := context.WithCancel(context.Background())
+			heartbeatDone := make(chan error, 1)
+			go func() {
+				tick := time.NewTicker(5 * time.Second)
+				defer tick.Stop()
+				for {
+					select {
+					case <-heartbeatCtx.Done():
+						heartbeatDone <- nil
+						return
+					case <-tick.C:
+						if err := bridge.Heartbeat(heartbeatCtx); err != nil {
+							if heartbeatCtx.Err() != nil {
+								err = nil
+							}
+							heartbeatDone <- err
+							return
+						}
+					}
 				}
+			}()
+			defer func() {
+				stopHeartbeat()
+				if err := <-heartbeatDone; err != nil {
+					t.Error("session heartbeat", err)
+				}
+			}()
+			for _, kind := range []string{"commandExecution", "fileChange", "mcpToolCall"} {
 				item := map[string]any{"type": kind, "cwd": e.Root, "command": "echo hello"}
 				setContent := func(content string) {
 					switch kind {
