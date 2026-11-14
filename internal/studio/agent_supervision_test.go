@@ -312,17 +312,25 @@ func TestLargeSupervisionObservationsContinueNativeProxy(t *testing.T) {
 				}
 				session, token := supervisorSession(t, e, req.ProjectID)
 				item := map[string]any{"type": kind, "cwd": e.Root, "command": "echo hello"}
-				content := strings.Repeat("large result\n", 20000)
-				switch kind {
-				case "commandExecution":
-					item["aggregatedOutput"] = content
-				case "fileChange":
-					item["changes"] = []any{map[string]string{"path": "new.txt", "diff": content}}
-				case "mcpToolCall":
-					item["result"] = map[string]string{"text": content}
-					item["arguments"] = map[string]string{"path": e.Root}
+				setContent := func(content string) {
+					switch kind {
+					case "commandExecution":
+						item["aggregatedOutput"] = content
+					case "fileChange":
+						item["changes"] = []any{map[string]string{"path": "new.txt", "diff": content}}
+					case "mcpToolCall":
+						item["result"] = map[string]string{"text": content}
+						item["arguments"] = map[string]string{"path": e.Root}
+					}
 				}
-				raw, _ := json.Marshal(map[string]any{"method": "item/completed", "params": map[string]any{"item": item}})
+				setContent("")
+				event := map[string]any{"method": "item/completed", "params": map[string]any{"item": item}}
+				empty, _ := json.Marshal(event)
+				setContent(strings.Repeat("x", harness.MaxObservationBytes-len(empty)))
+				raw, _ := json.Marshal(event)
+				if len(raw) != harness.MaxObservationBytes {
+					t.Fatal("fixture must exercise the inclusive limit", len(raw))
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				client, server := net.Pipe()

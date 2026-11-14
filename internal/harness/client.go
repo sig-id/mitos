@@ -22,8 +22,9 @@ type Delivery struct {
 	RunIDs    []string        `json:"run_ids"`
 }
 
-// MaxObservationBytes matches the native app-server frame limit. Approval requests
-// retain their smaller independent limit.
+// MaxObservationBytes is the inclusive JSON payload limit shared by the native
+// readers and observation endpoint. Line terminators do not count toward it.
+// Approval requests retain their smaller independent limit.
 const MaxObservationBytes = 1 << 20
 
 type Observer interface {
@@ -53,7 +54,9 @@ func (c *Client) Observe(ctx context.Context, raw json.RawMessage) error {
 	httpClient := *c.HTTP
 	httpClient.Timeout = 125 * time.Second
 	copy.HTTP = &httpClient
-	return copy.call(ctx, "POST", c.base()+"/observe", raw, nil)
+	// Preserve native bytes. Re-marshaling RawMessage HTML-escapes output and
+	// can grow an in-limit observation beyond the server's body limit.
+	return copy.callJSON(ctx, "POST", c.base()+"/observe", raw, nil)
 }
 
 type Broker interface {
@@ -88,7 +91,11 @@ func (c *Client) call(ctx context.Context, method, path string, in any, out any)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.URL+path, bytes.NewReader(b))
+	return c.callJSON(ctx, method, path, b, out)
+}
+
+func (c *Client) callJSON(ctx context.Context, method, path string, body []byte, out any) error {
+	req, err := http.NewRequestWithContext(ctx, method, c.URL+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

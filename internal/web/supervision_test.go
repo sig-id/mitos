@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -90,15 +91,33 @@ func TestSupervisionHTTPLargeObservations(t *testing.T) {
 			if err = bridge.Start(context.Background(), "codex", "External", e.Root); err != nil {
 				t.Fatal(err)
 			}
-			for _, kind := range []string{"commandExecution", "fileChange"} {
+			for _, kind := range []string{"commandExecution", "fileChange", "mcpToolCall"} {
 				item := map[string]any{"type": kind, "cwd": e.Root, "command": "echo hello"}
-				content := strings.Repeat("large output\n", 30000)
-				if kind == "commandExecution" {
-					item["aggregatedOutput"] = content
-				} else {
-					item["changes"] = []any{map[string]string{"path": "new.txt", "diff": content}}
+				setContent := func(content string) {
+					switch kind {
+					case "commandExecution":
+						item["aggregatedOutput"] = content
+					case "fileChange":
+						item["changes"] = []any{map[string]string{"path": "new.txt", "diff": content}}
+					case "mcpToolCall":
+						item["result"] = map[string]string{"text": content}
+					}
 				}
-				raw, _ := json.Marshal(map[string]any{"method": "item/completed", "params": map[string]any{"item": item}})
+				encode := func() []byte {
+					var body bytes.Buffer
+					encoder := json.NewEncoder(&body)
+					encoder.SetEscapeHTML(false)
+					if err := encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": item}}); err != nil {
+						t.Fatal(err)
+					}
+					return bytes.TrimSuffix(body.Bytes(), []byte("\n"))
+				}
+				setContent("")
+				setContent(strings.Repeat("<", harness.MaxObservationBytes-len(encode())))
+				raw := encode()
+				if len(raw) != harness.MaxObservationBytes {
+					t.Fatal("fixture must exercise the inclusive limit", len(raw))
+				}
 				if err = bridge.Observe(context.Background(), raw); err != nil {
 					t.Fatal(kind, err)
 				}

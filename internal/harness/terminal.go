@@ -36,22 +36,12 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 	readPipe, proxyOutput := io.Pipe()
 	defer readPipe.Close()
 	defer proxyOutput.Close()
-	stopped := make(chan error, 1)
-	go func() { stopped <- ProxyCodex(ctx, b, server, proxyInput, proxyOutput) }()
-	messages := make(chan json.RawMessage, 32)
 	go func() {
-		defer close(messages)
-		scan := bufio.NewScanner(readPipe)
-		scan.Buffer(make([]byte, 4096), 1<<20)
-		for scan.Scan() {
-			line := append(json.RawMessage(nil), scan.Bytes()...)
-			select {
-			case messages <- line:
-			case <-ctx.Done():
-				return
-			}
-		}
+		err := ProxyCodex(ctx, b, server, proxyInput, proxyOutput)
+		_ = proxyOutput.CloseWithError(err)
 	}()
+	messages := make(chan nativeFrame, 32)
+	go readNativeFrames(ctx, readPipe, messages)
 	userLines := make(chan string)
 	go func() {
 		defer close(userLines)
@@ -91,16 +81,11 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 				continue
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case err := <-stopped:
-				if err == nil {
-					err = io.EOF
-				}
-				return nil, err
-			case line, ok := <-messages:
+			case frame, ok := <-messages:
 				if !ok {
 					return nil, io.EOF
 				}
-				return line, nil
+				return frame.line, frame.err
 			}
 		}
 	}

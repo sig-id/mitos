@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,8 +37,7 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 	errorsOut := make(chan error, 2)
 	go func() { <-ctx.Done(); _ = server.Close() }()
 	go func() {
-		scan := bufio.NewScanner(clientIn)
-		scan.Buffer(make([]byte, 4096), MaxObservationBytes)
+		scan := nativeScanner(clientIn)
 		for scan.Scan() {
 			line := append([]byte(nil), scan.Bytes()...)
 			var envelope Envelope
@@ -63,43 +61,32 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 				return
 			}
 		}
-		err := scan.Err()
+		err := nativeScannerError(scan)
 		if err == nil {
 			err = io.EOF
 		}
 		errorsOut <- err
 	}()
 	// The server reader must remain live while human input is pending.
-	lines := make(chan []byte)
-	go func() {
-		defer close(lines)
-		scan := bufio.NewScanner(server)
-		scan.Buffer(make([]byte, 4096), MaxObservationBytes)
-		for scan.Scan() {
-			line := append([]byte(nil), scan.Bytes()...)
-			select {
-			case lines <- line:
-			case <-ctx.Done():
-				return
-			}
-		}
-		if err := scan.Err(); err != nil {
-			select {
-			case errorsOut <- err:
-			default:
-			}
-		}
-	}()
+	lines := make(chan nativeFrame)
+	go readNativeFrames(ctx, server, lines)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-errorsOut:
 			return err
-		case line, ok := <-lines:
+		case frame, ok := <-lines:
 			if !ok {
-				return nil
+				return ctx.Err()
 			}
+			if frame.err != nil {
+				if errors.Is(frame.err, io.EOF) {
+					return nil
+				}
+				return frame.err
+			}
+			line := frame.line
 			var e Envelope
 			if json.Unmarshal(line, &e) != nil {
 				return errors.New("invalid app-server JSON")
