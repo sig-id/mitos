@@ -30,7 +30,15 @@
  async function refreshHome(){
   home=await api('/api/workspace-home');lastObserved=home.observed_at;
   const next=JSON.stringify([home.projects,home.decisions]);if(next===homeSignature)return;homeSignature=next;
-  const nav=$('projects');nav.replaceChildren();for(const row of home.projects){const a=link(row.project.name,'/projects/'+row.project.id,'');a.append(el('small',home.server.name));if(row.project.id===project)a.setAttribute('aria-current','page');nav.append(a)}
+  const nav=$('projects'),known=new Map([...nav.children].map(n=>[n.dataset.projectId,n]));
+  for(const [index,row] of home.projects.entries()){
+   let item=known.get(row.project.id);known.delete(row.project.id);
+   if(!item){item=el('div',undefined,'project-navigation');item.dataset.projectId=row.project.id;item.append(link(row.project.name,'/projects/'+row.project.id,''))}
+   const a=item.firstElementChild;if(a.dataset.name!==row.project.name||a.dataset.server!==home.server.name){a.replaceChildren(document.createTextNode(row.project.name),el('small',home.server.name));a.dataset.name=row.project.name;a.dataset.server=home.server.name}
+   if(row.project.id===project)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');
+   if(nav.children[index]!==item)nav.insertBefore(item,nav.children[index]||null);
+  }
+  for(const item of known.values())item.remove();
   $('inbox-count').textContent=home.decisions.length||'';
   if(project)return;
   const content=$('home-content');content.replaceChildren();
