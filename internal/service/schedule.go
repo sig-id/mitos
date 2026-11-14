@@ -43,6 +43,11 @@ func (c Concurrency) Effective() Concurrency {
 	return c
 }
 func (u Unit) ValidateRuntime() error {
+	if len(u.Events) > 0 {
+		if _, err := u.EventPatterns(); err != nil {
+			return err
+		}
+	}
 	if u.Schedule != nil && u.TriggerKind() != "webhook" && u.TriggerKind() != "external_signal" && (u.Schedule.Path != "" || u.Schedule.Source != "") {
 		return errors.New("path/source require an ingress trigger")
 	}

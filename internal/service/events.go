@@ -62,7 +62,12 @@ func ValidEventPattern(pattern string) bool {
 }
 func (u Unit) EventPatterns() ([]string, error) {
 	patterns := []string{}
-	if u.Triggers != nil {
+	if len(u.Events) > 0 {
+		if u.TriggerKind() != "cron" && u.TriggerKind() != "interval" && u.TriggerKind() != "manual" {
+			return nil, errors.New("additional events require a cron, interval, or manual service")
+		}
+		patterns = append(patterns, u.Events...)
+	} else if u.Triggers != nil {
 		if u.Schedule != nil {
 			return nil, errors.New("choose triggers hooks or an event schedule")
 		}

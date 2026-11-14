@@ -115,6 +115,9 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	}
 	spec.Brief = b
 	if app.Builtin {
+		if app.ID == WorkflowAppID {
+			return spec, nil, graphError("recurring workflows must be configured as services")
+		}
 		for _, dep := range spec.Brief.Scheduling.Deps {
 			if dep.Payload == "data" {
 				return spec, nil, graphError("builtin inventory does not consume dependency artifacts")
@@ -193,6 +196,7 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 		return WorkGraph{}, graphError("initial membership exceeds task allowance")
 	}
 	g := WorkGraph{Setup: req.setup, Profile: GraphProfile, ID: newID("graph"), Home: e.Store.Home().ID, ProjectID: req.ProjectID, Workspace: project.Directory, RootTask: "", GoalRevision: req.GoalRevision, Revision: 1, PolicyRevision: 1, ControllerGeneration: 1, Activation: req.Activation, Predecessor: req.Predecessor, Policy: req.Policy, Limits: req.Limits, Members: map[string]*GraphMember{}, Expansions: map[string]*GraphExpansion{}, Receipts: map[string]GraphReceipt{}, Decisions: map[string]*GraphDecision{}, Status: "active", CreatedAt: now, UpdatedAt: now}
+	g.ServiceRunID = req.serviceRunID
 	refs := map[string]string{}
 	for _, spec := range req.Tasks {
 		if !validGraphKey(spec.ID) || refs[spec.ID] != "" {
@@ -245,8 +249,20 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 	if err := s.validateGraphPools(&g); err != nil {
 		return WorkGraph{}, err
 	}
-	if len(s.graphs) >= 256 {
+	activeGraphs := 0
+	for _, existing := range s.graphs {
+		if existing.Status == "active" {
+			activeGraphs++
+		}
+	}
+	if activeGraphs >= 256 {
 		return WorkGraph{}, graphError("graph capacity reached")
+	}
+	if req.serviceRunID != "" {
+		r := s.runs[req.serviceRunID]
+		if r == nil || r.Status != "running" || r.Brief.AppID != WorkflowAppID || r.Brief.ProjectID != req.ProjectID || s.lifecycleTaskHeld(s.tasks[r.TaskID]) {
+			return WorkGraph{}, ErrConflict
+		}
 	}
 	if req.Predecessor != "" {
 		p := s.graphs[req.Predecessor]

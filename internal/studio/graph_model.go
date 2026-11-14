@@ -111,6 +111,7 @@ type GraphReceipt struct {
 	At       time.Time         `json:"at"`
 }
 type WorkGraph struct {
+	ServiceRunID         string                     `json:"service_run_id,omitempty"`
 	Setup                *FrozenSetup               `json:"setup,omitempty"`
 	Result               *GraphResult               `json:"result,omitempty"`
 	Profile              string                     `json:"profile"`
@@ -140,6 +141,7 @@ type WorkGraph struct {
 	Decisions            map[string]*GraphDecision  `json:"decisions,omitempty"`
 }
 type CreateGraph struct {
+	serviceRunID string
 	setup        *FrozenSetup
 	Profile      string      `json:"profile"`
 	Key          string      `json:"key"`

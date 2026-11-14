@@ -5,6 +5,16 @@
   <div class="graph-compose-heading"><div><span class="graph-eyebrow">FROM GOAL TO RESULT</span><h2>What would you like to accomplish?</h2><p>Start with an idea. Watch the work take shape.</p></div><button id="graph-compose-close" aria-label="Close new work" hidden>×</button></div>
   <form id="graph-create-form">
    <label class="sr-only" for="graph-prompt">Your goal</label><textarea id="graph-prompt" name="goal" rows="3" required minlength="3" maxlength="10000" placeholder="Investigate why checkout is slow, fix the bottleneck, and show the improvement…"></textarea>
+   <details class="execution-fold"><summary>When to run</summary>
+    <label>Run this work<select id="graph-trigger" name="trigger"><option value="once">Once</option><option value="cron">On a schedule</option><option value="event">On an external event</option><option value="both">On a schedule and external events</option></select></label>
+    <div id="graph-recurring-fields" hidden>
+     <label>Workflow name<input name="workflow_name" maxlength="96" placeholder="For example: monitor-prs"></label>
+     <div id="graph-cron-fields"><label>Cron schedule<input name="cron" value="*/5 * * * *" maxlength="256"></label><label>Timezone<input name="timezone" value="UTC" maxlength="128"></label></div>
+     <div id="graph-event-fields" hidden><label>External event name<input name="event" maxlength="96" placeholder="For example: repository.changed"></label></div>
+     <label>Time limit per occurrence (minutes)<input name="minutes" type="number" value="30" min="1" max="120"></label>
+     <p class="muted">Describe the procedure, conditions, and allowed actions in your goal. Agents follow those instructions each time. Pending conditions can be checked again on the next occurrence. Scheduled and external triggers share one queue; you can stop or edit the workflow in Services.</p>
+    </div>
+   </details>
    <div class="graph-create-controls"><span id="graph-planner-note" class="muted">Checking agent availability…</span><button id="graph-create" class="primary" type="submit" disabled>Start work →</button></div>
    <p class="form-error" role="alert"></p>
   </form>

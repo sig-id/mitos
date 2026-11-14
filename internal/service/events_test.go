@@ -52,3 +52,20 @@ func TestEventSchemaRejectsUnsupportedSignalsAndMixedClocks(t *testing.T) {
 		}
 	}
 }
+
+func TestAdditionalEventsShareTimedOrManualService(t *testing.T) {
+	u := Unit{Trigger: "cron", Schedule: &Schedule{Type: "cron", Cron: "*/5 * * * *"}, Events: EventPatterns{"github.pr.changed"}}
+	if err := u.ValidateRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	u.Events = EventPatterns{"worker.completed"}
+	if u.ValidateRuntime() == nil {
+		t.Fatal("unsupported event accepted")
+	}
+	u.Events = EventPatterns{"github.pr.changed"}
+	u.Trigger = "continuous"
+	u.Schedule = &Schedule{Type: "continuous"}
+	if u.ValidateRuntime() == nil {
+		t.Fatal("unsupported combined trigger accepted")
+	}
+}

@@ -168,6 +168,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	mux.HandleFunc("GET /services/lifecycle/{seq}", s.serviceLifecycle)
 	mux.HandleFunc("GET /api/services", s.apiServices)
 	mux.HandleFunc("POST /api/services/preview", s.previewServices)
+	mux.HandleFunc("POST /api/services/workflows", s.scheduleWorkflow)
 	mux.HandleFunc("PUT /api/services", s.apiConfigureServices)
 	mux.HandleFunc("POST /services/catalog", s.configureServices)
 	mux.HandleFunc("POST /api/services/{id}/trigger", s.apiTriggerService)
@@ -448,6 +449,10 @@ func (s *Server) application(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, p, 200)
 }
 func (s *Server) newBrief(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("app") == studio.WorkflowAppID {
+		redirect(w,r,"/work")
+		return
+	}
 	p := s.base("new", "New work", "work")
 	p.Live = false
 	p.Brief = studio.Brief{AppID: r.URL.Query().Get("app"), Workspace: s.engine.Root, TimeoutMinutes: 10}

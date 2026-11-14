@@ -219,6 +219,54 @@ distinct keys. Saved cursors survive restart and unrelated catalog edits. After
 downtime, cron admits at most one overdue occurrence before advancing to the next
 future match. Schedule changes MUST NOT duplicate existing work.
 
+A manual, interval, or cron service MAY declare additional `events` patterns.
+Clock occurrences and matched events MUST target the same durable service queue,
+sharing activation, stop holds, maximum instances, and pending capacity. Event
+delivery MUST retain its source receipt and MUST NOT advance the clock cursor.
+Local clocks MUST work without a broker; MQTT is the external transport, not the
+authority for local scheduling. Both paths commit admission to the journal.
+Catalog edits to event subscriptions MUST suppress pending deliveries whose frozen
+subscription no longer matches, without replaying earlier unmatched events.
+
+### Recurring agent workflows
+
+The goal composer MUST allow instructions to be saved for a cron schedule, an
+external custom event, or both. Workflow-specific algorithms and integration rules
+belong in those instructions and agent-authored project resources, not in Mitos
+domain adapters. For example, how to discover PRs, interpret a security review,
+and decide whether to merge is part of the user's workflow. Mitos supplies triggers,
+durable admission, agent execution, limits, lifecycle, and evidence.
+
+The local `agent-workflow` service binding MUST save a project, instructions, and
+per-occurrence time limit. Each admitted occurrence MUST create at most one automatic
+work graph, bound durably to the occurrence run. Creation retries and restart after
+admission MUST recover that same graph; they MUST NOT execute a second copy. A later
+occurrence gets a fresh graph and reads current state according to the instructions.
+The work binding freezes when the occurrence is queued; project/agent execution
+settings freeze when its graph is created, as for manually started automatic work.
+
+Trigger payload and provenance MUST be passed to the planner and workers as bounded,
+untrusted context, separately from the user's instructions. Event data cannot change
+the workflow's project, instructions, grants, or limits. External changes require
+authorization in the saved user instructions under the existing agent policy.
+Waiting on a domain condition SHOULD normally finish the occurrence with a report
+so a later trigger can check again, rather than occupy an agent indefinitely.
+
+A logical occurrence MUST hold its service concurrency slot until its graph settles,
+without holding a process slot that its child agents need. Workers use the ordinary
+graph queue, pool admission, claims, and budgets. Stop, replacement, and timeout MUST
+cancel the graph and await child process/claim settlement before closing the
+occurrence. A restart MUST preserve pending approvals and interrupted child evidence;
+it MUST NOT silently retry an interrupted agent's external effects.
+
+The console MUST show saved instructions, trigger configuration, queue state, and
+the latest graph/result link. Successful graph completion MUST save its result on
+the occurrence, without labelling the agent's report as independent verification.
+Start failures and expired occurrences MUST remain visible and release capacity
+after settlement. Completed graphs MUST NOT exhaust the active graph allowance.
+
+### Outcome and custom events
+
 Outcome events come from final tasks: done produces succeeded, failed produces
 failed, and completed matches either. Cancellation produces neither; a failed run
 awaiting retry is not final. Multiple matching patterns produce at most one occurrence

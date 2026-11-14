@@ -205,7 +205,7 @@ func (s *Store) GraphRun(graph, task, id string) (Run, error) {
 func (e *Engine) GraphApplications() []map[string]any {
 	out := []map[string]any{}
 	for _, a := range e.Apps {
-		if a.DecisionModel != nil {
+		if a.DecisionModel != nil || a.ID == WorkflowAppID {
 			continue
 		}
 		out = append(out, map[string]any{"id": a.ID, "name": a.Name, "description": a.Description, "controller": a.GraphController})

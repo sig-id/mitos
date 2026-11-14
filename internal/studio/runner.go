@@ -80,6 +80,10 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	for _, r := range s.List() {
+		// Logical occurrences recover their durable child graph below.
+		if r.Brief.AppID == WorkflowAppID {
+			continue
+		}
 		if r.ExecutionKind == "interactive" {
 			continue
 		}
@@ -108,6 +112,10 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		}
 	}
 	startupCycle := time.Now().UTC()
+	if err = e.reconcileServiceGraphs(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if err = e.reconcileServiceLifecycle(); err != nil {
 		cancel()
 		return nil, err
@@ -196,6 +204,9 @@ func (e *Engine) Launch(b Brief, parent string) (Run, error) {
 	return e.Store.Create(b, name, parent, false)
 }
 func (e *Engine) prepareBrief(b Brief) (Brief, string, error) {
+	if b.AppID == WorkflowAppID && (b.ProjectID == "" || len(strings.TrimSpace(b.Intent)) < 3 || len(b.Ownership.Paths) > 0 || len(b.Ownership.Leases) > 0 || len(b.Scheduling.Deps) > 0) {
+		return Brief{}, "", errors.New("agent workflows require a project and instructions; worker agents own execution claims and dependencies")
+	}
 	if b.ProjectID != "" {
 		project, err := e.Desk.Project(b.ProjectID)
 		if err != nil {
@@ -317,6 +328,10 @@ func (e *Engine) cancelWork(id, reason string) error {
 	if err = e.Store.Transition(id, "cancellation_requested", "stopping", "Stopping", "Stopping the command and preserving its output and workspace change."); err != nil {
 		return err
 	}
+	if r.Brief.AppID == WorkflowAppID {
+		// Reconciliation awaits child settlement before closing the occurrence.
+		return nil
+	}
 	e.mu.Lock()
 	cancel := e.cancel[id]
 	if cancel != nil {
@@ -345,6 +360,9 @@ func (e *Engine) dispatch() {
 				continue
 			}
 			cycleTime := time.Now().UTC()
+			if err := e.reconcileServiceGraphs(); err != nil {
+				continue
+			}
 			if err := e.reconcileServiceLifecycle(); err != nil {
 				continue
 			}
@@ -403,6 +421,13 @@ func (e *Engine) dispatch() {
 				acquired, claimErr := e.Store.ScheduleSelected(r.ID, active, candidate.Policy)
 				if claimErr != nil || !acquired {
 					e.mu.Unlock()
+					continue
+				}
+				if r.Brief.AppID == WorkflowAppID {
+					e.mu.Unlock()
+					// The occurrence tracks the graph without consuming a worker slot.
+					// Graph agents use ordinary pool admission and process limits.
+					_ = e.startServiceGraph(r.ID)
 					continue
 				}
 				deadline := time.Now().Add(time.Duration(r.Brief.TimeoutMinutes) * time.Minute)

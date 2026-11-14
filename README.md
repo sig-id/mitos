@@ -198,6 +198,66 @@ mutations. The optional HTTPS device API has restricted snapshot and decision sc
 it is not the full remote-client contract. See
 [API and compatibility](spec/system/05_INTERFACES_AND_INTEGRATIONS.md).
 
+## Recurring agent workflows
+
+In the project goal composer, open **When to run** and choose **On a schedule**,
+**On an external event**, or **On a schedule and external events**. Give the
+workflow a name, select a cron expression/timezone and/or event name, and save.
+The goal text is the workflow's persistent instructions; agents implement its
+procedure using the project's tools and policies. Mitos does not hard-code PR,
+security-review, or merge algorithms.
+
+For example, describe your PR monitoring procedure in the goal, including how to
+recognize your security review, which statuses permit merging, and what to do when
+a review is pending. Authorize the intended external actions there. Select
+`*/5 * * * *` for a check every five minutes. Tell agents to report pending work
+and finish each occurrence so the next check can revisit it.
+
+The first scheduled run starts at the next matching time. **Services → Trigger
+task** runs an occurrence sooner. The server must remain running; after downtime,
+the saved clock coalesces missed ticks. Cron works without an MQTT broker. Each
+occurrence creates an automatic agent graph, retains its instructions and trigger
+context, and exposes its result and evidence in the project. Waiting approvals and
+interrupted agents keep their normal recovery behavior.
+
+**Services** shows saved instructions, queue state and the latest graph/result.
+Use **Stop service group** to stop the workflow and await its agents' shutdown;
+**Resume triggers** releases the hold. Edit **Project catalog** to change its
+instructions or schedule. The default is one active occurrence and one queued
+occurrence, shared between cron and external events. Excess triggers are recorded
+as skipped; subsequent periodic runs can reconcile current state.
+
+An external bridge can send a signed/granted MQTT `service.event` to
+`studio/events` with `{"name":"repository.changed","payload":{...}}`, matching
+the workflow's saved event name. Local callers can use `mitos emit-event` or the
+custom-event HTTP API. Duplicate messages retain their receipt. Trigger payloads
+are supplied as untrusted context, not instructions or permission grants; the
+configured agents interpret them according to your saved goal. Raw GitHub webhooks
+need a bridge to the authenticated Mitos message envelope.
+
+The composer uses `POST /api/services/workflows`:
+
+```json
+{
+  "id": "periodic-work",
+  "project_id": "YOUR_PROJECT_ID",
+  "goal": "Follow my workflow procedure, inspect current state, and report this occurrence's result.",
+  "cron": "*/5 * * * *",
+  "timezone": "UTC",
+  "event": "repository.changed",
+  "minutes": 30,
+  "expected_revision": 0
+}
+```
+
+Read the current catalog revision from `GET /api/services`. Omit `event` for cron
+only; omit `cron` and `timezone` for events only. Repeating an identical creation
+returns the saved service; a conflicting name or stale revision is rejected.
+Advanced catalogs use an `agent-workflow` work binding with `project_id`, `intent`,
+and `timeout_minutes`. An `events` array on a cron, interval, or manual unit adds
+event intake to its existing queue. Workflow-specific conditions belong in the
+instructions; logical workflow bindings do not run command condition/health probes.
+
 ## MQTT 5 messaging
 
 Enable messaging with `mitos serve --mqtt-config /path/to/mqtt.json`. The broker

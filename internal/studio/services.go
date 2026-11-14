@@ -149,6 +149,9 @@ func (e *Engine) prepareServices(c ServiceCatalog) (ServiceCatalog, error) {
 		if !ok {
 			return ServiceCatalog{}, fmt.Errorf("service %s has no work binding", unit.ID)
 		}
+		if brief.AppID == WorkflowAppID && (unit.Condition != nil || unit.Health != nil) {
+			return ServiceCatalog{}, fmt.Errorf("service %s: describe workflow conditions and health checks in the agent instructions", unit.ID)
+		}
 		// Operators must be able to disable a service whose installed app,
 		// workspace, or absolute deadline has become unavailable.
 		if _, enabled := active[unit.ID]; !enabled {

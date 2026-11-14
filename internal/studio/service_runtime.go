@@ -23,6 +23,7 @@ type ServiceTick struct {
 	Startup    bool      `json:"startup,omitempty"`
 }
 type ServiceState struct {
+	GraphID         string                   `json:"graph_id,omitempty"`
 	LifecycleStops  []int64                  `json:"lifecycle_stops,omitempty"`
 	Condition       *ServiceConditionState   `json:"condition,omitempty"`
 	Health          []ServiceHealthView      `json:"health,omitempty"`
@@ -284,6 +285,9 @@ func (s *Store) serviceRuntimeView() []ServiceState {
 		state.Health = s.serviceHealthViews(unit.ID, state.LastRunID)
 		if run := s.runs[state.LastRunID]; run != nil {
 			state.Condition = cloneCondition(run.Condition)
+			if creation, ok := s.graphCreations["service:"+run.ID]; ok {
+				state.GraphID = creation.ID
+			}
 		}
 		out = append(out, state)
 	}

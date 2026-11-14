@@ -254,6 +254,15 @@ func readInterruptLog(path string) ([]Run, int, error) {
 				}
 				continue
 			}
+			if c.Graph != nil {
+				projection := &Store{runs: runs}
+				if err = projection.applyGraph(event, c.Graph); err != nil {
+					return nil, 0, err
+				}
+				if event.RunID == "" {
+					continue
+				}
+			}
 			if c.ServiceLifecycle != nil {
 				if err = validateServiceLifecycle(event, c); err != nil {
 					return nil, 0, err
