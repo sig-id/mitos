@@ -14,6 +14,7 @@ type GraphSummary struct {
 	RootTask    string         `json:"root_task"`
 	Title       string         `json:"title"`
 	Status      string         `json:"status"`
+	WorkState   string         `json:"work_state"`
 	Revision    int64          `json:"revision"`
 	Members     int            `json:"members"`
 	Counts      map[string]int `json:"counts"`
@@ -21,12 +22,16 @@ type GraphSummary struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
-func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary, string) {
+func (s *Store) GraphSummaries(project, after string, limit int, states ...string) ([]GraphSummary, string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	ids := []string{}
+	state := "all"
+	if len(states) > 0 && states[0] != "" {
+		state = states[0]
+	}
 	for id, g := range s.graphs {
-		if id > after && (project == "" || g.ProjectID == project) {
+		if id > after && (project == "" || g.ProjectID == project) && (state == "all" || g.WorkStateValue() == state) {
 			ids = append(ids, id)
 		}
 	}
@@ -45,7 +50,7 @@ func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary
 				counts[s.graphDisplayState(g, m)]++
 			}
 		}
-		out = append(out, GraphSummary{ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
+		out = append(out, GraphSummary{ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, WorkState: g.WorkStateValue(), Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
 	}
 	return out, next
 }

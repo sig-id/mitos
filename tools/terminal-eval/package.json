@@ -16,7 +16,8 @@
     "test:picker": "node picker.mjs",
     "test:workflow-files": "node workflow-files.mjs",
     "test:automatic": "node automatic.mjs",
-    "test:markdown": "node markdown.mjs"
+    "test:markdown": "node markdown.mjs",
+    "test:work-navigation": "node work-navigation.mjs"
   },
   "devDependencies": {
     "ghostty-web": "0.4.0",
