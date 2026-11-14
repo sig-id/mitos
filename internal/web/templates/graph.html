@@ -2,9 +2,9 @@
 <section id="graph-work" aria-label="Work graphs">
  <div class="graph-browser"><span id="graph-sync" class="graph-sync" role="status">Connecting…</span></div>
  <section id="graph-compose" class="graph-compose">
-  <div class="graph-compose-heading"><div><span class="graph-eyebrow">FROM GOAL TO RESULT</span><h2>What would you like to accomplish?</h2><p>Start with an idea. Watch the work take shape.</p></div><button id="graph-compose-close" aria-label="Close new work" hidden>×</button></div>
+  <div class="graph-compose-heading"><h2>What would you like to accomplish?</h2><button id="graph-compose-close" aria-label="Close new work" hidden>×</button></div>
   <form id="graph-create-form">
-   <label class="sr-only" for="graph-prompt">Your goal</label><textarea id="graph-prompt" name="goal" rows="3" required minlength="3" maxlength="10000" placeholder="Investigate why checkout is slow, fix the bottleneck, and show the improvement…"></textarea>
+   <label class="sr-only" for="graph-prompt">Your goal</label><textarea id="graph-prompt" name="goal" rows="3" required minlength="3" maxlength="10000" placeholder="Describe your goal…"></textarea>
    <details class="graph-scheduling"><summary>When to run <span class="muted" id="graph-trigger-summary">Once</span></summary>
     <div class="graph-scheduling-content">
      <label>Run this work<select id="graph-trigger" name="trigger"><option value="once">Once</option><option value="cron">On a schedule</option><option value="event">On an external event</option><option value="both">On a schedule and external events</option></select></label>
@@ -17,24 +17,25 @@
         <label id="graph-weekday-field" hidden>On<select id="graph-weekday"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select></label>
         <label id="graph-time-field" hidden>At<input id="graph-schedule-time" type="time" value="09:00" required></label>
        </div>
-       <label id="graph-custom-field" hidden>Cron expression<input name="cron" value="*/5 * * * *" maxlength="256" required aria-describedby="graph-cron-help"><span class="muted" id="graph-cron-help">Five fields: minute, hour, day of month, month, day of week.</span></label>
+       <div id="graph-custom-field" hidden><div class="instruction-label"><label for="graph-cron">Cron expression</label><mitos-instructions label="Cron expression">Five fields: minute, hour, day of month, month, day of week.</mitos-instructions></div><input id="graph-cron" name="cron" value="*/5 * * * *" maxlength="256" required></div>
        <p class="graph-schedule-summary muted" id="graph-schedule-summary" aria-live="polite"></p>
       </div>
       <div id="graph-event-fields" hidden><label>External event name<input name="event" maxlength="96" placeholder="For example: repository.changed" required></label></div>
       <details id="graph-schedule-advanced" class="graph-schedule-advanced"><summary>Advanced options</summary>
        <div class="graph-schedule-row">
-        <label id="graph-timezone-field">Time zone<input name="timezone" maxlength="128" required aria-describedby="graph-timezone-help"><span class="muted" id="graph-timezone-help">Defaults to this device’s local time zone.</span></label>
+        <div id="graph-timezone-field"><div class="instruction-label"><label for="graph-timezone">Time zone</label><mitos-instructions label="Time zone">Defaults to this device’s local time zone.</mitos-instructions></div><input id="graph-timezone" name="timezone" maxlength="128" required></div>
        </div>
       </details>
-      <p class="muted graph-schedule-help">Each run inherits the project’s execution limits, including its time and agent-attempt limits.</p>
-      <p class="muted graph-schedule-help">Each run follows your goal’s instructions. You can manage the saved workflow in Services.</p>
+      <mitos-instructions label="Scheduled workflows">Each run inherits the project’s execution limits, including time and agent attempts.
+
+Manage saved workflows in [Background jobs](/services).</mitos-instructions>
      </div>
     </div>
    </details>
-   <div class="graph-create-controls"><span id="graph-planner-note" class="muted">Checking agent availability…</span><button id="graph-create" class="primary" type="submit" disabled>Start work →</button></div>
+   <div class="graph-create-controls"><span id="graph-planner-note" class="muted" role="status">Checking agent availability…</span><button id="graph-create" class="primary" type="submit" disabled>Start work →</button></div>
    <p class="form-error" role="alert"></p>
   </form>
-  <div class="graph-explainer" aria-hidden="true"><span><b>1</b> Describe the goal</span><i>→</i><span><b>2</b> Work takes shape</span><i>→</i><span><b>3</b> Review the result</span></div>
+
  </section>
  <section id="graph-current" hidden>
   <header class="graph-heading"><div><div class="graph-title-row"><h2 id="graph-title"></h2><span id="graph-status" class="graph-badge"></span></div><p id="graph-progress" class="muted"></p></div><div class="actions"><button id="graph-review" class="primary">Review result</button><details class="graph-menu"><summary aria-label="Work actions">•••</summary><div><button id="graph-replan">Replace planner</button><button id="graph-stop">Stop work</button></div></details></div></header>

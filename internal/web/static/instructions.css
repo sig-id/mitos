@@ -1,0 +1,20 @@
+mitos-instructions:not(:defined){font-size:14px;color:var(--muted)}
+mitos-instructions{display:inline-flex;vertical-align:middle;margin-left:8px;font-size:14px;font-weight:400;letter-spacing:normal;text-transform:none}
+.instructions-trigger{display:inline-grid;place-items:center;width:22px;height:22px;min-width:22px;padding:0;border:1px solid var(--line);border-radius:50%;background:transparent;color:var(--muted);font-size:13px;line-height:1;cursor:help}
+.instructions-trigger:hover,.instructions-trigger:focus-visible{color:var(--text);border-color:var(--muted)}
+.instructions-popup{position:fixed;inset:auto;margin:0;width:max-content;max-width:min(400px,calc(100vw - 16px));max-height:calc(100dvh - 16px);overflow:auto;padding:16px 18px;border:1px solid #4b5663;border-radius:8px;background:#222a33;color:var(--text);box-shadow:0 8px 32px #0006;font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:left;white-space:normal;overflow-wrap:anywhere}
+.instructions-popup[role=tooltip]{max-width:min(320px,calc(100vw - 16px));padding:10px 14px}
+.instructions-popup>strong{display:block;padding-right:24px;margin-bottom:8px;font-weight:600}
+.instructions-popup .instructions-close{position:absolute;right:8px;top:6px;padding:0 6px;background:none;border:0;font-size:22px;color:var(--muted)}
+.instructions-popup p,.instructions-popup small,.instructions-popup .muted,.instructions-popup .field-help{margin:0;font-size:14px;color:var(--text)}
+.instructions-popup p+p{margin-top:10px}.instructions-popup a{color:var(--blue);text-decoration:underline}
+.instructions-popup .analysis-prose{font-size:14px;line-height:1.65}
+.instructions-popup .analysis-prose>:first-child{margin-top:0}.instructions-popup .analysis-prose>:last-child{margin-bottom:0}
+.instructions-popup .analysis-prose :is(ul,ol){padding-left:20px}.instructions-popup .analysis-prose li{margin:6px 0}
+.instructions-popup code{font-size:13px}.instructions-popup .analysis-code{white-space:pre-wrap}
+.instructions-popup:not([popover]){position:static;display:block;width:auto;max-width:100%;box-shadow:none}
+@media(pointer:coarse){.instructions-trigger{width:30px;height:30px;min-width:30px}mitos-instructions{margin-left:6px}}
+
+.instruction-field{position:relative;min-width:0}.instruction-field>mitos-instructions{position:absolute;right:0;top:0}.instruction-field>label{padding-right:30px}.instruction-field>label :is(input,select,textarea){width:calc(100% + 30px)}
+
+.instruction-label{display:flex;align-items:center;gap:4px;margin:14px 0 7px}.instruction-label>label{margin:0}.instruction-label>mitos-instructions{margin-left:4px}

@@ -17,7 +17,7 @@
   const box=el('div',undefined,'resource-policy-fields'),values=policy(preferences),inputs=[];
   for(const scope of ['workflow','agent']){
    const group=el('fieldset');group.append(el('legend',scope==='workflow'?'Workflow budgets':'Per-agent resources'));
-   group.append(el('p',scope==='workflow'?'Shared across all agents and retries in one workflow run.':'Applies to each agent and its child processes, not the entire machine.','muted'));
+   group.firstElementChild.append(MitosInstructions.create(scope==='workflow'?'Shared across all agents and retries in one workflow run.':'Applies to each agent and its child processes, not the entire machine.',scope==='workflow'?'Workflow budgets':'Per-agent resources'));
    for(const control of controls.filter(c=>c.scope===scope)){
     const limit=get(values,control.path),row=el('div',undefined,'resource-setting'),label=el('label',control.label),select=el('select');
     select.setAttribute('aria-label',control.label+' policy');select.dataset.resource=control.path;
@@ -27,11 +27,11 @@
     select.value=limit.mode;label.append(select);row.append(label);
     const amountLabel=el('label',control.unit),amount=el('input');amount.type='number';amount.min='1';amount.max=String(control.max);amount.step='1';amount.value=limit.amount??'';amount.setAttribute('aria-label',control.label+' amount');amountLabel.append(amount);row.append(amountLabel);
     const sync=()=>{amountLabel.hidden=select.value!=='limit';amount.disabled=amountLabel.hidden;amount.required=!amount.disabled;};select.addEventListener('change',sync);sync();
-    row.append(el('span',control.enforced?'Enforced':'Cap unavailable','resource-support'),el('p',control.detail,'muted'));group.append(row);inputs.push({path:control.path,select,amount});
+    const support=el('span',control.enforced?'Enforced':'Cap unavailable','resource-support');support.append(MitosInstructions.create(control.detail,control.label));row.append(support);group.append(row);inputs.push({path:control.path,select,amount});
    }
    box.append(group);
   }
-  box.append(el('p','Inherit uses the next settings layer. No cap is explicit; zero is not a valid limit. The current runtime requires finite elapsed-time and attempt budgets.','muted'));
+  box.append(MitosInstructions.create('**Inherit** uses the next settings layer. **No cap** is explicit; zero is not a valid limit.\n\nThe current runtime requires finite elapsed-time and attempt budgets.','Resource policies','popover'));
   return {box,value:()=>{const result={workflow:{},agent:{}};for(const {path,select,amount} of inputs){const [scope,key]=path.split('.');result[scope][key]={mode:select.value,...(select.value==='limit'?{amount:Number(amount.value)}:{})};}return result;}};
  }
  function summary(preferences,controls){

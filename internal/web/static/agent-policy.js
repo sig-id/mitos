@@ -3,8 +3,8 @@
  const el=(tag,text)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e};
  window.MitosAgentPolicy={render(root,initial,base,api){
   let policy=initial;
-  const section=el('section');section.className='agent-policy setup-card';section.append(el('h2','Decisions API & approvals'));
-  section.append(el('p','Coordinated work plans and runs agents automatically. Choose here how their questions and approvals are handled. Saved changes also apply to pending requests.'));
+  const section=el('details');section.className='agent-policy setup-card';section.append(el('summary','Autonomy & approvals'));
+  section.append(MitosInstructions.create('Choose how agent questions and approvals are handled. Saved changes also apply to pending requests.','Approvals'));
   const form=el('form'),feedback=el('p');feedback.setAttribute('role','status');
   const field=(parent,label,input)=>{const l=el('label',label);input.setAttribute('aria-label',label);l.append(input);parent.append(l);return input};
   const select=(values,value)=>{const s=el('select');for(const [v,label] of values)s.append(new Option(label,v));s.value=value;return s};
@@ -17,7 +17,7 @@
   const input=(label,value,type='text')=>{const n=el('input');n.type=type;n.value=value;return field(providerFields,label,n)};
   const endpoint=input('Endpoint URL',config.endpoint||'');endpoint.type='url';endpoint.placeholder='https://your-provider.example/decisions';
   const model=input('Decision model',config.model||'');
-  const credential=input('API key environment variable',config.api_key_env||'');credential.placeholder='OPENAI_API_KEY';providerFields.append(el('p','Enter the name of a credential environment variable available to the Mitos server. Its secret value stays outside the browser and project files. Restart the server after changing its environment.'));
+  const credential=input('API key environment variable',config.api_key_env||'');credential.placeholder='OPENAI_API_KEY';providerFields.append(MitosInstructions.create('Enter the name of a credential environment variable available to the Mitos server. Its secret value stays outside the browser and project files. Restart the server after changing its environment.','API credentials'));
   const timeout=input('Request timeout (milliseconds)',config.timeout_ms||30000,'number');timeout.min=1;timeout.max=120000;
   const confidence=input('Minimum confidence',config.min_confidence??0.8,'number'),probability=input('Minimum choice probability',config.min_probability??0.8,'number');for(const n of [confidence,probability]){n.min=0;n.max=1;n.step=0.01}
   function sourceChanged(){providerFields.hidden=source.value!=='direct';appField.hidden=source.value!=='application';endpoint.required=model.required=source.value==='direct'}source.onchange=sourceChanged;sourceChanged();
@@ -26,7 +26,7 @@
   function providerConfig(){return {protocol:protocol.value,endpoint:endpoint.value.trim(),model:model.value.trim(),api_key_env:credential.value.trim(),hooks:['before_segment'],instructions:'Review requests within the operator’s approval boundaries.',timeout_ms:Number(timeout.value),max_calls:Number(budget.value),min_confidence:Number(confidence.value),min_probability:Number(probability.value)}}
   const fallback=field(form,'When evidence is insufficient',select([['human','Ask me'],['investigate','Request investigation']],policy.fallback));
   const budget=el('input');budget.type='number';budget.min=1;budget.max=64;budget.value=policy.max_calls;field(form,'Maximum model calls per request',budget);
-  const advanced=el('details');advanced.append(el('summary','Advanced rules & supervision'));form.append(advanced);advanced.append(el('h3','Independent supervision'),el('p','Supervision checks project boundaries separately from routing and approvals. A violation or uncertain model review stops owned work and holds new execution until you resolve the incident.'));
+  const advanced=el('details');advanced.append(el('summary','Advanced rules & supervision'));form.append(advanced);advanced.append(el('h3','Independent supervision'),MitosInstructions.create('Supervision checks project boundaries separately from routing and approvals. A violation or uncertain model review stops owned work and holds new execution until you resolve the incident.','Independent supervision'));
   const supervisor=policy.supervision||{};
   const supervisionMode=field(advanced,'Boundary review',select([['rules','Explicit rules'],['model','Rules and independent model'],['off','Disabled']],supervisor.mode||'rules'));
   const supervisionApp=el('input');supervisionApp.value=supervisor.application||'';field(advanced,'Supervisor decision application',supervisionApp);
@@ -42,7 +42,8 @@
    row.append(button('Remove rule',()=>{row.remove()}));rules.append(row);rows.push({row,value,command,directory,action});
   }
   for(const r of policy.rules||[])addRule(r);
-  advanced.append(button('Add command rule',()=>addRule()));const save=el('button','Save autonomy & approvals');save.type='submit';form.append(save,feedback);section.append(form);root.insertBefore(section,root.querySelector('.setup-agent-layout'));
+  advanced.append(button('Add command rule',()=>addRule()));const save=el('button','Save autonomy & approvals');save.type='submit';form.append(save,feedback);section.append(form);root.append(section);
+  form.addEventListener('invalid',event=>{for(let p=event.target.parentElement;p&&p!==root;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true},true);
   form.onsubmit=async event=>{event.preventDefault();save.disabled=true;try{policy=await api(base+'/agent-policy',{...policy,supervision:{mode:supervisionMode.value,application:supervisionApp.value.trim(),guidance:boundaries.value,workspace_only:workspaceOnly.checked,max_calls:Number(supervisionBudget.value)},autonomy:mode.value,guidance:guidance.value,decision_application:source.value==='application'?provider.value.trim():'',decision_provider:source.value==='direct'?providerConfig():null,fallback:fallback.value,max_calls:Number(budget.value),rules:rows.filter(r=>r.row.isConnected).map(r=>({id:r.value.id,command:r.command.value,directory:r.directory.value,action:r.action.value}))},'PUT');feedback.textContent='Saved. Approval handling is now '+(policy.autonomy==='manual'?'Ask me':policy.autonomy==='decision'?'Decisions API review':'Exact command rules')+'.'}catch(e){feedback.textContent=e.message}finally{save.disabled=false}};
  }};
 })();

@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {
-	p := s.base("tasks", "Tasks and scheduling", "work")
+	p := s.base("tasks", "Job queue", "work")
 	p.Tasks = s.engine.Store.Tasks()
 	p.Live = false
 	s.render(w, r, p, 200)

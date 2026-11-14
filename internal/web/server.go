@@ -406,7 +406,7 @@ func redirect(w http.ResponseWriter, r *http.Request, url string) {
 	http.Redirect(w, r, url, http.StatusSeeOther)
 }
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	p := s.base("overview", "Overview", "overview")
+	p := s.base("overview", "Runtime status", "overview")
 	p.Runs = nil
 	for _, run := range s.engine.Store.List() {
 		if !run.Sample {
@@ -416,7 +416,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, p, 200)
 }
 func (s *Server) work(w http.ResponseWriter, r *http.Request) {
-	p := s.base("work", "Work", "work")
+	p := s.base("work", "Run history", "work")
 	p.Query = r.URL.Query().Get("q")
 	p.Filter = r.URL.Query().Get("status")
 	filtered := []studio.Run{}
