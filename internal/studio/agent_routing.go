@@ -90,7 +90,7 @@ func (e *Engine) evaluateModel(ctx context.Context, project, scope, purpose stri
 	s.mu.Unlock()
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	answer, err := decisionmodel.Decide(ctx, cfg, request)
+	answer, err := e.Decide(ctx, cfg, request)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	evaluation.Status = "failed"

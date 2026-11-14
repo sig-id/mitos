@@ -19,18 +19,18 @@
   const source=field(connection,'Connection',select([['inherit',project?'Inherit system default':'Not configured'],['direct','Configure API connection'],['application','Use an installed decision application']],config.decision_provider?'direct':config.decision_application?'application':'inherit'));
   const inherited=el('p');inherited.className='muted';inherited.textContent=defaults.decision_provider?'System default: '+defaults.decision_provider.model+' · '+defaults.decision_provider.endpoint:defaults.decision_application?'System default: application '+defaults.decision_application:'No system Decisions API connection is configured.';connection.append(inherited);
   const direct=el('fieldset');direct.append(el('legend','API connection'));const values=config.decision_provider||defaults.decision_provider||{};
-  const protocol=field(direct,'Protocol',select([['openai_decisions','OpenAI Decisions'],['systemone','System One']],values.protocol||'openai_decisions'));
+  const protocol=field(direct,'Protocol',select([['openai_decisions','OpenAI Decisions'],['systemone','System One'],['gemini_decisions','Gemini Decisions'],['openrouter_decisions','OpenRouter Decisions']],values.protocol||'openai_decisions'));
   function input(parent,label,value,type='text'){const n=el('input');n.type=type;n.value=value;return field(parent,label,n)}
   const endpoint=input(direct,'Full endpoint URL',values.endpoint||'','url');endpoint.placeholder='https://your-provider.example/decisions';endpoint.maxLength=2048;
   const model=input(direct,'Model',values.model||'');model.maxLength=200;
-  const credential=input(direct,'API key environment variable',values.api_key_env||'');credential.placeholder='OPENAI_API_KEY';credential.pattern='[A-Za-z_][A-Za-z0-9_]*';
-  direct.append(el('p','Enter the environment variable name, not the API key. The secret must be available to the Mitos server. Restart Mitos after changing its environment.'));
+  const credential=window.MitosDecisionCredential.render(direct,values);
+  window.MitosDecisionPresets.render(direct,{protocol,endpoint,model,credential});
   const grid=el('div');grid.className='settings-grid';direct.append(grid);
   const timeout=input(grid,'Timeout (milliseconds)',values.timeout_ms||30000,'number');timeout.min=1;timeout.max=120000;timeout.required=true;
   const budget=input(grid,'Maximum model calls per request',values.max_calls||4,'number');budget.min=1;budget.max=64;budget.required=true;
   const confidence=input(grid,'Minimum confidence',values.min_confidence??0.8,'number'),probability=input(grid,'Minimum choice probability',values.min_probability??0.8,'number');for(const n of [confidence,probability]){n.min=0;n.max=1;n.step=0.01;n.required=true}
   direct.append(el('p','Project request allowances can impose a lower call limit.'));
-  function provider(){return {protocol:protocol.value,endpoint:endpoint.value.trim(),model:model.value.trim(),api_key_env:credential.value.trim(),timeout_ms:Number(timeout.value),max_calls:Number(budget.value),min_confidence:Number(confidence.value),min_probability:Number(probability.value),hooks:['before_segment'],instructions:'Review requests within the operator’s approval boundaries.'}}
+  function provider(){return {protocol:protocol.value,endpoint:endpoint.value.trim(),model:model.value.trim(),...credential.value(),timeout_ms:Number(timeout.value),max_calls:Number(budget.value),min_confidence:Number(confidence.value),min_probability:Number(probability.value),hooks:['before_segment'],instructions:'Review requests within the operator’s approval boundaries.'}}
   const test=el('button','Test API connection');test.type='button';const testStatus=el('p');testStatus.setAttribute('role','status');direct.append(test,testStatus);
   test.onclick=async()=>{if(![...direct.querySelectorAll('input')].every(n=>n.reportValidity()))return;test.disabled=true;testStatus.textContent='Testing connection…';try{const out=await api('/api/settings/decision-provider/test',{config:provider()});testStatus.textContent=out.message+' Settings have not been saved.'}catch(e){testStatus.textContent=e.message}finally{test.disabled=false}};
   const applicationBox=el('div'),application=input(applicationBox,'Installed decision application ID',config.decision_application||'');application.maxLength=100;
@@ -51,7 +51,7 @@
   form.append(launch);const actions=el('div');actions.className='settings-actions';const save=el('button',project?'Save project overrides':'Save system configuration');save.type='submit';save.className='primary';const feedback=el('p');feedback.setAttribute('role','status');actions.append(save,feedback);form.append(actions);
   form.onsubmit=async event=>{event.preventDefault();save.disabled=true;feedback.textContent='';try{
    const agents={};for(const row of rows){if(!row.enabled.checked)continue;let args;try{args=JSON.parse(row.args.value)}catch{throw Error('Launch arguments for '+row.id+' must be a JSON array of strings.')}if(!Array.isArray(args)||args.some(a=>typeof a!=='string'))throw Error('Launch arguments for '+row.id+' must be a JSON array of strings.');agents[row.id]={profile_id:row.profile.value,args}}
-   config=await api(base,{revision:config.revision,decision_provider:source.value==='direct'?provider():null,decision_application:source.value==='application'?application.value.trim():'',agents},'PUT');feedback.textContent=project?'Project overrides saved.':'System configuration saved.';
+   config=await api(base,{revision:config.revision,decision_provider:source.value==='direct'?provider():null,decision_application:source.value==='application'?application.value.trim():'',agents},'PUT');credential.saved(config.decision_provider);feedback.textContent=project?'Project overrides saved.':'System configuration saved.';
   }catch(e){feedback.textContent=e.message}finally{save.disabled=false}};
   root.replaceChildren(form);status.textContent=project?'Editing project overrides.':'Editing system defaults.';
  }

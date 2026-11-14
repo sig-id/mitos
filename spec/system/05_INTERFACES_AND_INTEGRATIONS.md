@@ -320,6 +320,29 @@ model and full endpoint `https://api.typesafe.ai/v1/systemone`, and set
 environment variable on the Mitos server, not in the manifest or worker command.
 Equivalent services may use an explicitly configured compatible endpoint.
 
+Operator connection settings also accept a write-only `api_key` or an opaque
+`api_key_ref`, mutually exclusive with `api_key_env`. Pasted keys are stored in
+owner-only server credential files; logs, plans, and API responses contain only
+references. A saved reference is bound to its original endpoint. Application
+manifests continue to use environment references, never inline secrets.
+
+The `gemini_decisions` adapter posts to
+`https://generativelanguage.googleapis.com/v1beta/decisions` with
+`model: "gemini-decision-1"`, a text `input`, named `questions.action` with choice
+criteria, and `x-goog-api-key` authentication. Responses contain named answers;
+`usage.total_input_tokens` and `usage.total_output_tokens` are normalized into
+Mitos usage. The requested model identifies the evaluation because Gemini's
+response does not include it. See the [Gemini Decisions contract](https://aistudio.google.com/docs/decisions-api).
+
+The `openrouter_decisions` adapter uses
+`https://openrouter.ai/api/alpha/decisions`, a text `state`, named questions and
+answers, and bearer authentication. It supports the dedicated decision models
+in the [OpenRouter Decisions catalog](https://openrouter.ai/docs/guides/features/decisions).
+These adapters preserve the existing choice, confidence, probability, payload,
+timeout, and no-retry/no-redirect checks; they do not simulate decisions with
+chat completions or self-reported confidence from generative models.
+
+
 | Adapter | Outbound shape | Inbound shape |
 |---|---|---|
 | `systemone` | `model`, JSON `state`, `questions.action` with `type: "choice"`, `instructions`, and string-valued `criteria` map | `answers.action` with `type`, `choice`, `confidence`, and `probabilities` map |

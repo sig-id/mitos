@@ -102,6 +102,9 @@ func validateDecisionModel(app Application) error {
 	if app.DecisionModel == nil {
 		return nil
 	}
+	if app.DecisionModel.APIKey != "" {
+		return errors.New("application decision_model must use an environment variable, not an inline API key")
+	}
 	if app.Builtin {
 		return errors.New("decision_model is only supported for command applications")
 	}
