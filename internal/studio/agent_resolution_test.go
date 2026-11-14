@@ -218,7 +218,7 @@ func TestAttentionTracksOwningGraphAndClearsAfterAnswer(t *testing.T) {
 		t.Fatal(notices)
 	}
 	n := notices[0]
-	if n.ProjectID != req.ProjectID || n.GraphID != g.ID || n.TaskID != "worker" || n.Reason != "automatic resolution is disabled" {
+	if n.ProjectID != req.ProjectID || n.GraphID != g.ID || n.TaskID != "worker" || !n.SetupRequired || !strings.Contains(n.Reason, "Configure the Decisions API") {
 		t.Fatal(n)
 	}
 	e.Store.mu.RLock()

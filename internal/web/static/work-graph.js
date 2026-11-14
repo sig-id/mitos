@@ -7,7 +7,7 @@
  const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
  const button = (text, fn, cls = '') => { const b = node('button', text, cls); b.type = 'button'; b.onclick = () => Promise.resolve().then(fn).catch(showError); return b; };
  const link = (text, href) => { const a = node('a', text, 'text-link'); a.href = href; return a; };
- const labels = { finished:'Finished', idle:'Not started', queued:'Queued', running:'Running', in_progress:'In progress', waiting_input:'Waiting for you', resuming:'Applying answer', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
+ const labels = { finished:'Finished', idle:'Not started', queued:'Queued', running:'Running', in_progress:'In progress', waiting_input:'Waiting for you', reviewing_approval:'Reviewing automatically', resuming:'Applying answer', accepted:'Complete', review:'Review ready', blocked:'Waiting', needs_attention:'Needs attention', failed:'Failed', cancelled:'Stopped', stopping:'Stopping', planning:'Planning', superseded:'Replaced', done:'Review ready' };
  const badge = status => node('span', labels[status] || status, 'graph-badge ' + status);
  const date = value => new Date(value).toLocaleString();
  const storageKey = `mitos.graph.pending.${server}.${project}`;
@@ -64,11 +64,22 @@
  function kindLabel(m) { return {scope:'Goal', planner:'Coordinator', decision:'Decision', step:'Agent'}[kind(m)]; }
  function plannerRounds(g=graph,view=snapshot){return Object.keys(g.members).filter(id=>kind(g.members[id])==='planner').sort((a,b)=>(g.members[a].attempts?.length?0:1)-(g.members[b].attempts?.length?0:1)||(view.nodes[a]?.created_at||'').localeCompare(view.nodes[b]?.created_at||'')||a.localeCompare(b))}
  function latestPlanner(){const rounds=plannerRounds();return rounds.at(-1)}
- function renderPlanner(){
-  const box=$('graph-planner-summary'),rounds=plannerRounds();box.hidden=!rounds.length;if(!rounds.length)return;
-  const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':graph.status==='active'&&Date.parse(graph.limits.deadline)<=Date.now()?'Stopped · time limit reached':['waiting_input','resuming'].includes(displayState(id))?labels[displayState(id)]:m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':overall()==='waiting_input'?'Waiting for your answer':'Waiting for agents';
-  box.replaceChildren(node('strong','✦ Coordinator'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,()=>selectNode(id,'planning'),'graph-planner-history'),button('Latest update',()=>selectNode(id,'output')));
+ function coordinatorStatus(){
+  if(graph.status==='accepted')return 'Complete';
+  if(graph.status==='cancelled'||Date.parse(graph.limits.deadline)<=Date.now())return 'Stopped';
+  const id=latestPlanner(),m=graph.members[id];
+  if(!m)return 'Preparing assignments';
+  if(['waiting_input','reviewing_approval','resuming'].includes(displayState(id)))return labels[displayState(id)];
+  if(m.state==='running')return plannerRounds().length===1?'Planning assignments':'Reviewing results';
+  if(m.state==='queued')return 'Preparing next round';
+  if(Object.values(graph.expansions).some(x=>x.error&&!x.outcome))return 'Needs attention';
+  return 'Coordinating assignments';
  }
+ const approvalSettingsURL=()=>`?graph=${encodeURIComponent(graphID)}&view=resources#decisions-api`;
+ const approvalSettings=()=>link('Configure Decisions API',approvalSettingsURL());
+ const mapKind=id=>id===graph.root_task?'planner':kind(graph.members[id]);
+ const mapTitle=id=>id===graph.root_task?coordinatorStatus():title(graph.members[id]);
+ const mapLabel=id=>id===graph.root_task?'Coordinator':kindLabel(graph.members[id]);
  $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
  function closeResult(){ resultViewKey='';$('graph-result').hidden=true;$('graph-current').classList.remove('showing-result'); }
  function applyWorkView(){
@@ -93,7 +104,8 @@
   const user=node('article',undefined,'conversation-message user');user.append(node('strong','You'),node('p',graph.members[graph.root_task].spec.brief.intent,'prose'));
   const agent=node('article',undefined,'conversation-message agent');agent.append(node('strong','Mitos'));
   if(graph.result){agent.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
-  else if(overall()==='waiting_input'){const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input');agent.append(node('p','An agent needs your answer before it can continue.'),button('Review request',()=>selectNode(waiting,'output'),'primary'));}
+  else if(overall()==='reviewing_approval'){agent.append(node('p','An independent reviewer is checking the pending request through the Decisions API. Work will continue when its answer is delivered.'));}
+  else if(overall()==='waiting_input'){const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input');agent.append(node('p',snapshot.nodes[waiting].decision_setup?'Set up the Decisions API to handle routine approvals automatically.':'An agent needs your answer before it can continue.'));if(snapshot.nodes[waiting].decision_setup)agent.append(approvalSettings());agent.append(button('Review request',()=>selectNode(waiting,'output'),'primary'));}
   else if(overall()==='needs_attention')agent.append(node('p','This work needs attention. The reason and next actions are shown above.'));
   else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
   if(graph.status==='active'&&!graph.policy.automatic&&Date.parse(graph.limits.deadline)>Date.now())agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
@@ -112,6 +124,7 @@
   const values = Object.values(snapshot.nodes);
   if (Object.values(graph.expansions).some(x => !x.outcome && x.error) || values.some(n => ['failed','needs_attention'].includes(n.state))) return 'needs_attention';
   if (values.some(n => n.state === 'waiting_input')) return 'waiting_input';
+  if (values.some(n => n.state === 'reviewing_approval')) return 'reviewing_approval';
   if (values.some(n => n.state === 'resuming')) return 'resuming';
   if (values.some(n => n.state === 'running')) return 'in_progress';
   if (reviewable(graph.root_task)) return 'review';
@@ -207,7 +220,7 @@
    toggle.setAttribute('aria-label',(expanded?'Collapse ':'Expand ')+(row.title||'Work'));toggle.setAttribute('aria-expanded',String(expanded));toggle.dataset.treeKey='toggle:'+row.id;
    const choose=button(row.title||'Untitled work',async()=>{if(!current)await chooseGraph(row.id);else{closeInspector();workView='work';window.MitosProjectNav.select('work');$('graph-compose').hidden=true;$('graph-current').hidden=false;applyWorkView()}},'work-tree-goal');choose.dataset.treeKey=row.id;
    if(current)choose.setAttribute('aria-current','page');
-   const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.waiting_input?'waiting_input':counts.failed||counts.needs_attention?'needs_attention':counts.running?'running':counts.review?'review':counts.blocked?'blocked':counts.queued?'queued':'idle';
+   const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.waiting_input?'waiting_input':counts.reviewing_approval?'reviewing_approval':counts.failed||counts.needs_attention?'needs_attention':counts.running?'running':counts.review?'review':counts.blocked?'blocked':counts.queued?'queued':'idle';
    const statusLabel=labels[status]||status,symbol={accepted:'✓',running:'◉',in_progress:'◉',planning:'◉',idle:'○',queued:'◷',blocked:'◷',review:'!',waiting_input:'!',needs_attention:'!',failed:'×',cancelled:'■',stopping:'■',finished:'✓'}[status]||'○';
    const indicator=node('span',symbol,'work-tree-status');indicator.dataset.status=status;indicator.setAttribute('aria-hidden','true');
    const label=node('span',undefined,'work-tree-goal-label');label.append(node('span',row.title||'Untitled work','work-tree-title'),node('small',statusLabel,'work-tree-state'));
@@ -272,9 +285,10 @@
   $('graph-title').textContent = title(graph.members[graph.root_task]); const status = overall(); $('graph-status').className = 'graph-badge ' + status; $('graph-status').textContent = labels[status] || status;
   const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.controller_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
   const awaiting=workers.filter(([,m])=>!m.accepted&&m.state==='done').length;
+  $('graph-approval-settings').href=approvalSettingsURL();
   $('graph-progress').textContent = `${finished} of ${workers.length} steps complete`+(awaiting?` · ${awaiting} awaiting review`:'') + (graph.policy.controller_application ? ' · Coordinator managed' : ' · Not started');
   $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.controller_application || graph.status !== 'active' || Date.parse(graph.limits.deadline)<=Date.now();
-  renderMessage(); renderPlanner(); renderMap(); renderInspector(); renderActivity(); renderTree();renderConversation();applyWorkView();document.dispatchEvent(new CustomEvent("mitos-graph",{detail:graph}));
+  renderMessage(); renderMap(); renderInspector(); renderActivity(); renderTree();renderConversation();applyWorkView();document.dispatchEvent(new CustomEvent("mitos-graph",{detail:graph}));
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
  function failureHelp(summary){
@@ -286,20 +300,21 @@
  function attemptsExhausted(){return graph.attempts>=graph.limits.attempts&&Object.values(snapshot.nodes).every(n=>n.settled)}
  function renderMessage() {
   const box=$('graph-message');box.replaceChildren();box.hidden=true;box.dataset.attention='false';
-  const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input')||Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].pending_requests);
+  const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input')||Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].human_requests);
   const expired=Date.parse(graph.limits.deadline)<=Date.now()&&graph.status==='active',exhausted=attemptsExhausted();
   const failures=Object.keys(snapshot.nodes).filter(id=>['failed','needs_attention'].includes(snapshot.nodes[id].state)&&id!==graph.root_task);
   const errors=Object.values(graph.expansions).filter(x=>!x.outcome&&x.error);
   if(graph.status==='active'&&(waiting||expired||exhausted||failures.length||errors.length)){
-   box.hidden=false;box.dataset.attention='true';box.append(node('h3',expired?'Work stopped: time limit reached':exhausted?'Work stopped: attempt limit reached':waiting?'Your answer is needed':'Work needs attention'));
+   box.hidden=false;box.dataset.attention='true';box.append(node('h3',expired?'Work stopped: time limit reached':exhausted?'Work stopped: attempt limit reached':waiting?(snapshot.nodes[waiting].decision_setup?'Set up automatic approval review':'Your answer is needed'):'Work needs attention'));
    if(expired||exhausted)box.append(node('p','The goal is unfinished. Resume with more resources to keep this workflow, its agents, completed steps and saved work.'),node('p','Review any reported failure before continuing. Saved agent conversations and workspace changes are reused when available.'));
-   if(waiting)box.append(node('p',title(graph.members[waiting])+' has a pending request.'),button('Review request',()=>selectNode(waiting,'output')));
+   if(waiting){box.append(node('p',snapshot.nodes[waiting].decision_setup?'Configure the Decisions API and approval boundaries so routine requests can be reviewed automatically.':title(graph.members[waiting])+' has a request that needs your input.'));const controls=node('div',undefined,'actions');if(snapshot.nodes[waiting].decision_setup)controls.append(approvalSettings());controls.append(button('Review request',()=>selectNode(waiting,'output')));box.append(controls);}
    for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.';item.append(node('strong',title(graph.members[id])),node('p',summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
    const reasons={controller_proposal_missing:'The coordinator did not save a work proposal.',controller_proposal_invalid:'The coordinator returned an unreadable proposal.',controller_proposal_stale_or_rejected:'The coordinator’s proposal did not match the current work.',controller_execution_needs_review:'The coordinator stopped before producing a verified proposal.',controller_allowance_exhausted:'The planning allowance has been used.',controller_context_limit:'The work exceeds the coordinator’s context limit.'};
    for(const error of errors)if(!failures.includes(error.controller_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect coordinator',()=>selectNode(error.controller_task||graph.root_task,'output')));
    if(expired&&!failures.length){const earlier=Object.keys(graph.members).filter(id=>graph.members[id].replacement&&graph.members[id].state==='failed');if(earlier.length){const history=node('details');history.append(node('summary',earlier.length+' earlier failed assignments'));for(const id of earlier)history.append(node('p',snapshot.nodes[id]?.summary||title(graph.members[id])),button('Inspect '+title(graph.members[id]),()=>selectNode(id,'output')));box.append(history)}}
    const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(!waiting&&!graph.service_run_id)actions.append(button('Resume with more resources',openResume,'primary'));if(expired||exhausted)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()}));box.append(actions);return;
   }
+  if(Object.values(snapshot.nodes).some(n=>n.reviewing_requests)){box.hidden=false;box.append(node('span','Approval review is running separately through the Decisions API.'));return;}
   if(!graph.policy.controller_application&&Object.values(graph.expansions).some(x=>!x.outcome)&&Object.keys(graph.members).length===1){box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));box.hidden=false}
   else if(graph.status==='accepted'){box.append(node('span','Work complete.'),button('Read final answer',()=>openResult()));box.hidden=false}
   else if(Object.values(graph.decisions||{}).some(d=>d.outcome==='selected')){const d=Object.values(graph.decisions).find(d=>d.outcome==='selected');box.append(node('span','A decision is ready to apply.'),button('Review decision',()=>selectNode(d.task_id)));box.hidden=false}
@@ -372,14 +387,14 @@
   for (const id of ids) {
    const m = graph.members[id], p = positions.get(id), status = displayState(id); let card = existing.get(id);
    if (!card) { card = button('',() => selectNode(id),'graph-node'); card.dataset.id = id; stage.append(card); }
-   existing.delete(id); card.style.left = p.x + 'px'; card.style.top = p.y + 'px'; card.style.height = '132px'; card.dataset.status = status; card.dataset.kind = kind(m); card.setAttribute('aria-pressed',String(id === selected)); card.setAttribute('aria-label',`${title(m)} · ${kindLabel(m)} · ${labels[status] || status}`);
-   const contentKey = JSON.stringify([title(m),status,kind(m),snapshot.nodes[id]?.executor,m.attempts?.length,m.spec.required,m.sealed]);
-   if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',planner:'✦',decision:'◈',step:'○'}[kind(m)]),document.createTextNode(kindLabel(m))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',m.spec.kind === 'scope' ? (m.accepted ? 'Result ready' : graph.policy.automatic ? 'Overall progress' : 'Not started') : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.controller_for ? 'Coordinator' : '')); card.replaceChildren(top,node('strong',title(m),'graph-node-title'),footer); }
+   existing.delete(id); card.style.left = p.x + 'px'; card.style.top = p.y + 'px'; card.style.height = '132px'; card.dataset.status = status; card.dataset.kind = mapKind(id); card.setAttribute('aria-pressed',String(id === selected)); card.setAttribute('aria-label',`${mapLabel(id)} · ${mapTitle(id)} · ${labels[status] || status}`);
+   const contentKey = JSON.stringify([mapTitle(id),status,mapKind(id),snapshot.nodes[id]?.executor,m.attempts?.length,m.spec.required,m.sealed,plannerRounds().length]);
+   if (card.dataset.content !== contentKey) { card.dataset.content = contentKey; const top = node('span',undefined,'graph-node-top'), k = node('span',undefined,'graph-node-kind'); k.append(node('b',{scope:'◇',planner:'✦',decision:'◈',step:'○'}[mapKind(id)]),document.createTextNode(mapLabel(id))); top.append(k,badge(status)); const footer = node('span',undefined,'graph-node-bottom'); footer.append(node('span',id===graph.root_task ? `${plannerRounds().length} planning ${plannerRounds().length===1?'round':'rounds'}` : m.spec.kind === 'scope' ? 'Work group' : snapshot.nodes[id]?.executor || 'Waiting for executor'),node('span',m.attempts?.length ? `↻ ${m.attempts.length}` : m.controller_for ? 'Coordinator' : '')); card.replaceChildren(top,node('strong',mapTitle(id),'graph-node-title'),footer); }
    const count = Object.values(graph.members).filter(child => child.spec.parent === id && kind(child)!=='planner' && (showHistory||!child.replacement)).length;
    if (m.spec.kind === 'scope' && count) { const toggle = button(collapsed.has(id) ? '+' : '−',() => { if (collapsed.has(id)) collapsed.delete(id); else { collapsed.add(id); if (selected && descendants(graph,id).includes(selected) && selected !== id) selectNode(id); } renderMap(); },'graph-collapse'); toggle.setAttribute('aria-expanded',String(!collapsed.has(id))); toggle.setAttribute('aria-label',(collapsed.has(id)?'Expand ':'Collapse ')+title(m)); toggle.style.left = (p.x+224)+'px'; toggle.style.top = (p.y+118)+'px'; stage.append(toggle); }
   }
   for (const card of existing.values()) card.remove();
-  const list = $('graph-list-view'); list.replaceChildren(); for (const id of ids) { const m = graph.members[id], row = button('',() => selectNode(id),'graph-list-row'); row.setAttribute('aria-pressed',String(id === selected)); const text = node('span',title(m)); text.append(node('small',kindLabel(m)+(snapshot.nodes[id]?.executor?' · '+snapshot.nodes[id].executor:''))); row.append(text,badge(displayState(id))); list.append(row); }
+  const list = $('graph-list-view'); list.replaceChildren(); for (const id of ids) { const m = graph.members[id], row = button('',() => selectNode(id),'graph-list-row'); row.setAttribute('aria-pressed',String(id === selected)); const text = node('span',mapTitle(id)); text.append(node('small',mapLabel(id)+(snapshot.nodes[id]?.executor?' · '+snapshot.nodes[id].executor:''))); row.append(text,badge(displayState(id))); list.append(row); }
   $('graph-node-count').textContent = ids.filter(id=>graph.members[id].spec.kind!=='scope').length+' assignments'+(Object.values(graph.members).some(m=>m.replacement)&&!showHistory?' · replaced work hidden':'');
   applyZoom(); if (firstLayout) { firstLayout = false; requestAnimationFrame(()=>fit(false)); }
  }
@@ -405,12 +420,12 @@
  $('graph-inspector-close').onclick=closeInspector;
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
-  if(m.spec.kind==='scope'&&!['progress','details','result'].includes(selectedTab))selectedTab='progress';
-  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,Date.parse(graph.limits.deadline)<=Date.now(),m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
+  if(m.spec.kind==='scope'&&!['progress','planning','details','result'].includes(selectedTab))selectedTab='progress';
+  $('graph-node-kind').textContent=mapLabel(selected); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,Date.parse(graph.limits.deadline)<=Date.now(),m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',selected===graph.root_task?'Coordinator':kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
   if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(Date.parse(graph.limits.deadline)>Date.now()&&m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
-  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(m.spec.kind==='scope'?[['progress','Progress'],['details','Request'],['result','Result']]:kind(m)==='planner'?[['output','Activity'],['planning','Planning rounds'],['details','Assignment']]:[['output','Activity'],['details','Assignment'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
+  box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(m.spec.kind==='scope'?[['progress','Activity'],['planning','Planning rounds'],['details','Request'],['result','Result']]:kind(m)==='planner'?[['output','Activity'],['planning','Planning rounds'],['details','Assignment']]:[['output','Activity'],['details','Assignment'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
   if(selectedTab==='progress'){renderGoalProgress(box,m)}else if(selectedTab==='result'){renderGoalResult(box)}else if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
@@ -492,11 +507,13 @@
   update();return events;
  }
  function renderPendingRequest(box,item){
-  const d=item.decision,card=node('section',undefined,'graph-request-card');card.append(node('h4',d.choice?'Applying your answer':item.blocking?'Waiting for you':'Question from the agent'),node('p',d.question,'graph-request-question'));
+  const d=item.decision,card=node('section',undefined,'graph-request-card');card.append(node('h4',d.choice?'Applying answer':item.setup_required?'Configure Decisions API':item.resolver&&item.resolver!=='human'?'Reviewing automatically':item.blocking?'Waiting for you':'Question from the agent'),node('p',d.question,'graph-request-question'));
   if(item.command){card.append(node('pre',item.command,'graph-request-context'));if(item.directory)card.append(node('p','Directory: '+item.directory,'muted'));if(d.context?.attempted){const source=node('details');source.append(node('summary','Full request'),node('pre',d.context.attempted,'graph-request-context'));card.append(source)}}else if(d.context?.attempted)card.append(node('pre',d.context.attempted,'graph-request-context'));
+  if(item.reason)card.append(node('p',item.reason,'muted'));if(item.setup_required)card.append(approvalSettings());
   if(d.context?.blocked_by)card.append(node('p',d.context.blocked_by));
   card.append(node('p','Requested '+date(d.requested_at),'muted'));
   if(d.choice){card.append(node('p',d.application_error||'Your answer has been recorded. Waiting for the agent to receive it.'));box.append(card);return}
+  if(item.resolver&&item.resolver!=='human'){card.append(node('p','The independent approval reviewer is handling this request.'));box.append(card);return;}
   const form=node('form'),error=node('p',undefined,'form-error');error.setAttribute('role','alert');let input;
   if(item.input==='text'){const label=node('label','Answer');input=node('textarea');input.maxLength=d.value_schema?.maxLength||1024;input.minLength=d.value_schema?.minLength||0;input.rows=3;input.value=requestDrafts.get(d.decision_id)||'';input.oninput=()=>requestDrafts.set(d.decision_id,input.value);label.append(input);form.append(label)}
   const choices=node('div',undefined,'graph-request-options');
@@ -505,7 +522,7 @@
   card.append(form);box.append(card);
  }
  function renderGoalProgress(box){
-  box.append(node('p','The coordinator plans and reviews; agents carry out the assignments.','muted'));
+  box.append(node('p',coordinatorStatus(),'muted'));const latest=latestPlanner();if(latest)box.append(button('Latest coordinator update',()=>selectNode(latest,'output')));
   const budgets=node('details',undefined,'graph-resource-budgets');budgets.dataset.readKey='goal-resource-budgets';budgets.append(node('summary','Resource budgets'),node('p',`${graph.attempts} of ${graph.limits.attempts} agent attempts allocated, including planning and retries.`),node('p','Workflow deadline: '+date(graph.limits.deadline)+'. Waiting time counts.'));if(graph.setup?.resources){const resources=graph.setup.resources;for(const [label,limit,unit]of [['Model tokens',resources.workflow?.tokens,'tokens'],['CPU per agent',resources.agent?.cpu_millicores,'millicores'],['Memory per agent',resources.agent?.memory_mib,'MiB']])budgets.append(node('p',label+': '+(limit?.mode==='limit'?`${limit.amount} ${unit}`:'No enforced cap')+'.'))}box.append(budgets);
   const members=workflowOrder().filter(id=>graph.members[id].spec.kind!=='scope'&&!graph.members[id].replacement),workers=members.filter(id=>kind(graph.members[id])!=='planner');
   box.append(node('h4','Assignments'));

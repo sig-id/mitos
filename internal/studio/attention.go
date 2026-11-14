@@ -8,17 +8,18 @@ import (
 // Attention joins native approval runs back to the work that is waiting on them.
 // It is a read projection; resolving a card still uses the canonical decision API.
 type Attention struct {
-	InputProfile string        `json:"input_profile"`
-	Blocking     bool          `json:"blocking"`
-	ID           string        `json:"id"`
-	Title        string        `json:"title"`
-	ProjectID    string        `json:"project_id,omitempty"`
-	GraphID      string        `json:"graph_id,omitempty"`
-	TaskID       string        `json:"task_id,omitempty"`
-	OwnerRunID   string        `json:"owner_run_id,omitempty"`
-	Reason       string        `json:"reason"`
-	Resolver     string        `json:"resolver"`
-	Card         decision.Card `json:"card"`
+	SetupRequired bool          `json:"setup_required,omitempty"`
+	InputProfile  string        `json:"input_profile"`
+	Blocking      bool          `json:"blocking"`
+	ID            string        `json:"id"`
+	Title         string        `json:"title"`
+	ProjectID     string        `json:"project_id,omitempty"`
+	GraphID       string        `json:"graph_id,omitempty"`
+	TaskID        string        `json:"task_id,omitempty"`
+	OwnerRunID    string        `json:"owner_run_id,omitempty"`
+	Reason        string        `json:"reason"`
+	Resolver      string        `json:"resolver"`
+	Card          decision.Card `json:"card"`
 }
 
 func (s *Store) attention() []Attention {
@@ -31,11 +32,11 @@ func (s *Store) attention() []Attention {
 		a := Attention{Blocking: true, ID: d.ID, Title: r.Brief.Title, ProjectID: r.Brief.ProjectID, OwnerRunID: r.ID, Reason: d.Context.BlockedBy, Resolver: "human", Card: *d, InputProfile: d.InputProfile()}
 		if d.Source != nil {
 			session := s.agentSessions[d.Source.SessionID]
-			a.Blocking = s.agentRequests[d.Source.SessionID+"/"+d.Source.RequestID].Request.Method != "mitos/asyncQuestion"
+			request := s.agentRequests[d.Source.SessionID+"/"+d.Source.RequestID]
+			a.Blocking = request.Request.Method != "mitos/asyncQuestion"
 			a.ProjectID, a.OwnerRunID = session.ProjectID, session.RunID
-			if route, ok := s.agentRoutes[d.Source.SessionID+"/"+d.Source.RequestID]; ok {
-				a.Reason, a.Resolver = route.Route.Reason, route.Route.Resolver
-			}
+			route, setup := s.requestReview(session, request)
+			a.Reason, a.Resolver, a.SetupRequired = route.Reason, route.Resolver, setup
 		}
 		if owner := s.runs[a.OwnerRunID]; owner != nil {
 			a.TaskID = owner.TaskID

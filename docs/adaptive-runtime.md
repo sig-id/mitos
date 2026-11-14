@@ -53,9 +53,11 @@ Active work currently exposes progress and stop controls; the follow-up composer
 sends once an answer is ready, rather than implying that messages steer an already
 running native attempt.
 
-The left work tree selects goals and agents. One Planner entry groups planning
-rounds into a chronological history; the graph shows worker assignments and their
-dependencies. Replaced assignments are available through **Show replaced work**.
+The left work tree selects goals and agents. The goal remains the page title; a
+single Coordinator card anchors the graph and connects to worker assignments.
+Selecting it opens activity, planning rounds, the original request and final result.
+One Coordinator entry in the tree groups planning rounds into a chronological
+history; arrows between assignments show their dependencies. Replaced assignments are available through **Show replaced work**.
 The graph also supports zoom, collapse and a list view. Selecting an agent opens its output in a wide reader, which can
 expand to the full content area. Planner proposals become readable summaries and
 expandable assignments; raw data is available separately. Attempt history opens

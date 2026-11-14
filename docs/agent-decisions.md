@@ -59,7 +59,9 @@ of merely delivering a declined answer.
 
 ## Notifications and API setup
 
-Immediate questions and approvals appear in **Notifications** on every workspace
+Requests undergoing automatic review show **Reviewing automatically** and do not raise a human notification. The reviewer runs independently of the coordinator and worker; supported requests use the configured Decisions API. If a supported routine request has no provider configured, **Configure Decisions API** opens the connection and approval-boundary form directly. The workflow header also links to **Decisions API & approvals**.
+
+Immediate questions and approvals needing the operator appear in **Notifications** on every workspace
 surface and in a persistent action banner. Review and answer them without leaving
 current work. Workflow nodes and goals show **Waiting for an answer** while an
 associated native request is pending. Inbox collects reports and project summaries;

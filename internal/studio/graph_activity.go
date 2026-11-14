@@ -3,17 +3,21 @@ package studio
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"mitos/internal/agentrouting"
 )
 
 type GraphPendingRequest struct {
-	Decision  HumanDecision `json:"decision"`
-	Blocking  bool          `json:"blocking"`
-	Input     string        `json:"input"`
-	Command   string        `json:"command,omitempty"`
-	Directory string        `json:"directory,omitempty"`
+	Resolver      string        `json:"resolver"`
+	Reason        string        `json:"reason,omitempty"`
+	SetupRequired bool          `json:"setup_required,omitempty"`
+	Decision      HumanDecision `json:"decision"`
+	Blocking      bool          `json:"blocking"`
+	Input         string        `json:"input"`
+	Command       string        `json:"command,omitempty"`
+	Directory     string        `json:"directory,omitempty"`
 }
 
 // Caller holds the store lock. Native requests have their own review runs; join
@@ -26,7 +30,7 @@ func (s *Store) graphPendingRequests(runID string) []GraphPendingRequest {
 	if r := s.runs[runID]; r != nil && r.Decision != nil && !r.Terminal() {
 		d := r.Decision
 		if d.AppliedAt == nil && d.SupersededAt == nil && !d.Due(time.Now()) {
-			pending = append(pending, GraphPendingRequest{Decision: *d, Blocking: true, Input: d.InputProfile()})
+			pending = append(pending, GraphPendingRequest{Decision: *d, Blocking: true, Input: d.InputProfile(), Resolver: "human"})
 		}
 	}
 	for _, request := range s.agentRequests {
@@ -44,11 +48,36 @@ func (s *Store) graphPendingRequests(runID string) []GraphPendingRequest {
 				continue
 			}
 			command, directory, _ := agentrouting.Command(request.Request)
-			pending = append(pending, GraphPendingRequest{Decision: *d, Blocking: request.Request.Method != "mitos/asyncQuestion", Input: d.InputProfile(), Command: command, Directory: directory})
+			route, setup := s.requestReview(session, request)
+			pending = append(pending, GraphPendingRequest{Decision: *d, Blocking: request.Request.Method != "mitos/asyncQuestion", Input: d.InputProfile(), Command: command, Directory: directory, Resolver: route.Resolver, Reason: route.Reason, SetupRequired: setup})
 		}
 	}
 	slices.SortFunc(pending, func(a, b GraphPendingRequest) int { return a.Decision.RequestedAt.Compare(b.Decision.RequestedAt) })
 	return pending
+}
+
+// Project current policy immediately, before the independent resolver goroutine
+// finishes, so an automatic review never briefly appears as a human approval.
+// Caller holds the store lock. This projection does not authorize any operation.
+func (s *Store) requestReview(session AgentSession, request AgentRequest) (agentrouting.Route, bool) {
+	p := s.agentPolicy(session.ProjectID)
+	route := agentrouting.Prepare(p, request.Request, session.Workspace)
+	if saved, ok := s.agentRoutes[session.ID+"/"+request.Request.Key]; ok && saved.PolicyRevision == p.Revision {
+		route = saved.Route
+	}
+	_, _, command := agentrouting.Command(request.Request)
+	supported := command || len(request.Request.Questions) > 0 && agentrouting.CanChoose(request.Request)
+	missing := p.DecisionProvider == nil && p.DecisionApplication == ""
+	if missing && supported && (route.Resolver == "decision" || route.Resolver == "classify" || route.Reason == "automatic resolution is disabled" || route.Reason == "decision provider is not configured") {
+		route.Resolver = "human"
+		route.Reason = "Configure the Decisions API and approval boundaries to review routine requests automatically."
+		return route, true
+	}
+	if route.Resolver == "human" && route.Source == "fallback" && (route.Reason == "credential_unavailable" || route.Reason == "transport_failed" || route.Reason == "decision provider is not configured" || strings.HasPrefix(route.Reason, "http_")) {
+		route.Reason = "The Decisions API is unavailable (" + route.Reason + "). Check the API connection in approval settings."
+		return route, true
+	}
+	return route, false
 }
 
 type GraphActivityEvent struct {
