@@ -25,12 +25,13 @@
  }
  function cleanLog(text){return String(text||'').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g,'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\r\n?/g,'\n')}
  function log(text){const pre=el('pre',cleanLog(text)||'No execution output was saved.','graph-execution-log');pre.tabIndex=0;pre.setAttribute('aria-label','Execution log');return pre}
- // Only typed public records become prose. Unknown output stays in the raw log.
- function activity(text,{live=false,truncated=false}={}){
-  const entries=[],byID=new Map();let message=null,structured=false;
-  for(const line of cleanLog(text).split('\n')){
+ // Records come only from the host-owned activity channel, never from text.
+ // Raw output (including JSON that imitates a record) cannot become agent prose.
+ function activity(text,{live=false,truncated=false,records=null}={}){
+  const entries=[],byID=new Map();let message=null;const structured=typeof records==='string';
+  for(const line of (structured?records:'').split('\n')){
    let v;try{v=JSON.parse(line)}catch{continue}
-   if(v?.mitos_activity!==1)continue;structured=true;
+   if(v?.mitos_activity!==1)continue;
    if(v.kind==='message'){
     const id=typeof v.id==='string'?v.id:'';
     let entry=id?byID.get('message:'+id):message;

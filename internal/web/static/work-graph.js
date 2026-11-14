@@ -512,11 +512,11 @@
      const at=Date.parse(output.updated_at)>0?output.updated_at:run.updated_at;
      status.textContent=!output.available?'Activity capture is unavailable for this attempt.':output.live?(output.text?'Working · Updated '+elapsed(at)+' ago':run.status==='queued'?'Waiting to start…':'Waiting for the agent…'):'Agent activity';
      if(output.live&&output.available&&Date.now()-Date.parse(at)>120000)status.textContent+=' · Waiting for an update';
-     const signature=JSON.stringify([output.text,output.live,output.truncated]);
+     const signature=JSON.stringify([output.text,output.activity,output.live,output.truncated,output.activity_truncated]);
      if(signature!==previous){
       previous=signature;const states=new Map([...content.querySelectorAll('details')].map(d=>[d.dataset.readKey,d.open]));
       const focus=document.activeElement?.closest('.graph-tool-row')?.dataset.readKey;
-      content.replaceChildren(window.MitosGraphOutput.activity(output.text,{live:output.live,truncated:output.truncated}));
+      content.replaceChildren(window.MitosGraphOutput.activity(output.text,{live:output.live,records:output.activity,truncated:typeof output.activity==='string'?output.activity_truncated:output.truncated}));
       for(const d of content.querySelectorAll('details'))if(states.has(d.dataset.readKey))d.open=states.get(d.dataset.readKey);
       if(focus)[...content.querySelectorAll('details')].find(d=>d.dataset.readKey===focus)?.querySelector('summary').focus({preventScroll:true});
       rawText.textContent=window.MitosGraphOutput.cleanLog(output.text);raw.hidden=!output.text;

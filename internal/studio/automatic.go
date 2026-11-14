@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -461,6 +462,8 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	preview, closePreview := e.beginAgentOutput(r.ID)
 	defer closePreview()
+	var activity bytes.Buffer
+	options.Activity = io.MultiWriter(&activity, preview.activity)
 	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), dir, prompt, options)
 	}})
@@ -488,7 +491,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err = e.provider.Stop(stopCtx, session); err != nil {
 		return err
 	}
-	if err = e.Store.SaveArtifact(r.ID, "output.txt", output); err != nil {
+	if err = e.Store.SaveArtifacts(r.ID, ArtifactData{Name: "output.txt", Data: output}, ArtifactData{Name: "activity.jsonl", Data: activity.Bytes()}); err != nil {
 		return err
 	}
 	report, readErr := readAgentResult(base, "agent-result.txt")

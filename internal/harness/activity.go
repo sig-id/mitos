@@ -9,9 +9,11 @@ import (
 
 // Render public execution activity only. Reasoning notifications and raw request
 // payloads are deliberately excluded from the user-facing execution log.
-// Keep a versioned public record alongside the human-readable log. Readers must
-// never infer assistant messages from arbitrary command output.
+// Records go to a separate writer owned by the host, never into the raw log.
 func writeActivityRecord(output io.Writer, value map[string]any) {
+	if output == nil {
+		return
+	}
 	value["mitos_activity"] = 1
 	data, err := json.Marshal(value)
 	if err == nil {
@@ -19,14 +21,14 @@ func writeActivityRecord(output io.Writer, value map[string]any) {
 	}
 }
 
-func writeCodexActivity(output io.Writer, event Envelope) {
+func writeCodexActivity(output, activity io.Writer, event Envelope) {
 	if event.Method == "item/agentMessage/delta" {
 		var p struct {
 			Delta  string `json:"delta"`
 			ItemID string `json:"itemId"`
 		}
 		if json.Unmarshal(event.Params, &p) == nil {
-			writeActivityRecord(output, map[string]any{"kind": "message", "id": p.ItemID, "delta": p.Delta})
+			writeActivityRecord(activity, map[string]any{"kind": "message", "id": p.ItemID, "delta": p.Delta})
 		}
 		return
 	}
@@ -74,12 +76,12 @@ func writeCodexActivity(output io.Writer, event Envelope) {
 	switch item.Type {
 	case "agentMessage":
 		if event.Method == "item/completed" {
-			writeActivityRecord(output, map[string]any{"kind": "message", "id": item.ID, "text": item.Text})
+			writeActivityRecord(activity, map[string]any{"kind": "message", "id": item.ID, "text": item.Text})
 		}
 
 	case "commandExecution":
 		record["kind"], record["command"], record["exit_code"] = "command", item.Command, item.ExitCode
-		writeActivityRecord(output, record)
+		writeActivityRecord(activity, record)
 		fmt.Fprintf(output, "\n%s command: %s", verb, item.Command)
 		if item.ExitCode != nil {
 			fmt.Fprintf(output, " (exit %d)", *item.ExitCode)
@@ -87,12 +89,12 @@ func writeCodexActivity(output io.Writer, event Envelope) {
 		fmt.Fprintln(output)
 	case "mcpToolCall", "dynamicToolCall":
 		record["kind"], record["name"] = "tool", strings.Trim(item.Server+" / "+item.Tool, " /")
-		writeActivityRecord(output, record)
+		writeActivityRecord(activity, record)
 		fmt.Fprintf(output, "\n%s tool: %s\n", verb, strings.Trim(item.Server+" / "+item.Tool, " /"))
 	case "fileChange":
 		for _, change := range item.Changes {
 			record["kind"], record["name"] = "file", change.Path
-			writeActivityRecord(output, record)
+			writeActivityRecord(activity, record)
 			fmt.Fprintf(output, "\n%s file change: %s\n", verb, change.Path)
 		}
 	}

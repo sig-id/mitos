@@ -111,6 +111,14 @@ print('native execution log')
 			if r.Verified {
 				t.Fatal("worker exit incorrectly presented as verifier proof")
 			}
+			activity, err := e.Store.Artifact(r.ID, "activity.jsonl")
+			if err != nil || !strings.Contains(string(activity), `"kind":"message"`) {
+				t.Fatalf("public activity not saved: %s, %v", activity, err)
+			}
+			raw, _ := e.Store.Artifact(r.ID, "output.txt")
+			if strings.Contains(string(raw), `"mitos_activity":1`) {
+				t.Fatal("host records leaked into raw log")
+			}
 			body, _ := e.Store.Artifact(r.ID, "report.md")
 			if !strings.Contains(string(body), "**42**") {
 				t.Fatal("native report missing")

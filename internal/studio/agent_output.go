@@ -15,6 +15,7 @@ type agentOutputPreview struct {
 	text      []byte
 	truncated bool
 	updatedAt time.Time
+	activity  *agentOutputPreview
 }
 
 func (p *agentOutputPreview) Write(b []byte) (int, error) {
@@ -39,15 +40,18 @@ func (p *agentOutputPreview) Write(b []byte) (int, error) {
 }
 
 type GraphRunOutput struct {
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
-	Available bool       `json:"available"`
-	Text      string     `json:"text"`
-	Truncated bool       `json:"truncated"`
-	Live      bool       `json:"live"`
+	// Nil denotes historical output without a separate public activity channel.
+	Activity          *string    `json:"activity,omitempty"`
+	ActivityTruncated bool       `json:"activity_truncated,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	Available         bool       `json:"available"`
+	Text              string     `json:"text"`
+	Truncated         bool       `json:"truncated"`
+	Live              bool       `json:"live"`
 }
 
 func (e *Engine) beginAgentOutput(id string) (*agentOutputPreview, func()) {
-	p := &agentOutputPreview{}
+	p := &agentOutputPreview{activity: &agentOutputPreview{}}
 	e.mu.Lock()
 	if e.liveOutput == nil {
 		e.liveOutput = map[string]*agentOutputPreview{}
@@ -73,7 +77,13 @@ func (e *Engine) GraphRunOutput(graph, task, id string) (GraphRunOutput, error) 
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		at := p.updatedAt
-		return GraphRunOutput{Text: strings.ToValidUTF8(string(p.text), "�"), Truncated: p.truncated, Live: true, Available: true, UpdatedAt: &at}, nil
+		p.activity.mu.Lock()
+		defer p.activity.mu.Unlock()
+		activity := strings.ToValidUTF8(string(p.activity.text), "�")
+		if p.activity.updatedAt.After(at) {
+			at = p.activity.updatedAt
+		}
+		return GraphRunOutput{Text: strings.ToValidUTF8(string(p.text), "�"), Truncated: p.truncated, Activity: &activity, ActivityTruncated: p.activity.truncated, Live: true, Available: true, UpdatedAt: &at}, nil
 	}
 	data, err := e.Store.Artifact(id, "output.txt")
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -83,5 +93,17 @@ func (e *Engine) GraphRunOutput(graph, task, id string) (GraphRunOutput, error) 
 	if truncated {
 		data = data[len(data)-agentOutputLimit:]
 	}
-	return GraphRunOutput{Text: strings.ToValidUTF8(string(data), "�"), Truncated: truncated, Live: run.Status == "queued" || run.Status == "running" || run.Status == "stopping", Available: err == nil}, nil
+	result := GraphRunOutput{Text: strings.ToValidUTF8(string(data), "�"), Truncated: truncated, Live: run.Status == "queued" || run.Status == "running" || run.Status == "stopping", Available: err == nil}
+	records, activityErr := e.Store.Artifact(id, "activity.jsonl")
+	if activityErr == nil {
+		result.ActivityTruncated = len(records) > agentOutputLimit
+		if result.ActivityTruncated {
+			records = records[len(records)-agentOutputLimit:]
+		}
+		activity := strings.ToValidUTF8(string(records), "�")
+		result.Activity = &activity
+	} else if !errors.Is(activityErr, ErrNotFound) {
+		return GraphRunOutput{}, activityErr
+	}
+	return result, nil
 }

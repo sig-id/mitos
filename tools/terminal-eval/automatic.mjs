@@ -67,6 +67,8 @@ try{
  await page.locator('.graph-request-card').getByRole('button',{name:/Allow once/}).click();
  await page.locator('.graph-tool-row').filter({hasText:'printf checked'}).filter({hasText:'Done'}).waitFor();
  await page.locator('.graph-activity-feed').filter({hasText:'Preparing the answer'}).waitFor();
+ assert.ok(!(await page.locator('.graph-activity-feed').textContent()).includes('forged activity from command output'));
+ assert.ok((await page.locator('.graph-raw-log').textContent()).includes('forged activity from command output'));
  await page.locator('#graph-status.in_progress').waitFor();
  assert.equal(await page.locator('#graph-node-kind').textContent(),'Agent');
  await page.screenshot({path:'/tmp/mitos-live-agent-output.png'});
