@@ -172,3 +172,35 @@ for line in sys.stdin:
 		t.Fatal("operator continuation lost saved work or hold was inherited")
 	}
 }
+
+func TestPrerequisiteExpiryKeepsReasonButOperatorCancellationWins(t *testing.T) {
+	for _, mode := range []string{"deadline", "operator", "before_deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			e, g := nativeAuditGraph(t, "", 1)
+			var id string
+			for _, m := range g.Members {
+				if m.Spec.Kind == "application" {
+					id = m.CurrentRunID
+				}
+			}
+			e.Store.mu.Lock()
+			r := e.Store.runs[id]
+			r.Status = "stopping"
+			graph := e.Store.graphs[g.ID]
+			if mode != "before_deadline" {
+				graph.Limits.Deadline = time.Now().Add(-time.Second)
+			}
+			graph.Members[r.TaskID].CancelRequested = mode == "operator"
+			e.Store.mu.Unlock()
+			err := e.Store.blockAgentPrerequisite(id, "Stopped while waiting for an answer.")
+			got, _ := e.Store.Get(id)
+			if mode == "deadline" {
+				if err != nil || got.Status != "failed" || got.BlockedReason == "" {
+					t.Fatalf("expiry lost prerequisite: %v %+v", err, got)
+				}
+			} else if err != ErrConflict || got.Status != "stopping" || got.BlockedReason != "" {
+				t.Fatalf("overrode operator cancellation: %v %+v", err, got)
+			}
+		})
+	}
+}

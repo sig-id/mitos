@@ -489,6 +489,10 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		return
 	}
 	if current.Status == "stopping" {
+		var prerequisite *agentPrerequisiteError
+		if errors.As(err, &prerequisite) && e.Store.blockAgentPrerequisite(r.ID, prerequisite.Error()) == nil {
+			return
+		}
 		_ = e.Store.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "Stopped. Available output and workspace changes were preserved.")
 		return
 	}

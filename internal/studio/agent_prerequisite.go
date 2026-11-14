@@ -3,6 +3,7 @@ package studio
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // The process has stopped, but starting a replacement cannot supply the missing
@@ -29,8 +30,24 @@ func (s *Store) blockAgentPrerequisite(id, summary string) error {
 	if r == nil {
 		return ErrNotFound
 	}
-	if r.Terminal() || r.Status == "stopping" {
+	if r.Terminal() {
 		return ErrConflict
+	}
+	if r.Status == "stopping" {
+		// Workflow expiry can request cancellation while the provider is still
+		// harvesting. Retain the unanswered prerequisite in that race, while
+		// giving explicit operator cancellation precedence.
+		if r.GraphAttempt == nil {
+			return ErrConflict
+		}
+		g := s.graphs[r.GraphAttempt.GraphID]
+		if g == nil || g.Status != "active" || time.Now().Before(g.Limits.Deadline) {
+			return ErrConflict
+		}
+		m := g.Members[r.TaskID]
+		if m == nil || m.CancelRequested || m.Replacement != "" {
+			return ErrConflict
+		}
 	}
 	return s.commit(id, "effect", "agent_prerequisite_blocked", change{Status: "failed", Stage: "Answer required before resuming", Summary: summary, BlockedReason: "native_request_unanswered"})
 }
