@@ -22,23 +22,23 @@ const GraphProfile = "work-graph/v1"
 const graphMaxBytes = 2 << 20
 
 type GraphLimits struct {
-	Tasks           int       `json:"tasks"`
-	Amendments      int       `json:"amendments"`
-	Attempts        int       `json:"attempts"`
-	Retries         int       `json:"retries"`
-	Expansions      int       `json:"expansions"`
-	ControllerCalls int       `json:"controller_calls"`
-	Depth           int       `json:"depth"`
-	Fanout          int       `json:"fanout"`
-	Deadline        time.Time `json:"deadline"`
+	Tasks             int       `json:"tasks"`
+	Amendments        int       `json:"amendments"`
+	Attempts          int       `json:"attempts"`
+	Retries           int       `json:"retries"`
+	Expansions        int       `json:"expansions"`
+	OrchestratorCalls int       `json:"orchestrator_calls"`
+	Depth             int       `json:"depth"`
+	Fanout            int       `json:"fanout"`
+	Deadline          time.Time `json:"deadline"`
 }
 type GraphPolicy struct {
-	Automatic             bool     `json:"automatic,omitempty"`
-	Mode                  string   `json:"mode"` // defined, adaptive, hybrid
-	Applications          []string `json:"applications"`
-	AllowArguments        bool     `json:"allow_arguments"`
-	ControllerApplication string   `json:"controller_application,omitempty"`
-	DecisionApplication   string   `json:"decision_application,omitempty"`
+	Automatic               bool     `json:"automatic,omitempty"`
+	Mode                    string   `json:"mode"` // defined, adaptive, hybrid
+	Applications            []string `json:"applications"`
+	AllowArguments          bool     `json:"allow_arguments"`
+	OrchestratorApplication string   `json:"orchestrator_application,omitempty"`
+	DecisionApplication     string   `json:"decision_application,omitempty"`
 }
 type GraphSpec struct {
 	Agent      *AgentSelection `json:"agent,omitempty"`
@@ -61,7 +61,7 @@ type GraphExecutor struct {
 type GraphMember struct {
 	RefreshContext  bool             `json:"refresh_context,omitempty"`
 	ContinueFrom    string           `json:"continue_from,omitempty"`
-	ControllerFor   string           `json:"controller_for,omitempty"`
+	OrchestratorFor string           `json:"orchestrator_for,omitempty"`
 	Spec            GraphSpec        `json:"spec"`
 	Revision        int64            `json:"revision"`
 	FactRevision    int64            `json:"fact_revision"`
@@ -85,18 +85,18 @@ type GraphAcceptance struct {
 	Manifest     string    `json:"manifest"`
 }
 type GraphExpansion struct {
-	LastError      string               `json:"last_error,omitempty"`
-	Failures       int                  `json:"failures,omitempty"`
-	ID             string               `json:"id"`
-	Scope          string               `json:"scope"`
-	Generation     int64                `json:"generation"`
-	Deadline       time.Time            `json:"deadline"`
-	Outcome        string               `json:"outcome,omitempty"`
-	ControllerTask string               `json:"controller_task,omitempty"`
-	Revision       int64                `json:"revision,omitempty"`
-	Reads          map[string]GraphRead `json:"reads,omitempty"`
-	TriggerCursor  int64                `json:"trigger_cursor,omitempty"`
-	Error          string               `json:"error,omitempty"`
+	LastError        string               `json:"last_error,omitempty"`
+	Failures         int                  `json:"failures,omitempty"`
+	ID               string               `json:"id"`
+	Scope            string               `json:"scope"`
+	Generation       int64                `json:"generation"`
+	Deadline         time.Time            `json:"deadline"`
+	Outcome          string               `json:"outcome,omitempty"`
+	OrchestratorTask string               `json:"orchestrator_task,omitempty"`
+	Revision         int64                `json:"revision,omitempty"`
+	Reads            map[string]GraphRead `json:"reads,omitempty"`
+	TriggerCursor    int64                `json:"trigger_cursor,omitempty"`
+	Error            string               `json:"error,omitempty"`
 }
 type GraphTrigger struct {
 	Seq     int64  `json:"seq"`
@@ -113,35 +113,35 @@ type GraphReceipt struct {
 	At       time.Time         `json:"at"`
 }
 type WorkGraph struct {
-	WorkState            string                     `json:"work_state,omitempty"`
-	ServiceRunID         string                     `json:"service_run_id,omitempty"`
-	Setup                *FrozenSetup               `json:"setup,omitempty"`
-	Result               *GraphResult               `json:"result,omitempty"`
-	Profile              string                     `json:"profile"`
-	ID                   string                     `json:"id"`
-	Home                 string                     `json:"home"`
-	ProjectID            string                     `json:"project_id"`
-	Workspace            string                     `json:"workspace"`
-	RootTask             string                     `json:"root_task"`
-	GoalRevision         int64                      `json:"goal_revision"`
-	Revision             int64                      `json:"revision"`
-	PolicyRevision       int64                      `json:"policy_revision"`
-	ControllerGeneration int64                      `json:"controller_generation"`
-	Activation           string                     `json:"activation"`
-	Predecessor          string                     `json:"predecessor,omitempty"`
-	Policy               GraphPolicy                `json:"policy"`
-	Limits               GraphLimits                `json:"limits"`
-	Members              map[string]*GraphMember    `json:"members"`
-	Expansions           map[string]*GraphExpansion `json:"expansions"`
-	Triggers             []GraphTrigger             `json:"triggers,omitempty"`
-	Cursor               int64                      `json:"cursor"`
-	Attempts             int                        `json:"attempts"`
-	ControllerCalls      int                        `json:"controller_calls"`
-	Receipts             map[string]GraphReceipt    `json:"receipts"`
-	Status               string                     `json:"status"`
-	CreatedAt            time.Time                  `json:"created_at"`
-	UpdatedAt            time.Time                  `json:"updated_at"`
-	Decisions            map[string]*GraphDecision  `json:"decisions,omitempty"`
+	WorkState              string                     `json:"work_state,omitempty"`
+	ServiceRunID           string                     `json:"service_run_id,omitempty"`
+	Setup                  *FrozenSetup               `json:"setup,omitempty"`
+	Result                 *GraphResult               `json:"result,omitempty"`
+	Profile                string                     `json:"profile"`
+	ID                     string                     `json:"id"`
+	Home                   string                     `json:"home"`
+	ProjectID              string                     `json:"project_id"`
+	Workspace              string                     `json:"workspace"`
+	RootTask               string                     `json:"root_task"`
+	GoalRevision           int64                      `json:"goal_revision"`
+	Revision               int64                      `json:"revision"`
+	PolicyRevision         int64                      `json:"policy_revision"`
+	OrchestratorGeneration int64                      `json:"orchestrator_generation"`
+	Activation             string                     `json:"activation"`
+	Predecessor            string                     `json:"predecessor,omitempty"`
+	Policy                 GraphPolicy                `json:"policy"`
+	Limits                 GraphLimits                `json:"limits"`
+	Members                map[string]*GraphMember    `json:"members"`
+	Expansions             map[string]*GraphExpansion `json:"expansions"`
+	Triggers               []GraphTrigger             `json:"triggers,omitempty"`
+	Cursor                 int64                      `json:"cursor"`
+	Attempts               int                        `json:"attempts"`
+	OrchestratorCalls      int                        `json:"orchestrator_calls"`
+	Receipts               map[string]GraphReceipt    `json:"receipts"`
+	Status                 string                     `json:"status"`
+	CreatedAt              time.Time                  `json:"created_at"`
+	UpdatedAt              time.Time                  `json:"updated_at"`
+	Decisions              map[string]*GraphDecision  `json:"decisions,omitempty"`
 }
 type CreateGraph struct {
 	serviceRunID string
@@ -294,16 +294,17 @@ func graphError(format string, args ...any) error { return fmt.Errorf("work grap
 
 // Reject irrelevant fields rather than silently ignoring a misspelled operation
 // shape (for example dependencies attached to a cancellation).
+var graphOperationFields = map[string][]string{
+	"add": {"spec"}, "supersede": {"task", "spec", "rationale"}, "amend": {"task", "spec"},
+	"dependencies": {"task", "dependencies", "join"}, "priority": {"task", "priority"},
+	"open_expansion": {"task", "expansion"}, "close_expansion": {"expansion", "rationale"},
+	"classify_trigger": {"trigger", "rationale"}, "seal": {"task", "cursor"}, "reopen": {"task"},
+	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task"},
+	"accept": {"task", "evidence", "rationale"}, "dismiss_decision": {"expansion", "rationale"},
+}
+
 func validateGraphOperation(op GraphOperation) error {
-	allowed := map[string][]string{
-		"add": {"spec"}, "supersede": {"task", "spec", "rationale"}, "amend": {"task", "spec"},
-		"dependencies": {"task", "dependencies", "join"}, "priority": {"task", "priority"},
-		"open_expansion": {"task", "expansion"}, "close_expansion": {"expansion", "rationale"},
-		"classify_trigger": {"trigger", "rationale"}, "seal": {"task", "cursor"}, "reopen": {"task"},
-		"cancel": {"task", "rationale"}, "replace_controller": {"rationale"}, "retry": {"task"},
-		"accept": {"task", "evidence", "rationale"}, "dismiss_decision": {"expansion", "rationale"},
-	}
-	keys, ok := allowed[op.Kind]
+	keys, ok := graphOperationFields[op.Kind]
 	if !ok {
 		return graphError("unsupported operation %q", op.Kind)
 	}

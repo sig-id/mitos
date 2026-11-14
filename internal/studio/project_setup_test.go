@@ -131,6 +131,6 @@ func TestSetupDefaultsOverridesAndFrozenExecution(t *testing.T) {
 		t.Fatal("running setup changed")
 	}
 	if !strings.Contains(stored.Setup.prompt(), stored.Setup.Document) {
-		t.Fatal("planner did not get full setup")
+		t.Fatal("orchestrator did not get full setup")
 	}
 }

@@ -86,7 +86,7 @@ type Request struct {
 }
 
 // Assignment carries Mitos fleet lineage, independently of any native CLI
-// sub-agents. Goal/task IDs are references for the controller, not completion claims.
+// sub-agents. Goal/task IDs are references for the orchestrator, not completion claims.
 type Assignment struct {
 	GoalID         string `json:"goal_id,omitempty"`
 	TaskID         string `json:"task_id,omitempty"`

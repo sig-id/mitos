@@ -31,7 +31,7 @@ func TestGraphTypedDecisionSelectionAndIdempotency(t *testing.T) {
 	spec := graphWorker("new-worker", g.RootTask)
 	p := proposal(g, "choose")
 	p.Operations = nil
-	request := GraphDecisionRequest{Proposal: p, Context: "Choose a useful next investigation", Candidates: []GraphPlan{{Explanation: "Inspect the workspace", Operations: []GraphOperation{{Kind: "add", Spec: &spec}}}, {Explanation: "Need more information", Operations: []GraphOperation{{Kind: "reopen", Task: g.RootTask}}}}}
+	request := GraphDecisionRequest{Proposal: p, Context: "Choose a useful next investigation", Candidates: []OrchestratorPlan{{Explanation: "Inspect the workspace", Operations: []GraphOperation{{Kind: "add", Spec: &spec}}}, {Explanation: "Need more information", Operations: []GraphOperation{{Kind: "reopen", Task: g.RootTask}}}}}
 	d, err := e.RequestGraphDecision(request)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestGraphTypedDecisionSelectionAndIdempotency(t *testing.T) {
 		t.Fatal("choice not bound to supplied amendment")
 	}
 	g, _ = e.Store.Graph(g.ID)
-	if g.ControllerCalls != 1 || g.Attempts != 1 {
+	if g.OrchestratorCalls != 1 || g.Attempts != 1 {
 		t.Fatal("inference not counted against responsibility")
 	}
 }
@@ -80,7 +80,7 @@ func TestGraphPendingInferenceRecoveryDoesNotCallProvider(t *testing.T) {
 	g := createGraphTest(t, e, req)
 	p := proposal(g, "unknown")
 	p.Operations = nil
-	request := GraphDecisionRequest{Proposal: p, Candidates: []GraphPlan{{Explanation: "Wait for context", Operations: []GraphOperation{{Kind: "reopen", Task: g.RootTask}}}, {Explanation: "Wait for evidence", Operations: []GraphOperation{{Kind: "reopen", Task: g.RootTask}}}}}
+	request := GraphDecisionRequest{Proposal: p, Candidates: []OrchestratorPlan{{Explanation: "Wait for context", Operations: []GraphOperation{{Kind: "reopen", Task: g.RootTask}}}, {Explanation: "Wait for evidence", Operations: []GraphOperation{{Kind: "reopen", Task: g.RootTask}}}}}
 	d, err := e.RequestGraphDecision(request)
 	if err != nil {
 		t.Fatal(err)
@@ -97,19 +97,19 @@ func TestGraphPendingInferenceRecoveryDoesNotCallProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, _ = e.Store.Graph(g.ID)
-	if g.Decisions[d.Key].Outcome != "rejected" || g.Decisions[d.Key].Reason != "interrupted_unknown_consumption" || g.ControllerCalls != 1 {
+	if g.Decisions[d.Key].Outcome != "rejected" || g.Decisions[d.Key].Reason != "interrupted_unknown_consumption" || g.OrchestratorCalls != 1 {
 		t.Fatal("pending inference was replayed or its charge reset")
 	}
 }
-func TestGraphControllerDynamicallyAddsWorkFromNativeEvidence(t *testing.T) {
+func TestGraphOrchestratorDynamicallyAddsWorkFromNativeEvidence(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 fixture unavailable")
 	}
 	e, req := graphEngine(t, false)
-	controller := executionApp(t, "unused")
-	controller.ID = "planner"
-	controller.Command = []string{python, "-c", `import json,pathlib,sys
+	orchestrator := executionApp(t, "unused")
+	orchestrator.ID = "orchestrator"
+	orchestrator.Command = []string{python, "-c", `import json,pathlib,sys
 request=json.load(sys.stdin)
 ctx=json.loads(request['graph']['context'])
 ops=[]
@@ -117,10 +117,10 @@ if ctx['expansion']=='initial':
  ops=[{'kind':'add','spec':{'id':'discovered','parent':ctx['root_task'],'kind':'application','required':True,'criteria':'Inventory verified','acceptance':'application','brief':{'title':'Discover the workspace','app_id':'workspace-inventory','timeout_minutes':1}}}]
 pathlib.Path('graph-proposal.json').write_text(json.dumps({'operations':ops,'explanation':'Investigated the available facts'}))
 pathlib.Path('result.txt').write_text('proposal written')
-print('# Native controller analysis\nNo worker response tags required.')`}
-	e.Apps = append(e.Apps, controller)
-	req.Policy.Applications = append(req.Policy.Applications, controller.ID)
-	req.Policy.ControllerApplication = controller.ID
+print('# Native orchestrator analysis\nNo worker response tags required.')`}
+	e.Apps = append(e.Apps, orchestrator)
+	req.Policy.Applications = append(req.Policy.Applications, orchestrator.ID)
+	req.Policy.OrchestratorApplication = orchestrator.ID
 	g := createGraphTest(t, e, req)
 	// Run each admitted command through the real executor, keeping the fixture
 	// deterministic while exercising the same reconciliation/admission handlers.
@@ -155,15 +155,15 @@ print('# Native controller analysis\nNo worker response tags required.')`}
 		}
 	}
 	g, _ = e.Store.Graph(g.ID)
-	workers, planners := 0, 0
+	workers, orchestrators := 0, 0
 	for _, m := range g.Members {
 		if m.Spec.Kind != "application" {
 			continue
 		}
-		if m.ControllerFor != "" {
-			planners++
+		if m.OrchestratorFor != "" {
+			orchestrators++
 			out, err := e.Store.Artifact(m.CurrentRunID, "output.txt")
-			if err != nil || !strings.Contains(string(out), "Native controller analysis") {
+			if err != nil || !strings.Contains(string(out), "Native orchestrator analysis") {
 				t.Fatal("native output lost")
 			}
 		} else {
@@ -173,9 +173,9 @@ print('# Native controller analysis\nNo worker response tags required.')`}
 			}
 		}
 	}
-	if workers != 1 || planners != 2 {
+	if workers != 1 || orchestrators != 2 {
 		data, _ := json.Marshal(g)
-		t.Fatalf("controller did not perform bounded dynamic expansion: workers=%d planners=%d %s", workers, planners, data)
+		t.Fatalf("orchestrator did not perform bounded dynamic expansion: workers=%d orchestrators=%d %s", workers, orchestrators, data)
 	}
 	for _, x := range g.Expansions {
 		if x.Outcome == "" {
@@ -183,6 +183,6 @@ print('# Native controller analysis\nNo worker response tags required.')`}
 		}
 	}
 	if g.Status == "accepted" {
-		t.Fatal("controller narrative accepted the root")
+		t.Fatal("orchestrator narrative accepted the root")
 	}
 }

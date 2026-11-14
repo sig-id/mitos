@@ -3,7 +3,7 @@
 These are reusable agent definitions for the [agent-library design](../spec/system/07_AGENT_LIBRARY.md).
 They are embedded in the server and used by the automatic Codex workflow. Add or
 edit worker roles in **Agent library**; the server preserves revisions and freezes
-definitions for admitted attempts. The planner can create task-specific specializations
+definitions for admitted attempts. The orchestrator can create task-specific specializations
 within a graph. Existing dormant goals still require an explicit start.
 
 | Definition | Intended contribution |
@@ -15,10 +15,10 @@ within a graph. Existing dormant goals still require an explicit start.
 | `mitos.reviewer` | Independent assessment of a specific candidate |
 | `mitos.tester` | Focused test design/execution and reproduction |
 | `mitos.writer` | Documentation and evidence-based synthesis |
-| `mitos.planner` | Work discovery, agent selection/creation, and replanning |
+| `mitos.orchestrator` | Work discovery, agent selection/creation, and replanning |
 
 This is a starting collection, not a required pipeline. A report task may need only
-a researcher and a writer. The planner may create a runtime-contract auditor, data
+a researcher and a writer. The orchestrator may create a runtime-contract auditor, data
 analyst, or another specialist from an appropriate base rather than asking the user
 to configure a role. Creating an agent means creating its definition/binding and a
 new attempt on an eligible runtime; it does not install a new model or bypass capacity.
@@ -55,7 +55,7 @@ Preserved: useful role intent, requirements awareness, evidence-based review,
 context-sensitive investigation, clear documentation and practical validation.
 Removed: PASS/FAIL/FIX/SKIP replies, XML prompt sections, pipeline jumps, fixed PRD
 paths, automatic session inheritance, universal Git restrictions, numerical confidence
-gates, and mandatory role sequences. Worker replies remain native. The planner uses
+gates, and mandatory role sequences. Worker replies remain native. The orchestrator uses
 an explicit proposal interface; the runtime still owns authority and completion.
 
 ## Validate authored packages

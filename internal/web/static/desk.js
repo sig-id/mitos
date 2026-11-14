@@ -20,17 +20,17 @@
     });
   }
   form('project-form', async b => { const p = await api('/api/projects', b); location.href = `/projects/${p.id}`; });
-  form('session-form', async b => { if(b.role==='coordinator'){await window.MitosCoordination.startSetup(b);return;} const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
+  form('session-form', async b => { if(b.role==='orchestrator'){await window.MitosCoordination.startSetup(b);return;} const s = await api(projectAPI('sessions'), b); location.href = `/workspace?project=${project}&session=${s.id}`; });
   form('topic-form', async (b,f) => { b.paths = b.paths.split('\n').map(x=>x.trim()).filter(Boolean); await api(projectAPI('topics'), b); f.reset(); $('topic-dialog').close(); await topics(); });
   let agentCatalog = [], agentSelection = 0, selectedInstallation;
   function sessionMode(){
-    const coordinator=$('session-role').value==='coordinator', v=selectedInstallation;
-    $('session-dialog-title').textContent=coordinator?'Set up the coordinator':'Start an agent';
-    $('session-prompt-label').textContent=coordinator?'Work goal (optional during analysis)':'Work goal';
-    $('session-form').querySelector('[type=submit]').textContent=coordinator?'Analyze project':'Start agent';
-    $('session-form').querySelector('[type=submit]').disabled=!v?.installed||(coordinator?!v?.capabilities.project_context:(v?.kind==='agent'&&!v?.capabilities.initial_prompt));
-    $('session-prompt').required=!coordinator&&v?.kind==='agent';
-    $('agent-prompt-help').textContent=coordinator?(v?.capabilities.project_context?'First, this agent analyzes the project in a separate background conversation. Review and edit its proposed context before starting work.':'This agent has no background project-analysis adapter. Choose Codex, Claude or Pi.'):(v?.kind==='agent'?(v?.capabilities.initial_prompt?'A concrete first goal is required. Starting a session begins work on that goal.':'This adapter cannot accept a work goal. Choose an agent with initial prompt support.'):'Open this application in its terminal.');
+    const orchestrator=$('session-role').value==='orchestrator', v=selectedInstallation;
+    $('session-dialog-title').textContent=orchestrator?'Set up the orchestrator':'Start an agent';
+    $('session-prompt-label').textContent=orchestrator?'Work goal (optional during analysis)':'Work goal';
+    $('session-form').querySelector('[type=submit]').textContent=orchestrator?'Analyze project':'Start agent';
+    $('session-form').querySelector('[type=submit]').disabled=!v?.installed||(orchestrator?!v?.capabilities.project_context:(v?.kind==='agent'&&!v?.capabilities.initial_prompt));
+    $('session-prompt').required=!orchestrator&&v?.kind==='agent';
+    $('agent-prompt-help').textContent=orchestrator?(v?.capabilities.project_context?'First, this agent analyzes the project in a separate background conversation. Review and edit its proposed context before starting work.':'This agent has no background project-analysis adapter. Choose Codex, Claude or Pi.'):(v?.kind==='agent'?(v?.capabilities.initial_prompt?'A concrete first goal is required. Starting a session begins work on that goal.':'This adapter cannot accept a work goal. Choose an agent with initial prompt support.'):'Open this application in its terminal.');
   }
   $('session-role').addEventListener('change',sessionMode);
   async function inspectAgent() {
@@ -489,7 +489,7 @@
     const values=await api(projectAPI('sessions')),signature=JSON.stringify(values);if(signature===sessionsSignature)return;sessionsSignature=signature;
     const focusedSession=document.activeElement?.closest('.session-link')?.dataset.sessionId;
     $('session-list').replaceChildren();
-    for(const s of values.filter(s=>s.role!=='coordinator')){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;link.dataset.sessionId=s.id;link.dataset.sessionName=s.name;wireContextLink(link);const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.continuation ? s.continuation.kind+' · ' : ''}${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
+    for(const s of values.filter(s=>s.role!=='orchestrator')){const link=el('a',undefined,`session-link${s.id===session?' selected':''}`);link.href=`/workspace?project=${project}&session=${s.id}`;link.dataset.sessionId=s.id;link.dataset.sessionName=s.name;wireContextLink(link);const text=el('span',s.name);text.append(el('small',`${s.role} · ${s.continuation ? s.continuation.kind+' · ' : ''}${s.status}`));link.append(el('span',undefined,`state-dot ${s.status}`),text);$('session-list').append(link);}
     if(focusedSession)document.querySelector(`[data-session-id="${CSS.escape(focusedSession)}"]`)?.focus({preventScroll:true});
     const selected=values.find(s=>s.id===session);if(selected?.detail)$('connection-status').textContent=selected.detail;
     if (selected) $('session-name').textContent=selected.name;

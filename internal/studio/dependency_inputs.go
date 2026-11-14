@@ -34,6 +34,7 @@ type DependencyInput struct {
 func (s *Store) bindDependencyInputs(t *Task, witnesses []workpool.Witness) ([]workpool.Witness, error) {
 	out := append([]workpool.Witness(nil), witnesses...)
 	var total int64
+	inboxBytes := 0
 	count := 0
 	for i, w := range out {
 		var dep *workpool.Dependency
@@ -43,7 +44,36 @@ func (s *Store) bindDependencyInputs(t *Task, witnesses []workpool.Witness) ([]w
 				break
 			}
 		}
+		// Bound journal evidence even for control-only sources. A message can be
+		// 64 KiB; allowing 128 full envelopes would exceed the journal record cap.
+		if w.Inbox != nil {
+			if inboxBytes+len(w.Inbox.Message) > 1<<20 {
+				if dep != nil && dep.Strength == "soft" {
+					out[i].Inbox = nil
+					out[i].InputOmitted = "inbox_evidence_limit"
+					continue
+				}
+				return nil, errors.New("inbox witnesses exceed the 1 MiB admission limit")
+			}
+			inboxBytes += len(w.Inbox.Message)
+		}
 		if dep == nil || dep.Payload != "data" {
+			continue
+		}
+		if w.Inbox != nil {
+			body := w.Inbox.Message
+			if total+int64(len(body)) > dependencyBytes || count+1 > dependencyFiles {
+				if dep.Strength == "soft" {
+					out[i].Inbox = nil
+					out[i].InputOmitted = "input_limit_exceeded"
+					continue
+				}
+				return nil, errors.New("inbox input limit exceeded")
+			}
+			sum := sha256.Sum256(body)
+			out[i].Artifacts = []workpool.Artifact{{Name: "message.json", SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(body))}}
+			total += int64(len(body))
+			count++
 			continue
 		}
 		upstream := s.runs[w.RunID]
@@ -96,6 +126,14 @@ func (s *Store) bindDependencyInputs(t *Task, witnesses []workpool.Witness) ([]w
 func (s *Store) boundInput(w workpool.Witness, a workpool.Artifact) ([]byte, error) {
 	if !workpool.ArtifactName(a.Name) || a.Bytes < 0 || a.Bytes > dependencyBytes {
 		return nil, errors.New("invalid bound input")
+	}
+	if w.Inbox != nil {
+		body, err := s.boundInboxInput(w)
+		sum := sha256.Sum256(body)
+		if err != nil || a.Name != "message.json" || a.Bytes != int64(len(body)) || a.SHA256 != hex.EncodeToString(sum[:]) {
+			return nil, errors.New("inbox input checksum or witness mismatch")
+		}
+		return body, nil
 	}
 	producer, err := s.Get(w.RunID)
 	if err != nil {

@@ -51,7 +51,7 @@ func Defaults() Policy {
 func Controls(e Enforcement) []Control {
 	return []Control{
 		{"workflow.elapsed_minutes", "Elapsed time", "workflow", "minutes", 43200, e.Elapsed, false, "Includes waiting and approval time. The workflow is stopped when its deadline is reached."},
-		{"workflow.attempts", "Agent attempts", "workflow", "attempts", 2048, e.Attempts, false, "Shared by planner calls, workers, and retries. Used attempts are not refunded."},
+		{"workflow.attempts", "Agent attempts", "workflow", "attempts", 2048, e.Attempts, false, "Shared by orchestrator calls, workers, and retries. Used attempts are not refunded."},
 		{"workflow.tokens", "Model tokens", "workflow", "tokens", 1000000000000, e.Tokens, true, "A shared input/output token budget needs a metered model gateway with reservations. Native CLI credentials do not provide that guarantee."},
 		{"agent.cpu_millicores", "CPU capacity", "agent", "millicores", 1024000, e.CPU, true, "1000 millicores is one CPU core. A quota must cover the agent and all child processes; local process execution cannot enforce it."},
 		{"agent.memory_mib", "Memory", "agent", "MiB", 1073741824, e.Memory, true, "A memory cap must cover the agent and all child processes. It requires a provider with an enforced memory boundary."},

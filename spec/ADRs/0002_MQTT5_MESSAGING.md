@@ -24,7 +24,7 @@ Existing HTTP APIs and terminal streams do not need to become MQTT interfaces.
 ## Rationale and alternatives
 
 A custom transport would require maintaining connection, delivery, and flow-control
-machinery. Existing protocols let Mitos concentrate on grants, coordinator fencing,
+machinery. Existing protocols let Mitos concentrate on grants, orchestrator fencing,
 durable task transitions, and verification. MQTT 5 supplies a standard publish/subscribe
 foundation while allowing a small application schema.
 

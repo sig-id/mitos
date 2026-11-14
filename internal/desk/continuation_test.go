@@ -227,18 +227,18 @@ func TestContinuationRejectionsKeepSourceRunning(t *testing.T) {
 	}
 }
 
-func TestCoordinatorContinuationAndHandoffBoundaries(t *testing.T) {
+func TestOrchestratorContinuationAndHandoffBoundaries(t *testing.T) {
 	m, p := continuationManager(t)
-	source, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "coordinator", Prompt: "Coordinate checkout"}, "http://localhost")
+	source, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "orchestrator", Prompt: "Coordinate checkout"}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	fork, err := m.Continue(source.ID, "fork", ContinuationRequest{Key: "coordinator-fork", Mode: "context"}, "http://localhost")
+	fork, err := m.Continue(source.ID, "fork", ContinuationRequest{Key: "orchestrator-fork", Mode: "context"}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if fork.Role != "agent" {
-		t.Fatal("fork created another coordinator")
+		t.Fatal("fork created another orchestrator")
 	}
 	otherDir := filepath.Join(p.Directory, "other")
 	if err := os.Mkdir(otherDir, 0700); err != nil {
@@ -255,16 +255,16 @@ func TestCoordinatorContinuationAndHandoffBoundaries(t *testing.T) {
 	if _, err := m.Continue(source.ID, "handover", ContinuationRequest{Key: "cross-project", AgentID: "target", HandoffTopicID: topic.ID}, "http://localhost"); err == nil {
 		t.Fatal("cross-project handoff admitted")
 	}
-	target, err := m.Continue(source.ID, "handover", ContinuationRequest{Key: "coordinator-handover", AgentID: "target"}, "http://localhost")
+	target, err := m.Continue(source.ID, "handover", ContinuationRequest{Key: "orchestrator-handover", AgentID: "target"}, "http://localhost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Role != "coordinator" {
-		t.Fatal("handover lost coordinator role")
+	if target.Role != "orchestrator" {
+		t.Fatal("handover lost orchestrator role")
 	}
 	await(t, func() bool { s, _ := m.Session(source.ID); return s.Status == "stopped" })
-	if _, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "coordinator"}, "http://localhost"); err == nil {
-		t.Fatal("second coordinator admitted")
+	if _, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "source", Role: "orchestrator"}, "http://localhost"); err == nil {
+		t.Fatal("second orchestrator admitted")
 	}
 	m.mu.Lock()
 	saved, _ := m.sessionLocked(fork.ID)

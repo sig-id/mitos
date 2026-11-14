@@ -58,10 +58,10 @@ if 'Previous conversation and saved evidence:' in prompt:
 if '--output-schema' in sys.argv:
  ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
- plan={'explanation':'Evidence meets the goal.','steps':[],'accept':[],'retry':[],'complete':bool(workers)}
+ plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:
   for i in range(2):
-   plan['steps'].append({'id':'work'+str(i),'title':['Implement change','Review change'][i],'assignment':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'criteria':'Produce evidence for the answer.','agent':['mitos.engineer','mitos.reviewer'][i],'role':'Answer specialist' if i else '', 'instructions':'Check the answer carefully.' if i else '', 'after':['work0'] if i else [],'replaces':''})
+   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
  else:
   assert len(workers)==2
   for f in workers:

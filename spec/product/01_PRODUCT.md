@@ -29,7 +29,7 @@ specific decisions that still need their judgment.
 The initial customer is a developer or technical operator already using coding
 agents, with several tasks or recurring responsibilities to manage. They want to
 use existing agents and tools on their own projects and machines, without becoming
-a full-time coordinator. Small engineering teams are the next audience once
+a full-time orchestrator. Small engineering teams are the next audience once
 shared identity and permissions are enforced.
 
 The entry market is the operation of agent-assisted engineering work: coordinated

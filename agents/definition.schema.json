@@ -29,7 +29,7 @@
     "kind": {
       "enum": [
         "worker",
-        "planner"
+        "orchestrator"
       ]
     },
     "match": {

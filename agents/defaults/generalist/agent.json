@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.generalist",
-  "revision": 1,
+  "revision": 2,
   "name": "Generalist",
   "description": "Solve bounded tasks across domains and provide a base for newly generated specialists.",
   "kind": "worker",
@@ -17,7 +17,7 @@
   },
   "instructions": {
     "path": "instructions.md",
-    "sha256": "4e70ba887371228b7c926c58cf7ca9151f5e82a2e430ae9cc6cd8f225b95d64c"
+    "sha256": "a9ac09811f32c079e13149a57572ecdd5f70c78446d1b37e66402b240f58a2b8"
   },
   "runtime": {
     "requires": [

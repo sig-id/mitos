@@ -23,7 +23,7 @@ func (m *Manager) prepareSessionContextLocked(p Project, s *Session, launch *age
 	s.PolicyRevision = profile.Revision
 	s.Workspace = p.Directory
 	s.AttentionTransport = "manual"
-	if s.Role != "coordinator" && s.Role != "shell" {
+	if s.Role != "orchestrator" && s.Role != "shell" {
 		active := 0
 		for _, old := range m.state.Sessions {
 			if s.Continuation != nil && s.Continuation.Kind == "handover" && old.ID == s.Continuation.SourceID {
@@ -40,26 +40,26 @@ func (m *Manager) prepareSessionContextLocked(p Project, s *Session, launch *age
 	if s.Assignment != nil && s.Assignment.RequestedBy != "" && s.Assignment.RequestedBy != "operator" {
 		parent, err := m.sessionLocked(s.Assignment.RequestedBy)
 		if err == nil {
-			if parent.Role == "coordinator" {
-				s.CoordinatorID = parent.ID
+			if parent.Role == "orchestrator" {
+				s.OrchestratorID = parent.ID
 			} else {
-				s.CoordinatorID = parent.CoordinatorID
+				s.OrchestratorID = parent.OrchestratorID
 			}
 		}
 	}
-	if s.Role == "agent" && s.CoordinatorID == "" {
+	if s.Role == "agent" && s.OrchestratorID == "" {
 		for _, old := range m.state.Sessions {
 			if s.Continuation != nil && s.Continuation.Kind == "handover" && old.ID == s.Continuation.SourceID {
 				continue
 			}
-			if old.ID != s.ID && old.ProjectID == p.ID && old.Role == "coordinator" && activeSession(old) {
-				s.CoordinatorID = old.ID
+			if old.ID != s.ID && old.ProjectID == p.ID && old.Role == "orchestrator" && activeSession(old) {
+				s.OrchestratorID = old.ID
 				break
 			}
 		}
 	}
-	if s.Role == "coordinator" {
-		s.CoordinatorID = ""
+	if s.Role == "orchestrator" {
+		s.OrchestratorID = ""
 	}
 	for _, directory := range []string{m.dir, p.Directory} {
 		var stat syscall.Statfs_t

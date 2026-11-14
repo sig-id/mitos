@@ -36,7 +36,7 @@ def validate():
     bundle = load(ROOT / 'defaults/library.json')
     assert set(bundle) == {'profile', 'id', 'revision', 'agents'}
     assert bundle['profile'] == 'agent-library-bundle/v1'
-    assert bundle['id'] == 'mitos.defaults' and bundle['revision'] == 2
+    assert bundle['id'] == 'mitos.defaults' and bundle['revision'] == 3
     assert 0 < len(bundle['agents']) <= 128
     identities, listed = set(), set()
     for entry in bundle['agents']:
@@ -59,7 +59,7 @@ def validate():
         for dependency in data['skills'] + data['knowledge']:
             assert dependency['id'] and dependency['sha256']
     assert listed == {p.resolve() for p in (ROOT / 'defaults').glob('*/agent.json')}
-    assert ('mitos.generalist', 1) in identities and ('mitos.planner', 2) in identities
+    assert ('mitos.generalist', 2) in identities and ('mitos.orchestrator', 3) in identities
     print('Validated ' + str(len(identities)) + ' definitions, bundle references and instruction digests.')
 
 

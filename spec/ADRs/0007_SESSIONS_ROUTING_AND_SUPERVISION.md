@@ -9,10 +9,10 @@ as the owning contract for six increments: explicit bridge-backed sessions;
 project autonomy and delegated approvals; portable cooperation; deterministic and
 model-assisted routing; shared decision infrastructure; independent supervision.
 
-Use coordinator for the planning role, worker for an assignee, supervisor for the
+Use orchestrator for the planning role, worker for an assignee, supervisor for the
 independent boundary monitor, and daemon only for a service process. Remove the obsolete project coordination `/supervision` endpoint and `desk supervision`
 command without public aliases. Use `/coordination`, `desk coordination` and
-`coordinator_id`; historical session records receive storage-only lineage migration.
+`orchestrator_id`; historical session records receive storage-only lineage migration.
 Flow control and recovery do not constitute supervision.
 
 Routing does require classification when request metadata and explicit rules do

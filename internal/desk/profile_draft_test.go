@@ -23,7 +23,7 @@ func draftManager(t *testing.T, analysis string) (*Manager, Project) {
 	if err = os.WriteFile(fixture, []byte(analysis), 0600); err != nil {
 		t.Fatal(err)
 	}
-	m.Agents, err = agentcli.New(nil, agentcli.Config{Applications: []agentcli.Definition{{ID: "analyst", Name: "Analyst fixture", Kind: "agent", Executables: []string{shell}, Args: []string{"-c", `printf 'GOAL:%s\n' "$@"; while read -r line; do :; done`, "coordinator"}, ContextArgs: []string{fixture}, Prompt: "positional"}}, Profiles: []agentcli.Profile{{ID: "account", Name: "Selected account", AgentID: "analyst", Env: map[string]string{"ANALYSIS_ACCOUNT": "TEST_ANALYSIS_ACCOUNT"}}}}, append(os.Environ(), "TEST_ANALYSIS_ACCOUNT=account-marker", "MITOS_SESSION_ID=parent-must-not-leak"))
+	m.Agents, err = agentcli.New(nil, agentcli.Config{Applications: []agentcli.Definition{{ID: "analyst", Name: "Analyst fixture", Kind: "agent", Executables: []string{shell}, Args: []string{"-c", `printf 'GOAL:%s\n' "$@"; while read -r line; do :; done`, "orchestrator"}, ContextArgs: []string{fixture}, Prompt: "positional"}}, Profiles: []agentcli.Profile{{ID: "account", Name: "Selected account", AgentID: "analyst", Env: map[string]string{"ANALYSIS_ACCOUNT": "TEST_ANALYSIS_ACCOUNT"}}}}, append(os.Environ(), "TEST_ANALYSIS_ACCOUNT=account-marker", "MITOS_SESSION_ID=parent-must-not-leak"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestProfileDraftReviewBeforeStartingAndRetry(t *testing.T) {
 		t.Fatal("unreviewed draft replaced profile", saved)
 	}
 	if _, err = m.ReviewAndStartProfileDraft(p.ID, d.ID, *d.Profile, 0, "http://localhost"); err == nil {
-		t.Fatal("coordinator admitted without goal")
+		t.Fatal("orchestrator admitted without goal")
 	}
 	approved := *d.Profile
 	approved.Goal = "Add malformed-input tests"
@@ -75,7 +75,7 @@ func TestProfileDraftReviewBeforeStartingAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Role != "coordinator" || s.InitialPrompt != approved.Goal || s.ProfileID != "account" || s.SetupDraftID != d.ID {
+	if s.Role != "orchestrator" || s.InitialPrompt != approved.Goal || s.ProfileID != "account" || s.SetupDraftID != d.ID {
 		t.Fatal(s)
 	}
 	await(t, func() bool {
@@ -185,7 +185,7 @@ func TestProfileDraftCancelFailureAndRestart(t *testing.T) {
 }
 func TestAgentRequiresGoal(t *testing.T) {
 	m, p := draftManager(t, "")
-	for _, role := range []string{"agent", "coordinator"} {
+	for _, role := range []string{"agent", "orchestrator"} {
 		if _, err := m.StartAgent(p.ID, agentcli.Request{AgentID: "analyst", Role: role, Prompt: " \n "}, "http://localhost"); err == nil {
 			t.Fatal("empty goal accepted", role)
 		}

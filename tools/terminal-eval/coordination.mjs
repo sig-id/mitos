@@ -31,8 +31,8 @@ if sys.argv[1]=='analysis':
 mitos=os.environ['MITOS_BIN']
 def desk(*args):
  return json.loads(subprocess.check_output([mitos,'desk',*args],text=True))
-if sys.argv[1]=='coordinator':
- assert 'You are the Mitos coordinator.' in ' '.join(sys.argv)
+if sys.argv[1]=='orchestrator':
+ assert 'You are the Mitos orchestrator.' in ' '.join(sys.argv)
  worker=desk('start-session','--agent','worker-test','--prompt','Write parser tests and publish evidence')
  print('DELEGATED:'+worker['id'],flush=True)
 else:
@@ -42,7 +42,7 @@ for line in sys.stdin:
  if line.startswith('ack '):
   desk('acknowledge',line.strip().split()[1]); print('ACKNOWLEDGED',flush=True)
 `);
-await writeFile(path.join(data,'agents.json'),JSON.stringify({applications:['coordinator','worker'].map(role=>({id:role+'-test',name:role+' fixture',kind:'agent',executables:[python],args:['-u',fixture,role],context_args:['-u',fixture,'analysis'],prompt:'positional'}))}));
+await writeFile(path.join(data,'agents.json'),JSON.stringify({applications:['orchestrator','worker'].map(role=>({id:role+'-test',name:role+' fixture',kind:'agent',executables:[python],args:['-u',fixture,role],context_args:['-u',fixture,'analysis'],prompt:'positional'}))}));
 const reservation=createServer();await new Promise(r=>reservation.listen(0,'127.0.0.1',r));const port=reservation.address().port;await new Promise(r=>reservation.close(r));const base=`http://127.0.0.1:${port}`;
 const server=spawn(process.env.MITOS_BIN||path.join(root,'bin/mitos'),['serve','--addr',`127.0.0.1:${port}`,'--data',data,'--workspace-root',temporary],{cwd:root,stdio:['ignore','ignore','pipe']});
 let log='';server.stderr.on('data',b=>log=(log+b).slice(-8000));const exited=new Promise(r=>server.once('exit',r));
@@ -59,7 +59,7 @@ try{
  await page.waitForURL('**/projects/*');
  const openedProject=new URL(page.url()).pathname.split('/').at(-1);await page.goto(base+'/workspace?project='+openedProject+'&setup=true');
  await page.locator('#session-dialog').waitFor({state:'visible'});
- await page.locator('#session-agent').selectOption('coordinator-test');
+ await page.locator('#session-agent').selectOption('orchestrator-test');
  await page.waitForFunction(()=>!document.querySelector('#session-form [type=submit]').disabled);
  assert.equal(await page.locator('#session-form [type=submit]').textContent(),'Analyze project');
  assert.equal(await page.locator('#session-prompt').inputValue(),'');
@@ -67,7 +67,7 @@ try{
  await page.locator('#session-form [type=submit]').click();
  await page.locator('#setup-output-panel').waitFor({state:'visible'});
  await page.waitForFunction(()=>document.querySelector('#setup-output').textContent.includes('Reading README.md'));
- assert.match(await page.locator('#coordinator-list').textContent(),/analysis running/);
+ assert.match(await page.locator('#orchestrator-list').textContent(),/analysis running/);
  await page.locator('#analysis-activity .analysis-command').waitFor();
  assert.equal(await page.locator('#setup-output').isVisible(),false);
  const command=page.locator('#analysis-activity .analysis-command').first();
@@ -90,9 +90,9 @@ try{
  assert.equal(await page.locator('#analysis-activity').isVisible(),false);
  await page.locator('#analysis-activity-mode').click();
 
- assert.equal(await page.locator('.coordinator-link').getAttribute('aria-current'),'page');
+ assert.equal(await page.locator('.orchestrator-link').getAttribute('aria-current'),'page');
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-analysis.png')});
- const colors=await page.evaluate(()=>[getComputedStyle(document.querySelector('.workspace-selector-trigger')).backgroundColor,getComputedStyle(document.querySelector('.coordinator-link')).backgroundColor]);assert.notEqual(colors[0],colors[1]);
+ const colors=await page.evaluate(()=>[getComputedStyle(document.querySelector('.workspace-selector-trigger')).backgroundColor,getComputedStyle(document.querySelector('.orchestrator-link')).backgroundColor]);assert.notEqual(colors[0],colors[1]);
  await page.reload();await page.waitForFunction(()=>document.querySelector('#setup-output').textContent.includes('Reading README.md'));
  assert.equal((await api(`/api/projects/${project}/coordination`)).draft.status,'running');
  // A failed refresh remains visible until that source recovers, even while
@@ -144,7 +144,7 @@ try{
  assert.equal((await api(`/api/projects/${project}/profile`)).revision,0,'draft did not overwrite saved profile');
  assert.equal(await page.locator('#profile-goal').inputValue(),'','analysis does not invent a work goal');
  await page.locator('#profile-save').click();
- assert.equal((await api(`/api/projects/${project}/sessions`)).length,0,'missing goal cannot start coordinator');
+ assert.equal((await api(`/api/projects/${project}/sessions`)).length,0,'missing goal cannot start orchestrator');
  await page.reload();await page.getByRole('button',{name:'Review context & set goal',exact:true}).click();await page.locator('#profile-dialog').waitFor({state:'visible'});
  assert.match(await page.locator('#profile-context').inputValue(),/README.md/,'draft survives navigation');
  await page.locator('#profile-context').fill((await page.locator('#profile-context').inputValue())+' Operator correction: maintain compatibility.');
@@ -154,21 +154,21 @@ try{
  await page.getByRole('heading',{name:'Ready to start',exact:true}).waitFor();
  assert.equal((await api(`/api/projects/${project}/sessions`)).length,0,'review does not launch work');
  assert.equal((await api(`/api/projects/${project}/profile`)).revision,0,'launch applies the reviewed profile');
- await page.reload();await page.locator('#start-coordinator').waitFor();
+ await page.reload();await page.locator('#start-orchestrator').waitFor();
  assert.equal(await page.locator('#setup-steps [aria-current=step]').getAttribute('data-step'),'3');
  assert.match(await page.locator('.setup-goal').textContent(),/Ship a reviewed parser/);
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-start-step.png')});
- await page.locator('#start-coordinator').click();await page.waitForURL(u=>!!u.searchParams.get('session'));
+ await page.locator('#start-orchestrator').click();await page.waitForURL(u=>!!u.searchParams.get('session'));
  assert.equal(await page.locator('#view-terminal').isVisible(),true);
- await page.waitForFunction(()=>document.querySelector('.coordinator-link')?.getAttribute('aria-current')==='page');
- assert.equal(await page.locator('#coordinator-list a').count(),1,'one coordinator entry across tabs');
+ await page.waitForFunction(()=>document.querySelector('.orchestrator-link')?.getAttribute('aria-current')==='page');
+ assert.equal(await page.locator('#orchestrator-list a').count(),1,'one orchestrator entry across tabs');
  await page.locator('#tab-coordination').click();
  assert.equal(await page.locator('#view-coordination').isVisible(),true);
  await wait(async()=> (await api(`/api/projects/${project}/sessions`)).length===2);
- const sessions=await api(`/api/projects/${project}/sessions`),coordinator=sessions.find(s=>s.role==='coordinator'),worker=sessions.find(s=>s.role==='agent');
- assert.equal(coordinator.initial_prompt,'Ship a reviewed parser with tests');
+ const sessions=await api(`/api/projects/${project}/sessions`),orchestrator=sessions.find(s=>s.role==='orchestrator'),worker=sessions.find(s=>s.role==='agent');
+ assert.equal(orchestrator.initial_prompt,'Ship a reviewed parser with tests');
  assert.match((await api(`/api/projects/${project}/profile`)).context,/Operator correction/);
- assert.equal(worker.coordinator_id,coordinator.id);assert.equal(worker.assignment.requested_by,coordinator.id);
+ assert.equal(worker.orchestrator_id,orchestrator.id);assert.equal(worker.assignment.requested_by,orchestrator.id);
  await page.locator('[data-start-role="agent"]').last().click();await page.locator('#session-agent').selectOption('worker-test');
  await page.waitForFunction(()=>!document.querySelector('#session-form [type=submit]').disabled);
  assert.equal(await page.locator('#session-prompt').inputValue(),'');
@@ -176,8 +176,8 @@ try{
  await page.locator('#session-dialog [data-close]').click();
  await page.locator('.assignment-edge').waitFor();await page.locator('.assignment-edge').focus();await page.keyboard.press('Enter');
  assert.match(await page.locator('#assignment-detail').textContent(),/Write parser tests/);
- assert.equal(await page.locator('#session-list [data-session-id="'+coordinator.id+'"]').count(),0);
- assert.equal(await page.locator('#coordinator-list').isVisible(),true);
+ assert.equal(await page.locator('#session-list [data-session-id="'+orchestrator.id+'"]').count(),0);
+ assert.equal(await page.locator('#orchestrator-list').isVisible(),true);
  await page.locator('#project-attention > summary').click();
  await page.getByRole('button',{name:'Send attention',exact:true}).click();await page.locator('#attention-body').fill('Hold the shared Git index');await page.locator('#attention-form input[name=pause]').check();await page.locator('#attention-form [type=submit]').click();
  await page.locator('.attention-card').waitFor();let v=await api(`/api/projects/${project}/coordination`);const notice=v.notices[0];assert.equal(notice.targets.length,2);
@@ -187,17 +187,17 @@ try{
  await page.getByText('Breakpoint requested · 2/2 acknowledged',{exact:true}).waitFor();
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-coordination.png')});
  await page.getByRole('button',{name:'Release breakpoint',exact:true}).click();await page.getByText('Released breakpoint · 2/2 acknowledged',{exact:true}).waitFor();
- await page.locator('#coordinator-list .coordinator-link').click();assert.equal(await page.locator('#view-terminal').isVisible(),true);
+ await page.locator('#orchestrator-list .orchestrator-link').click();assert.equal(await page.locator('#view-terminal').isVisible(),true);
  await page.locator('#tab-coordination').click();assert.equal(await page.locator('#view-coordination').isVisible(),true);
  await page.setViewportSize({width:390,height:844});await page.locator('#edit-project-profile').click();await page.locator('#profile-dialog').waitFor({state:'visible'});
  assert.equal(await page.locator('#profile-goal').inputValue(),'Ship a reviewed parser with tests');await page.locator('#profile-dialog [data-close]').click();
  const failedDir=path.join(temporary,'failure');await mkdir(failedDir);await writeFile(path.join(failedDir,'fail-analysis'),'');
  const failedProject=await api('/api/projects',{name:'Failed analysis',directory:failedDir});
  await page.goto(base+'/workspace?project='+failedProject.id);
- await api(`/api/projects/${failedProject.id}/profile-drafts`,{key:'failure',agent_id:'coordinator-test'});
+ await api(`/api/projects/${failedProject.id}/profile-drafts`,{key:'failure',agent_id:'orchestrator-test'});
  await page.getByRole('heading',{name:'Project analysis failed',exact:true}).waitFor();
  await page.waitForFunction(()=>document.querySelector('#setup-output').textContent.includes('Fixture sign-in failed'));
  await page.getByRole('button',{name:'Retry analysis',exact:true}).click();await page.locator('#session-dialog').waitFor({state:'visible'});
  if(process.env.MITOS_SCREENSHOT_DIR)await page.screenshot({path:path.join(process.env.MITOS_SCREENSHOT_DIR,'mitos-analysis-failure.png')});
- assert.deepEqual(errors,[]);console.log('PASS: explicit analyze/review/start workflow, review recovery without premature launch, stable tabs, Markdown and syntax highlighting, separate token usage, collapsible activity tree, expand/collapse and raw modes, safe log rendering, retained expansion, per-source refresh recovery, offline recovery without stale errors, local clock while offline, verbose live analysis, reload recovery, distinct navigation colors and selection, visible failure and retry, background project analysis, persisted editable draft, no worker or coordinator before review, required first goals, name autofill, profile defaults/save, terminal opens after coordinator launch, real CLI delegation, recorded graph edge, single coordinator navigation, CLI acknowledgments, breakpoint release, terminal tab, mobile profile, no browser errors');
+ assert.deepEqual(errors,[]);console.log('PASS: explicit analyze/review/start workflow, review recovery without premature launch, stable tabs, Markdown and syntax highlighting, separate token usage, collapsible activity tree, expand/collapse and raw modes, safe log rendering, retained expansion, per-source refresh recovery, offline recovery without stale errors, local clock while offline, verbose live analysis, reload recovery, distinct navigation colors and selection, visible failure and retry, background project analysis, persisted editable draft, no worker or orchestrator before review, required first goals, name autofill, profile defaults/save, terminal opens after orchestrator launch, real CLI delegation, recorded graph edge, single orchestrator navigation, CLI acknowledgments, breakpoint release, terminal tab, mobile profile, no browser errors');
 }finally{await browser?.close();server.kill('SIGTERM');await exited;await rm(temporary,{recursive:true,force:true});}

@@ -35,8 +35,8 @@ func validGraphKey(v string) bool {
 	return len(v) > 0 && len(v) <= 128 && !strings.ContainsAny(v, "\x00\n\r")
 }
 func validateGraphLimits(l GraphLimits, now time.Time) error {
-	if l.Tasks < 1 || l.Tasks > 512 || l.Amendments < 1 || l.Amendments > 2048 || l.Attempts < 1 || l.Attempts > 2048 || l.Retries < 0 || l.Retries > 16 || l.Expansions < 1 || l.Expansions > 256 || l.ControllerCalls < 1 || l.ControllerCalls > 256 || l.Depth < 1 || l.Depth > 32 || l.Fanout < 1 || l.Fanout > 128 || !l.Deadline.After(now) || l.Deadline.After(now.Add(30*24*time.Hour)) {
-		return graphError("finite task, attempt, expansion, controller, depth, fanout and deadline limits are required")
+	if l.Tasks < 1 || l.Tasks > 512 || l.Amendments < 1 || l.Amendments > 2048 || l.Attempts < 1 || l.Attempts > 2048 || l.Retries < 0 || l.Retries > 16 || l.Expansions < 1 || l.Expansions > 256 || l.OrchestratorCalls < 1 || l.OrchestratorCalls > 256 || l.Depth < 1 || l.Depth > 32 || l.Fanout < 1 || l.Fanout > 128 || !l.Deadline.After(now) || l.Deadline.After(now.Add(30*24*time.Hour)) {
+		return graphError("finite task, attempt, expansion, orchestrator, depth, fanout and deadline limits are required")
 	}
 	return nil
 }
@@ -97,7 +97,7 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 		if app.Agent.Specialization != nil {
 			app.Name = app.Agent.Specialization.Role
 		}
-		if app.Agent.Definition.Kind != "planner" {
+		if !isOrchestratorKind(app.Agent.Definition.Kind) {
 			spec.Acceptance = "operator"
 		}
 		b.Ownership.Paths = []string{"."}
@@ -179,8 +179,8 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 			return WorkGraph{}, graphError("unregistered or duplicate application")
 		}
 	}
-	if req.Policy.ControllerApplication != "" && !slices.Contains(req.Policy.Applications, req.Policy.ControllerApplication) {
-		return WorkGraph{}, graphError("controller application must be granted")
+	if req.Policy.OrchestratorApplication != "" && !slices.Contains(req.Policy.Applications, req.Policy.OrchestratorApplication) {
+		return WorkGraph{}, graphError("orchestrator application must be granted")
 	}
 	if req.Policy.DecisionApplication != "" {
 		app, ok := e.App(req.Policy.DecisionApplication)
@@ -195,7 +195,7 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 	if len(req.Tasks) == 0 || len(req.Tasks) > req.Limits.Tasks {
 		return WorkGraph{}, graphError("initial membership exceeds task allowance")
 	}
-	g := WorkGraph{Setup: req.setup, Profile: GraphProfile, ID: newID("graph"), Home: e.Store.Home().ID, ProjectID: req.ProjectID, Workspace: project.Directory, RootTask: "", GoalRevision: req.GoalRevision, Revision: 1, PolicyRevision: 1, ControllerGeneration: 1, Activation: req.Activation, Predecessor: req.Predecessor, Policy: req.Policy, Limits: req.Limits, Members: map[string]*GraphMember{}, Expansions: map[string]*GraphExpansion{}, Receipts: map[string]GraphReceipt{}, Decisions: map[string]*GraphDecision{}, Status: "active", CreatedAt: now, UpdatedAt: now}
+	g := WorkGraph{Setup: req.setup, Profile: GraphProfile, ID: newID("graph"), Home: e.Store.Home().ID, ProjectID: req.ProjectID, Workspace: project.Directory, RootTask: "", GoalRevision: req.GoalRevision, Revision: 1, PolicyRevision: 1, OrchestratorGeneration: 1, Activation: req.Activation, Predecessor: req.Predecessor, Policy: req.Policy, Limits: req.Limits, Members: map[string]*GraphMember{}, Expansions: map[string]*GraphExpansion{}, Receipts: map[string]GraphReceipt{}, Decisions: map[string]*GraphDecision{}, Status: "active", CreatedAt: now, UpdatedAt: now}
 	g.ServiceRunID = req.serviceRunID
 	refs := map[string]string{}
 	for _, spec := range req.Tasks {
@@ -220,6 +220,9 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 		}
 		for i := range spec.Brief.Scheduling.Deps {
 			dep := &spec.Brief.Scheduling.Deps[i]
+			if dep.Inbox != nil {
+				continue
+			}
 			if refs[dep.From] == "" {
 				return WorkGraph{}, graphError("unknown dependency reference")
 			}
@@ -245,6 +248,11 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 			return WorkGraph{}, ErrConflict
 		}
 		return graphClone(*s.graphs[old.ID]), nil
+	}
+	for _, m := range g.Members {
+		if err := s.normalizeGraphInbox(&g, m.Spec.Brief.Scheduling.Deps); err != nil {
+			return WorkGraph{}, err
+		}
 	}
 	if err := s.validateGraphPools(&g); err != nil {
 		return WorkGraph{}, err
@@ -320,6 +328,12 @@ func validateGraph(g *WorkGraph) error {
 			}
 		}
 		for _, dep := range request.Deps {
+			if dep.Inbox != nil {
+				if dep.Inbox.Project != g.ProjectID {
+					return graphError("inbox source must belong to the graph project")
+				}
+				continue
+			}
 			if g.Members[dep.From] == nil {
 				return graphError("cross-graph dependencies require an import adapter")
 			}
@@ -460,7 +474,7 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 	if p.Profile != GraphProfile || !validGraphKey(p.Key) || len(p.Operations) < 1 || len(p.Operations) > 128 || len(p.Explanation) > 4000 {
 		return fail(graphError("invalid proposal envelope"))
 	}
-	if p.Revision != prior.Revision || p.PolicyRevision != prior.PolicyRevision || p.Generation != prior.ControllerGeneration || !p.Deadline.After(now) || p.Deadline.After(prior.Limits.Deadline) || prior.Status != "active" {
+	if p.Revision != prior.Revision || p.PolicyRevision != prior.PolicyRevision || p.Generation != prior.OrchestratorGeneration || !p.Deadline.After(now) || p.Deadline.After(prior.Limits.Deadline) || prior.Status != "active" {
 		return fail(ErrConflict)
 	}
 	if len(prior.Receipts) >= prior.Limits.Amendments {
@@ -517,7 +531,9 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			spec.ID = refs[spec.ID]
 			spec.Parent = resolve(spec.Parent)
 			for i := range spec.Brief.Scheduling.Deps {
-				spec.Brief.Scheduling.Deps[i].From = resolve(spec.Brief.Scheduling.Deps[i].From)
+				if spec.Brief.Scheduling.Deps[i].Inbox == nil {
+					spec.Brief.Scheduling.Deps[i].From = resolve(spec.Brief.Scheduling.Deps[i].From)
+				}
 			}
 			parent := g.Members[spec.Parent]
 			if parent == nil || parent.Sealed || parent.Accepted != nil {
@@ -562,7 +578,12 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			m.History = append(m.History, m.Spec)
 			m.Spec.Brief.Scheduling.Deps = append([]workpool.Dependency(nil), op.Dependencies...)
 			for i := range m.Spec.Brief.Scheduling.Deps {
-				m.Spec.Brief.Scheduling.Deps[i].From = resolve(m.Spec.Brief.Scheduling.Deps[i].From)
+				if m.Spec.Brief.Scheduling.Deps[i].Inbox == nil {
+					m.Spec.Brief.Scheduling.Deps[i].From = resolve(m.Spec.Brief.Scheduling.Deps[i].From)
+				}
+			}
+			if err := e.Store.normalizeGraphInbox(&g, m.Spec.Brief.Scheduling.Deps); err != nil {
+				return fail(err)
 			}
 			m.Spec.Brief.Scheduling.Join = op.Join
 			m.Spec.Brief.Scheduling.Normalize()
@@ -578,13 +599,13 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			if m == nil || m.Spec.Kind != "scope" || m.Sealed || m.Accepted != nil || !validGraphKey(op.Expansion) || g.Expansions[op.Expansion] != nil || len(g.Expansions) >= g.Limits.Expansions {
 				return fail(graphError("expansion requires an open scope and remaining allowance"))
 			}
-			g.Expansions[op.Expansion] = &GraphExpansion{ID: op.Expansion, Scope: id, Generation: g.ControllerGeneration, Deadline: p.Deadline}
+			g.Expansions[op.Expansion] = &GraphExpansion{ID: op.Expansion, Scope: id, Generation: g.OrchestratorGeneration, Deadline: p.Deadline}
 		case "close_expansion":
 			x := g.Expansions[op.Expansion]
 			if x == nil || x.Outcome != "" || op.Rationale == "" {
 				return fail(graphError("closing an expansion requires an unresolved obligation and rationale"))
 			}
-			if x.Generation != g.ControllerGeneration && !operator {
+			if x.Generation != g.OrchestratorGeneration && !operator {
 				return fail(ErrConflict)
 			}
 			x.Outcome = op.Rationale
@@ -653,18 +674,18 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			if member := g.Members[d.TaskID]; member != nil {
 				member.CancelRequested = true
 			}
-		case "replace_controller":
+		case "replace_orchestrator":
 			if !operator || op.Rationale == "" {
-				return fail(graphError("controller replacement requires operator authority and rationale"))
+				return fail(graphError("orchestrator replacement requires operator authority and rationale"))
 			}
-			g.ControllerGeneration++
+			e.Store.advanceGraphOrchestratorGeneration(&g)
 			for _, x := range g.Expansions {
 				if x.Outcome == "" && !strings.HasPrefix(x.ID, "decision:") {
-					x.Generation = g.ControllerGeneration
-					if member := g.Members[x.ControllerTask]; member != nil {
+					x.Generation = g.OrchestratorGeneration
+					if member := g.Members[x.OrchestratorTask]; member != nil {
 						member.CancelRequested = true
 					}
-					x.ControllerTask = ""
+					x.OrchestratorTask = ""
 					x.Error = ""
 				}
 			}
@@ -702,6 +723,11 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			}
 		default:
 			return fail(graphError("unknown operation %q", op.Kind))
+		}
+	}
+	for _, m := range g.Members {
+		if err := e.Store.normalizeGraphInbox(&g, m.Spec.Brief.Scheduling.Deps); err != nil {
+			return fail(err)
 		}
 	}
 	if err := validateGraph(&g); err != nil {
@@ -827,7 +853,7 @@ func (s *Store) GraphBlockers(id string) ([]string, error) {
 		if x.Outcome == "" {
 			out = append(out, "expansion:"+id)
 			if x.Error != "" {
-				out = append(out, "controller:"+x.Error)
+				out = append(out, "orchestrator:"+x.Error)
 			}
 		}
 	}

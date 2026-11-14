@@ -120,5 +120,5 @@ Delivery limits remain in [conformance](../system/06_DELIVERY_AND_CONFORMANCE.md
 [ADR 0004](0004_ADAPTIVE_WORK_GRAPHS.md) defines the target adaptive composition above
 this initial batch runtime and supersedes only the deferral of specifying graph
 semantics. It does not widen the implemented hooks, change provider wire formats,
-or make a model answer authoritative. Its graph/controller lifecycle requires the
+or make a model answer authoritative. Its graph/orchestrator lifecycle requires the
 separate delivery gates and retains this adapter's compatibility limits.

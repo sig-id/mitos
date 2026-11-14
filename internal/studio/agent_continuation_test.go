@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Real scheduler + app-server transport: both worker and coordinator fail,
+// Real scheduler + app-server transport: both worker and orchestrator fail,
 // then continue under their original task identities with larger allowances.
 func TestAutomaticResourceContinuation(t *testing.T) {
 	python, err := exec.LookPath("python3")
@@ -27,9 +27,9 @@ if '--output-schema' in sys.argv:
  ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  if workers and workers[0]['state']=='failed':sys.exit(9)
- plan={'explanation':'Continue the same work.','steps':[],'accept':[],'retry':[],'complete':bool(workers),'result':{'title':'','markdown':'','source_tasks':[]}}
+ plan={'explanation':'Continue the same work.','operations':[],'accept':[],'complete':bool(workers),'result':{'title':'','markdown':'','source_tasks':[]}}
  if not workers:
-  plan['steps']=[{'id':'worker','title':'Keep partial work','assignment':'Finish answer.txt','criteria':'Preserve partial work','agent':'mitos.engineer','role':'','instructions':'','after':[],'replaces':''}]
+  plan['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Preserve partial work','brief':{'title':'Keep partial work','intent':'Finish answer.txt','app_id':'agent:'+ ('mitos.engineer'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  else:
   assert workers[0]['state']=='done',str(workers)
   plan['accept']=[{'task':workers[0]['id'],'rationale':'Verified the saved result'}]
@@ -76,7 +76,7 @@ else:
 			}
 			blocked := false
 			for _, x := range current.Expansions {
-				if x.Error == "controller_execution_needs_review" {
+				if x.Error == "orchestrator_execution_needs_review" {
 					blocked = true
 				}
 			}
@@ -98,19 +98,19 @@ else:
 		return WorkGraph{}
 	}
 	g = waitStopped()
-	var worker, planner, workerRun, plannerRun string
+	var worker, orchestrator, workerRun, orchestratorRun string
 	for id, m := range g.Members {
 		if m.State == "failed" {
-			if m.ControllerFor == "" {
+			if m.OrchestratorFor == "" {
 				worker = id
 				workerRun = m.CurrentRunID
 			} else {
-				planner = id
-				plannerRun = m.CurrentRunID
+				orchestrator = id
+				orchestratorRun = m.CurrentRunID
 			}
 		}
 	}
-	if worker == "" || planner == "" {
+	if worker == "" || orchestrator == "" {
 		t.Fatal("missing failed agents")
 	}
 	r, _ := e.Store.Get(workerRun)
@@ -136,7 +136,7 @@ else:
 			t.Fatal(err)
 		}
 		g = waitStopped()
-		for _, id := range []string{worker, planner} {
+		for _, id := range []string{worker, orchestrator} {
 			failed, _ := e.Store.Get(g.Members[id].CurrentRunID)
 			started := false
 			for _, event := range failed.Events {
@@ -158,7 +158,7 @@ else:
 	if err = os.Remove(failureFile); err != nil {
 		t.Fatal(err)
 	}
-	workerRun, plannerRun = g.Members[worker].CurrentRunID, g.Members[planner].CurrentRunID
+	workerRun, orchestratorRun = g.Members[worker].CurrentRunID, g.Members[orchestrator].CurrentRunID
 	next, err := e.ResumeGraph(g.ID, resumeRequest(g))
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +186,7 @@ else:
 	if len(next.Members) != len(g.Members) {
 		t.Fatal("replaced workflow structure")
 	}
-	for id, source := range map[string]string{worker: workerRun, planner: plannerRun} {
+	for id, source := range map[string]string{worker: workerRun, orchestrator: orchestratorRun} {
 		resumed, _ := e.Store.Get(next.Members[id].CurrentRunID)
 		if resumed.ParentID != source || resumed.GraphAttempt.ContinueFrom != source || resumed.NativeThreadID != "fixture-thread" {
 			t.Fatal("agent identity or conversation lost")
@@ -196,7 +196,7 @@ else:
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{worker, planner} {
+	for _, id := range []string{worker, orchestrator} {
 		resumed := false
 		for _, line := range strings.Split(strings.TrimSpace(string(wire)), "\n") {
 			var entry struct {
@@ -229,7 +229,7 @@ else:
 	if err != nil || !strings.Contains(string(patch), "partial.txt") || !strings.Contains(string(patch), "deleted file") || !strings.Contains(string(patch), "answer.txt") {
 		t.Fatalf("changes are not cumulative: %s %v", patch, err)
 	}
-	if next.Attempts != g.Attempts+2 || next.ControllerCalls != g.ControllerCalls+1 {
+	if next.Attempts != g.Attempts+2 || next.OrchestratorCalls != g.OrchestratorCalls+1 {
 		t.Fatal("continued attempts not charged")
 	}
 }

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -326,8 +327,11 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		writeJSON(w, 200, v)
 	})
 
+	mux.HandleFunc("GET /api/graphs/orchestrator-schema", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, json.RawMessage(studio.OrchestratorSchema()))
+	})
 	mux.HandleFunc("GET /api/graphs/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "automatic_goal_planning": true, "completed_result_continuations": true, "intent_shaped_results": true, "native_agent_runtimes": []string{"codex"}, "editable_agent_library": true, "agent_specialization": true, "controller_proposals": true, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "capacity": 2})
+		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "automatic_goal_planning": true, "completed_result_continuations": true, "intent_shaped_results": true, "native_agent_runtimes": []string{"codex"}, "editable_agent_library": true, "agent_specialization": true, "orchestrator_proposals": true, "orchestrator_contract": "work-graph/v1", "orchestrator_schema": "/api/graphs/orchestrator-schema", "dependency_sources": []string{"task", "mqtt_inbox"}, "dependency_guards": []string{"done", "candidate_available", "failed", "cancelled", "inbox_received"}, "joins": []string{"all", "any", "k_of_n"}, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "capacity": 2})
 	})
 	mux.HandleFunc("GET /api/graphs", func(w http.ResponseWriter, r *http.Request) {
 		state := r.URL.Query().Get("state")

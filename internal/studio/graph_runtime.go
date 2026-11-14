@@ -34,7 +34,7 @@ func (e *Engine) reconcileGraphs() error {
 			}
 		}
 	}
-	if err := e.reconcileGraphControllers(); err != nil {
+	if err := e.reconcileGraphOrchestrators(); err != nil {
 		return err
 	}
 	s := e.Store
@@ -61,7 +61,7 @@ func (e *Engine) reconcileGraphs() error {
 			if g.Attempts >= g.Limits.Attempts {
 				break
 			}
-			ready, err := s.refreshResumedPlanner(&g, m)
+			ready, err := s.refreshResumedOrchestrator(&g, m)
 			if err != nil {
 				return err
 			}
@@ -75,14 +75,14 @@ func (e *Engine) reconcileGraphs() error {
 			if m.Executor == nil {
 				return graphError("missing frozen executor")
 			}
-			if m.ControllerFor != "" && m.ContinueFrom != "" {
-				if g.ControllerCalls >= g.Limits.ControllerCalls {
+			if m.OrchestratorFor != "" && m.ContinueFrom != "" {
+				if g.OrchestratorCalls >= g.Limits.OrchestratorCalls {
 					continue
 				}
-				g.ControllerCalls++
+				g.OrchestratorCalls++
 			}
 			rid := newID("local")
-			binding := GraphAttempt{ContinueFrom: m.ContinueFrom, GraphID: g.ID, GraphRevision: g.Revision, Specification: m.Revision, PolicyRevision: g.PolicyRevision, Generation: g.ControllerGeneration, Executor: *m.Executor, Criteria: m.Spec.Criteria, Context: m.Spec.Context}
+			binding := GraphAttempt{ContinueFrom: m.ContinueFrom, GraphID: g.ID, GraphRevision: g.Revision, Specification: m.Revision, PolicyRevision: g.PolicyRevision, Generation: g.OrchestratorGeneration, Executor: *m.Executor, Criteria: m.Spec.Criteria, Context: m.Spec.Context}
 			r := Run{ID: rid, TaskID: tid, ProjectID: g.ProjectID, Tenant: decision.LocalTenant, Brief: m.Spec.Brief, AppName: m.Executor.Application.Name, GraphAttempt: &binding, Status: "queued", Stage: "Ready to start", Summary: "Graph task is waiting for execution capacity.", CreatedAt: g.UpdatedAt, UpdatedAt: g.UpdatedAt}
 			if len(m.Attempts) > 0 {
 				r.ParentID = m.Attempts[len(m.Attempts)-1]
@@ -133,6 +133,10 @@ func (s *Store) graphMemberReadiness(g *WorkGraph, m *GraphMember) workpool.Read
 	states := map[string]workpool.State{}
 	for i := range req.Deps {
 		dep := &req.Deps[i]
+		if dep.Inbox != nil {
+			states[dep.From] = s.graphInboxState(*dep)
+			continue
+		}
 		m := g.Members[dep.From]
 		if m == nil {
 			continue
@@ -161,7 +165,7 @@ func (s *Store) graphMemberReadiness(g *WorkGraph, m *GraphMember) workpool.Read
 	// establishes graph acceptance rather than treating process exit as acceptance.
 	for i := range ready.Matched {
 		w := &ready.Matched[i]
-		if upstream := s.tasks[w.TaskID]; upstream != nil {
+		if upstream := s.tasks[w.TaskID]; upstream != nil && w.Inbox == nil {
 			w.Status = upstream.Status
 		}
 	}
@@ -196,7 +200,7 @@ func (s *Store) graphRunChange(id, kind string, c change, at time.Time, seq int6
 	}
 	terminal := c.Status == "done" || c.Status == "failed" || c.Status == "cancelled" || c.Status == "parked"
 	if terminal && g.Status == "active" {
-		if g.Policy.Mode != "defined" && m.ControllerFor == "" {
+		if g.Policy.Mode != "defined" && m.OrchestratorFor == "" {
 			g.Cursor = seq
 			g.Triggers = append(g.Triggers, GraphTrigger{Seq: seq, TaskID: r.TaskID, RunID: id, Kind: kind})
 			// Reopening is serialized with the outcome that makes more work relevant.

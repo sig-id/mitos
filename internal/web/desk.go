@@ -50,12 +50,12 @@ func (s *Server) deskPage(w http.ResponseWriter, r *http.Request) {
 	} else if len(p.Sessions) > 0 {
 		p.Session = p.Sessions[len(p.Sessions)-1]
 		for _, candidate := range p.Sessions {
-			if candidate.Role == "coordinator" {
+			if candidate.Role == "orchestrator" {
 				p.Session = candidate
 			}
 		}
 	}
-	p.Coordinating = r.URL.Query().Get("session") == "" || p.Session.Role == "coordinator"
+	p.Coordinating = r.URL.Query().Get("session") == "" || p.Session.Role == "orchestrator"
 	if r.URL.Query().Get("view") == "terminal" {
 		p.Coordinating = false
 	}

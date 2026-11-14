@@ -32,7 +32,7 @@ outcome and usage before effects. Pending calls after restart become unknown
 consumption and are not resent. Revising policy does not reset the call allowance.
 
 The supervision model has a separate responsibility: examine boundaries and hold or
-stop work. Neither the request router nor the coordinator establishes confinement.
+stop work. Neither the request router nor the orchestrator establishes confinement.
 
 Automatic workers now run through Codex app-server under the compute provider's
 process ownership. Supported questions and approvals share the explicit-session
@@ -59,7 +59,7 @@ of merely delivering a declined answer.
 
 ## Notifications and API setup
 
-Requests undergoing automatic review show **Reviewing automatically** and do not raise a human notification. The reviewer runs independently of the coordinator and worker; supported requests use the configured Decisions API. If a supported routine request has no provider configured, **Configure Decisions API** opens System Configuration. The workflow header also links to **Decisions API & approvals**.
+Requests undergoing automatic review show **Reviewing automatically** and do not raise a human notification. The reviewer runs independently of the orchestrator and worker; supported requests use the configured Decisions API. If a supported routine request has no provider configured, **Configure Decisions API** opens System Configuration. The workflow header also links to **Decisions API & approvals**.
 
 Immediate questions and approvals needing the operator appear in **Notifications** on every workspace
 surface and in a persistent action banner. Review and answer them without leaving

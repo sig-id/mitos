@@ -12,8 +12,8 @@
   const build=()=>{if(built||!d.open)return;built=true;if(depth>=12){body.append(el('p','Expand the raw data below to inspect deeper values.'));return}for(const [key,v]of entries.slice(0,100)){const row=el('div',undefined,'graph-json-row');if(v&&typeof v==='object')row.append(structured(v,key,depth+1,path+'/'+key));else row.append(el('strong',key),structured(v));body.append(row)}if(entries.length>100)body.append(el('p','Showing the first 100 entries. Full data is available below.','muted'))};d.addEventListener('toggle',build);d.append(body);build();return d;
  }
  function plan(value,resolve){
-  const box=el('div',undefined,'graph-plan-output');box.append(el('h4','Coordinator summary'),prose(value.explanation));
-  if(value.complete===true)box.append(el('p','The planner proposes completing this goal.','graph-output-callout'));
+  const box=el('div',undefined,'graph-plan-output');box.append(el('h4','Orchestrator summary'),prose(value.explanation));
+  if(value.complete===true)box.append(el('p','The orchestrator proposes completing this goal.','graph-output-callout'));
   const steps=list(value.steps).filter(s=>s&&typeof s==='object'),local=new Map(steps.map(s=>[s.id,s.title]));
   const taskName=id=>local.get(id)||resolve(id)||id;
   if(steps.length){box.append(el('h4',`Proposed assignments · ${steps.length}`));steps.forEach((s,i)=>{
@@ -25,19 +25,19 @@
   })}
   const reviews=list(value.accept).filter(r=>r&&typeof r==='object');if(reviews.length){box.append(el('h4','Reviewed results'));reviews.forEach((r,i)=>{const d=disclosure(taskName(r.task),'review:'+i,true);d.append(prose(r.rationale));box.append(d)})}
   if(list(value.retry).length){box.append(el('h4','Retry requested'));const ul=el('ul');for(const id of value.retry)ul.append(el('li',taskName(id)));box.append(ul)}
-  if(list(value.operations).length){box.append(el('h4','Proposed changes'));value.operations.filter(op=>op&&typeof op==='object').forEach((op,i)=>{const d=disclosure((label(op.kind).replaceAll('_',' ')||'Change')+' · '+(op.spec?.brief?.title||taskName(op.task)||op.expansion||''),'operation:'+i,i===0);d.append(prose(op.spec?.brief?.intent||op.rationale||''));if(op.spec?.criteria)d.append(el('h5','Success criteria'),prose(op.spec.criteria));box.append(d)})}
+  if(list(value.operations).length){box.append(el('h4','Proposed changes'));value.operations.filter(op=>op&&typeof op==='object').forEach((op,i)=>{const d=disclosure((label(op.kind).replaceAll('_',' ')||'Change')+' · '+(op.spec?.brief?.title||taskName(op.task)||op.expansion||''),'operation:'+i,i===0);d.append(prose(op.spec?.brief?.intent||op.rationale||''));if(op.spec?.criteria)d.append(el('h5','Success criteria'),prose(op.spec.criteria));const schedule=op.spec?.brief?.scheduling||{deps:op.dependencies,join:op.join},deps=list(schedule.deps);if(deps.length){const rule=schedule.join?.rule||'all';d.append(el('h5',rule==='k_of_n'?`Join: ${schedule.join.k} of ${deps.filter(dep=>dep.strength!=='soft').length}`:`Join: ${rule}`));for(const dep of deps)d.append(el('p',`${dep.inbox?'MQTT '+dep.inbox.project+'/'+dep.inbox.mailbox+' · '+dep.inbox.type:taskName(dep.from)} · ${dep.guard||'terminal'}${dep.strength==='soft'?' · optional':''}`))}box.append(d)})}
   return box;
  }
  function cleanLog(text){return String(text||'').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g,'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\r\n?/g,'\n')}
  function log(text){const pre=el('pre',cleanLog(text)||'No execution output was saved.','graph-execution-log');pre.tabIndex=0;pre.setAttribute('aria-label','Execution log');return pre}
- window.MitosGraphOutput={log,cleanLog,render(text,{planner=false,name='',resolve=()=>''}={}){
+ window.MitosGraphOutput={log,cleanLog,render(text,{orchestrator=false,name='',resolve=()=>''}={}){
   if(name==='output.txt'||name.endsWith('.log'))return log(text);
   if(name.endsWith('.patch')&&window.MitosDiff)return window.MitosDiff.preview(text);
   if(!String(text||'').trim())return el('p',name==='report.md'?'This attempt saved an empty report. Read its execution log for activity and failure details.':'No content was saved in this file.','muted');
   let value,parsed=false;try{value=JSON.parse(text);parsed=true}catch{}
   if(!parsed)return name.endsWith('.patch')?window.MitosFormat.code(text,'diff'):name.endsWith('.txt')?window.MitosFormat.code(text,'text'):window.MitosMarkdown.view(text,{filename:name||'Output.md'});
   const box=el('div',undefined,'graph-structured-output');
-  if(planner&&value&&typeof value==='object'&&typeof value.explanation==='string'&&(Array.isArray(value.steps)||Array.isArray(value.operations)))box.append(plan(value,resolve));else box.append(structured(value));
+  if(orchestrator&&value&&typeof value==='object'&&typeof value.explanation==='string'&&(Array.isArray(value.steps)||Array.isArray(value.operations)))box.append(plan(value,resolve));else box.append(structured(value));
   const raw=disclosure('Raw data','raw');let loaded=false;raw.addEventListener('toggle',()=>{if(raw.open&&!loaded){loaded=true;raw.append(window.MitosFormat.code(text,'json'))}});box.append(raw);return box;
  }};
 })();

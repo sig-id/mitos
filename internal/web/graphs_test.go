@@ -16,7 +16,7 @@ func TestGraphAPITransactionsAndDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Close()
-	req := studio.CreateGraph{Profile: studio.GraphProfile, Key: "api-create", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, ControllerCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Hour)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Explore project", Acceptance: "operator"}}}
+	req := studio.CreateGraph{Profile: studio.GraphProfile, Key: "api-create", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, OrchestratorCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Hour)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Explore project", Acceptance: "operator"}}}
 	body, _ := json.Marshal(req)
 	response := request(s, "POST", "/api/graphs", string(body), false)
 	var g studio.WorkGraph
@@ -29,7 +29,7 @@ func TestGraphAPITransactionsAndDiscovery(t *testing.T) {
 	if duplicate.Code != 201 || again.ID != g.ID {
 		t.Fatal("duplicate graph created")
 	}
-	p := studio.GraphProposal{Profile: studio.GraphProfile, Key: "api-close", GraphID: g.ID, Revision: g.Revision, PolicyRevision: g.PolicyRevision, Generation: g.ControllerGeneration, Deadline: g.Limits.Deadline, Operations: []studio.GraphOperation{{Kind: "close_expansion", Expansion: "initial", Rationale: "No discovery required"}, {Kind: "seal", Task: g.RootTask, Cursor: g.Cursor}}}
+	p := studio.GraphProposal{Profile: studio.GraphProfile, Key: "api-close", GraphID: g.ID, Revision: g.Revision, PolicyRevision: g.PolicyRevision, Generation: g.OrchestratorGeneration, Deadline: g.Limits.Deadline, Operations: []studio.GraphOperation{{Kind: "close_expansion", Expansion: "initial", Rationale: "No discovery required"}, {Kind: "seal", Task: g.RootTask, Cursor: g.Cursor}}}
 	body, _ = json.Marshal(p)
 	preview := request(s, "POST", "/api/graphs/"+g.ID+"/preview", string(body), false)
 	if preview.Code != 200 {
@@ -48,7 +48,7 @@ func TestGraphAPITransactionsAndDiscovery(t *testing.T) {
 	if got := request(s, "POST", "/api/graphs/"+g.ID+"/amendments", string(body), false); got.Code != 409 {
 		t.Fatal("stale amendment not reported as conflict")
 	}
-	for _, path := range []string{"/api/graphs", "/api/graphs/" + g.ID, "/api/graphs/" + g.ID + "/blockers", "/api/graphs/capabilities", "/api/graphs/applications", "/api/graphs/" + g.ID + "/snapshot?node=" + g.RootTask} {
+	for _, path := range []string{"/api/graphs", "/api/graphs/" + g.ID, "/api/graphs/" + g.ID + "/blockers", "/api/graphs/capabilities", "/api/graphs/orchestrator-schema", "/api/graphs/applications", "/api/graphs/" + g.ID + "/snapshot?node=" + g.RootTask} {
 		if got := request(s, "GET", path, "", false); got.Code != 200 {
 			t.Fatalf("%s: %s", path, got.Body.String())
 		}
@@ -98,7 +98,7 @@ func TestGraphResumeAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Close()
-	create := studio.CreateGraph{Profile: studio.GraphProfile, Key: "resume-api-create", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, ControllerCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Second)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Explore project", Acceptance: "operator"}}}
+	create := studio.CreateGraph{Profile: studio.GraphProfile, Key: "resume-api-create", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: studio.GraphPolicy{Mode: "adaptive", Applications: []string{"workspace-inventory"}}, Limits: studio.GraphLimits{Tasks: 16, Amendments: 16, Attempts: 16, Retries: 1, Expansions: 8, OrchestratorCalls: 4, Depth: 4, Fanout: 8, Deadline: time.Now().UTC().Add(time.Second)}, Tasks: []studio.GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Explore project", Acceptance: "operator"}}}
 	g, err := e.CreateGraph(create)
 	if err != nil {
 		t.Fatal(err)

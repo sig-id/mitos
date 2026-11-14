@@ -11,7 +11,7 @@ work. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workfl
 
 The normal journey is a goal followed by automatic planning and execution. Users
 MUST NOT need to author steps, choose application IDs, or configure a group and
-completion criteria for every worker. The controller selects suitable definitions,
+completion criteria for every worker. The orchestrator selects suitable definitions,
 specializes them, or creates a task-specific definition when none fits. The graph
 shows the resulting work and the agents assigned to it.
 
@@ -32,7 +32,7 @@ one definition. A specialist name is a description, not evidence of expertise.
 
 Definitions are configuration records; they do not add a kernel primitive. Task,
 Attempt, Process and Session retain their existing identities. The library owns
-versions and discovery; the controller owns selection/proposed specialization;
+versions and discovery; the orchestrator owns selection/proposed specialization;
 the kernel owns admission; the scheduler owns dispatch; adapters own native process
 and observation handling. Application domain identities remain application-owned.
 
@@ -48,7 +48,7 @@ formats into this shape before validation and registration.
 | Field | Meaning |
 |---|---|
 | `profile`, `id`, `revision`, `name`, `description` | Schema, namespaced identity, positive revision, and user-facing purpose. |
-| `kind` | `worker` or `planner`; identifies intended use, never grants control authority. |
+| `kind` | `worker` or `orchestrator`; identifies intended use, never grants control authority. |
 | `match` | `use_for` and `avoid_for` hints used to rank eligible candidates. These are advisory, not hard permissions. |
 | `instructions` | Package-relative text path and SHA-256 of its exact bytes. |
 | `runtime` | Required adapter features and ordered runtime preferences; no executable paths or credential values. |
@@ -88,7 +88,7 @@ colliding short names MUST NOT silently shadow another definition. Operators may
 configure explicit project defaults over installation defaults. The exact resolved
 reference is recorded before admission, never looked up again as an unpinned name.
 
-The default library ships general-purpose roles, with a planner and a generalist as
+The default library ships general-purpose roles, with a orchestrator and a generalist as
 bootstrap choices. Importing files from a repository is an explicit registration
 operation under project policy; finding a prompt file must not install a tool or
 change authority. A directory of definitions and a configured native runtime are
@@ -111,8 +111,8 @@ the user to approve every temporary specialization.
 ## Selection and creation on demand
 
 1. Admit the user's goal and effective planning policy, preserving the original
-   request and criteria. Bootstrap planning from an authorized planner definition
-   and compatible installed runtime; never require a planner to invent itself.
+   request and criteria. Bootstrap planning from an authorized orchestrator definition
+   and compatible installed runtime; never require a orchestrator to invent itself.
 2. Retrieve a bounded set of definitions using purpose, requirements and permitted
    sources. Deterministic filtering excludes inaccessible revisions, unavailable
    capabilities and incompatible runtimes. Ranking may use a model or code.
@@ -158,7 +158,7 @@ with independent accounting and the existing inference recovery rules.
 | Definition generation fails validation | Reject it and permit bounded correction under the same allowance; never silently fall back to a different grant. |
 
 The product may show Planning only while planning is queued, admitted or running,
-with the distinction inspectable. A bare goal with no planner is waiting for setup,
+with the distinction inspectable. A bare goal with no orchestrator is waiting for setup,
 not active planning. Existing manually created goals need an explicit, idempotent
 "Start automatic work" operation that binds the current policy and goal; merely
 viewing or upgrading an old graph MUST NOT launch previously dormant work.
@@ -178,7 +178,7 @@ A newly invented specialist may start from
 the generalist's broader optional ceiling, still intersected with current grants.
 
 Effective capability authority is the intersection of definition requests,
-project/application grants, controller scope, task restrictions, provider enforcement
+project/application grants, orchestrator scope, task restrictions, provider enforcement
 and remaining allowance. Instructions, skill bodies, knowledge and claimed expertise
 are not authority. Executable skills/tool adapters require independent registration;
 a generated instruction cannot smuggle in an executable or credentials. Defaults
@@ -210,18 +210,18 @@ and specialization reference. The Attempt MUST freeze:
   assembly receipt, and memory binding.
 - Resolved adapter/harness/model/profile identifiers and enforcement capabilities.
 - Effective authority, resource claims, limits and remaining responsibility budget.
-- Selection/generation receipts and creator/controller generation.
+- Selection/generation receipts and creator/orchestrator generation.
 
 Secret values never enter these records. A template update cannot change an admitted
 worker. Replacing a harness creates a new Attempt; retaining an application persona
 or agent binding does not authorize resuming an unresolved process.
 
 Workers return native prose, files, code changes or adapter-native events. They do
-not emit PASS/FAIL/FIX, a universal JSON reply, or graph commands. A planner can use
+not emit PASS/FAIL/FIX, a universal JSON reply, or graph commands. A orchestrator can use
 a structured proposal tool because proposing is its assignment; this must not become
 the ordinary worker interface. Only the kernel commits proposals. Findings and
 completion claims remain distinct from checks and accepted results. Neither the
-reviewer role nor the planner role can self-grant acceptance authority.
+reviewer role nor the orchestrator role can self-grant acceptance authority.
 
 Agent instances are represented on the graph through their Tasks and Attempts.
 The library is the source of reusable definitions, not a second list of "running"
@@ -258,5 +258,5 @@ integrations already work. Conformance belongs to G4/G5 and additionally require
 
 For example, "audit spec/impl gap" may select a researcher, specialize a reviewer as
 "runtime contract auditor", and add further investigation only where evidence calls
-for it. The planner may finish with a report; it must not create implementation,
+for it. The orchestrator may finish with a report; it must not create implementation,
 committing or merging steps solely because an engineering template exists.

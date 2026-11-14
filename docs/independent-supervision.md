@@ -6,12 +6,12 @@ enter project boundaries and set the supervisor's per-session call allowance.
 The model uses the existing Decisions API adapter, with separate instructions,
 inputs, receipts and budget from request classification and answer selection.
 
-The coordinator plans work; workers execute it; the router chooses who should
+The orchestrator plans work; workers execute it; the router chooses who should
 answer a question; the supervisor checks boundaries. The daemon owns the lifecycle.
 Coordination uses `/api/projects/{project}/coordination`, `desk coordination`,
-`coordinator_id` and `MITOS_COORDINATOR_ID`. The old coordination `/supervision`
+`orchestrator_id` and `MITOS_ORCHESTRATOR_ID`. The old coordination `/supervision`
 endpoint and CLI command are removed without aliases. Saved execution identifiers
-such as `mitos.planner` remain identities; they are not supervision roles. A supervisor's `allow` verdict does not grant permission,
+such as `mitos.orchestrator` remain identities; they are not supervision roles. A supervisor's `allow` verdict does not grant permission,
 answer a question, accept a task result or bypass a command rule.
 
 Explicit deny rules are checked before intercepted approvals can be answered.
@@ -36,7 +36,7 @@ silently truncated. The model must hold if omitted content is needed to establis
 compliance. Model failures, exhausted budgets and insufficient confidence hold work.
 
 A non-allow verdict and incident are committed together. The project hold blocks
-queued admission, graph/coordinator progress and native session launches. Stop
+queued admission, graph/orchestrator progress and native session launches. Stop
 intent records process targets before cancellation; active automatic work, owned
 sessions, project-analysis processes and managed builds receive stop requests. Bridge capabilities are revoked.
 Restart retains the hold and retries incomplete stop intent. The project page

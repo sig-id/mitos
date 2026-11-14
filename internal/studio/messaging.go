@@ -219,6 +219,12 @@ func (s *Store) AcceptMessage(m messaging.Envelope) (messaging.Receipt, error) {
 	if !m.Deadline.After(time.Now()) {
 		receipt.Status = "expired"
 		receipt.Detail = "message deadline elapsed before admission"
+	} else if m.Kind == "event" && m.Type == "workflow.signal" {
+		g := s.graphs[m.Mailbox]
+		if g == nil || g.ProjectID != m.Project || g.Status != "active" || !g.Limits.Deadline.After(time.Now()) || int64(m.Generation) != g.OrchestratorGeneration {
+			receipt.Status = "rejected"
+			receipt.Detail = "workflow signal requires an active graph mailbox and current orchestrator generation"
+		}
 	} else if (m.Kind == "command" || m.Kind == "event") && m.Type == "service.event" && m.Project == "studio" && m.Mailbox == "events" && m.Generation == 0 {
 		var input struct {
 			Name    string          `json:"name"`
@@ -286,7 +292,7 @@ func (s *Store) messageGeneration(project, mailbox string, generation int) error
 			if generation > 0 && r.Generation == generation {
 				return nil
 			}
-			return errors.New("stale coordinator generation")
+			return errors.New("stale orchestrator generation")
 		}
 	}
 	return errors.New("unknown responsibility mailbox")

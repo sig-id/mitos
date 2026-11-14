@@ -10,17 +10,9 @@ import (
 	"time"
 )
 
-// GraphPlan is the optional structured tool boundary of a registered controller,
-// never the reply protocol of ordinary workers. Workers' output.txt is evidence;
-// it is interpreted only by an explicitly configured controller application.
-type GraphPlan struct {
-	Operations  []GraphOperation `json:"operations"`
-	Explanation string           `json:"explanation"`
-}
-
-func (e *Engine) reconcileGraphControllers() error {
+func (e *Engine) reconcileGraphOrchestrators() error {
 	for _, snapshot := range e.Store.Graphs() {
-		if e.Store.SupervisionHeld(snapshot.ProjectID) || snapshot.Status != "active" || snapshot.Policy.ControllerApplication == "" || !time.Now().Before(snapshot.Limits.Deadline) {
+		if e.Store.SupervisionHeld(snapshot.ProjectID) || snapshot.Status != "active" || snapshot.Policy.OrchestratorApplication == "" || !time.Now().Before(snapshot.Limits.Deadline) {
 			continue
 		}
 		keys := []string{}
@@ -33,10 +25,10 @@ func (e *Engine) reconcileGraphControllers() error {
 			if strings.HasPrefix(key, "decision:") {
 				continue
 			}
-			if x.Outcome != "" || x.Error != "" || x.ControllerTask == "" {
+			if x.Outcome != "" || x.Error != "" || x.OrchestratorTask == "" {
 				continue
 			}
-			m := snapshot.Members[x.ControllerTask]
+			m := snapshot.Members[x.OrchestratorTask]
 			if m == nil {
 				continue
 			}
@@ -51,12 +43,12 @@ func (e *Engine) reconcileGraphControllers() error {
 				continue
 			}
 			if r.Status != "done" || !r.Verified {
-				if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "controller_execution_needs_review"); err != nil {
+				if err = e.graphOrchestratorError(snapshot.ID, key, x.OrchestratorTask, "orchestrator_execution_needs_review"); err != nil {
 					return err
 				}
 				continue
 			}
-			// A controller deliberately exposes one typed proposal file. Native stdout
+			// A orchestrator deliberately exposes one typed proposal file. Native stdout
 			// remains untouched and cannot accidentally become a control command.
 			proposalName := "graph-proposal.json"
 			for _, artifact := range r.Artifacts {
@@ -66,44 +58,18 @@ func (e *Engine) reconcileGraphControllers() error {
 			}
 			body, err := e.Store.Artifact(r.ID, proposalName)
 			if err != nil {
-				if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "controller_proposal_missing"); err != nil {
+				if err = e.graphOrchestratorError(snapshot.ID, key, x.OrchestratorTask, "orchestrator_proposal_missing"); err != nil {
 					return err
 				}
 				continue
 			}
-			if snapshot.Policy.Automatic {
-				var plan AutomaticPlan
-				err = DecodeGraphJSON(body, &plan)
-				if err == nil {
-					err = e.applyAutomaticPlan(snapshot, key, r, plan)
-				}
-				if err != nil {
-					if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "Planner could not apply its proposal: "+err.Error()); err != nil {
-						return err
-					}
-				}
-				continue
+			var plan OrchestratorPlan
+			err = DecodeGraphJSON(body, &plan)
+			if err == nil {
+				err = e.applyOrchestratorPlan(snapshot, key, r, plan)
 			}
-			var plan GraphPlan
-			if err = DecodeGraphJSON(body, &plan); err != nil {
-				if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "controller_proposal_invalid"); err != nil {
-					return err
-				}
-				continue
-			}
-			ops := []GraphOperation{}
-			// Controller generation and triggering facts are captured before launch.
-			// The authority to close this planning obligation is supplied by the kernel.
-			ops = append(ops, GraphOperation{Kind: "close_expansion", Expansion: key, Rationale: plan.Explanation})
-			for _, tr := range snapshot.Triggers {
-				if tr.Seq <= x.TriggerCursor && tr.Outcome == "" {
-					ops = append(ops, GraphOperation{Kind: "classify_trigger", Trigger: tr.Seq, Rationale: "Considered by controller attempt " + r.ID})
-				}
-			}
-			ops = append(ops, plan.Operations...)
-			p := GraphProposal{Profile: GraphProfile, Key: "controller:" + r.ID, GraphID: snapshot.ID, Revision: x.Revision, PolicyRevision: snapshot.PolicyRevision, Generation: x.Generation, Deadline: x.Deadline, Reads: x.Reads, Operations: ops, Explanation: plan.Explanation}
-			if _, _, err = e.amendGraph(p, false, false); err != nil {
-				if err = e.graphControllerError(snapshot.ID, key, x.ControllerTask, "controller_proposal_stale_or_rejected"); err != nil {
+			if err != nil {
+				if err = e.graphOrchestratorError(snapshot.ID, key, x.OrchestratorTask, "Orchestrator could not apply its proposal: "+err.Error()); err != nil {
 					return err
 				}
 			}
@@ -121,13 +87,13 @@ func (e *Engine) reconcileGraphControllers() error {
 	slices.Sort(ids)
 	for _, id := range ids {
 		old := s.graphs[id]
-		if s.supervisionHeld(old.ProjectID) || old.Status != "active" || old.Policy.ControllerApplication == "" || !time.Now().Before(old.Limits.Deadline) {
+		if s.supervisionHeld(old.ProjectID) || old.Status != "active" || old.Policy.OrchestratorApplication == "" || !time.Now().Before(old.Limits.Deadline) {
 			continue
 		}
 		if old.Policy.Automatic {
 			waiting := false
 			for _, m := range old.Members {
-				if m.Spec.Kind == "application" && m.ControllerFor == "" && !m.CancelRequested && m.Replacement == "" {
+				if m.Spec.Kind == "application" && m.OrchestratorFor == "" && !m.CancelRequested && m.Replacement == "" {
 					if m.CurrentRunID != "" && !s.graphSettled(m) {
 						waiting = true
 					}
@@ -152,7 +118,7 @@ func (e *Engine) reconcileGraphControllers() error {
 			for _, tr := range g.Triggers {
 				if tr.Outcome == "" && len(g.Expansions) < g.Limits.Expansions {
 					key := fmt.Sprintf("event:%d", tr.Seq)
-					g.Expansions[key] = &GraphExpansion{ID: key, Scope: g.RootTask, Generation: g.ControllerGeneration, Deadline: g.Limits.Deadline}
+					g.Expansions[key] = &GraphExpansion{ID: key, Scope: g.RootTask, Generation: g.OrchestratorGeneration, Deadline: g.Limits.Deadline}
 					changed = true
 					break
 				}
@@ -163,10 +129,10 @@ func (e *Engine) reconcileGraphControllers() error {
 			keys = append(keys, key)
 		}
 		slices.Sort(keys)
-		// One planner in flight per graph. Parallel workers remain independently runnable.
+		// One orchestrator in flight per graph. Parallel workers remain independently runnable.
 		busy := false
 		for _, x := range g.Expansions {
-			if x.Outcome == "" && x.ControllerTask != "" && x.Error == "" {
+			if x.Outcome == "" && x.OrchestratorTask != "" && x.Error == "" {
 				busy = true
 			}
 		}
@@ -176,12 +142,12 @@ func (e *Engine) reconcileGraphControllers() error {
 				if strings.HasPrefix(key, "decision:") {
 					continue
 				}
-				if x.Outcome != "" || x.ControllerTask != "" || x.Error != "" {
+				if x.Outcome != "" || x.OrchestratorTask != "" || x.Error != "" {
 					continue
 				}
-				if g.ControllerCalls >= g.Limits.ControllerCalls || len(g.Members) >= g.Limits.Tasks || g.Attempts >= g.Limits.Attempts {
+				if g.OrchestratorCalls >= g.Limits.OrchestratorCalls || len(g.Members) >= g.Limits.Tasks || g.Attempts >= g.Limits.Attempts {
 					if x.Error == "" {
-						x.Error = "controller_allowance_exhausted"
+						x.Error = "orchestrator_allowance_exhausted"
 						changed = true
 					}
 					break
@@ -196,7 +162,7 @@ func (e *Engine) reconcileGraphControllers() error {
 					changed = true
 					break
 				}
-				// Disclosure is explicitly enabled by configuring the controller application;
+				// Disclosure is explicitly enabled by configuring the orchestrator application;
 				// include bounded facts and references, not arbitrary workspace contents.
 				type fact struct {
 					ID        string     `json:"id"`
@@ -212,7 +178,7 @@ func (e *Engine) reconcileGraphControllers() error {
 				dependencies := []workpool.Dependency{}
 				for _, tid := range graphIDs(&g) {
 					m := g.Members[tid]
-					if m.ControllerFor != "" {
+					if m.OrchestratorFor != "" {
 						continue
 					}
 					f := fact{ID: tid, Spec: m.Spec, State: m.State, RunID: m.CurrentRunID, Accepted: m.Accepted != nil}
@@ -253,23 +219,23 @@ func (e *Engine) reconcileGraphControllers() error {
 					reads[tid] = GraphRead{m.Revision, m.FactRevision}
 				}
 				if g.Policy.Automatic {
-					s.addPlannerEvidence(&g, dependencies)
+					s.addOrchestratorEvidence(&g, dependencies)
 				}
-				raw, _ := json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json in the workspace with operations and explanation. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."})
+				raw, _ := json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "inbox": graphInboxAddress(&g, s.seq), "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json using the shared OrchestratorPlan: operations, accept, complete, result and explanation. Use the same scheduling dependencies and joins as the graph API. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."})
 				if g.Policy.Automatic {
 					library := e.AutomaticAgents()["agents"]
-					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "facts": facts, "agent_library": library, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.ControllerCalls - g.ControllerCalls, "instruction": automaticPlannerInstructions, "previous_error": x.LastError})
+					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "facts": facts, "agent_library": library, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "instruction": orchestratorInstructions, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError})
 				}
 				if len(raw) > graphContextLimit(&g) {
-					x.Error = "controller_context_limit"
+					x.Error = "orchestrator_context_limit"
 					changed = true
 					break
 				}
 				tid := newID("task")
-				spec := GraphSpec{ID: tid, Parent: x.Scope, Kind: "application", Required: false, Criteria: "Produce a valid graph proposal within policy", Acceptance: "application", Context: string(raw), Brief: Brief{Title: "Plan the next work", Intent: "Read the graph context and propose a bounded amendment. Write graph-proposal.json; leave normal analysis in your native output.", AppID: g.Policy.ControllerApplication, TimeoutMinutes: 5}}
+				spec := GraphSpec{ID: tid, Parent: x.Scope, Kind: "application", Required: false, Criteria: "Produce a valid graph proposal within policy", Acceptance: "application", Context: string(raw), Brief: Brief{Title: "Plan the next work", Intent: "Read the graph context and propose a bounded amendment. Write graph-proposal.json; leave normal analysis in your native output.", AppID: g.Policy.OrchestratorApplication, TimeoutMinutes: 5}}
 				if g.Policy.Automatic {
 					spec.Brief.Title = "Plan goal"
-					if g.ControllerCalls > 0 {
+					if g.OrchestratorCalls > 0 {
 						spec.Brief.Title = "Review progress"
 					}
 					spec.Brief.Intent = "Read current evidence and choose the next assignments or review the completed goal."
@@ -277,14 +243,14 @@ func (e *Engine) reconcileGraphControllers() error {
 				spec.Brief.Scheduling.Deps = dependencies
 				normalized, executor, err := e.resolveGraphSpec(&g, spec)
 				if err != nil {
-					x.Error = "controller_adapter_unavailable"
+					x.Error = "orchestrator_adapter_unavailable"
 					changed = true
 					break
 				}
-				g.Members[tid] = &GraphMember{ControllerFor: key, Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued"}
-				g.ControllerCalls++
+				g.Members[tid] = &GraphMember{OrchestratorFor: key, Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued"}
+				g.OrchestratorCalls++
 				g.Revision++
-				x.ControllerTask = tid
+				x.OrchestratorTask = tid
 				x.Revision = g.Revision
 				x.Reads = reads
 				x.TriggerCursor = g.Cursor
@@ -299,14 +265,14 @@ func (e *Engine) reconcileGraphControllers() error {
 			}
 			gc := graphChange{Graph: g}
 			s.projectGraph(&gc, old)
-			if err := s.commit("", "effect", "graph_controller_scheduled", change{Graph: &gc}); err != nil {
+			if err := s.commit("", "effect", "graph_orchestrator_scheduled", change{Graph: &gc}); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
 }
-func (e *Engine) graphControllerError(id, key, task, reason string) error {
+func (e *Engine) graphOrchestratorError(id, key, task, reason string) error {
 	s := e.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -315,23 +281,23 @@ func (e *Engine) graphControllerError(id, key, task, reason string) error {
 		return ErrNotFound
 	}
 	x := old.Expansions[key]
-	if x == nil || x.ControllerTask != task || x.Outcome != "" || x.Error != "" {
+	if x == nil || x.OrchestratorTask != task || x.Outcome != "" || x.Error != "" {
 		return nil
 	}
 	g := graphClone(*old)
 	g.Expansions[key].Error = reason
-	if g.Policy.Automatic && strings.HasPrefix(reason, "Planner could not apply") && g.ControllerCalls < g.Limits.ControllerCalls && g.Expansions[key].Failures < 2 {
+	if g.Policy.Automatic && strings.HasPrefix(reason, "Orchestrator could not apply") && g.OrchestratorCalls < g.Limits.OrchestratorCalls && g.Expansions[key].Failures < 2 {
 		g.Expansions[key].Error = ""
-		g.Expansions[key].ControllerTask = ""
+		g.Expansions[key].OrchestratorTask = ""
 		g.Revision++
 		g.Expansions[key].LastError = reason
 		g.Expansions[key].Failures++
 	}
-	return s.commit("", "effect", "graph_controller_blocked", change{Graph: &graphChange{Graph: g}})
+	return s.commit("", "effect", "graph_orchestrator_blocked", change{Graph: &graphChange{Graph: g}})
 }
 
 // Caller holds the store lock. Reports retain priority over supplementary files.
-func (s *Store) addPlannerEvidence(g *WorkGraph, deps []workpool.Dependency) {
+func (s *Store) addOrchestratorEvidence(g *WorkGraph, deps []workpool.Dependency) {
 	count := 0
 	var size int64
 	for _, dep := range deps {

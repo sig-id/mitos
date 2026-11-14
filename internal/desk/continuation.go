@@ -212,7 +212,7 @@ func (m *Manager) Continue(sourceID, kind string, request ContinuationRequest, s
 	}
 	continuation := &Continuation{SourceID: sourceID, Kind: kind, Mode: mode, Key: request.Key, RequestHash: hash}
 	role := source.Role
-	if kind == "fork" && role == "coordinator" {
+	if kind == "fork" && role == "orchestrator" {
 		role = "agent"
 	}
 	launchRequest := agentcli.Request{AgentID: request.AgentID, ProfileID: request.ProfileID, Prompt: request.Prompt}
@@ -276,10 +276,10 @@ func (m *Manager) Continue(sourceID, kind string, request ContinuationRequest, s
 	if err != nil {
 		return Session{}, err
 	}
-	if role == "coordinator" {
+	if role == "orchestrator" {
 		for i := range m.state.Sessions {
-			if m.state.Sessions[i].CoordinatorID == sourceID {
-				m.state.Sessions[i].CoordinatorID = result.ID
+			if m.state.Sessions[i].OrchestratorID == sourceID {
+				m.state.Sessions[i].OrchestratorID = result.ID
 			}
 		}
 		if err := m.saveLocked(); err != nil {
@@ -363,7 +363,7 @@ func (m *Manager) contextLocked(source Session, destination string, request Cont
 		workspace = project.Directory
 	}
 	var text strings.Builder
-	fmt.Fprintf(&text, "# Mitos context handover\n\nCaptured: %s\nSource: %s (%s, %s)\nAgent: %s; profile: %s\nWorkspace: %s\n\nThis is a controller reconstruction from recorded evidence, not an agent-authored summary or the CLI's full model context. The workspace is shared, not a Git snapshot. Verify current files and coordinate through the project board.\n", time.Now().UTC().Format(time.RFC3339), source.ID, source.Name, source.Status, source.AgentID, source.ProfileID, workspace)
+	fmt.Fprintf(&text, "# Mitos context handover\n\nCaptured: %s\nSource: %s (%s, %s)\nAgent: %s; profile: %s\nWorkspace: %s\n\nThis is a orchestrator reconstruction from recorded evidence, not an agent-authored summary or the CLI's full model context. The workspace is shared, not a Git snapshot. Verify current files and coordinate through the project board.\n", time.Now().UTC().Format(time.RFC3339), source.ID, source.Name, source.Status, source.AgentID, source.ProfileID, workspace)
 	fmt.Fprintf(&text, "\n## Original prompt\n\n%s\n\n## Continuation directions\n\n%s\n\n## Supplied handoff notes\n\n%s\n", source.InitialPrompt, request.Prompt, request.Notes)
 	if source.Continuation != nil && source.Continuation.ContextPath != "" {
 		fmt.Fprintf(&text, "\nEarlier handover document: %s\n", source.Continuation.ContextPath)

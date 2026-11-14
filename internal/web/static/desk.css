@@ -26,19 +26,19 @@
 .graph-heading{margin:22px 0 10px}.graph-heading h3,.assignment-detail h3,.coordination-graph h3{font-size:0.9375rem;margin:0}
 .coordination-graph{border:1px solid var(--line);border-radius:10px;margin:17px 0;background:radial-gradient(ellipse at top,#232d40 0,#171b21 70%);padding:15px;overflow:auto}
 .coordination-graph svg{display:block;width:100%;min-width:480px;max-height:900px}.assignment-edge{fill:none;stroke:#6b83b3;stroke-width:5;cursor:pointer;opacity:.65}.assignment-edge:hover,.assignment-edge:focus{stroke:#d4e2ff;stroke-width:8;opacity:1;outline:none}
-.coordinator-node{fill:#2c3c5c;stroke:#a6c3ff;stroke-width:2}.agent-node{fill:#232a35;stroke:#627087}.node-title{font:1.0625rem system-ui;fill:#e5eaf2}.node-status{font:0.875rem system-ui;fill:#afbdd1}.coordination-graph a:hover rect,.coordination-graph a:focus rect{stroke:#d1e0ff;stroke-width:3}
+.orchestrator-node{fill:#2c3c5c;stroke:#a6c3ff;stroke-width:2}.agent-node{fill:#232a35;stroke:#627087}.node-title{font:1.0625rem system-ui;fill:#e5eaf2}.node-status{font:0.875rem system-ui;fill:#afbdd1}.coordination-graph a:hover rect,.coordination-graph a:focus rect{stroke:#d1e0ff;stroke-width:3}
 .graph-empty{font-size:0.9375rem;line-height:1.8;color:var(--muted);padding:20px}.assignment-buttons{display:flex;flex-wrap:wrap;gap:6px}.assignment-buttons button{font-size:0.8125rem;text-align:left;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .assignment-detail{padding:16px;border-left:2px solid var(--accent);background:var(--panel);font-size:0.875rem;line-height:1.7}.assignment-detail p{margin:7px 0;white-space:pre-wrap;overflow-wrap:anywhere}.assignment-detail code{display:block;font-size:0.875rem;overflow-wrap:anywhere}.text-link{color:var(--accent);font-size:0.875rem}.other-session{display:flex;align-items:center;gap:10px;margin-top:12px}.other-session a{flex:1}.other-session button{font-size:0.8125rem}
 .attention-card{padding:16px;border:1px solid var(--line);border-radius:8px;margin:14px 0;background:var(--panel)}.attention-card h4{font-size:0.875rem;margin:0 0 10px}.attention-card>p{font-size:0.9375rem;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.attention-card>small{display:block;margin:9px 0;font-size:0.8125rem}.attention-card>button{margin-top:12px}.attention-card details p{overflow-wrap:anywhere;line-height:1.7}
-.coordinator-link{display:block;border:1px solid #485b7a;background:#242e41}.coordinator-link small{white-space:normal}.profile-columns{display:grid;grid-template-columns:2fr 1fr;gap:16px}.profile-columns label{margin-bottom:8px}
+.orchestrator-link{display:block;border:1px solid #485b7a;background:#242e41}.orchestrator-link small{white-space:normal}.profile-columns{display:grid;grid-template-columns:2fr 1fr;gap:16px}.profile-columns label{margin-bottom:8px}
 @media(max-width:700px){.coordination-view{padding:18px;max-height:none}.coordination-heading{align-items:flex-start;flex-direction:column}.coordination-heading h2{font-size:1.25rem}.profile-columns{grid-template-columns:1fr}.other-session{flex-wrap:wrap}.workspace-tabs{overflow:auto}.workspace-tabs button{white-space:nowrap}}
 .setup-progress{margin:20px 0;padding:18px;border:1px solid #526b95;border-radius:8px;background:#202b3d}.setup-progress[hidden]{display:none}.setup-progress h3{font-size:1rem;margin:0 0 8px}.setup-progress p{font-size:0.875rem;line-height:1.7;margin-bottom:12px}.setup-progress button{margin:4px 8px 0 0}#profile-context{font-size:0.9375rem;line-height:1.6}
-/* Workspace context is teal; the selected coordinator view is violet. */
+/* Workspace context is teal; the selected orchestrator view is violet. */
 .workspace-selector-trigger{background:#192d2c;border-color:#39645c;color:#c5eee3;border-left:3px solid #76bda9}
 .workspace-selector-trigger:hover{background:#223d38}.workspace-switcher[open] .workspace-selector-trigger{border-color:#76bda9}.project-link.selected{background:#223d38;color:#c5eee3}
-.coordinator-link{background:transparent;border:1px solid transparent;border-left:3px solid transparent}
-.coordinator-link:hover{background:#292536}
-.coordinator-link.selected{background:#352b48;border-color:#665085;border-left:3px solid #c4a1ee;color:#ead9ff}
+.orchestrator-link{background:transparent;border:1px solid transparent;border-left:3px solid transparent}
+.orchestrator-link:hover{background:#292536}
+.orchestrator-link.selected{background:#352b48;border-color:#665085;border-left:3px solid #c4a1ee;color:#ead9ff}
 
 body:not([data-view=terminal]) #session-list .session-link.selected{background:transparent}
 body[data-view=terminal] #session-list .session-link.selected{background:#23354b}

@@ -34,7 +34,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 			}
 			return prior, nil
 		}
-		if prior.Revision != req.Revision || prior.Status != "active" || len(prior.Members) != 1 || prior.Attempts != 0 || prior.Policy.ControllerApplication != "" {
+		if prior.Revision != req.Revision || prior.Status != "active" || len(prior.Members) != 1 || prior.Attempts != 0 || prior.Policy.OrchestratorApplication != "" {
 			return WorkGraph{}, ErrConflict
 		}
 		policy, err = e.automaticPolicy()
@@ -76,7 +76,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 		return WorkGraph{}, graphError("resume recurring work through its owning service")
 	}
 	a, b := req.Limits, old.Limits
-	if a.Tasks < b.Tasks || a.Amendments < b.Amendments || a.Attempts < b.Attempts || a.Retries < b.Retries || a.Expansions < b.Expansions || a.ControllerCalls < b.ControllerCalls || a.Depth < b.Depth || a.Fanout < b.Fanout || a.Deadline.Before(b.Deadline) {
+	if a.Tasks < b.Tasks || a.Amendments < b.Amendments || a.Attempts < b.Attempts || a.Retries < b.Retries || a.Expansions < b.Expansions || a.OrchestratorCalls < b.OrchestratorCalls || a.Depth < b.Depth || a.Fanout < b.Fanout || a.Deadline.Before(b.Deadline) {
 		return WorkGraph{}, graphError("resuming can only increase resource allowances")
 	}
 	for _, m := range old.Members {
@@ -91,7 +91,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 	}
 	g := graphClone(*old)
 	if req.StartAutomatic {
-		if len(g.Members) != 1 || g.Attempts != 0 || g.Policy.ControllerApplication != "" {
+		if len(g.Members) != 1 || g.Attempts != 0 || g.Policy.OrchestratorApplication != "" {
 			return WorkGraph{}, ErrConflict
 		}
 		g.Policy, g.Setup = policy, setup
@@ -113,24 +113,24 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 	g.Limits = req.Limits
 	g.Revision++
 	g.PolicyRevision++
-	g.ControllerGeneration++
+	s.advanceGraphOrchestratorGeneration(&g)
 	g.UpdatedAt = now
-	pending, planners := 0, 0
+	pending, orchestrators := 0, 0
 	for _, tid := range graphIDs(&g) {
 		m := g.Members[tid]
-		if m.CancelRequested || m.Replacement != "" || m.Spec.Kind != "application" || strings.HasPrefix(m.ControllerFor, "decision:") {
+		if m.CancelRequested || m.Replacement != "" || m.Spec.Kind != "application" || strings.HasPrefix(m.OrchestratorFor, "decision:") {
 			continue
 		}
-		x := g.Expansions[m.ControllerFor]
-		planner := x != nil && x.Outcome == "" && x.ControllerTask == tid
-		if m.Accepted != nil && !planner {
+		x := g.Expansions[m.OrchestratorFor]
+		orchestrator := x != nil && x.Outcome == "" && x.OrchestratorTask == tid
+		if m.Accepted != nil && !orchestrator {
 			continue
 		}
 		run := s.runs[m.CurrentRunID]
 		if run == nil && m.CurrentRunID == "" && len(m.Attempts) > 0 {
 			run = s.runs[m.Attempts[len(m.Attempts)-1]]
 		}
-		retry := planner || run != nil && (run.Status == "failed" || run.Status == "cancelled")
+		retry := orchestrator || run != nil && (run.Status == "failed" || run.Status == "cancelled")
 		if retry && run != nil {
 			if len(m.Attempts) > g.Limits.Retries {
 				return WorkGraph{}, graphError("increase the per-task retry allowance for %s", tid)
@@ -142,9 +142,9 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 			m.FactRevision++
 		}
 		if m.CurrentRunID == "" {
-			if planner {
+			if orchestrator {
 				m.RefreshContext = true
-				planners++
+				orchestrators++
 			}
 			pending++
 			m.History = append(m.History, graphClone(m.Spec))
@@ -156,7 +156,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 	if g.Attempts+max(1, pending) > g.Limits.Attempts || len(g.Receipts)+1 >= g.Limits.Amendments {
 		return WorkGraph{}, graphError("increase attempts and amendment allowances to leave room for continuation")
 	}
-	if g.ControllerCalls+planners > g.Limits.ControllerCalls {
+	if g.OrchestratorCalls+orchestrators > g.Limits.OrchestratorCalls {
 		return WorkGraph{}, graphError("increase the planning call allowance for continuation")
 	}
 	for _, x := range g.Expansions {
@@ -166,7 +166,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 		x.LastError = x.Error
 		x.Error = ""
 		x.Deadline = g.Limits.Deadline
-		x.Generation = g.ControllerGeneration
+		x.Generation = g.OrchestratorGeneration
 		x.Revision = g.Revision
 	}
 	g.Receipts[req.Key] = GraphReceipt{Key: req.Key, Digest: digest, Revision: g.Revision, At: now}
@@ -178,10 +178,10 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 	return graphClone(g), nil
 }
 
-// Refresh the existing coordinator after resumed workers settle. Its old
+// Refresh the existing orchestrator after resumed workers settle. Its old
 // conversation remains useful, but its old facts and dependency witnesses do not.
-// Caller holds the store lock. No new planner identity is created.
-func (s *Store) refreshResumedPlanner(g *WorkGraph, m *GraphMember) (bool, error) {
+// Caller holds the store lock. No new orchestrator identity is created.
+func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, error) {
 	if !m.RefreshContext {
 		return true, nil
 	}
@@ -190,7 +190,7 @@ func (s *Store) refreshResumedPlanner(g *WorkGraph, m *GraphMember) (bool, error
 	deps := []workpool.Dependency{}
 	for _, id := range graphIDs(g) {
 		worker := g.Members[id]
-		if worker.ControllerFor != "" {
+		if worker.OrchestratorFor != "" {
 			continue
 		}
 		if worker.Spec.Kind == "application" && !worker.CancelRequested && worker.Replacement == "" && worker.Accepted == nil {
@@ -231,19 +231,21 @@ func (s *Store) refreshResumedPlanner(g *WorkGraph, m *GraphMember) (bool, error
 	if err := json.Unmarshal([]byte(m.Spec.Context), &context); err != nil {
 		return false, err
 	}
-	context["facts"], context["remaining_tasks"], context["remaining_attempts"], context["remaining_plans"] = facts, g.Limits.Tasks-len(g.Members), g.Limits.Attempts-g.Attempts, g.Limits.ControllerCalls-g.ControllerCalls
+	context["facts"], context["remaining_tasks"], context["remaining_attempts"], context["remaining_plans"] = facts, g.Limits.Tasks-len(g.Members), g.Limits.Attempts-g.Attempts, g.Limits.OrchestratorCalls-g.OrchestratorCalls
 	context["triggers"] = g.Triggers
+	context["inbox"] = graphInboxAddress(g, s.seq)
+	context["instruction"] = orchestratorInstructions
 	raw, err := json.Marshal(context)
 	if err != nil {
 		return false, err
 	}
 	if len(raw) > graphContextLimit(g) {
-		return false, graphError("resumed coordinator context exceeds its limit")
+		return false, graphError("resumed orchestrator context exceeds its limit")
 	}
 	m.Spec.Context = string(raw)
-	s.addPlannerEvidence(g, deps)
+	s.addOrchestratorEvidence(g, deps)
 	m.Spec.Brief.Scheduling.Deps = deps
-	x := g.Expansions[m.ControllerFor]
+	x := g.Expansions[m.OrchestratorFor]
 	x.Reads, x.Revision, x.TriggerCursor = reads, g.Revision, g.Cursor
 	return true, nil
 }

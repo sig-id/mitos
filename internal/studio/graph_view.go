@@ -96,7 +96,7 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 		return "cancelled"
 	}
 	if m.Spec.Kind == "scope" {
-		if g.Policy.ControllerApplication == "" && len(g.Members) == 1 {
+		if g.Policy.OrchestratorApplication == "" && len(g.Members) == 1 {
 			return "idle"
 		}
 		if m.Sealed {
@@ -239,16 +239,16 @@ func (s *Store) GraphRun(graph, task, id string) (Run, error) {
 	return cloneRun(&copy), nil
 }
 
-// GraphController is discoverability metadata, not an additional authority grant.
-// Older explicit controller bindings remain valid; ordinary applications are not
-// silently treated as planners by the UI.
+// GraphOrchestrator is discoverability metadata, not an additional authority grant.
+// Older explicit orchestrator bindings remain valid; ordinary applications are not
+// silently treated as orchestrators by the UI.
 func (e *Engine) GraphApplications() []map[string]any {
 	out := []map[string]any{}
 	for _, a := range e.Apps {
 		if a.DecisionModel != nil || a.ID == WorkflowAppID {
 			continue
 		}
-		out = append(out, map[string]any{"id": a.ID, "name": a.Name, "description": a.Description, "controller": a.GraphController})
+		out = append(out, map[string]any{"id": a.ID, "name": a.Name, "description": a.Description, "orchestrator": a.GraphOrchestrator})
 	}
 	slices.SortFunc(out, func(a, b map[string]any) int { return strings.Compare(a["name"].(string), b["name"].(string)) })
 	return out

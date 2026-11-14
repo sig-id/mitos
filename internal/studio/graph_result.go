@@ -46,7 +46,7 @@ func bindGraphResult(g *WorkGraph, answer FinalAnswer, author string) (*GraphRes
 	seen := map[string]bool{}
 	for _, id := range answer.SourceTasks {
 		m := g.Members[id]
-		if m == nil || m.ControllerFor != "" || m.Spec.Kind != "application" || m.Accepted == nil || m.Replacement != "" || m.Accepted.RunID == "" || seen[id] {
+		if m == nil || m.OrchestratorFor != "" || m.Spec.Kind != "application" || m.Accepted == nil || m.Replacement != "" || m.Accepted.RunID == "" || seen[id] {
 			return nil, graphError("final answer must cite distinct accepted, unreplaced workers")
 		}
 		seen[id] = true

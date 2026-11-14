@@ -49,7 +49,7 @@
    const header=el('div',undefined,'graph-result-heading');header.append(el('h2',graph.result?'Result':'Saved work'),button('Back to graph',()=>{generation++;onClose()}));container.replaceChildren(header,el('p','Loading saved result…','muted'));
    try{
     const sources=[...(graph.result?.sources||[])];
-    for(const m of Object.values(graph.members))if(m.spec.kind==='application'&&!m.controller_for&&!m.replacement&&m.current_run_id&&!sources.some(s=>s.task===m.spec.id))sources.push({task:m.spec.id,run:m.accepted?.run_id||m.current_run_id});
+    for(const m of Object.values(graph.members))if(m.spec.kind==='application'&&!m.orchestrator_for&&!m.replacement&&m.current_run_id&&!sources.some(s=>s.task===m.spec.id))sources.push({task:m.spec.id,run:m.accepted?.run_id||m.current_run_id});
     if(initial&&!sources.some(s=>s.task===initial.task&&s.run===initial.run))sources.push({task:initial.task,run:initial.run});
     const entries=await Promise.all(sources.map(async source=>{
      const member=graph.members[source.task],base=baseURL(graph.id,source.task,source.run);let run={id:source.run,status:'unavailable',artifacts:[]},files=[],problem='';
@@ -87,7 +87,7 @@
     const source=el('select'),scope=el('select'),browser=el('mitos-file-browser'),note=el('p',undefined,'muted'),exports=el('details');
     const sourceLabel=el('label','Assignment');sourceLabel.append(source);const scopeLabel=el('label','Show');scopeLabel.append(scope);
     source.setAttribute('aria-label','Saved assignment');scope.setAttribute('aria-label','File view');
-    entries.forEach((entry,i)=>source.append(new Option(entry.member.spec.brief.title+(entry.member.controller_for?' · Coordinator':'')+' · '+entry.run.status,String(i))));
+    entries.forEach((entry,i)=>source.append(new Option(entry.member.spec.brief.title+(entry.member.orchestrator_for?' · Orchestrator':'')+' · '+entry.run.status,String(i))));
     for(const [value,label]of [['reports','Reports & logs'],['changes','Changed files'],['workspace','Workspace snapshot']])scope.append(new Option(label,value));
     exports.append(el('summary','Export files'));sidebar.append(sourceLabel,scopeLabel,note,browser,exports);
     let activeEntry;
@@ -110,7 +110,7 @@
     }
     source.onchange=async()=>{await renderFiles();const entry=activeEntry,name=['report.md','output.txt','changes.patch'].find(name=>entry?.run.artifacts?.some(a=>a.name===name));if(name)open({path:name,entry,artifact:true});else{++previewGeneration;location={kind:'result'};controls('No saved report');body.replaceChildren(el('p',entry?.problem||'Select a saved file to preview it.'))}};scope.onchange=()=>renderFiles();await renderFiles();
     const rationale=graph.members[graph.root_task].accepted?.rationale?.trim();
-    if(rationale){const review=el('details');review.append(el('summary','Coordinator completion review'),markup(rationale));container.append(review)}
+    if(rationale){const review=el('details');review.append(el('summary','Orchestrator completion review'),markup(rationale));container.append(review)}
     if(initial){const entry=entries.find(e=>e.member.spec.id===initial.task&&e.run.id===initial.run);if(entry){const path=initial.path||(entry.run.artifacts?.some(a=>a.name==='report.md')?'report.md':entry.run.artifacts?.some(a=>a.name==='output.txt')?'output.txt':'');if(path)location={kind:'file',file:{...initial,path,artifact:initial.artifact??!initial.path,entry}};else selectEntry(entry)}}
     await show();
    }catch(e){if(current())container.append(el('p','Could not load the result: '+e.message,'form-error'))}

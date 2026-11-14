@@ -18,7 +18,7 @@ func (s *Server) runContext(p *page) {
 	case "human":
 		p.RunSource = "Manual request; individual identity was not recorded"
 	case "graph":
-		p.RunSource = "Workflow coordinator"
+		p.RunSource = "Workflow orchestrator"
 	default:
 		if strings.HasPrefix(p.Task.Source, "trigger:") {
 			p.RunSource = "Service trigger: " + strings.TrimPrefix(p.Task.Source, "trigger:")

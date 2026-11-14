@@ -116,8 +116,8 @@ func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
 	if req.ID != "" && prior == nil {
 		return agents.Definition{}, ErrNotFound
 	}
-	if prior != nil && (prior.Revision != req.Revision || prior.Kind == "planner") {
-		return agents.Definition{}, fmt.Errorf("agent changed or is the built-in planner: %w", ErrConflict)
+	if prior != nil && (prior.Revision != req.Revision || prior.Kind == "orchestrator") {
+		return agents.Definition{}, fmt.Errorf("agent changed or is the built-in orchestrator: %w", ErrConflict)
 	}
 	if prior == nil && len(library) >= 128 {
 		return agents.Definition{}, errors.New("agent library capacity reached")
