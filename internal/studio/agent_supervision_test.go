@@ -391,3 +391,18 @@ func TestClaudeOutsideFileCannotReceiveOperatorApproval(t *testing.T) {
 		})
 	}
 }
+
+func TestInvalidObservationExplainsFailureWithoutEchoingPayload(t *testing.T) {
+	e := &Engine{}
+	for _, tc := range []struct{ name, raw, want string }{
+		{"malformed", `{"private":"secret",`, "contains invalid JSON"},
+		{"oversized", `{"private":"` + strings.Repeat("s", harness.MaxObservationBytes) + `"}`, "received 1048590 bytes, limit 1048576 bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := e.ObserveAgent(context.Background(), "", "", json.RawMessage(tc.raw))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("expected safe, specific observation diagnostic, got %v", err)
+			}
+		})
+	}
+}

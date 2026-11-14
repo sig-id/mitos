@@ -33,7 +33,7 @@ try{
  await page.goto(base+'/workspace?project='+project.id);await page.locator('#tab-changes').click();await page.locator('.diff-file').first().waitFor();
  const open=async name=>{const node=page.locator('.diff-file').filter({has:page.locator(':scope > summary .diff-file-name',{hasText:name})}).first();if(await node.getAttribute('open')===null)await node.locator(':scope > summary').click();await node.locator('.diff-file-content > *').first().waitFor();return node;};
  const sample=await open('sample.go');
- assert.deepEqual(await sample.locator('th').allTextContents(),['HEAD','Working tree']);
+ assert.deepEqual(await sample.locator('th').allTextContents(),['Before','After']);
  assert.ok((await sample.locator('.diff-line-number').first().boundingBox()).width<=44,'line-number gutters remain narrow');
  assert.match(await sample.locator('.diff-cell.removed').first().textContent(),/before/);
  assert.match(await sample.locator('.diff-cell.added').first().textContent(),/after/);

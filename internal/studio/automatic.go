@@ -521,7 +521,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return err
 	}
 	if runErr != nil {
-		return fmt.Errorf("Codex stopped: %w. Inspect the saved output for authentication or runtime errors", runErr)
+		return fmt.Errorf("Codex stopped: %w. Saved reports, changes and execution logs remain available", runErr)
 	}
 	if readErr != nil || len(strings.TrimSpace(string(report))) == 0 {
 		return errors.New("Codex produced no final response; inspect the saved output")

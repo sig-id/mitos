@@ -51,6 +51,7 @@ func (s *Store) GraphSummaries(project, after string, limit int) ([]GraphSummary
 }
 
 type GraphNodeView struct {
+	Summary         string    `json:"summary,omitempty"`
 	PendingRequests int       `json:"pending_requests,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	State           string    `json:"state"`
@@ -155,6 +156,9 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		}
 		copy.Members[id] = &member
 		n := GraphNodeView{CreatedAt: g.CreatedAt, State: s.graphDisplayState(g, m), Settled: s.graphSettled(m)}
+		if r := s.runs[m.CurrentRunID]; r != nil {
+			n.Summary = r.Summary
+		}
 		n.PendingRequests = len(s.graphPendingRequests(m.CurrentRunID))
 		if len(m.Attempts) > 0 {
 			if r := s.runs[m.Attempts[0]]; r != nil {

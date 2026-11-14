@@ -28,7 +28,12 @@
   if(list(value.operations).length){box.append(el('h4','Proposed changes'));value.operations.filter(op=>op&&typeof op==='object').forEach((op,i)=>{const d=disclosure((label(op.kind).replaceAll('_',' ')||'Change')+' · '+(op.spec?.brief?.title||taskName(op.task)||op.expansion||''),'operation:'+i,i===0);d.append(prose(op.spec?.brief?.intent||op.rationale||''));if(op.spec?.criteria)d.append(el('h5','Success criteria'),prose(op.spec.criteria));box.append(d)})}
   return box;
  }
- window.MitosGraphOutput={render(text,{planner=false,name='',resolve=()=>''}={}){
+ function cleanLog(text){return String(text||'').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g,'').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').replace(/\r\n?/g,'\n')}
+ function log(text){const pre=el('pre',cleanLog(text)||'No execution output was saved.','graph-execution-log');pre.tabIndex=0;pre.setAttribute('aria-label','Execution log');return pre}
+ window.MitosGraphOutput={log,cleanLog,render(text,{planner=false,name='',resolve=()=>''}={}){
+  if(name==='output.txt'||name.endsWith('.log'))return log(text);
+  if(name.endsWith('.patch')&&window.MitosDiff)return window.MitosDiff.preview(text);
+  if(!String(text||'').trim())return el('p',name==='report.md'?'This attempt saved an empty report. Read its execution log for activity and failure details.':'No content was saved in this file.','muted');
   let value,parsed=false;try{value=JSON.parse(text);parsed=true}catch{}
   if(!parsed)return name.endsWith('.patch')?window.MitosFormat.code(text,'diff'):name.endsWith('.txt')?window.MitosFormat.code(text,'text'):window.MitosMarkdown.view(text,{filename:name||'Output.md'});
   const box=el('div',undefined,'graph-structured-output');

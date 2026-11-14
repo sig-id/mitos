@@ -86,12 +86,12 @@ try{
  await page.screenshot({path:'/tmp/mitos-planner-reader.png'});await page.locator('#graph-inspector-expand').click();assert.ok(await page.locator('.graph-map').isVisible());
  await page.locator(`[data-tree-key="${worker.spec.id}"]`).click();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.ok(await page.locator('#graph-node-detail').getByText('The answer is', {exact:false}).count());
  await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).waitFor();await page.locator('#graph-node-detail').getByRole('button',{name:'source file',exact:true}).click();await page.locator('.graph-source-line.cited').waitFor();await page.getByRole('button',{name:'Back to graph',exact:true}).click();
- const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByText('Files & downloads',{exact:true}).click();await page.locator('.graph-attempt-card').getByRole('link',{name:'report.md',exact:true}).waitFor();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
+ const beforeAttemptURL=page.url();await page.locator('#graph-node-detail').getByRole('button',{name:'Attempts',exact:true}).click();await page.locator('.graph-attempt-card').waitFor();await page.locator('.graph-attempt-card').getByRole('button',{name:'Browse saved files',exact:true}).waitFor();await page.locator('#graph-node-detail .analysis-prose').filter({hasText:'The answer is'}).waitFor();assert.equal(page.url(),beforeAttemptURL,'attempt inspection navigated away');
  // A previous failed attempt expands in place beside the current successful one.
  const previous='previous-attempt',snapshotPattern='**/api/graphs/'+graphID+'/snapshot?*',previousPath='**/api/graphs/'+graphID+'/nodes/'+worker.spec.id+'/runs/'+previous;
  await page.route(snapshotPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.members[worker.spec.id].attempts=[previous,...worker.attempts];await route.fulfill({response,json:value})});
  await page.route(previousPath,route=>route.fulfill({json:{id:previous,status:'failed',summary:'Earlier execution stopped.',created_at:g.created_at,updated_at:g.updated_at,finished_at:g.updated_at,artifacts:[]}}));
- let previousActivityCalls=0;await page.route(previousPath+'/activity',route=>route.fulfill({json:{status:'running',created_at:g.created_at,started_at:g.created_at,updated_at:g.updated_at,requests:[],events:[{at:g.updated_at,kind:'agent_started',summary:'Activity update '+(++previousActivityCalls)}]}}));
+ let previousActivityCalls=0;await page.route(previousPath+'/activity',route=>route.fulfill({json:{status:'running',created_at:g.created_at,started_at:g.created_at,updated_at:g.updated_at,requests:[],events:[{at:g.updated_at,kind:'agent_started',summary:'Activity update '+(++previousActivityCalls)},{at:g.updated_at,kind:'artifact_harvested',summary:'Report saved'},{at:g.updated_at,kind:'workspace_harvested',summary:'Workspace saved'}]}}));
  await page.locator('.graph-attempt-card').nth(1).waitFor();
  await page.locator('.graph-attempt-card').first().locator('summary').first().click();
  await page.locator('.graph-attempt-card').first().getByText('Earlier execution stopped.',{exact:true}).waitFor();
@@ -106,6 +106,7 @@ try{
  assert.notEqual(await page.locator('.graph-attempt-card').first().getAttribute('open'),null,'activity response collapsed the reopened attempt');
  const eventsPanel=page.locator('.graph-attempt-card').first().locator('.graph-execution-events');
  await eventsPanel.locator('summary').click();
+ assert.equal(await eventsPanel.getByText('artifact harvested',{exact:true}).count(),0);await eventsPanel.getByRole('checkbox',{name:'Show technical events',exact:true}).check();await eventsPanel.getByText('artifact harvested',{exact:true}).waitFor();await eventsPanel.getByRole('checkbox',{name:'Show technical events',exact:true}).uncheck();
  const activityBeforeRead=previousActivityCalls;
  await wait(async()=>previousActivityCalls>=activityBeforeRead+2);
  assert.notEqual(await eventsPanel.getAttribute('open'),null,'activity update closed execution events');
@@ -128,6 +129,17 @@ try{
  await page.screenshot({path:'/tmp/mitos-final-result.png'});await page.getByRole('button',{name:'Back to graph',exact:true}).click();assert.ok(await page.locator('.graph-body').isVisible());
  await page.locator('#graph-zoom-in').click();const zoom=await page.locator('#graph-zoom').textContent();await page.waitForTimeout(1600);assert.equal(await page.locator('#graph-zoom').textContent(),zoom);
  await page.locator('#work-tree .work-tree-toggle').click();assert.equal(await page.locator('#work-tree .work-tree-node').count(),0);await page.locator('#work-tree .work-tree-toggle').click();assert.ok(await page.locator('#work-tree .work-tree-node').count());
+ // A stopped workflow explains its failure in every view, even without accepted work.
+ const stoppedPattern='**/api/graphs/'+graphID+'/snapshot?*';
+ await page.route(stoppedPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.status='active';delete value.graph.result;value.graph.limits.deadline='2020-01-01T00:00:00Z';value.graph.expansions={};for(const [id,m]of Object.entries(value.graph.members)){delete m.accepted;if(id===worker.spec.id){m.state='failed';value.nodes[id].state='failed';value.nodes[id].summary='Codex stopped: invalid supervision observation';value.nodes[id].settled=true}}await route.fulfill({response,json:value})});
+ await page.locator('#graph-message').getByRole('heading',{name:'Work stopped: time limit reached',exact:true}).waitFor();
+ await page.locator('[data-view=work]').click();assert.equal(await page.locator('#graph-message').isVisible(),true);assert.match(await page.locator('#graph-message').textContent(),/could not validate an agent activity event/);
+ await page.locator('#graph-message').getByRole('button',{name:'Read saved work',exact:true}).click();await page.getByRole('heading',{name:'No final answer yet',exact:true}).waitFor();assert.equal(await page.locator('#graph-message').isVisible(),true);assert.equal(await page.locator('#graph-followup-form').isVisible(),false);
+ await page.locator('mitos-file-browser button[data-path="report.md"]').click();await page.locator('.graph-result-content').getByText('The answer is',{exact:false}).waitFor();
+ await page.locator('#graph-message').getByRole('button',{name:'Inspect failed attempt',exact:true}).click();assert.equal(await page.getByRole('button',{name:'Retry step',exact:true}).count(),0);
+ await page.screenshot({path:'/tmp/mitos-workflow-attention.png'});
+ await page.locator('#graph-message').getByRole('button',{name:'Start new work',exact:true}).click();assert.equal(await page.locator('#graph-prompt').inputValue(),g.members[g.root_task].spec.brief.intent);await page.locator('#graph-compose-close').click();
+ await page.unroute(stoppedPattern);await page.locator('#graph-status.accepted').waitFor();
  // A follow-up is a new bounded continuation with the previous answer and evidence.
  await page.locator('[data-view=result]').click();await page.locator('#graph-followup').fill('Continue from the saved answer and produce it again');await page.locator('#graph-followup-send').click();await wait(async()=>new URL(page.url()).searchParams.get('graph')!==graphID);const continuationID=new URL(page.url()).searchParams.get('graph');await wait(async()=>(await api('/api/graphs/'+continuationID)).status==='accepted');const continuation=await api('/api/graphs/'+continuationID);assert.equal(continuation.predecessor,graphID);await page.locator('.conversation-history').waitFor();assert.equal((await api('/api/graphs/'+graphID)).status,'accepted');
  // Editing definitions is a normal product flow, with persisted revisions.
@@ -144,13 +156,13 @@ try{
  // Save recurring instructions from the same composer; recover a lost response
  // without duplicating the service or executing the domain procedure during setup.
  await page.locator('#new-work').click();await page.locator('#graph-prompt').fill('Inspect current state, follow my procedure, and report this occurrence.');
- await page.locator('#graph-create-form details>summary').click();await page.locator('#graph-trigger').selectOption('both');
- await page.locator('[name=workflow_name]').fill('recurring-inspection');await page.locator('[name=cron]').fill('0 0 1 1 *');await page.locator('[name=event]').fill('repository.changed');
+ await page.locator('#graph-create-form summary').filter({hasText:'When to run'}).click();await page.locator('#graph-trigger').selectOption('both');
+ await page.locator('#graph-frequency').selectOption('custom');await page.locator('[name=cron]').fill('0 0 1 1 *');await page.locator('[name=event]').fill('repository.changed');
  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
  let scheduleDropped=false;await page.route('**/api/services/workflows',async route=>{if(!scheduleDropped){scheduleDropped=true;await route.fetch();await route.abort('failed')}else await route.continue()});
  await page.locator('#graph-create').click();await page.getByRole('button',{name:'Retry same request',exact:true}).waitFor();
  await page.reload();await page.getByRole('button',{name:'Retry same request',exact:true}).click();await page.waitForURL('**/services');
- const scheduled=await api('/api/services');assert.equal(scheduled.catalog.config.units.length,1);assert.equal(scheduled.catalog.config.units[0].schedule.cron,'0 0 1 1 *');assert.deepEqual(scheduled.catalog.config.units[0].events,['repository.changed']);assert.equal(scheduled.catalog.work['recurring-inspection'].intent,'Inspect current state, follow my procedure, and report this occurrence.');
- await page.getByText('Saved instructions',{exact:true}).click();await page.getByText('Inspect current state, follow my procedure, and report this occurrence.',{exact:true}).waitFor();assert.deepEqual(errors,[]);
+ const scheduled=await api('/api/services');assert.equal(scheduled.catalog.config.units.length,1);assert.equal(scheduled.catalog.config.units[0].schedule.cron,'0 0 1 1 *');assert.deepEqual(scheduled.catalog.config.units[0].events,['repository.changed']);assert.equal(Object.values(scheduled.catalog.work)[0].intent,'Inspect current state, follow my procedure, and report this occurrence.');
+ await page.getByText('Saved instructions',{exact:true}).click();await page.locator('p.prose').filter({hasText:'Inspect current state, follow my procedure, and report this occurrence.'}).waitFor();assert.deepEqual(errors,[]);
  console.log('PASS: inline approvals, automatic goal-to-result, dependent agents, library, mobile layout, reconnect, uncertain-request replay, and recurring workflow creation with cron/event triggers');
 }finally{await browser?.close();if(server&&server.exitCode===null){server.kill('SIGTERM');await exited}if(!process.env.MITOS_KEEP_GRAPH_FIXTURE)await rm(temporary,{recursive:true,force:true});else console.log('Fixture:',temporary)}

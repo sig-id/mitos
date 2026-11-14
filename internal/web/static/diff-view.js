@@ -63,7 +63,7 @@
     return table;
   }
   let signature='',openFiles=new Map();
-  window.MitosDiff={preview(patch){const box=el('div',undefined,'diff-files');for(const file of parse(patch)){const details=el('details',undefined,'diff-file');details.open=true;details.append(el('summary',file.name||file.old),table(file));box.append(details)}if(!box.children.length)box.append(el('p',patch.trim()||'No changes.'));return box;},render(resources){if(!root)return;
+  window.MitosDiff={preview(patch){const box=el('div',undefined,'diff-files');for(const file of parse(patch)){const details=el('details',undefined,'diff-file');details.open=true;details.append(el('summary',file.name||file.old),table(file));box.append(details)}if(!box.children.length)box.append(el('p',patch.trim()||'This attempt saved no file changes. Reports and execution logs may still be available.'));return box;},render(resources){if(!root)return;
     const key=JSON.stringify([resources.diff,resources.git_status,resources.diff_truncated]);if(key===signature)return;signature=key;
     for(const node of root.querySelectorAll('.diff-file'))openFiles.set(node.dataset.path,node.open);
     const files=parse(resources.diff||''),fragment=document.createDocumentFragment();
