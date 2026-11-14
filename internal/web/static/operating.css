@@ -25,3 +25,12 @@ summary.goal-heading{display:list-item;list-style-position:inside}
 .setup-save-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}.setup-edit-surface>mitos-markdown{--md-editor-height:420px}
 
 .agent-policy{margin-top:24px}.agent-policy form,.agent-policy fieldset{display:grid;gap:14px}.agent-policy form{margin-top:16px}.agent-policy label{display:grid;gap:6px}.agent-policy fieldset{padding:16px;border:1px solid var(--line);border-radius:8px}.agent-policy input,.agent-policy select,.agent-policy textarea{min-width:0;max-width:100%}#supervision-panel{overflow-wrap:anywhere}#supervision-panel h2{font-size:18px}#supervision-panel p,#supervision-panel details{margin:12px 0}#supervision-panel summary{cursor:pointer}#supervision-panel pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}#supervision-panel textarea{display:block;width:100%;max-width:640px;margin:12px 0}#supervision-panel label{display:block;margin:12px 0}
+
+.resource-policy-fields{grid-column:1/-1;display:grid;gap:24px;margin-top:12px}
+.resource-policy-fields fieldset{min-width:0;margin:0;padding:20px;border:1px solid var(--line);border-radius:8px}
+.resource-policy-fields legend{padding:0 8px;font-weight:600}.resource-policy-fields fieldset>p{margin:0 0 18px;font-size:13px}
+.resource-setting{display:grid;grid-template-columns:minmax(0,2fr) minmax(100px,1fr);gap:12px 16px;padding:18px 0;border-top:1px solid var(--line)}
+.resource-setting label{display:grid;gap:8px}.resource-setting p{grid-column:1/-1;font-size:13px;margin:0;line-height:1.6}.resource-support{grid-column:1/-1;color:var(--muted);font-size:12px}
+.resource-policy-fields>p{font-size:13px;margin:0;line-height:1.6}.resource-setting [hidden]{display:none!important}
+.resource-policy-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;margin:18px 0}.resource-policy-summary h4{font-size:14px;margin:0 0 10px}.resource-policy-summary dl{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:0;font-size:13px}.resource-policy-summary dt{color:var(--muted)}.resource-policy-summary dd{margin:0 0 10px;overflow-wrap:anywhere}
+@media(max-width:640px){.resource-policy-summary{grid-template-columns:1fr;gap:12px}.resource-setting{grid-template-columns:1fr}.resource-policy-fields fieldset{padding:16px}}

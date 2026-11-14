@@ -9,6 +9,7 @@ import (
 	"io"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/cooperation"
+	"mitos/internal/resourcepolicy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,38 +26,41 @@ type SetupSections struct {
 	Git         string `json:"git"`
 }
 type RuntimePreferences struct {
-	Revision int    `json:"revision"`
-	Runtime  string `json:"runtime"`
-	Model    string `json:"model"`
-	Minutes  int    `json:"minutes"`
-	Attempts int    `json:"attempts"`
-	Guidance string `json:"guidance"`
+	Resources *resourcepolicy.Policy `json:"resources,omitempty"`
+	Revision  int                    `json:"revision"`
+	Runtime   string                 `json:"runtime"`
+	Model     string                 `json:"model"`
+	Minutes   int                    `json:"minutes"`
+	Attempts  int                    `json:"attempts"`
+	Guidance  string                 `json:"guidance"`
 }
 type ProjectSetup struct {
-	Cooperation   cooperation.Document `json:"cooperation"`
-	AgentPolicy   agentpolicy.Policy   `json:"agent_policy"`
-	Warning       string               `json:"warning,omitempty"`
-	FileName      string               `json:"file_name"`
-	FileHash      string               `json:"file_hash"`
-	Exists        bool                 `json:"exists"`
-	Document      string               `json:"document"`
-	Sections      SetupSections        `json:"sections"`
-	Project       RuntimePreferences   `json:"project"`
-	Defaults      RuntimePreferences   `json:"defaults"`
-	Effective     RuntimePreferences   `json:"effective"`
-	SettingsError string               `json:"settings_error,omitempty"`
+	ResourceControls []resourcepolicy.Control `json:"resource_controls"`
+	Cooperation      cooperation.Document     `json:"cooperation"`
+	AgentPolicy      agentpolicy.Policy       `json:"agent_policy"`
+	Warning          string                   `json:"warning,omitempty"`
+	FileName         string                   `json:"file_name"`
+	FileHash         string                   `json:"file_hash"`
+	Exists           bool                     `json:"exists"`
+	Document         string                   `json:"document"`
+	Sections         SetupSections            `json:"sections"`
+	Project          RuntimePreferences       `json:"project"`
+	Defaults         RuntimePreferences       `json:"defaults"`
+	Effective        RuntimePreferences       `json:"effective"`
+	SettingsError    string                   `json:"settings_error,omitempty"`
 }
 type FrozenSetup struct {
-	Cooperation cooperation.Document `json:"cooperation"`
-	AgentPolicy agentpolicy.Policy   `json:"agent_policy"`
-	Document    string               `json:"document"`
-	FileName    string               `json:"file_name"`
-	FileHash    string               `json:"file_hash"`
-	Personal    string               `json:"personal,omitempty"`
-	Runtime     string               `json:"runtime"`
-	Model       string               `json:"model,omitempty"`
-	Minutes     int                  `json:"minutes"`
-	Attempts    int                  `json:"attempts"`
+	Resources   resourcepolicy.Policy `json:"resources"`
+	Cooperation cooperation.Document  `json:"cooperation"`
+	AgentPolicy agentpolicy.Policy    `json:"agent_policy"`
+	Document    string                `json:"document"`
+	FileName    string                `json:"file_name"`
+	FileHash    string                `json:"file_hash"`
+	Personal    string                `json:"personal,omitempty"`
+	Runtime     string                `json:"runtime"`
+	Model       string                `json:"model,omitempty"`
+	Minutes     int                   `json:"minutes"`
+	Attempts    int                   `json:"attempts"`
 }
 type InstructionsEdit struct {
 	FileHash string         `json:"file_hash"`
@@ -148,6 +152,9 @@ func splitSetup(document string) (SetupSections, int, int, error) {
 	return SetupSections{values[0], values[1], values[2]}, start, end + len(setupEnd), nil
 }
 func validatePreferences(v RuntimePreferences) error {
+	if err := validateResourcePreferences(v); err != nil {
+		return err
+	}
 	if v.Runtime != "" && v.Runtime != "codex" {
 		return errors.New("automatic work currently supports Codex only; other installed runtimes can be used where their adapters support the requested action")
 	}
@@ -179,8 +186,10 @@ func (e *Engine) readPreferences(project string) (RuntimePreferences, error) {
 	if len(raw) > setupLimit {
 		return v, errors.New("preferences exceed limit")
 	}
-	err = json.Unmarshal(raw, &v)
-	return v, err
+	if err = DecodeGraphJSON(raw, &v); err != nil {
+		return v, err
+	}
+	return v, validatePreferences(v)
 }
 func (e *Engine) Preferences(project string) (RuntimePreferences, error) {
 	if project != "" {
@@ -241,21 +250,15 @@ func effectivePreferences(global, project RuntimePreferences) RuntimePreferences
 	if project.Model != "" {
 		v.Model = project.Model
 	}
-	if project.Minutes != 0 {
-		v.Minutes = project.Minutes
-	}
-	if project.Attempts != 0 {
-		v.Attempts = project.Attempts
-	}
 	if v.Runtime == "" {
 		v.Runtime = "codex"
 	}
-	if v.Minutes == 0 {
-		v.Minutes = 120
-	}
-	if v.Attempts == 0 {
-		v.Attempts = 96
-	}
+	resources := resourcepolicy.Resolve(resourcepolicy.Defaults(), preferenceResources(global))
+	resources = resourcepolicy.Resolve(resources, preferenceResources(project))
+	v.Resources = &resources
+	// Keep legacy response fields in sync for existing clients and saved graphs.
+	v.Minutes = int(resources.Workflow.ElapsedMinutes.Amount)
+	v.Attempts = int(resources.Workflow.Attempts.Amount)
 	v.Guidance = global.Guidance
 	return v
 }
@@ -304,7 +307,7 @@ func (e *Engine) ProjectSetup(id string) (ProjectSetup, error) {
 	} else {
 		effective = effectivePreferences(effective, policy)
 	}
-	return ProjectSetup{Cooperation: coop, AgentPolicy: e.Store.AgentPolicy(id), Warning: warning, FileName: name, FileHash: hash, Exists: exists, Document: document, Sections: sections, Project: local, Defaults: global, Effective: effective, SettingsError: settingsError}, nil
+	return ProjectSetup{ResourceControls: resourcepolicy.Controls(workflowResourceEnforcement()), Cooperation: coop, AgentPolicy: e.Store.AgentPolicy(id), Warning: warning, FileName: name, FileHash: hash, Exists: exists, Document: document, Sections: sections, Project: local, Defaults: global, Effective: effective, SettingsError: settingsError}, nil
 }
 func (e *Engine) SaveInstructions(id string, req InstructionsEdit) (ProjectSetup, error) {
 	p, err := e.Desk.Project(id)
@@ -422,11 +425,11 @@ func (e *Engine) freezeSetup(id string) (*FrozenSetup, error) {
 	if !v.Exists {
 		document = sectionBlock(v.Sections) + "\n"
 	}
-	return &FrozenSetup{Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
+	return &FrozenSetup{Resources: *v.Effective.Resources, Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
 }
 func (s *FrozenSetup) prompt() string {
 	if s == nil {
 		return ""
 	}
-	return s.Cooperation.Prompt() + fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nFull project instructions (%s, frozen for this work):\n%s\nRuntime: %s; model: %s. Work deadline: %d minutes; attempt allowance: %d. Monetary and qualitative budgets in the document are guidance, not enforced accounting.\n", s.Personal, s.FileName, s.Document, s.Runtime, s.Model, s.Minutes, s.Attempts)
+	return s.Cooperation.Prompt() + fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nFull project instructions (%s, frozen for this work):\n%s\nRuntime: %s; model: %s. Workflow elapsed-time budget: %d minutes, including waits; shared agent-attempt budget: %d, including planners and retries. CPU and memory are per-agent resources; model tokens are a shared workflow budget. Only supported structured caps are enforced. Monetary and qualitative budgets in prose are guidance, not enforced accounting.\n", s.Personal, s.FileName, s.Document, s.Runtime, s.Model, s.Minutes, s.Attempts)
 }

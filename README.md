@@ -198,6 +198,40 @@ mutations. The optional HTTPS device API has restricted snapshot and decision sc
 it is not the full remote-client contract. See
 [API and compatibility](spec/system/05_INTERFACES_AND_INTEGRATIONS.md).
 
+## Resource limits
+
+Project setup shows **Runtime & resource limits** with two scopes:
+
+- **Workflow budgets:** elapsed time (including waiting), agent attempts shared
+  across planners/workers/retries, and model tokens.
+- **Per-agent resources:** CPU capacity and memory for an agent and its children.
+
+Elapsed time and attempt budgets are enforced today. CPU and memory caps require
+provider quota support; token caps require a metered model gateway. The current
+local process/native CLI runtime cannot enforce those three caps. The UI marks
+those controls unavailable, and the API rejects requests for them.
+
+Use **My defaults** or a project `mitos` block to configure supported limits:
+
+```mitos
+{
+  "resources": {
+    "workflow": {
+      "elapsed_minutes": {"mode": "limit", "amount": 120},
+      "attempts": {"mode": "limit", "amount": 48}
+    }
+  }
+}
+```
+
+Omitted dimensions or `mode: "inherit"` inherit from the preceding settings layer.
+`mode: "unlimited"` explicitly means no cap for CPU, memory, or tokens; zero is not
+a valid cap. The current runtime still requires finite elapsed-time and attempt
+budgets. Legacy `minutes`/`attempts` remain compatible. New work freezes the resolved
+policy; changing settings does not reset running budgets. See the
+[resource policy contract](spec/system/02_RUNTIME.md#resource-policy-scopes-and-enforcement)
+for units, inheritance, provider requirements, and token accounting requirements.
+
 ## Recurring agent workflows
 
 In the project goal composer, open **When to run** and choose **On a schedule**,
@@ -209,8 +243,8 @@ five-field expressions. **Advanced options** lets you change the time zone.
 New workflows inherit project execution limits, including elapsed time and agent
 attempts, for each occurrence. Existing workflows with explicit time caps retain
 those caps. In the workflow API, omitted or zero `minutes` means inherit, not
-unlimited. CPU, memory, and token budgets need a separate resource-policy design;
-these are not enforced limits in this form.
+unlimited. CPU, memory, and token caps are represented by the resource policy but are not
+enforced by the current local process/native CLI runtime.
 The goal text is the workflow's persistent instructions; agents implement its
 procedure using the project's tools and policies. Mitos does not hard-code PR,
 security-review, or merge algorithms.
