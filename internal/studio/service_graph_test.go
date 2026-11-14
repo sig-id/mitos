@@ -1,7 +1,9 @@
 package studio
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +11,92 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWorkflowResultRecovery(t *testing.T) {
+	for _, scenario := range []string{"unsaved", "saved", "mismatch", "corrupt"} {
+		t.Run(scenario, func(t *testing.T) {
+			e, req := workflowEngine(t)
+			req.Cron, req.Timezone = "", "" // No clock admissions during recovery.
+			if _, err := e.ScheduleGoal(req); err != nil {
+				t.Fatal(err)
+			}
+			r, err := e.TriggerService(req.ID, "recovery")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := e.Store.Schedule(r.ID, nil); err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			if err := e.startServiceGraph(r.ID); err != nil {
+				t.Fatal(err)
+			}
+			g, _ := e.Store.serviceGraph(r.ID)
+			// Persist a settled graph at the boundary before parent completion.
+			g.Status = "accepted"
+			g.Result = &GraphResult{Title: "Occurrence result", Markdown: "Nothing requires action.", Author: "planner:test", CreatedAt: time.Now().UTC()}
+			e.Store.mu.Lock()
+			err = e.Store.commit("", "effect", "test_graph_accepted", change{Graph: &graphChange{Graph: g}})
+			e.Store.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.MarshalIndent(g.Result, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario != "unsaved" {
+				saved := data
+				if scenario == "mismatch" {
+					saved = []byte(`{"title":"another result"}`)
+				}
+				if err := e.Store.SaveArtifact(r.ID, "workflow-result.json", saved); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "corrupt" {
+					if err := os.WriteFile(filepath.Join(e.Store.Dir(), "artifacts", r.ID, "workflow-result.json"), []byte("corrupt"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			// Restart both the store and engine; repeat to check durable completion.
+			for restart := 0; restart < 2; restart++ {
+				if err := e.Store.Close(); err != nil {
+					t.Fatal(err)
+				}
+				replay, err := OpenStore(e.Store.Dir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { replay.Close() })
+				e.Store = replay
+				restarted, err := NewEngine(replay, e.Apps, e.Root)
+				if scenario == "mismatch" || scenario == "corrupt" {
+					if err == nil {
+						restarted.Close()
+						t.Fatal("invalid result accepted")
+					}
+					parent, _ := replay.Get(r.ID)
+					if parent.Status != "running" {
+						t.Fatal("invalid result completed occurrence", parent.Status)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal("workflow result prevented startup", err)
+				}
+				restarted.Close()
+				parent, err := replay.Get(r.ID)
+				if err != nil || parent.Status != "done" || len(parent.Artifacts) != 1 || len(replay.Graphs()) != 1 {
+					t.Fatal("occurrence did not complete exactly once", parent, err)
+				}
+				saved, err := replay.Artifact(r.ID, "workflow-result.json")
+				if err != nil || !bytes.Equal(saved, data) {
+					t.Fatal("result changed during recovery", err)
+				}
+			}
+		})
+	}
+}
 
 func workflowEngine(t *testing.T) (*Engine, ScheduledGoal) {
 	t.Helper()

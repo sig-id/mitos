@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,7 +203,16 @@ func (e *Engine) reconcileServiceGraphs() error {
 			if err != nil {
 				return err
 			}
-			if err = e.Store.SaveArtifact(r.ID, "workflow-result.json", data); err != nil {
+			// A crash can leave the artifact committed before Complete. Reuse
+			// that evidence only after checking its checksum and graph contents.
+			saved, err := e.Store.Artifact(r.ID, "workflow-result.json")
+			switch {
+			case errors.Is(err, ErrNotFound):
+				err = e.Store.SaveArtifact(r.ID, "workflow-result.json", data)
+			case err == nil && !bytes.Equal(saved, data):
+				err = errors.New("saved workflow result does not match accepted graph")
+			}
+			if err != nil {
 				return err
 			}
 			if err = e.Store.Complete(r.ID, "Agent workflow completed. Open its graph for the result and evidence.", false); err != nil && !errors.Is(err, ErrConflict) {
