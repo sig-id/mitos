@@ -143,7 +143,7 @@
  async function refreshChanges(){
   const requestID=++changesRequest;
   const source=$('changes-source').value;
-  if(source==='workspace'){const data=await api(endpoint('resources')+'?details=true');if(requestID!==changesRequest)return;window.MitosDiff.render(data);$('changes-context').textContent='Project working tree compared with HEAD. Agent workspace copies are separate.'}
+  if(source==='workspace'){const data=await api(endpoint('resources')+'?details=true');if(requestID!==changesRequest)return;window.MitosDiff.render(data);$('changes-context').textContent='Project working tree compared with HEAD. A clean project does not mean agents made no changes. Choose an agent attempt under Compare to inspect its saved patch.'}
   else{const response=await fetch(source);if(!response.ok)throw Error('Saved patch unavailable.');const diff=await response.text();if(requestID!==changesRequest)return;window.MitosDiff.render({diff});$('changes-context').textContent='Saved agent patch: original snapshot compared with the agent’s result. This has not been applied to the project.'}
  }
  async function selectView(next){

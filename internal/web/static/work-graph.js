@@ -62,7 +62,7 @@
  function latestPlanner(){const rounds=plannerRounds();return rounds.at(-1)}
  function renderPlanner(){
   const box=$('graph-planner-summary'),rounds=plannerRounds();box.hidden=!rounds.length;if(!rounds.length)return;
-  const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':['waiting_input','resuming'].includes(displayState(id))?labels[displayState(id)]:m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':overall()==='waiting_input'?'Waiting for your answer':'Waiting for agents';
+  const id=rounds.at(-1),m=graph.members[id],status=graph.status==='accepted'?'Complete':graph.status==='active'&&Date.parse(graph.limits.deadline)<=Date.now()?'Stopped · time limit reached':['waiting_input','resuming'].includes(displayState(id))?labels[displayState(id)]:m.state==='running'?(rounds.length===1?'Planning':'Reviewing results'):m.state==='queued'?'Queued':Object.values(graph.expansions).some(x=>x.error&&!x.outcome)?'Needs attention':graph.status==='cancelled'?'Stopped':overall()==='waiting_input'?'Waiting for your answer':'Waiting for agents';
   box.replaceChildren(node('strong','✦ Coordinator'),node('span',status,'muted'),button(`${rounds.length} planning ${rounds.length===1?'round':'rounds'}`,()=>selectNode(id,'planning'),'graph-planner-history'),button('Latest update',()=>selectNode(id,'output')));
  }
  $('graph-show-history').onchange=event=>{showHistory=event.target.checked;renderMap();renderTree()};
@@ -70,7 +70,7 @@
  function applyWorkView(){
   $('graph-current').dataset.workView=workView;
   $('graph-conversation').hidden=workView!=='work';
-  $('graph-followup-form').hidden=!graph||!$('graph-compose').hidden||workView==='workflow';
+  $('graph-followup-form').hidden=!graph||!$('graph-compose').hidden||workView==='workflow'||!graph.result;
   if(graph){$('graph-followup-send').disabled=graph.status!=='accepted'||!graph.result;$('followup-context').textContent=graph.result?'Your agent will use this result and its saved evidence.':'You can send a follow-up when the result is ready.';}
   if(workView!=='result')closeResult();
   else if(graph&&!openingResult&&resultViewKey!==graph.id+':'+graph.revision)openResult();
@@ -90,6 +90,7 @@
   const agent=node('article',undefined,'conversation-message agent');agent.append(node('strong','Mitos'));
   if(graph.result){agent.append(window.MitosMarkdown.view(answerPreview(graph.result)),button('Open result & evidence',()=>openResult(),'primary'));}
   else if(overall()==='waiting_input'){const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input');agent.append(node('p','An agent needs your answer before it can continue.'),button('Review request',()=>selectNode(waiting,'output'),'primary'));}
+  else if(overall()==='needs_attention')agent.append(node('p','This work needs attention. The reason and next actions are shown above.'));
   else agent.append(node('p',graph.status==='active'?(overall()==='planning'?'I’m planning the work and choosing agents.':'I’m working on your request. You can follow the agents in Workflow.'):'This work has stopped. Its output is preserved.'));
   if(graph.status==='active'&&!graph.policy.automatic)agent.append(button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));
   box.replaceChildren(user,agent);
@@ -200,7 +201,7 @@
   if (expected !== epoch || id !== graphID || selection !== selected || sequence<snapshotApplied) return;snapshotApplied=sequence;
   if (result.graph.project_id !== project || result.graph.home !== server) throw new Error('This graph belongs to a different project or server.');
   snapshot = result; graph = result.graph; if (selected && !graph.members[selected]) selected = '';
-  const signature = JSON.stringify([graph,snapshot.nodes]);
+  const signature = JSON.stringify([graph,snapshot.nodes,Date.parse(graph.limits.deadline)<=Date.now()]);
   if (signature !== snapshotSignature) { snapshotSignature = signature; render(); }
   $('graph-sync').textContent = 'Live · ' + new Date(result.observed_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); $('graph-sync').classList.remove('offline');
  }
@@ -208,21 +209,37 @@
   if ($('graph-compose').hidden) $('graph-current').hidden = false;
   $('graph-title').textContent = title(graph.members[graph.root_task]); const status = overall(); $('graph-status').className = 'graph-badge ' + status; $('graph-status').textContent = labels[status] || status;
   const workers = Object.entries(graph.members).filter(([,m]) => m.spec.kind !== 'scope' && !m.controller_for && !m.replacement), finished = workers.filter(([,m]) => m.accepted).length;
-  $('graph-progress').textContent = `${finished} of ${workers.length} steps complete` + (graph.policy.controller_application ? ' · Coordinator managed' : ' · Not started');
-  $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.controller_application || graph.status !== 'active';
+  const awaiting=workers.filter(([,m])=>!m.accepted&&m.state==='done').length;
+  $('graph-progress').textContent = `${finished} of ${workers.length} steps complete`+(awaiting?` · ${awaiting} awaiting review`:'') + (graph.policy.controller_application ? ' · Coordinator managed' : ' · Not started');
+  $('graph-review').hidden = graph.policy.automatic ? graph.status!=='accepted' : !reviewable(graph.root_task);$('graph-review').textContent=graph.status==='accepted'?'View result':'Review result'; $('graph-stop').disabled = graph.status !== 'active'; $('graph-replan').hidden = !graph.policy.controller_application || graph.status !== 'active' || Date.parse(graph.limits.deadline)<=Date.now();
   renderMessage(); renderPlanner(); renderMap(); renderInspector(); renderActivity(); renderTree();renderConversation();applyWorkView();document.dispatchEvent(new CustomEvent("mitos-graph",{detail:graph}));
   $('graph-announcement').textContent = `${labels[status] || status}. ${finished} of ${workers.length} steps complete.`;
  }
+ function failureHelp(summary){
+  if(/invalid supervision observation/i.test(summary))return 'The runtime could not validate an agent activity event. Older versions used this error for both oversized events and malformed JSON; this saved run does not identify which. Check the runtime version and supervision diagnostics before trying again.';
+  if(/supervision observation/i.test(summary))return 'The runtime stopped because it could not check an agent activity event. Resolve the reported event format or size problem before retrying.';
+  if(/supervision|project is held/i.test(summary))return 'Review the supervision incident in Project setup before retrying this work.';
+  return 'Read the failure and execution log below, resolve the reported problem, then retry if this workflow still has time and attempts available.';
+ }
  function renderMessage() {
+  const box=$('graph-message');box.replaceChildren();box.hidden=true;box.dataset.attention='false';
   const waiting=Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].state==='waiting_input')||Object.keys(snapshot.nodes).find(id=>snapshot.nodes[id].pending_requests);
-  if(waiting){const box=$('graph-message');box.replaceChildren(node('span',title(graph.members[waiting])+(snapshot.nodes[waiting].state==='waiting_input'?' is waiting for your answer.':' has a pending request.')),button('Review request',()=>selectNode(waiting,'output')));box.hidden=false;return;}
-  const box = $('graph-message'); box.replaceChildren(); box.hidden = true;
-  const errors = Object.values(graph.expansions).filter(x => !x.outcome && x.error);
-  if (Date.parse(graph.limits.deadline) <= Date.now() && graph.status === 'active') { box.textContent = 'The work reached its time limit. Results are preserved; no new steps will start.'; box.hidden = false; }
-  else if (errors.length) { const reasons = {controller_proposal_missing:'The planner did not produce a work proposal.',controller_proposal_invalid:'The planner returned a proposal the runtime could not read.',controller_proposal_stale_or_rejected:'The planner’s proposal no longer matches the current work.',controller_execution_needs_review:'The planner stopped before producing a verified proposal.',controller_allowance_exhausted:'The planning allowance has been used.',controller_context_limit:'This graph exceeds the planner’s context limit.'}; box.append(node('span', reasons[errors[0].error] || errors[0].error.replaceAll('_',' ')),button('Inspect planner',() => selectNode(errors[0].controller_task || graph.root_task))); box.hidden = false; }
-  else if (!graph.policy.controller_application && Object.values(graph.expansions).some(x => !x.outcome) && Object.keys(graph.members).length === 1) { box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary')); box.hidden = false; }
-  else if (graph.status === 'accepted') { box.textContent = graph.policy.automatic ? 'Work complete · Open View result to read the saved reports and deliverables.' : 'Work complete. The graph and its results are preserved.'; box.hidden = false; }
-  else if (Object.values(graph.decisions || {}).some(d => d.outcome === 'selected')) { const d = Object.values(graph.decisions).find(d => d.outcome === 'selected'); box.append(node('span','A decision is ready to apply.'),button('Review decision',() => selectNode(d.task_id))); box.hidden = false; }
+  const expired=Date.parse(graph.limits.deadline)<=Date.now()&&graph.status==='active';
+  const failures=Object.keys(snapshot.nodes).filter(id=>['failed','needs_attention'].includes(snapshot.nodes[id].state)&&id!==graph.root_task);
+  const errors=Object.values(graph.expansions).filter(x=>!x.outcome&&x.error);
+  if(graph.status==='active'&&(waiting||expired||failures.length||errors.length)){
+   box.hidden=false;box.dataset.attention='true';box.append(node('h3',expired?'Work stopped: time limit reached':waiting?'Your answer is needed':'Work needs attention'));
+   if(expired)box.append(node('p','The goal is unfinished. No new attempts can start in this workflow. Saved reports and changes are still available.'),node('p','Next: inspect the failure or saved work, fix any reported runtime problem, then start new work with an appropriate time limit.'));
+   if(waiting)box.append(node('p',title(graph.members[waiting])+' has a pending request.'),button('Review request',()=>selectNode(waiting,'output')));
+   for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.';item.append(node('strong',title(graph.members[id])),node('p',summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
+   const reasons={controller_proposal_missing:'The coordinator did not save a work proposal.',controller_proposal_invalid:'The coordinator returned an unreadable proposal.',controller_proposal_stale_or_rejected:'The coordinator’s proposal did not match the current work.',controller_execution_needs_review:'The coordinator stopped before producing a verified proposal.',controller_allowance_exhausted:'The planning allowance has been used.',controller_context_limit:'The work exceeds the coordinator’s context limit.'};
+   for(const error of errors)if(!failures.includes(error.controller_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect coordinator',()=>selectNode(error.controller_task||graph.root_task,'output')));
+   if(expired&&!failures.length){const earlier=Object.keys(graph.members).filter(id=>graph.members[id].replacement&&graph.members[id].state==='failed');if(earlier.length){const history=node('details');history.append(node('summary',earlier.length+' earlier failed assignments'));for(const id of earlier)history.append(node('p',snapshot.nodes[id]?.summary||title(graph.members[id])),button('Inspect '+title(graph.members[id]),()=>selectNode(id,'output')));box.append(history)}}
+   const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(expired)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()},'primary'));box.append(actions);return;
+  }
+  if(!graph.policy.controller_application&&Object.values(graph.expansions).some(x=>!x.outcome)&&Object.keys(graph.members).length===1){box.append(node('span','This goal has not started.'),button('Start automatic work',async()=>{await sendMutation(endpoint(graph.id)+'/automatic',{key:crypto.randomUUID(),revision:graph.revision});await refreshSelected()},'primary'));box.hidden=false}
+  else if(graph.status==='accepted'){box.append(node('span','Work complete.'),button('Read final answer',()=>openResult()));box.hidden=false}
+  else if(Object.values(graph.decisions||{}).some(d=>d.outcome==='selected')){const d=Object.values(graph.decisions).find(d=>d.outcome==='selected');box.append(node('span','A decision is ready to apply.'),button('Review decision',()=>selectNode(d.task_id)));box.hidden=false}
  }
  function workflowOrder() {
   const ids=Object.keys(graph.members).filter(id=>kind(graph.members[id])!=='planner'&&(showHistory||!graph.members[id].replacement));
@@ -296,10 +313,10 @@
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
   if(m.spec.kind==='scope'&&!['progress','details','result'].includes(selectedTab))selectedTab='progress';
-  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
+  $('graph-node-kind').textContent=kindLabel(m); const signature=JSON.stringify([selected,selectedTab,selectedAttempt,m,snapshot.nodes[selected],graph.decisions,graph.expansions,graph.status,Date.parse(graph.limits.deadline)<=Date.now(),m.spec.kind==='scope'?[graph.members,snapshot.nodes]:null]); if(signature===detailSignature)return;captureReader();renderedReaderKey=graphID+':'+selected+':'+selectedTab+':'+selectedAttempt;detailSignature=signature;box.replaceChildren(node('h3',kind(m)==='planner'?'Coordinator · Round '+(plannerRounds().indexOf(selected)+1):title(m)),badge(displayState(selected)));
   const actions=node('div',undefined,'actions');
   if(!graph.policy.automatic&&reviewable(selected)) actions.append(button(m.spec.kind==='scope'?'Review result':'Review step',()=>openAction('accept',selected),'primary'));
-  if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
+  if(graph.status==='active'&&!m.accepted&&!m.cancel_requested&&!m.replacement){if(Date.parse(graph.limits.deadline)>Date.now()&&m.spec.kind!=='scope'&&['failed','cancelled'].includes(m.state)&&snapshot.nodes[selected]?.settled&&m.attempts.length<=graph.limits.retries)actions.append(button('Retry step',()=>openAction('retry',selected)));if(m.spec.kind!=='scope')actions.append(button('Stop step',()=>openAction('cancel',selected)));}
   box.append(actions);const tabs=node('nav',undefined,'graph-tabs');tabs.setAttribute('aria-label','Step details');for(const [id,label]of(m.spec.kind==='scope'?[['progress','Progress'],['details','Request'],['result','Result']]:kind(m)==='planner'?[['output','Activity'],['planning','Planning rounds'],['details','Assignment']]:[['output','Activity'],['details','Assignment'],['attempts','Attempts']])){const b=button(label,()=>{selectedTab=id;detailSignature='';renderInspector()});if(id===selectedTab)b.setAttribute('aria-current','page');tabs.append(b)}box.append(tabs);
   if(selectedTab==='progress'){renderGoalProgress(box,m)}else if(selectedTab==='result'){renderGoalResult(box)}else if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
@@ -321,11 +338,11 @@
   const holder=node('div');holder.append(node('p','Loading output…','muted'));box.append(holder);const token=epoch,chosen=selected;
   runDetail(m,runID).then(async run=>{
    if(token!==epoch||selected!==chosen||!holder.isConnected)return;
-   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)));if(run.id!==m.current_run_id)attemptHeader.append(badge(run.status==='done'?'finished':run.status));if(showAttempt)holder.append(attemptHeader);const files=run.artifacts||[];const events=renderRunActivity(holder,m,run);
+   holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)));if(run.id!==m.current_run_id)attemptHeader.append(badge(run.status==='done'?'finished':run.status));if(showAttempt)holder.append(attemptHeader);const files=run.artifacts||[];if(run.status==='failed'||run.status==='parked'){const failure=node('section',undefined,'graph-run-failure');failure.append(node('h4','Why this attempt stopped'),node('p',run.summary||'No failure explanation was saved.'),node('p',failureHelp(run.summary||'')));holder.append(failure)}const events=renderRunActivity(holder,m,run);
    const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);const report=readable.find(a=>/report\.md$/.test(a.name))||[...readable].reverse().find(a=>/output\.txt$/.test(a.name))||readable[0];
-   if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run)}else if(!report){holder.append(node('p',run.summary||'This attempt finished without a saved report.','muted'));}
+   if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run)}else if(!report){holder.append(node('p','This attempt finished without a saved report.','muted'));}
    if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');select.dataset.runId=run.id;for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Coordinator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifacts?.[run.id]||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{planner:!!m.controller_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
-   if(files.length){const details=node('details');details.dataset.readKey='artifacts:'+run.id;details.append(node('summary','Files & downloads'));const links=node('div',undefined,'graph-files');for(const artifact of files)links.append(link(artifact.name,'/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(artifact.name)));details.append(links);holder.append(details)}
+   if(files.length){const actions=node('div',undefined,'graph-deliverable-links');actions.append(button('Browse saved files',()=>openResult({task:m.spec.id,run:run.id})));if(files.some(a=>a.name==='changes.patch'))actions.append(button('Preview changes',()=>openResult({task:m.spec.id,run:run.id,path:'changes.patch',artifact:true})));holder.append(actions,node('p','Reports, logs and workspace files are saved for this attempt. Read them in the file browser; downloading is optional.','muted'))}
    // Restore only the newly mounted content; live updates must preserve current reader state.
    holder.append(events);restoreDisclosures(holder);
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
@@ -345,7 +362,7 @@
      heading.textContent=output.live?'Live activity':'Execution log';
      status.textContent=!output.available?'Live capture is unavailable for this attempt. Its status and requests are shown above.':output.text?'Last activity '+elapsed(at)+' ago'+(output.truncated?' · Showing recent output':''):run.status==='queued'?'Waiting to start.':'No agent messages or tool activity yet · '+elapsed(at)+' since the last status update';
      if(output.live&&output.available&&Date.now()-Date.parse(at)>120000)status.textContent+=' · No recent activity received; the process may be waiting.';
-     if(content.textContent!==output.text){const follow=content.scrollHeight-content.scrollTop-content.clientHeight<40;content.textContent=output.text;content.hidden=!output.text;if(follow)content.scrollTop=content.scrollHeight;}
+     const cleanText=window.MitosGraphOutput.cleanLog(output.text);if(content.textContent!==cleanText){const follow=content.scrollHeight-content.scrollTop-content.clientHeight<40;content.textContent=cleanText;content.hidden=!output.text;if(follow)content.scrollTop=content.scrollHeight;}
      if(!output.live)return;
     }
    }catch(error){if(!active())return;status.textContent='Activity connection lost. Last received output is shown. Retrying…';}
@@ -355,7 +372,7 @@
  }
  function renderRunActivity(box,m,run){
   const panel=node('section',undefined,'graph-run-activity'),meta=node('p','Loading attempt status…','muted'),requests=node('div',undefined,'graph-pending-requests'),events=node('details',undefined,'graph-execution-events'),list=node('ol',undefined,'graph-event-list');
-  events.dataset.readKey='events:'+run.id;events.append(node('summary','Execution events'),list);panel.append(meta,requests);box.append(panel);
+  const filter=node('label',undefined,'graph-event-filter'),all=node('input');all.type='checkbox';filter.append(all,document.createTextNode('Show technical events'));events.dataset.readKey='events:'+run.id;events.append(node('summary','Activity timeline'),filter,list);panel.append(meta,requests);box.append(panel);
   const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(run.id)+'/activity';let requestKey='',eventsKey='';
   const active=()=>token===epoch&&panel.isConnected;
   const update=async()=>{
@@ -367,7 +384,13 @@
      const pending=activity.requests||[],key=JSON.stringify(pending);
      if(key!==requestKey){requestKey=key;requests.replaceChildren();for(const item of pending)renderPendingRequest(requests,item);}
      const eventKey=JSON.stringify(activity.events);
-     if(eventKey!==eventsKey){eventsKey=eventKey;list.replaceChildren();for(const event of activity.events||[]){const li=node('li');li.append(node('time',date(event.at)),node('strong',({graph_attempts_queued:'Scheduled',claims_acquired:'Execution started',advance:'Assignment admitted',run_started:'Preparing workspace',workspace_prepared:'Workspace ready',agent_started:'Agent connected',run_finished:'Finished',agent_request_received:'Answer requested',agent_answer_recorded:'Answer recorded',agent_answer_delivered:'Answer delivered'})[event.kind]||event.kind.replaceAll('_',' ')));if(event.summary)li.append(node('p',event.summary));list.append(li)}events.querySelector('summary').textContent='Execution events · '+list.childElementCount;}
+     if(eventKey!==eventsKey){eventsKey=eventKey;const renderEvents=()=>{
+      const labels={graph_attempts_queued:'Scheduled',run_started:'Preparing workspace',agent_started:'Agent connected',run_finished:'Finished',run_failed:'Attempt failed',run_cancelled:'Stopped',approval_requested:'Approval requested',agent_request_received:'Answer requested',agent_answer_recorded:'Answer recorded',agent_answer_delivered:'Answer delivered'};
+      const visible=(activity.events||[]).filter(event=>all.checked||labels[event.kind]);list.replaceChildren();
+      for(const event of visible){const li=node('li');li.append(node('time',date(event.at)),node('strong',labels[event.kind]||event.kind.replaceAll('_',' ')));if(event.summary)li.append(node('p',event.summary));list.append(li)}
+      if(!visible.length)list.append(node('li','No milestones recorded yet. Technical events are available above.'));
+      events.querySelector('summary').textContent='Activity timeline · '+visible.length;
+     };all.onchange=renderEvents;renderEvents();}
      if(!['queued','running','stopping','parked'].includes(activity.status)&&!pending.length)return;
     }
    }catch(error){if(!active())return;meta.textContent='Unable to refresh attempt status. Retrying…';}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mitos/internal/agentcli"
 	"mitos/internal/decision"
 	"mitos/internal/decisionmodel"
@@ -189,8 +190,11 @@ func (e *Engine) supervise(ctx context.Context, session AgentSession, event stri
 	return errors.New(verdict.Reason)
 }
 func (e *Engine) ObserveAgent(ctx context.Context, id, token string, raw json.RawMessage) error {
-	if len(raw) > harness.MaxObservationBytes || !json.Valid(raw) {
-		return errors.New("invalid supervision observation")
+	if len(raw) > harness.MaxObservationBytes {
+		return fmt.Errorf("supervision observation too large: received %d bytes, limit %d bytes; the agent stopped because its activity could not be checked", len(raw), harness.MaxObservationBytes)
+	}
+	if !json.Valid(raw) {
+		return errors.New("supervision observation contains invalid JSON; the agent stopped because its activity could not be checked")
 	}
 	s := e.Store
 	s.mu.RLock()

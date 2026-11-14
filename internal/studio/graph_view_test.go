@@ -50,6 +50,9 @@ func TestGraphViewKeepsStatusesWithoutExecutionHistory(t *testing.T) {
 	if err != nil || run.Events != nil || run.GraphAttempt != nil || run.Execution != nil {
 		t.Fatal("run projection included execution history")
 	}
+	if unselected.Nodes[id].Summary != run.Summary || run.Summary == "" {
+		t.Fatal("unselected attempt explanation missing from snapshot")
+	}
 	if _, err = e.Store.GraphRun(g.ID, g.RootTask, runID); err != ErrNotFound {
 		t.Fatal("wrong task binding read")
 	}
