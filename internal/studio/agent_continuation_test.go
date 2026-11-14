@@ -47,6 +47,16 @@ else:
 `
 	fixture := appServerFixture(script)
 	fixture = strings.Replace(fixture, "elif method=='thread/start':", "elif method in ('thread/start','thread/resume'):", 1)
+	failureFile := filepath.Join(bin, "handshake-failure")
+	wireLog := filepath.Join(bin, "native-requests.jsonl")
+	failureJSON, _ := json.Marshal(failureFile)
+	wireJSON, _ := json.Marshal(wireLog)
+	fixture = strings.Replace(fixture, " req=json.loads(line);method=req.get('method','')", ` req=json.loads(line);method=req.get('method','')
+ with open(`+string(wireJSON)+`, 'a') as log:log.write(json.dumps({'cwd':str(pathlib.Path.cwd()),'request':req})+'\n')
+ failure=pathlib.Path(`+string(failureJSON)+`)
+ if failure.exists() and method==failure.read_text():
+  send({'id':req['id'],'error':{'code':-32000,'message':'fixture handshake failure'}})
+  continue`, 1)
 	if err = os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+python+"\n"+fixture), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -56,18 +66,22 @@ else:
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(20 * time.Second)
-	stopped := false
-	for time.Now().Before(deadline) {
-		g, _ = e.Store.Graph(g.ID)
-		for _, x := range g.Expansions {
-			if x.Error == "controller_execution_needs_review" {
-				stopped = true
+	waitStopped := func() WorkGraph {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			current, err := e.Store.Graph(g.ID)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if stopped {
+			blocked := false
+			for _, x := range current.Expansions {
+				if x.Error == "controller_execution_needs_review" {
+					blocked = true
+				}
+			}
 			settled := true
-			for _, m := range g.Members {
+			for _, m := range current.Members {
 				for _, id := range m.Attempts {
 					r, _ := e.Store.Get(id)
 					if !r.Terminal() || r.Claim != nil && r.Claim.ReleasedAt == nil {
@@ -75,16 +89,15 @@ else:
 					}
 				}
 			}
-			if settled {
-				break
+			if blocked && settled {
+				return current
 			}
-			stopped = false
+			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(20 * time.Millisecond)
+		t.Fatal("workflow did not stop")
+		return WorkGraph{}
 	}
-	if !stopped {
-		t.Fatalf("workflow did not stop: %+v", g)
-	}
+	g = waitStopped()
 	var worker, planner, workerRun, plannerRun string
 	for id, m := range g.Members {
 		if m.State == "failed" {
@@ -111,6 +124,41 @@ else:
 	if err = os.WriteFile(filepath.Join(e.Root, "hello.txt"), []byte("source changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// A process can start and harvest its restored tree without ever opening
+	// the native conversation. Retry both initialization and resume failures.
+	for _, phase := range []string{"initialize", "thread/resume"} {
+		if err = os.WriteFile(failureFile, []byte(phase), 0600); err != nil {
+			t.Fatal(err)
+		}
+		request := resumeRequest(g)
+		request.Key = "failed-handshake:" + phase
+		if _, err = e.ResumeGraph(g.ID, request); err != nil {
+			t.Fatal(err)
+		}
+		g = waitStopped()
+		for _, id := range []string{worker, planner} {
+			failed, _ := e.Store.Get(g.Members[id].CurrentRunID)
+			started := false
+			for _, event := range failed.Events {
+				if event.Kind == "agent_started" {
+					started = true
+				}
+			}
+			if failed.NativeThreadID != "" || failed.Workspace == nil || failed.Workspace.ResultCommit == "" || !started || !strings.Contains(failed.Summary, "fixture handshake failure") {
+				t.Fatalf("not a harvested handshake failure: %+v", failed)
+			}
+			retry := graphClone(failed)
+			retry.GraphAttempt.ContinueFrom = failed.ID
+			source, _, restored, err := e.agentContinuation(context.Background(), retry)
+			if err != nil || source.NativeThreadID != "fixture-thread" || source.ID != failed.ID || restored.Fingerprint != failed.Workspace.Fingerprint {
+				t.Fatalf("%s lost conversation or harvest: source=%s thread=%q fingerprint=%s: %v", phase, source.ID, source.NativeThreadID, restored.Fingerprint, err)
+			}
+		}
+	}
+	if err = os.Remove(failureFile); err != nil {
+		t.Fatal(err)
+	}
+	workerRun, plannerRun = g.Members[worker].CurrentRunID, g.Members[planner].CurrentRunID
 	next, err := e.ResumeGraph(g.ID, resumeRequest(g))
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +166,7 @@ else:
 	if next.ID != g.ID {
 		t.Fatal("created another workflow")
 	}
-	deadline = time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		next, _ = e.Store.Graph(g.ID)
 		if next.Status == "accepted" {
@@ -142,6 +190,39 @@ else:
 		resumed, _ := e.Store.Get(next.Members[id].CurrentRunID)
 		if resumed.ParentID != source || resumed.GraphAttempt.ContinueFrom != source || resumed.NativeThreadID != "fixture-thread" {
 			t.Fatal("agent identity or conversation lost")
+		}
+	}
+	wire, err := os.ReadFile(wireLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{worker, planner} {
+		resumed := false
+		for _, line := range strings.Split(strings.TrimSpace(string(wire)), "\n") {
+			var entry struct {
+				CWD     string `json:"cwd"`
+				Request struct {
+					Method string `json:"method"`
+					Params struct {
+						ThreadID string `json:"threadId"`
+					} `json:"params"`
+				} `json:"request"`
+			}
+			if err = json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if filepath.Base(filepath.Dir(entry.CWD)) != next.Members[id].CurrentRunID {
+				continue
+			}
+			if entry.Request.Method == "thread/start" {
+				t.Fatal("failed handshake silently created a new conversation")
+			}
+			if entry.Request.Method == "thread/resume" {
+				resumed = entry.Request.Params.ThreadID == "fixture-thread"
+			}
+		}
+		if !resumed {
+			t.Fatal("native conversation was not resumed")
 		}
 	}
 	patch, err := e.Store.Artifact(next.Members[worker].CurrentRunID, "changes.patch")

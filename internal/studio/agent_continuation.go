@@ -42,10 +42,16 @@ func (e *Engine) agentContinuation(ctx context.Context, r Run) (Run, workspacefs
 			started = true
 		}
 	}
-	// A continuation may fail before opening its conversation or harvesting its
-	// restored workspace. Keep the last durable source across those failed starts.
-	if !started && (prior.Workspace == nil || prior.Workspace.ResultCommit == "") && prior.GraphAttempt.ContinueFrom != "" {
-		return e.agentContinuation(ctx, prior)
+	// Process startup is not proof that the conversation opened. A failed
+	// initialize/thread-resume handshake can still harvest the restored tree.
+	// Recover its conversation from the validated lineage while retaining that
+	// latest harvest; only fall back to the ancestor's tree if none was saved.
+	if prior.NativeThreadID == "" && prior.GraphAttempt.ContinueFrom != "" {
+		ancestor, before, current, err := e.agentContinuation(ctx, prior)
+		if err != nil || prior.Workspace == nil || prior.Workspace.ResultCommit == "" {
+			return ancestor, before, current, err
+		}
+		prior.NativeThreadID = ancestor.NativeThreadID
 	}
 	if prior.Workspace == nil {
 		// A pre-launch failure has no workspace or conversation to restore.
