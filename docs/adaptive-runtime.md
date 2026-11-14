@@ -293,6 +293,13 @@ retrying a task retains its original selector. Empty operations may wait for
 already scheduled tasks or inbox signals without spending repeated orchestration
 calls. Inbox content is evidence, never authority to change grants or instructions.
 
+Resuming a graph or replacing its orchestrator advances unsatisfied graph-mailbox
+selectors on tasks that have no queued attempt to the new generation, preserving
+their cursors and other filters. A selector with an already admitted matching
+message retains that evidence, including when other join sources are still
+waiting. Queued/admitted attempts keep their frozen specifications and witnesses;
+selectors for other mailboxes or explicitly different generations are unchanged.
+
 ### Terminology and saved-state compatibility
 
 The role, built-in agent, UI, and API use **orchestrator** (`mitos.orchestrator`,

@@ -678,7 +678,7 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			if !operator || op.Rationale == "" {
 				return fail(graphError("orchestrator replacement requires operator authority and rationale"))
 			}
-			g.OrchestratorGeneration++
+			e.Store.advanceGraphOrchestratorGeneration(&g)
 			for _, x := range g.Expansions {
 				if x.Outcome == "" && !strings.HasPrefix(x.ID, "decision:") {
 					x.Generation = g.OrchestratorGeneration

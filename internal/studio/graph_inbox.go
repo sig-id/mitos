@@ -70,3 +70,29 @@ func (s *Store) boundInboxInput(w workpool.Witness) ([]byte, error) {
 func graphInboxAddress(g *WorkGraph, seq int64) map[string]any {
 	return map[string]any{"project": g.ProjectID, "mailbox": g.ID, "generation": g.OrchestratorGeneration, "after_sequence": seq}
 }
+
+// Caller holds the store lock. Advance unsatisfied graph-mailbox selectors with
+// their admission authority. Queued attempts have frozen specifications; an
+// already received message also remains eligible while other join sources wait.
+func (s *Store) advanceGraphOrchestratorGeneration(g *WorkGraph) {
+	previous := g.OrchestratorGeneration
+	g.OrchestratorGeneration++
+	for _, m := range g.Members {
+		if m.Spec.Kind != "application" || m.CurrentRunID != "" || len(m.Attempts) != 0 || m.Accepted != nil || m.CancelRequested || m.Replacement != "" {
+			continue
+		}
+		changed := false
+		for _, dep := range m.Spec.Brief.Scheduling.Deps {
+			in := dep.Inbox
+			if in == nil || in.Project != g.ProjectID || in.Mailbox != g.ID || in.Kind != "event" || in.Type != "workflow.signal" || int64(in.Generation) != previous || s.graphInboxState(dep).Inbox != nil {
+				continue
+			}
+			if !changed {
+				m.History = append(m.History, graphClone(m.Spec))
+				m.Revision++
+				changed = true
+			}
+			in.Generation = int(g.OrchestratorGeneration)
+		}
+	}
+}

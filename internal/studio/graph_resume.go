@@ -113,7 +113,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 	g.Limits = req.Limits
 	g.Revision++
 	g.PolicyRevision++
-	g.OrchestratorGeneration++
+	s.advanceGraphOrchestratorGeneration(&g)
 	g.UpdatedAt = now
 	pending, orchestrators := 0, 0
 	for _, tid := range graphIDs(&g) {
