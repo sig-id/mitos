@@ -65,6 +65,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	BlockedReason      string                 `json:"blocked_reason,omitempty"`
 	NativeThreadID     string                 `json:"native_thread_id,omitempty"`
 	GraphAttempt       *GraphAttempt          `json:"graph_attempt,omitempty"`
 	ModelDecisions     []ModelDecision        `json:"model_decisions,omitempty"`
@@ -162,6 +163,7 @@ type Event struct {
 }
 
 type change struct {
+	BlockedReason       string                     `json:"blocked_reason,omitempty"`
 	SystemConfiguration *SystemConfiguration       `json:"system_configuration,omitempty"`
 	NativeThreadID      string                     `json:"native_thread_id,omitempty"`
 	SupervisorVerdict   *SupervisorVerdict         `json:"supervisor_verdict,omitempty"`

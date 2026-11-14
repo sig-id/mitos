@@ -382,6 +382,17 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	orchestrator := isOrchestratorKind(b.Definition.Kind)
 	resultPath := filepath.Join(base, "agent-result.txt")
 	args := []string{native.Executable, "app-server"}
+	// The inherited Go cache is commonly outside workspace-write roots. Give
+	// routine checks a writable cache without asking for broader permissions.
+	cache, err := os.MkdirTemp("", "mitos-go-build-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(cache)
+	cacheJSON, _ := json.Marshal(cache)
+	args = append(args, "-c", "shell_environment_policy.set.GOCACHE="+string(cacheJSON))
+	native.Env = agentCacheEnvironment(native.Env, cache)
+	prompt += "\nGo checks have a writable GOCACHE in the temporary directory. Use that cache rather than escalating for cache access. Bound optional checks; if a test needs unavailable network or local socket access, preserve the limitation and continue the audit using source evidence unless that test is essential to the assignment.\n"
 	options := harness.CodexOptions{Headless: true, ResumeThread: prior.NativeThreadID, ThreadStarted: func(thread string) error { return e.Store.recordNativeThread(r.ID, thread) }, Model: b.Model, Sandbox: "workspace-write", Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
 	if orchestrator {
 		options.Sandbox = "read-only"
@@ -466,6 +477,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	// output and changes before returning the transition error.
 	<-session.Done()
 	output, runErr := session.Result()
+	if runErr != nil || ctx.Err() != nil {
+		if prerequisite := e.Store.pendingAgentPrerequisite(r.ID); prerequisite != nil {
+			runErr = prerequisite
+		}
+	}
 	runErr = errors.Join(runErr, stageErr)
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

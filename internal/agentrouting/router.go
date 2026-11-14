@@ -18,6 +18,9 @@ type Route struct {
 
 func Prepare(p agentpolicy.Policy, r harness.Request, workspace string) Route {
 	human := func(reason string) Route { return Route{Resolver: "human", Source: "rule", Reason: reason} }
+	if r.Method == "mcpServer/elicitation/request" {
+		return human("connector requests require explicit review")
+	}
 	if r.Method == "item/commandExecution/requestApproval" || r.Method == "PreToolUse" && len(r.Questions) == 0 {
 		command, directory, ok := Command(r)
 		if !ok {

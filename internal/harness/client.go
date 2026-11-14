@@ -25,7 +25,7 @@ type Delivery struct {
 // MaxObservationBytes is the inclusive JSON payload limit shared by the native
 // readers and observation endpoint. Line terminators do not count toward it.
 // Approval requests retain their smaller independent limit.
-const MaxObservationBytes = 1 << 20
+const MaxObservationBytes = 16 << 20
 
 type Observer interface {
 	Observe(context.Context, json.RawMessage) error

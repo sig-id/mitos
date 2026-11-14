@@ -147,8 +147,8 @@ try{
  await page.locator('#graph-zoom-in').click();const zoom=await page.locator('#graph-zoom').textContent();await page.waitForTimeout(1600);assert.equal(await page.locator('#graph-zoom').textContent(),zoom);
  await page.locator('#work-tree .work-tree-toggle').click();assert.equal(await page.locator('#work-tree .work-tree-node').count(),0);await page.locator('#work-tree .work-tree-toggle').click();assert.ok(await page.locator('#work-tree .work-tree-node').count());
  // A stopped workflow explains its failure in every view, even without accepted work.
- const stoppedPattern='**/api/graphs/'+graphID+'/snapshot?*';
- await page.route(stoppedPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.status='active';delete value.graph.result;value.graph.limits.deadline='2020-01-01T00:00:00Z';value.graph.expansions={};for(const [id,m]of Object.entries(value.graph.members)){delete m.accepted;if(id===worker.spec.id){m.state='failed';value.nodes[id].state='failed';value.nodes[id].summary='Codex stopped: invalid supervision observation';value.nodes[id].settled=true}}await route.fulfill({response,json:value})});
+ const stoppedPattern='**/api/graphs/'+graphID+'/snapshot?*';let prerequisiteFixture=false;
+ await page.route(stoppedPattern,async route=>{const response=await route.fetch(),value=await response.json();value.graph.status='active';delete value.graph.result;value.graph.limits.deadline='2020-01-01T00:00:00Z';value.graph.expansions={};for(const [id,m]of Object.entries(value.graph.members)){delete m.accepted;if(id===worker.spec.id){m.state='failed';value.nodes[id].state='failed';value.nodes[id].summary='Codex stopped: invalid supervision observation';value.nodes[id].settled=true;if(prerequisiteFixture){value.nodes[id].state='needs_attention';value.nodes[id].blocked_reason='native_request_unanswered';value.nodes[id].summary='Stopped while waiting for an answer to a connector confirmation.'}}}if(prerequisiteFixture)value.graph.limits.deadline=new Date(Date.now()+3600000).toISOString();await route.fulfill({response,json:value})});
  await page.locator('#graph-message').getByRole('heading',{name:'Work stopped: time limit reached',exact:true}).waitFor();
  await page.locator('[data-view=work]').click();assert.equal(await page.locator('#graph-message').isVisible(),true);assert.match(await page.locator('#graph-message').textContent(),/could not validate an agent activity event/);
  await page.locator('#graph-message').getByRole('button',{name:'Read saved work',exact:true}).click();await page.getByRole('heading',{name:'No final answer yet',exact:true}).waitFor();assert.equal(await page.locator('#graph-message').isVisible(),true);assert.equal(await page.locator('#graph-followup-form').isVisible(),false);
@@ -167,6 +167,13 @@ try{
  await page.unroute('**/api/graphs/'+graphID+'/resume');
 
  await page.locator('#graph-message').getByRole('button',{name:'Start new work',exact:true}).click();assert.equal(await page.locator('#graph-prompt').inputValue(),g.members[g.root_task].spec.brief.intent);await page.locator('#graph-compose-close').click();
+ prerequisiteFixture=true;
+ await page.locator('#graph-message').getByRole('heading',{name:'Work stopped waiting for an answer',exact:true}).waitFor();
+ assert.match(await page.locator('#graph-message').textContent(),/More time alone will repeat the wait/);
+ await page.locator('#graph-message').getByRole('button',{name:'Resume after resolving prerequisite',exact:true}).click();
+ const prerequisiteDialog=page.getByRole('dialog',{name:'Resume after resolving prerequisite',exact:true});await prerequisiteDialog.waitFor();
+ assert.equal(await prerequisiteDialog.getByLabel('Additional workflow time (minutes)',{exact:true}).inputValue(),'0');
+ await prerequisiteDialog.getByRole('button',{name:'Cancel',exact:true}).click();
  await page.unroute(stoppedPattern);await page.locator('#graph-status.accepted').waitFor();
  // A follow-up is a new bounded continuation with the previous answer and evidence.
  await page.locator('[data-view=result]').click();await page.locator('#graph-followup').fill('Continue from the saved answer and produce it again');await page.locator('#graph-followup-send').click();await wait(async()=>new URL(page.url()).searchParams.get('graph')!==graphID);const continuationID=new URL(page.url()).searchParams.get('graph');await wait(async()=>(await api('/api/graphs/'+continuationID)).status==='accepted');const continuation=await api('/api/graphs/'+continuationID);assert.equal(continuation.predecessor,graphID);await page.locator('.conversation-history').waitFor();assert.equal((await api('/api/graphs/'+graphID)).status,'accepted');

@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+func TestConnectorConfirmationAlwaysNeedsHumanReview(t *testing.T) {
+	r, err := harness.Normalize("codex", json.RawMessage(`{"id":1,"method":"mcpServer/elicitation/request","params":{"threadId":"t","turnId":null,"serverName":"github","mode":"form","message":"Create this issue?","requestedSchema":{"type":"object","properties":{}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, autonomy := range []string{"manual", "delegated", "decision"} {
+		p := agentpolicy.Default()
+		p.Autonomy = autonomy
+		if got := Prepare(p, r, "/work"); got.Resolver != "human" || got.Choice != "" {
+			t.Fatalf("%s implicitly authorized connector: %+v", autonomy, got)
+		}
+	}
+}
+
 func TestRulesPrecedeClassification(t *testing.T) {
 	raw := json.RawMessage(`{"id":1,"method":"item/commandExecution/requestApproval","params":{"threadId":"t","turnId":"u","command":"go test ./...","cwd":"/work"}}`)
 	r, err := harness.Normalize("codex", raw)

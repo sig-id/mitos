@@ -236,6 +236,16 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 			}
 			if len(event.ID) > 0 && event.Method != "" {
 				if options.Headless {
+					if event.Method == "mcpServer/elicitation/request" {
+						// Supported confirmations have already gone through the broker.
+						// Cancel unsupported forms/challenges as a tool-level failure so
+						// the agent can save its work and explain the missing capability.
+						if err := send(map[string]any{"id": event.ID, "result": map[string]any{"action": "cancel", "content": nil, "_meta": nil}}); err != nil {
+							return err
+						}
+						fmt.Fprintln(output, "\nConnector request cancelled: this form requires its native interface. No approval was granted; the agent may continue independent work.")
+						continue
+					}
 					return fmt.Errorf("unsupported native request requires an explicit session: %s", event.Method)
 				}
 				fmt.Fprintf(output, "\nThis request requires the local console. Native request:\n%s\nEnter its JSON result, or Ctrl-C to stop:\n", raw)

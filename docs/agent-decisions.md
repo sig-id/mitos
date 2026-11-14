@@ -37,7 +37,19 @@ stop work. Neither the request router nor the orchestrator establishes confineme
 Automatic workers now run through Codex app-server under the compute provider's
 process ownership. Supported questions and approvals share the explicit-session
 notification and resolution service. The process deadline remains active while a question
-is pending. Unsupported native requests fail visibly instead of receiving invented
+is pending. If execution stops with an unanswered blocking request, the saved attempt
+records `native_request_unanswered`. Automatic planning and replacement stop until
+the operator addresses the prerequisite and resumes the workflow. Continuation
+retains the task, saved conversation and harvested work; it does not grant the old
+permission. Asynchronous clarifications do not trigger this hold.
+
+Codex MCP connector elicitations use the same durable decision/outbox service.
+Confirmation forms, up to three boolean or two-choice enum fields, and HTTPS
+browser-step confirmations receive explicit human review, including when command
+review is delegated. Defaults never authorize an answer. Unsupported forms and
+verification challenges are cancelled at the tool boundary in headless workers,
+allowing the agent to save its report and explain the unavailable native interaction.
+Other unsupported native requests fail visibly instead of receiving invented
 answers. Final reports are captured from final agent-message items, and failed or
 interrupted turns cannot be accepted as successful attempts.
 

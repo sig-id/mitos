@@ -65,6 +65,7 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 }
 
 type GraphNodeView struct {
+	BlockedReason     string    `json:"blocked_reason,omitempty"`
 	HumanRequests     int       `json:"human_requests,omitempty"`
 	ReviewingRequests int       `json:"reviewing_requests,omitempty"`
 	DecisionSetup     bool      `json:"decision_setup,omitempty"`
@@ -94,6 +95,9 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 			return "stopping"
 		}
 		return "cancelled"
+	}
+	if r := s.runs[m.CurrentRunID]; r != nil && r.BlockedReason != "" {
+		return "needs_attention"
 	}
 	if m.Spec.Kind == "scope" {
 		if g.Policy.OrchestratorApplication == "" && len(g.Members) == 1 {
@@ -182,8 +186,15 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		n := GraphNodeView{CreatedAt: g.CreatedAt, State: s.graphDisplayState(g, m), Settled: s.graphSettled(m)}
 		if r := s.runs[m.CurrentRunID]; r != nil {
 			n.Summary = r.Summary
+			n.BlockedReason = r.BlockedReason
 		}
 		requests := s.graphPendingRequests(m.CurrentRunID)
+		for _, request := range requests {
+			if request.Blocking && request.Decision.Choice == "" {
+				n.Summary = "Waiting for an answer: " + request.Decision.Question
+				break
+			}
+		}
 		n.PendingRequests = len(requests)
 		for _, request := range requests {
 			if request.Decision.Choice != "" {

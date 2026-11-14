@@ -470,6 +470,9 @@ func (e *Engine) amendGraph(p GraphProposal, preview, operator bool) (WorkGraph,
 }
 func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, operator bool) (WorkGraph, GraphReceipt, error) {
 	fail := func(err error) (WorkGraph, GraphReceipt, error) { return WorkGraph{}, GraphReceipt{}, err }
+	if !operator && e.Store.graphPrerequisiteBlocked(prior) {
+		return fail(graphError("an agent is blocked on an external prerequisite; operator continuation is required"))
+	}
 	now := time.Now().UTC()
 	if p.Profile != GraphProfile || !validGraphKey(p.Key) || len(p.Operations) < 1 || len(p.Operations) > 128 || len(p.Explanation) > 4000 {
 		return fail(graphError("invalid proposal envelope"))
