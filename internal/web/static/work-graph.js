@@ -205,7 +205,7 @@
    const item=node('div',undefined,'work-tree-item'),heading=node('div',undefined,'work-tree-heading');item.dataset.graphId=row.id;
    const toggle=button(expanded?'▾':'▸',()=>toggleTree(row.id),'work-tree-toggle');
    toggle.setAttribute('aria-label',(expanded?'Collapse ':'Expand ')+(row.title||'Work'));toggle.setAttribute('aria-expanded',String(expanded));toggle.dataset.treeKey='toggle:'+row.id;
-   const choose=button(row.title||'Untitled work',async()=>{if(!current)await chooseGraph(row.id);else{selected='';workView='work';window.MitosProjectNav.select('work');$('graph-compose').hidden=true;$('graph-current').hidden=false;updateURL();renderTree();applyWorkView()}},'work-tree-goal');choose.dataset.treeKey=row.id;
+   const choose=button(row.title||'Untitled work',async()=>{if(!current)await chooseGraph(row.id);else{closeInspector();workView='work';window.MitosProjectNav.select('work');$('graph-compose').hidden=true;$('graph-current').hidden=false;applyWorkView()}},'work-tree-goal');choose.dataset.treeKey=row.id;
    if(current)choose.setAttribute('aria-current','page');
    const status=current&&graph?overall():row.status==='accepted'?'accepted':row.status==='cancelled'?'cancelled':counts.waiting_input?'waiting_input':counts.failed||counts.needs_attention?'needs_attention':counts.running?'running':counts.review?'review':counts.blocked?'blocked':counts.queued?'queued':'idle';
    const statusLabel=labels[status]||status,symbol={accepted:'✓',running:'◉',in_progress:'◉',planning:'◉',idle:'○',queued:'◷',blocked:'◷',review:'!',waiting_input:'!',needs_attention:'!',failed:'×',cancelled:'■',stopping:'■',finished:'✓'}[status]||'○';
@@ -371,7 +371,12 @@
  function restoreDisclosures(box){const saved=readerStates.get(renderedReaderKey);if(!saved)return;for(const d of box.querySelectorAll('details[data-read-key]'))if(d.dataset.readKey in saved.open)d.open=saved.open[d.dataset.readKey];}
  function restoreReader(){const saved=readerStates.get(renderedReaderKey);if(!saved)return;restoreDisclosures($('graph-node-detail'));$('graph-inspector').scrollTop=saved.scroll;}
  $('graph-inspector-expand').onclick=()=>{const body=document.querySelector('.graph-body'),expanded=body.classList.toggle('reading-mode');$('graph-inspector-expand').textContent=expanded?'Show graph':'Expand';$('graph-inspector-expand').setAttribute('aria-pressed',String(expanded));scrollWorkTo($('graph-inspector'))};
- $('graph-inspector-close').onclick=()=>{selected='';epoch++;detailSignature='';$('graph-inspector').hidden=true;document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');updateURL();renderMap();renderTree()};
+ function closeInspector() {
+  selected='';selectedAttempt='';epoch++;detailSignature='';$('graph-inspector').hidden=true;
+  document.querySelector('.graph-body').classList.remove('reading-mode');$('graph-inspector-expand').textContent='Expand';$('graph-inspector-expand').setAttribute('aria-pressed','false');
+  updateURL();if(graph)renderMap();renderTree();
+ }
+ $('graph-inspector-close').onclick=closeInspector;
  function renderInspector() {
   const m=graph.members[selected],box=$('graph-node-detail'); $('graph-inspector').hidden=!m; if(!m)return;
   if(m.spec.kind==='scope'&&!['progress','details','result'].includes(selectedTab))selectedTab='progress';

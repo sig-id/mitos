@@ -48,7 +48,24 @@ try{
  await page.reload();await row(first.id).waitFor();assert.equal(await row(first.id).locator('.work-tree-node').count(),0);await row(second.id).getByRole('button',{name:/Second work nested/}).waitFor();
  await row(second.id).locator('.work-tree-goal').click();await wait(async()=>new URL(page.url()).searchParams.get('graph')===second.id);
  await row(second.id).locator('.work-tree-node').filter({hasText:'Second work child'}).click();await page.locator('#graph-inspector').waitFor({state:'visible'});
+ // Returning to the conversation must also clear a stable workflow's inspector.
+ await page.locator('#graph-inspector-expand').click();
  await row(second.id).locator('.work-tree-goal').click();assert.equal(await page.locator('#graph-conversation').isVisible(),true);
+ assert.equal(new URL(page.url()).searchParams.has('node'),false);
+ await page.locator('[data-view=workflow]').click();
+ assert.equal(await page.locator('#graph-inspector').isVisible(),false);
+ assert.equal(await page.locator('.graph-node[aria-pressed=true]').count(),0);
+ assert.equal(await page.locator('.graph-body').evaluate(el=>el.classList.contains('reading-mode')),false);
+ assert.equal(await page.locator('#graph-inspector-expand').getAttribute('aria-pressed'),'false');
+ // Selecting the same step again must rebuild usable details.
+ await row(second.id).locator('.work-tree-node').filter({hasText:'Second work child'}).click();
+ await page.locator('#graph-inspector').waitFor({state:'visible'});
+ await page.locator('#graph-node-detail').getByRole('button',{name:'Request',exact:true}).click();
+ assert.deepEqual(await page.locator('#graph-node-detail .prose').allTextContents(),['Second work child','Review saved evidence']);
+ await page.locator('#graph-inspector-close').click();
+ assert.equal(await page.locator('#graph-inspector').isVisible(),false);
+ assert.equal(await page.locator('.graph-node[aria-pressed=true]').count(),0);
+ await row(second.id).locator('.work-tree-goal').click();
  // Archiving cancels active work and removes it from Open, including after reload.
  await page.getByLabel('Work actions',{exact:true}).click();await page.locator('#graph-archive').click();
  await wait(async()=>await row(second.id).count()===0);assert.equal((await api('/api/graphs/'+second.id)).work_state,'archived');
