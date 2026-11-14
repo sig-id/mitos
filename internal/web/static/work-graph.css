@@ -36,7 +36,6 @@
 .graph-body.reading-mode:has(.graph-inspector:not([hidden])){grid-template-columns:minmax(0,1fr)}.graph-body.reading-mode:has(.graph-inspector:not([hidden])) .graph-map{display:none}.graph-body.reading-mode .graph-inspector{max-height:none;overflow:visible}
 .graph-output-section{border:1px solid #3e4a55;border-radius:7px;padding:14px 18px;margin:16px 0}.graph-inspector .graph-output-section>summary{font-size:16px;font-weight:600;color:var(--text);overflow-wrap:anywhere}.graph-output-section[open]>summary{margin-bottom:14px}
 .graph-plan-output>h4{font-size:17px;color:var(--text);margin:24px 0 12px}.graph-plan-output h5{font-size:15px;margin:18px 0 6px}.graph-output-agent{color:var(--accent);text-transform:capitalize}.graph-output-callout{border-left:3px solid var(--accent);padding:10px 15px;background:#28342a}
-.graph-json-children{padding-left:12px;min-width:0}.graph-json-row{margin:12px 0;overflow-wrap:anywhere}.graph-json-row>strong{color:var(--blue)}.graph-json-value{white-space:pre-wrap}
 .graph-attempt-card{display:grid;gap:14px;border:1px solid var(--line);border-radius:8px;padding:18px;margin:18px 0}.graph-attempt-heading,.graph-attempt-summary{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.graph-attempt-summary{margin:18px 0}.graph-attempt-card>button{justify-self:start}.graph-attempt-card>details{border-top:1px solid var(--line);padding-top:12px}.graph-attempt-card>details>a{display:block;margin-top:12px}
 @media(max-width:1200px){.graph-body:has(.graph-inspector:not([hidden])){grid-template-columns:1fr}.graph-inspector{order:-1;max-height:none}}
 @media(max-width:640px){.graph-inspector{padding:18px}.graph-output-section{padding:12px}.graph-inspector .graph-tabs{gap:18px}.graph-inspector .analysis-code{font-size:13px}}
@@ -81,7 +80,6 @@
 @media(max-width:640px){.conversation-message{max-width:94%;padding:10px 12px}.conversation-message.user{max-width:88%}.graph-followup textarea{font-size:16px}.graph-followup-input{gap:8px}.graph-followup-input>button{padding:7px 12px}}
 
 
-.graph-live-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;padding:16px;background:var(--bg);border:1px solid var(--line);border-radius:8px;font:14px/1.6 monospace}
 
 .graph-badge.in_progress{color:var(--running)}.graph-badge.waiting_input,.graph-badge.resuming{color:var(--waiting)}.graph-node[data-status=waiting_input]{border-color:var(--waiting)}
 .graph-goal-assignment{display:flex;gap:12px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:10px 0}.graph-goal-assignment>button{flex:1;min-width:160px}.graph-goal-current,.graph-goal-orchestrator{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}.graph-goal-orchestrator>summary{cursor:pointer;font-weight:600}
@@ -169,3 +167,35 @@ mitos-file-browser{display:block;min-width:0}mitos-file-browser input{width:100%
  #graph-current[data-work-view=work]:has(#graph-inspector:not([hidden]))>.graph-body.reading-mode{grid-column:1/-1}
  #graph-work:has(#graph-current[data-work-view=work] #graph-inspector:not([hidden]))>.graph-followup{max-width:none;width:calc((100% - 24px)*.535);margin-left:0}
 }
+
+/* A single reading column: messages, compact actions, then optional files. */
+.graph-activity-status{font-size:13px;margin:10px 0 18px}
+.graph-activity-feed{display:flex;flex-direction:column;gap:8px;min-width:0}
+.graph-agent-message{padding:8px 0 12px;min-width:0}
+.graph-activity-label{display:block;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px}
+.graph-agent-message .analysis-prose{font-size:15px;line-height:1.75}
+.graph-agent-message .md-toolbar{display:none}
+.graph-agent-message .md-preview{max-height:none;padding:0;border:0;background:none}
+.graph-tool-row{min-width:0;border:0;border-left:2px solid var(--line);padding:0 0 0 12px;margin:0}
+.graph-tool-row>summary{display:flex;align-items:baseline;gap:9px;cursor:pointer;padding:8px 0;list-style:none;font-size:13px}
+.graph-tool-row>summary::-webkit-details-marker{display:none}
+.graph-tool-icon{color:var(--muted);flex:none}.graph-tool-label{font-weight:600;flex:none}
+.graph-tool-name{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.graph-tool-status{color:var(--muted);font-size:11px;margin-left:auto;flex:none}
+.graph-tool-row>summary:after{content:'›';color:var(--muted);flex:none}.graph-tool-row[open]>summary:after{transform:rotate(90deg)}
+.graph-tool-row.running{border-color:var(--blue)}.graph-tool-row.running .graph-tool-icon,.graph-tool-row.running .graph-tool-status{color:var(--blue)}
+.graph-tool-row.failed{border-color:#f4aaa7}.graph-tool-row.failed .graph-tool-status{color:#f4aaa7}
+.graph-tool-row .analysis-code{max-height:280px;overflow:auto;margin:6px 0 12px}
+.graph-raw-log,.graph-attempt-files{border-top:1px solid var(--line);margin:22px 0 0;padding:14px 0}
+.graph-raw-log>summary,.graph-attempt-files>summary{color:var(--muted);cursor:pointer;font-size:13px}
+.graph-attempt-report{margin:24px 0}.graph-attempt-report>h4{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.graph-inline-files{margin-top:16px;min-width:0}.graph-inline-files .graph-file-layout{grid-template-columns:minmax(0,1fr);gap:18px}
+.graph-inline-files .graph-file-sidebar{border-right:0;border-bottom:1px solid var(--line);padding:0 0 16px}
+.graph-inline-files .file-list{max-height:220px}.graph-inline-files .graph-file-sidebar>h3,.graph-inline-files .graph-file-sidebar>p{display:none}
+.graph-inline-files .graph-result-heading{gap:12px;flex-wrap:wrap}.graph-inline-files .graph-result-heading h4{margin:0}
+.graph-inline-files button{font-size:13px}.graph-inline-files .graph-preview-origin{display:none}
+.graph-structured-output>.graph-output-section{border:0;border-top:1px solid var(--line);border-radius:0;padding:14px 0}
+.graph-structured-output>.graph-output-section>summary{font-size:13px;color:var(--muted);font-weight:400}
+@media(max-width:640px){.graph-tool-row>summary{gap:6px}.graph-tool-label{font-size:12px}.graph-tool-name{font-size:12px}.graph-inline-files .graph-result-heading{align-items:flex-start}}
+
+.graph-inspector .graph-tool-row{margin-top:0}.graph-inspector .graph-tool-row>summary{font-size:13px;color:var(--text)}

@@ -37,19 +37,19 @@
   const body=new Uint8Array(size);let offset=0;for(const chunk of chunks){body.set(chunk,offset);offset+=chunk.length}
   const text=new TextDecoder('utf-8',{fatal:true}).decode(body);if(text.includes('\0'))throw Error('This is a binary file. Use Download file.');return text;
  }
- let generation=0;
+ const generations=new WeakMap();
  window.MitosGraphResult={
   async linkOutput(content,{graph,member,run,request,open}){
    if(!run.artifacts?.some(a=>a.name==='workspace.tar.gz'))return;
    const base=baseURL(graph.id,member.spec.id,run.id);
    try{const entry={member,run,base,files:await inventory(base,request)};if(content.isConnected)linkFiles(content,[entry],{entry,path:'report.md'},file=>open({task:member.spec.id,run:run.id,path:file.path,line:file.line,end:file.end,artifact:file.artifact}))}catch{/* Existing report stays readable if its archive is unavailable. */}
   },
-  async open({graph,request,container,onClose,initial}){
-   const token=++generation,current=()=>generation===token&&!container.hidden;
-   const header=el('div',undefined,'graph-result-heading');header.append(el('h2',graph.result?'Result':'Saved work'),button('Back to graph',()=>{generation++;onClose()}));container.replaceChildren(header,el('p','Loading saved result…','muted'));
+  async open({graph,request,container,onClose,initial,attemptOnly=false}){
+   const token=(generations.get(container)||0)+1;generations.set(container,token);const current=()=>generations.get(container)===token&&container.isConnected&&!container.hidden;
+   const header=el('div',undefined,'graph-result-heading');header.append(el(attemptOnly?'h4':'h2',attemptOnly?'Files from this attempt':graph.result?'Result':'Saved work'),button(attemptOnly?'Back to activity':'Back to graph',()=>{if(!attemptOnly)generations.set(container,token+1);onClose()}));container.replaceChildren(header,el('p','Loading saved result…','muted'));
    try{
-    const sources=[...(graph.result?.sources||[])];
-    for(const m of Object.values(graph.members))if(m.spec.kind==='application'&&!m.orchestrator_for&&!m.replacement&&m.current_run_id&&!sources.some(s=>s.task===m.spec.id))sources.push({task:m.spec.id,run:m.accepted?.run_id||m.current_run_id});
+    const sources=attemptOnly?[{task:initial.task,run:initial.run}]:[...(graph.result?.sources||[])];
+    for(const m of Object.values(graph.members))if(!attemptOnly&&m.spec.kind==='application'&&!m.orchestrator_for&&!m.replacement&&m.current_run_id&&!sources.some(s=>s.task===m.spec.id))sources.push({task:m.spec.id,run:m.accepted?.run_id||m.current_run_id});
     if(initial&&!sources.some(s=>s.task===initial.task&&s.run===initial.run))sources.push({task:initial.task,run:initial.run});
     const entries=await Promise.all(sources.map(async source=>{
      const member=graph.members[source.task],base=baseURL(graph.id,source.task,source.run);let run={id:source.run,status:'unavailable',artifacts:[]},files=[],problem='';
@@ -63,10 +63,11 @@
     const open=file=>navigate({kind:'file',file});
     const options=context=>({link:(target,label)=>{const file=resolveFile(target,entries,context);return file?button(label,()=>open(file)):null}});
     function markup(text,context){const rendered=window.MitosMarkdown.view(text,{...options(context),filename:context?.path||'Result.md'});linkFiles(rendered,entries,context,open);return rendered}
-    function controls(title,url){readerHeading.replaceChildren();if(title)readerHeading.append(el('h3',title));const actions=el('div',undefined,'actions');if(history.length)actions.append(button('Back',()=>{location=history.pop();show()}));if(location.kind!=='result'&&graph.result)actions.append(button('Final answer',()=>navigate({kind:'result'})));if(url)actions.append(download('Download file',url));readerHeading.append(actions);if(location.file)readerHeading.append(el('p',location.file.entry.member.spec.brief.title+' · '+location.file.entry.run.status,'graph-preview-origin muted'));readerHeading.hidden=!title&&!actions.children.length}
+    function controls(title,url){readerHeading.replaceChildren();if(title)readerHeading.append(el('h3',title));const actions=el('div',undefined,'actions');if(history.length)actions.append(button('Back',()=>{location=history.pop();show()}));if(location.kind!=='result'&&graph.result&&!attemptOnly)actions.append(button('Final answer',()=>navigate({kind:'result'})));if(url)actions.append(download('Download file',url));readerHeading.append(actions);if(location.file)readerHeading.append(el('p',location.file.entry.member.spec.brief.title+' · '+location.file.entry.run.status,'graph-preview-origin muted'));readerHeading.hidden=!title&&!actions.children.length}
     async function show(){
      const version=++previewGeneration;
      if(location.kind==='result'){
+      if(attemptOnly){controls('');body.replaceChildren(el('p','Select a file to preview it here.','muted'));return;}
       controls(graph.result?'':'No final answer yet');
       if(graph.result){body.replaceChildren(markup(graph.result.markdown));const items=el('div',undefined,'graph-result-items');for(const item of graph.result.items||[]){if(item.kind==='link'){const a=el('a',item.title,'result-item');a.href=item.url;a.target='_blank';a.rel='noopener noreferrer';items.append(a)}else{const file=resolveFile('mitos://'+item.task+'/'+item.path,entries);if(file)items.append(button(item.title,()=>open(file)));else items.append(el('span',item.title+' · saved file unavailable','muted'))}}if(items.children.length)body.append(items);}
       else body.replaceChildren(el('p','This goal has no final answer. Saved reports may describe partial or failed work; they do not mean the goal is complete. Select an assignment and a file to read its report, inspect its changes, or browse its workspace snapshot.'));
@@ -89,7 +90,7 @@
     source.setAttribute('aria-label','Saved assignment');scope.setAttribute('aria-label','File view');
     entries.forEach((entry,i)=>source.append(new Option(entry.member.spec.brief.title+(entry.member.orchestrator_for?' · Orchestrator':'')+' · '+entry.run.status,String(i))));
     for(const [value,label]of [['reports','Reports & logs'],['changes','Changed files'],['workspace','Workspace snapshot']])scope.append(new Option(label,value));
-    exports.append(el('summary','Export files'));sidebar.append(sourceLabel,scopeLabel,note,browser,exports);
+    exports.append(el('summary','Export files'));if(!attemptOnly)sidebar.append(sourceLabel);sidebar.append(scopeLabel,note,browser,exports);
     let activeEntry;
     function selectEntry(entry){if(activeEntry===entry)return;source.value=String(entries.indexOf(entry));activeEntry=entry;scope.value='reports';renderFiles()}
     let listingVersion=0;
@@ -110,8 +111,8 @@
     }
     source.onchange=async()=>{await renderFiles();const entry=activeEntry,name=['report.md','output.txt','changes.patch'].find(name=>entry?.run.artifacts?.some(a=>a.name===name));if(name)open({path:name,entry,artifact:true});else{++previewGeneration;location={kind:'result'};controls('No saved report');body.replaceChildren(el('p',entry?.problem||'Select a saved file to preview it.'))}};scope.onchange=()=>renderFiles();await renderFiles();
     const rationale=graph.members[graph.root_task].accepted?.rationale?.trim();
-    if(rationale){const review=el('details');review.append(el('summary','Orchestrator completion review'),markup(rationale));container.append(review)}
-    if(initial){const entry=entries.find(e=>e.member.spec.id===initial.task&&e.run.id===initial.run);if(entry){const path=initial.path||(entry.run.artifacts?.some(a=>a.name==='report.md')?'report.md':entry.run.artifacts?.some(a=>a.name==='output.txt')?'output.txt':'');if(path)location={kind:'file',file:{...initial,path,artifact:initial.artifact??!initial.path,entry}};else selectEntry(entry)}}
+    if(rationale&&!attemptOnly){const review=el('details');review.append(el('summary','Orchestrator completion review'),markup(rationale));container.append(review)}
+    if(initial){const entry=entries.find(e=>e.member.spec.id===initial.task&&e.run.id===initial.run);if(entry){const path=initial.path||(entry.run.artifacts?.some(a=>a.name==='report.md')?'report.md':!attemptOnly&&entry.run.artifacts?.some(a=>a.name==='output.txt')?'output.txt':'');if(path)location={kind:'file',file:{...initial,path,artifact:initial.artifact??!initial.path,entry}};else selectEntry(entry)}}
     await show();
    }catch(e){if(current())container.append(el('p','Could not load the result: '+e.message,'form-error'))}
   }

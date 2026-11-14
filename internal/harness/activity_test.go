@@ -33,3 +33,44 @@ func TestPublicExecutionActivity(t *testing.T) {
 		t.Fatal("non-public or raw tool payload included")
 	}
 }
+
+func TestPublicActivityRecordsKeepMessageAndCommandBoundaries(t *testing.T) {
+	var output bytes.Buffer
+	command := "python3 - <<'PY'\nprint(\"payload\")\nPY"
+	events := []string{
+		`{"method":"item/agentMessage/delta","params":{"itemId":"message","delta":"Checking **files**.\n"}}`,
+		`{"method":"item/completed","params":{"item":{"id":"message","type":"agentMessage","text":"Checking **files**.\n"}}}`,
+		`{"method":"item/completed","params":{"item":{"id":"command","type":"commandExecution","command":` + string(mustJSON(t, command)) + `,"exitCode":1,"status":"failed"}}}`,
+		`{"method":"item/reasoning/textDelta","params":{"delta":"private reasoning"}}`,
+		`{"method":"item/commandExecution/outputDelta","params":{"delta":"arbitrary command output\n"}}`,
+	}
+	for _, raw := range events {
+		var e Envelope
+		if err := json.Unmarshal([]byte(raw), &e); err != nil {
+			t.Fatal(err)
+		}
+		writeCodexActivity(&output, e)
+	}
+	var records []map[string]any
+	for _, line := range strings.Split(output.String(), "\n") {
+		var v map[string]any
+		if json.Unmarshal([]byte(line), &v) == nil && v["mitos_activity"] == float64(1) {
+			records = append(records, v)
+		}
+	}
+	if len(records) != 3 || records[0]["delta"] != "Checking **files**.\n" || records[1]["text"] != records[0]["delta"] || records[2]["command"] != command || records[2]["exit_code"] != float64(1) || records[2]["status"] != "failed" {
+		t.Fatalf("bad public records: %#v", records)
+	}
+	if strings.Contains(output.String(), "private reasoning") {
+		t.Fatal("reasoning included")
+	}
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

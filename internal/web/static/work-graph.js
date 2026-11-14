@@ -470,10 +470,26 @@
   runDetail(m,runID).then(async run=>{
    if(token!==epoch||selected!==chosen||!holder.isConnected)return;
    holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)));if(run.id!==m.current_run_id)attemptHeader.append(badge(run.status==='done'?'finished':run.status));if(showAttempt)holder.append(attemptHeader);const files=run.artifacts||[];if(run.status==='failed'||run.status==='parked'){const failure=node('section',undefined,'graph-run-failure');failure.append(node('h4','Why this attempt stopped'),node('p',run.summary||'No failure explanation was saved.'),node('p',failureHelp(run.summary||'')));holder.append(failure)}const events=renderRunActivity(holder,m,run);
-   const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);const report=readable.find(a=>/report\.md$/.test(a.name))||[...readable].reverse().find(a=>/output\.txt$/.test(a.name))||readable[0];
-   if(['queued','running','stopping'].includes(run.status)){renderLiveOutput(holder,m,run)}else if(!report){holder.append(node('p','This attempt finished without a saved report.','muted'));}
-   if(readable.length){const select=node('select');select.setAttribute('aria-label','Output artifact');select.dataset.runId=run.id;for(const a of readable)select.append(new Option(a.name==='report.md'?'Report':a.name==='output.txt'?'Execution log':a.name==='graph-proposal.json'?'Orchestrator proposal':a.name==='changes.patch'?'Changes':a.name,a.name));select.value=readerStates.get(renderedReaderKey)?.artifacts?.[run.id]||report.name;if(!select.value)select.value=report.name;const content=node('div');holder.append(select,content);const show=async()=>{const name=select.value,artifact=files.find(a=>a.name===name),cacheKey=run.id+'/'+artifact.sha256;content.textContent='Loading…';try{let text=artifactCache.get(cacheKey);if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('Output is unavailable.');const buffer=await response.text();if(buffer.length>512*1024)throw Error('This output is too large to preview. Download the artifact instead.');text=buffer;artifactCache.set(cacheKey,text)}if(token!==epoch||select.value!==name||!content.isConnected)return;content.replaceChildren(window.MitosGraphOutput.render(text,{orchestrator:!!m.orchestrator_for,name,resolve:id=>graph.members[id]?title(graph.members[id]):id}));window.MitosGraphResult.linkOutput(content,{graph,member:m,run,request,open:openResult});}catch(error){content.textContent=error.message}};select.onchange=()=>show();await show();}
-   if(files.length){const actions=node('div',undefined,'graph-deliverable-links');actions.append(button('Browse saved files',()=>openResult({task:m.spec.id,run:run.id})));if(files.some(a=>a.name==='changes.patch'))actions.append(button('Preview changes',()=>openResult({task:m.spec.id,run:run.id,path:'changes.patch',artifact:true})));holder.append(actions,node('p','Reports, logs and workspace files are saved for this attempt. Read them in the file browser; downloading is optional.','muted'))}
+   const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);
+   const report=readable.find(a=>a.name==='report.md')||[...readable].reverse().find(a=>/report\.md$/.test(a.name))||(m.orchestrator_for&&readable.find(a=>a.name==='graph-proposal.json'));
+   const live=['queued','running','stopping'].includes(run.status);
+   if(live||!report)renderLiveOutput(holder,m,run);
+   const saved=node('details',undefined,'graph-attempt-files'),browser=node('div',undefined,'graph-inline-files');
+   saved.dataset.readKey='files:'+run.id;saved.append(node('summary','Saved files'+(files.length?' · '+files.length:'')),browser);
+   let loaded=false;
+   const openFiles=async initial=>{saved.open=true;loaded=true;await window.MitosGraphResult.open({graph:structuredClone(graph),request,container:browser,attemptOnly:true,initial:{task:m.spec.id,run:run.id,...initial},onClose:()=>{saved.open=false;saved.querySelector('summary').focus()}});if(initial?.path&&browser.isConnected)browser.scrollIntoView({block:'nearest'})};
+   saved.addEventListener('toggle',()=>{if(saved.open&&!loaded)openFiles()});
+   if(report){
+    const content=node('section',undefined,'graph-attempt-report');content.append(node('h4',m.orchestrator_for?'Plan':'Report'));const body=node('div','Loading report…');content.append(body);holder.append(content);
+    try{
+     const cacheKey=run.id+'/'+report.sha256;let text=artifactCache.get(cacheKey);
+     if(text===undefined){const response=await fetch('/runs/'+encodeURIComponent(run.id)+'/artifacts/'+encodeURIComponent(report.name),{headers:{'X-Mitos-Server':server},cache:'no-store'});if(!response.ok)throw Error('The report is unavailable.');text=await response.text();if(text.length>512*1024)throw Error('This report is too large to preview. Open Saved files to download it.');artifactCache.set(cacheKey,text)}
+     if(token!==epoch||!body.isConnected)return;
+     body.replaceChildren(window.MitosGraphOutput.render(text,{orchestrator:!!m.orchestrator_for,name:report.name,compact:true,resolve:id=>graph.members[id]?title(graph.members[id]):id}));
+     window.MitosGraphResult.linkOutput(body,{graph,member:m,run,request,open:openFiles});
+    }catch(error){body.textContent=error.message}
+   }
+   if(files.length)holder.append(saved);
    // Restore only the newly mounted content; live updates must preserve current reader state.
    holder.append(events);restoreDisclosures(holder);
   }).catch(error=>{if(holder.isConnected)holder.textContent=error.message});
@@ -483,9 +499,10 @@
  // panel. Hidden views and collapsed attempt sections keep their readers paused.
  function activityVisible(element){return !document.hidden&&!element.closest('[hidden], details:not([open])')&&element.getClientRects().length>0;}
  function renderLiveOutput(box,m,run){
-  const section=node('section',undefined,'graph-live-output'),heading=node('h4','Live activity'),status=node('p','Connecting to agent activity…','muted'),content=node('pre',undefined,'graph-live-text');
-  content.hidden=true;section.append(heading,status,content);box.append(section);
-  const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(run.id)+'/output';
+  const section=node('section',undefined,'graph-live-output'),status=node('p','Connecting to agent activity…','graph-activity-status muted'),content=node('div');
+  const raw=node('details',undefined,'graph-raw-log'),rawText=node('pre',undefined,'graph-execution-log');raw.dataset.readKey='raw-log:'+run.id;raw.append(node('summary','Raw execution log'),rawText);
+  rawText.tabIndex=0;rawText.setAttribute('aria-label','Raw execution log');section.append(status,content,raw);box.append(section);
+  const token=epoch,path=endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(run.id)+'/output';let previous='';
   const active=()=>token===epoch&&section.isConnected;
   const update=async()=>{
    if(!active())return;
@@ -493,13 +510,20 @@
     if(activityVisible(section)){
      const output=await request(path);if(!active())return;
      const at=Date.parse(output.updated_at)>0?output.updated_at:run.updated_at;
-     heading.textContent=output.live?'Live activity':'Execution log';
-     status.textContent=!output.available?'Live capture is unavailable for this attempt. Its status and requests are shown above.':output.text?'Last activity '+elapsed(at)+' ago'+(output.truncated?' · Showing recent output':''):run.status==='queued'?'Waiting to start.':'No agent messages or tool activity yet · '+elapsed(at)+' since the last status update';
-     if(output.live&&output.available&&Date.now()-Date.parse(at)>120000)status.textContent+=' · No recent activity received; the process may be waiting.';
-     const cleanText=window.MitosGraphOutput.cleanLog(output.text);if(content.textContent!==cleanText){const follow=content.scrollHeight-content.scrollTop-content.clientHeight<40;content.textContent=cleanText;content.hidden=!output.text;if(follow)content.scrollTop=content.scrollHeight;}
+     status.textContent=!output.available?'Activity capture is unavailable for this attempt.':output.live?(output.text?'Working · Updated '+elapsed(at)+' ago':run.status==='queued'?'Waiting to start…':'Waiting for the agent…'):'Agent activity';
+     if(output.live&&output.available&&Date.now()-Date.parse(at)>120000)status.textContent+=' · Waiting for an update';
+     const signature=JSON.stringify([output.text,output.live,output.truncated]);
+     if(signature!==previous){
+      previous=signature;const states=new Map([...content.querySelectorAll('details')].map(d=>[d.dataset.readKey,d.open]));
+      const focus=document.activeElement?.closest('.graph-tool-row')?.dataset.readKey;
+      content.replaceChildren(window.MitosGraphOutput.activity(output.text,{live:output.live,truncated:output.truncated}));
+      for(const d of content.querySelectorAll('details'))if(states.has(d.dataset.readKey))d.open=states.get(d.dataset.readKey);
+      if(focus)[...content.querySelectorAll('details')].find(d=>d.dataset.readKey===focus)?.querySelector('summary').focus({preventScroll:true});
+      rawText.textContent=window.MitosGraphOutput.cleanLog(output.text);raw.hidden=!output.text;
+     }
      if(!output.live)return;
     }
-   }catch(error){if(!active())return;status.textContent='Activity connection lost. Last received output is shown. Retrying…';}
+   }catch(error){if(!active())return;status.textContent='Activity connection lost. Retrying…';}
    if(active())setTimeout(update,1000);
   };
   update();
