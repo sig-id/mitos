@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,112 @@ import (
 	"testing"
 	"time"
 )
+
+func TestInterruptedAsyncClarificationPreservesPrerequisite(t *testing.T) {
+	// The incident's question was over 400 characters: the CLI acknowledged
+	// it, while decision-card validation rejected it and left no Inbox item.
+	question := strings.Repeat("Which configured publication route has been restored? ", 10)
+	encoded, _ := json.Marshal(question)
+	script := `import sys,json,pathlib
+def send(v):print(json.dumps(v),flush=True)
+for line in sys.stdin:
+ r=json.loads(line);m=r.get('method')
+ if m=='initialize':send({'id':r['id'],'result':{}})
+ elif m=='thread/start':send({'id':r['id'],'result':{'thread':{'id':'async-thread'}}})
+ elif m=='turn/start':
+  pathlib.Path('prepared-issues.txt').write_text('preserved drafts')
+  send({'id':r['id'],'result':{'turn':{'id':'async-turn'}}})
+  send({'method':'item/completed','params':{'threadId':'async-thread','turnId':'async-turn','item':{'type':'agentMessage','id':'question','delivery':'async','questions':[{'title':` + string(encoded) + `,'options':None}]}}})
+`
+	e, g := nativeAuditGraph(t, script, 1)
+	var task, run string
+	for id, m := range g.Members {
+		if m.Spec.Kind == "application" {
+			task, run = id, m.CurrentRunID
+		}
+	}
+	if ok, err := e.Store.AcquireClaims(run); err != nil || !ok {
+		t.Fatal(err)
+	}
+	r, _ := e.Store.Get(run)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); e.execute(ctx, r) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for e.Store.pendingAgentPrerequisite(run) == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	activity, err := e.Store.GraphActivity(g.ID, task, run)
+	if err != nil || len(activity.Requests) != 1 || activity.Requests[0].Blocking || !strings.Contains(activity.Requests[0].Decision.Context.Attempted, question) {
+		t.Fatalf("async question not visible with full context: %v %+v", err, activity.Requests)
+	}
+	view, _ := e.Store.GraphView(g.ID, task)
+	if view.Nodes[task].State != "running" {
+		t.Fatal("optional input stopped independent work", view.Nodes[task])
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker did not settle")
+	}
+	r, _ = e.Store.Get(run)
+	if r.Status != "failed" || r.BlockedReason != "native_request_unanswered" {
+		t.Fatalf("clarification became generic timeout: %s %s", r.Status, r.Summary)
+	}
+	patch, err := e.Store.Artifact(run, "changes.patch")
+	if err != nil || !strings.Contains(string(patch), "preserved drafts") {
+		t.Fatal("lost prepared work", err)
+	}
+	view, _ = e.Store.GraphView(g.ID, task)
+	if view.Nodes[task].State != "needs_attention" || view.Nodes[task].BlockedReason == "" {
+		t.Fatal("missing prerequisite banner facts", view.Nodes[task])
+	}
+}
+
+func TestUnroutableAsyncClarificationStopsReplacement(t *testing.T) {
+	script := `import sys,json,pathlib
+def send(v):print(json.dumps(v),flush=True)
+for line in sys.stdin:
+ r=json.loads(line);m=r.get('method')
+ if m=='initialize':send({'id':r['id'],'result':{}})
+ elif m=='thread/start':send({'id':r['id'],'result':{'thread':{'id':'async-thread'}}})
+ elif m=='turn/start':
+  pathlib.Path('partial.txt').write_text('preserve before routing failure')
+  send({'id':r['id'],'result':{'turn':{'id':'async-turn'}}})
+  send({'method':'item/completed','params':{'threadId':'async-thread','turnId':'async-turn','item':{'type':'agentMessage','id':'question','delivery':'async','questions':[{'title':str(i)} for i in range(4)]}}})
+`
+	e, g := nativeAuditGraph(t, script, 1)
+	var run string
+	for _, m := range g.Members {
+		if m.Spec.Kind == "application" {
+			run = m.CurrentRunID
+		}
+	}
+	if ok, err := e.Store.AcquireClaims(run); err != nil || !ok {
+		t.Fatal(err)
+	}
+	r, _ := e.Store.Get(run)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	e.execute(ctx, r)
+	r, _ = e.Store.Get(run)
+	if r.Status != "failed" || r.BlockedReason == "" || !strings.Contains(r.Summary, "could not be recorded") || !e.Store.GraphPrerequisiteBlocked(g.ID) {
+		t.Fatalf("lost input routing failure: %s %s", r.Status, r.Summary)
+	}
+	patch, err := e.Store.Artifact(run, "changes.patch")
+	if err != nil || !strings.Contains(string(patch), "preserve before routing failure") {
+		t.Fatal("lost partial work", err)
+	}
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	if g.Attempts != 1 || g.OrchestratorCalls != 0 {
+		t.Fatal("repeated an unanswerable input request")
+	}
+}
 
 func nativeAuditGraph(t *testing.T, script string, workers int) (*Engine, WorkGraph) {
 	t.Helper()

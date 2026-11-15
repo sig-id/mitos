@@ -6,6 +6,16 @@ import (
 	"strings"
 )
 
+// QuestionRoutingError prevents a native question that was acknowledged by the
+// CLI from silently disappearing when the host cannot record it for the user.
+type QuestionRoutingError struct{ Cause error }
+
+func (e *QuestionRoutingError) Error() string {
+	return "The asynchronous clarification could not be recorded for the user. Saved work is preserved; resolve the input routing failure before resuming: " + e.Cause.Error()
+}
+
+func (e *QuestionRoutingError) Unwrap() error { return e.Cause }
+
 // asyncRequest converts a native asynchronous question item into a durable request.
 // It retains the source item; answers are delivered by turn/steer, never as RPC
 // replies to an item notification.

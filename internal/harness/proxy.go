@@ -129,6 +129,9 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 			}
 			if len(e.ID) > 0 && e.Method != "" {
 				normalized, err := Normalize("codex", line)
+				if err != nil && async {
+					return &QuestionRoutingError{Cause: err}
+				}
 				if err == nil {
 					rpcKey := normalized.Thread + "\x00" + string(e.ID)
 					mu.Lock()
@@ -139,6 +142,9 @@ func ProxyCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, client
 						continue
 					}
 					if err != nil {
+						if async {
+							return &QuestionRoutingError{Cause: err}
+						}
 						var status *HTTPError
 						if !errors.As(err, &status) || status.Status != 422 {
 							return err

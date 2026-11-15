@@ -296,6 +296,44 @@ time.sleep(60)
 	}
 }
 
+func TestObservationRenewsOnlyLiveSessions(t *testing.T) {
+	for _, state := range []string{"live", "closed", "expired"} {
+		t.Run(state, func(t *testing.T) {
+			e, req := graphEngine(t, false)
+			p := agentpolicy.Default()
+			p.Supervision.Mode = "rules"
+			if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+				t.Fatal(err)
+			}
+			session, token := supervisorSession(t, e, req.ProjectID)
+			if state == "closed" {
+				if err := e.Store.CloseAgentSession(session.ID, token); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e.Store.mu.Lock()
+			before := e.Store.agentSessions[session.ID]
+			if state == "expired" {
+				before.LeaseUntil = time.Now().Add(-time.Second)
+				e.Store.agentSessions[session.ID] = before
+			}
+			e.Store.mu.Unlock()
+			raw, _ := json.Marshal(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]any{"type": "commandExecution", "cwd": e.Root, "command": "echo hello"}}})
+			err := e.ObserveAgent(context.Background(), session.ID, token, raw)
+			e.Store.mu.RLock()
+			after := e.Store.agentSessions[session.ID]
+			e.Store.mu.RUnlock()
+			if state == "live" {
+				if err != nil || !after.LeaseUntil.After(before.LeaseUntil) {
+					t.Fatal("successful observation did not renew liveness", err)
+				}
+			} else if err == nil || after.Closed != before.Closed || !after.LeaseUntil.Equal(before.LeaseUntil) {
+				t.Fatal("observation revived an inactive session", err)
+			}
+		})
+	}
+}
+
 func TestLargeSupervisionObservationsContinueNativeProxy(t *testing.T) {
 	for _, mode := range []string{"off", "rules", "model"} {
 		for _, kind := range []string{"commandExecution", "fileChange", "mcpToolCall"} {
@@ -331,7 +369,9 @@ func TestLargeSupervisionObservationsContinueNativeProxy(t *testing.T) {
 				if len(raw) != harness.MaxObservationBytes {
 					t.Fatal("fixture must exercise the inclusive limit", len(raw))
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				// Full 16 MiB evidence is parsed and journaled under the race
+				// detector; the former 1 MiB fixture's deadline is too short.
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
 				client, server := net.Pipe()
 				defer server.Close()

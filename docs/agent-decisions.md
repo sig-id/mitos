@@ -37,11 +37,12 @@ stop work. Neither the request router nor the orchestrator establishes confineme
 Automatic workers now run through Codex app-server under the compute provider's
 process ownership. Supported questions and approvals share the explicit-session
 notification and resolution service. The process deadline remains active while a question
-is pending. If execution stops with an unanswered blocking request, the saved attempt
+is pending. If execution is interrupted with an unanswered request, the saved attempt
 records `native_request_unanswered`. Automatic planning and replacement stop until
 the operator addresses the prerequisite and resumes the workflow. Continuation
 retains the task, saved conversation and harvested work; it does not grant the old
-permission. Asynchronous clarifications do not trigger this hold.
+permission. Asynchronous clarifications allow independent work while the attempt is
+running, but retain the missing-input reason if execution is interrupted.
 
 Codex MCP connector elicitations use the same durable decision/outbox service.
 Confirmation forms, up to three boolean or two-choice enum fields, and HTTPS
@@ -53,12 +54,20 @@ Other unsupported native requests fail visibly instead of receiving invented
 answers. Final reports are captured from final agent-message items, and failed or
 interrupted turns cannot be accepted as successful attempts.
 
+Successful supervised observations renew the active session lease after their
+evidence is journaled. A large journal write cannot expire the session merely by
+delaying its heartbeat; closed or already-expired sessions are not revived.
+
 The investigation route starts one bounded read-only Codex app-server investigation.
 It cannot ask recursive questions, and requested escalations are denied. Its result
 must match the original cards and current policy; uncertainty returns to the user.
 This uses the native runtime's read-only sandbox, not independent OS confinement.
 
 Structured asynchronous Codex question items create nonblocking notifications.
+Long questions use a shortened card title; the complete question and suggestions
+remain in the saved request context and answer delivery. A question that cannot be
+recorded fails visibly and stops automatic replacement instead of silently waiting
+for an answer the user cannot provide.
 Their answers use turn/steer with the original active-turn precondition and become
 applied only after the source acknowledges delivery. Turn completion invalidates
 outstanding replies. Terminal input during an active turn also uses turn/steer;

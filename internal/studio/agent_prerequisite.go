@@ -16,8 +16,11 @@ func (s *Store) pendingAgentPrerequisite(runID string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, p := range s.graphPendingRequests(runID) {
-		if p.Blocking && p.Decision.Choice == "" {
-			return &agentPrerequisiteError{summary: fmt.Sprintf("Stopped while waiting for an answer to %q. The request was not approved or executed. Saved work is preserved. Review approval settings or the missing input, then resume this workflow; automatic replacement would repeat the same wait.", p.Decision.Question)}
+		// Async clarification permits independent work while the agent is
+		// running. If that attempt is interrupted, retain its unanswered input
+		// just like a blocking request instead of replacing it with a timeout.
+		if p.Decision.Choice == "" {
+			return &agentPrerequisiteError{summary: fmt.Sprintf("Stopped while waiting for an answer to %q. No answer or permission was inferred. Saved work is preserved. Review approval settings or the missing input, then resume this workflow; automatic replacement would repeat the same wait.", p.Decision.Question)}
 		}
 	}
 	return nil

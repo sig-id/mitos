@@ -5,13 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"mitos/internal/decision"
 	"net"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"mitos/internal/decision"
 )
 
 type asyncTestBroker struct {
@@ -91,7 +94,9 @@ func TestAsyncQuestionsSteerWithoutStoppingServerEvents(t *testing.T) {
 }
 
 func TestAsyncSuggestionsRemainInContextWithoutOverflowingQuestion(t *testing.T) {
-	title := strings.Repeat("Q", 190)
+	// Native async questions have no 200-character title limit. This used to
+	// fail broker validation after the CLI had already acknowledged the tool.
+	title := strings.Repeat("復元した接続を確認してください。", 40)
 	suggestion := strings.Repeat("Suggested option ", 30)
 	params, _ := json.Marshal(map[string]any{"threadId": "t", "turnId": "u", "item": map[string]any{"id": "async-long", "type": "agentMessage", "delivery": "async", "questions": []any{map[string]any{"title": title, "options": []string{suggestion, "Other approach"}}}}})
 	raw, ok := asyncRequest(Envelope{Method: "item/completed", Params: params})
@@ -112,7 +117,41 @@ func TestAsyncSuggestionsRemainInContextWithoutOverflowingQuestion(t *testing.T)
 	if err = card.Validate(false); err != nil {
 		t.Fatal("card rejected", err)
 	}
-	if card.Question != title || !strings.Contains(card.Context.Attempted, suggestion) || card.Kind != "supply_value" {
+	if utf8.RuneCountInString(card.Question) != 200 || !strings.HasSuffix(card.Question, "…") || request.Questions[0].Question != title || !strings.Contains(card.Context.Attempted, title) || !strings.Contains(card.Context.Attempted, suggestion) || card.Kind != "supply_value" {
 		t.Fatal("title, suggestion or free text support lost")
+	}
+}
+
+type rejectedQuestionBroker struct{ asyncTestBroker }
+
+func (*rejectedQuestionBroker) Submit(context.Context, json.RawMessage) (Delivery, error) {
+	return Delivery{}, &HTTPError{Status: 422}
+}
+
+func TestAsyncRoutingFailureIsNotSilentlyForwarded(t *testing.T) {
+	for _, questions := range []string{
+		`[{"title":"Which route is ready?"}]`,
+		`[{"title":"1"},{"title":"2"},{"title":"3"},{"title":"4"}]`,
+	} {
+		t.Run(questions, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			client, server := net.Pipe()
+			defer server.Close()
+			input, writer := io.Pipe()
+			defer input.Close()
+			defer writer.Close()
+			var output bytes.Buffer
+			done := make(chan error, 1)
+			go func() { done <- ProxyCodex(ctx, &rejectedQuestionBroker{}, client, input, &output) }()
+			fmt.Fprintf(server, `{"method":"item/completed","params":{"threadId":"t","turnId":"u","item":{"type":"agentMessage","id":"q","delivery":"async","questions":%s}}}`+"\n", questions)
+			var routing *QuestionRoutingError
+			if err := <-done; !errors.As(err, &routing) || !strings.Contains(err.Error(), "could not be recorded") {
+				t.Fatalf("lost routing failure: %v", err)
+			}
+			if output.Len() != 0 {
+				t.Fatal("forwarded a question the user cannot answer")
+			}
+		})
 	}
 }

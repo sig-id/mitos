@@ -12,6 +12,7 @@ import (
 	"mitos/internal/harness"
 	"mitos/internal/supervision"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -173,6 +174,15 @@ func (e *Engine) supervise(ctx context.Context, session AgentSession, event stri
 	}
 	if verdict.Outcome == "allow" {
 		err := s.commit("", "effect", "supervision_verdict_recorded", change{SupervisorVerdict: &verdict})
+		// Journaling a large observation holds the store lock, so even an
+		// on-time heartbeat cannot renew its lease until this write completes.
+		// The session was live above. Renew after the durable write, before
+		// releasing the lock, without reviving closed or held sessions or
+		// treating an approval request as continuing process liveness.
+		if err == nil && strings.HasPrefix(event, "observation:") && ctx.Err() == nil && !s.supervisionHeld(session.ProjectID) {
+			live.LeaseUntil = time.Now().UTC().Add(30 * time.Second)
+			err = s.commit("", "effect", "agent_session_heartbeat", change{AgentSession: &live})
+		}
 		s.mu.Unlock()
 		return err
 	}

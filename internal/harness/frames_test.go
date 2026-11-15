@@ -32,7 +32,9 @@ func (b *captureObserver) Observe(_ context.Context, raw json.RawMessage) error 
 func TestProxyObservationAtFrameLimit(t *testing.T) {
 	for _, ending := range []string{"\n", "\r\n", ""} {
 		t.Run(fmt.Sprintf("ending-%q", ending), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// The transport now permits 16 MiB frames. Race instrumentation
+			// needs more time to copy and validate the boundary payload.
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			client, server := net.Pipe()
 			defer server.Close()
@@ -108,7 +110,7 @@ func TestProxyRejectsInvalidFramesWithoutForwarding(t *testing.T) {
 }
 
 func TestCodexConsumesLimitEventAndFinalResultBeforeEOF(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	client, server := net.Pipe()
 	defer server.Close()
