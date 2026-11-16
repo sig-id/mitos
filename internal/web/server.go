@@ -320,6 +320,9 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		limit := int64(32 << 10)
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/agent-sessions/") && strings.Contains(r.URL.Path, "/handoff/") {
+			limit = 1 << 20
+		}
 		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/agent-sessions/") && strings.HasSuffix(r.URL.Path, "/observe") {
 			limit = harness.MaxObservationBytes
 		}

@@ -31,10 +31,12 @@ if '--output-schema' in sys.argv:
    plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
  else:
   inputs=json.loads(prompt.split('\nSaved upstream evidence (read these files):\n')[1].split('\nWork only')[0])
-  assert len(inputs)==2
-  for item in inputs:
-   assert pathlib.Path(item['directory'],'changes.patch').exists()
-   assert pathlib.Path(item['directory'],'changes.json').exists()
+  assert len(inputs)==0,inputs
+  for f in workers:
+   page=tool('artifact_list',{'run_id':f['run_id'],'cursor':0,'limit':32})
+   ref=next(a for a in page['artifacts'] if a['role']=='report')
+   read=tool('artifact_read',{'run_id':f['run_id'],'artifact_id':ref['id'],'offset':0,'limit':32768})
+   assert read['complete'],read
   assert len(workers)==2
   for f in workers:
    assert f['state']=='done',str(f)
@@ -233,11 +235,15 @@ func TestAutomaticInstalledCodex(t *testing.T) {
 		t.Skip("set MITOS_TEST_NATIVE_CODEX=1 for the authenticated native CLI smoke test")
 	}
 	e, req := graphEngine(t, true)
-	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "native-smoke", ProjectID: req.ProjectID, Goal: "Use exactly one researcher agent to read hello.txt and report its exact contents. Do not edit any files. The orchestrator should review that report and finish; no additional workers are needed."})
+	goal := "Use exactly one researcher agent to read hello.txt and report its exact contents. Do not edit any files. The orchestrator should review that report and finish; no additional workers are needed."
+	if os.Getenv("MITOS_TEST_HANDOFF_LARGE") == "1" {
+		goal = "Use exactly one engineer worker to create audit-report.md in its workspace: first line 'Verified finding 48', followed by at least 120000 lines saying 'Supporting evidence'. Register that report using artifact_register, submit a typed result, and finish. The orchestrator must inspect result_get and artifact_list, search for the finding, read only its small relevant range, and accept without creating another worker. The report and harvested patch must both exceed 1 MiB. This is a protocol smoke test; no external actions are needed."
+	}
+	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "native-smoke", ProjectID: req.ProjectID, Goal: goal})
 	if err != nil {
 		t.Fatal(err)
 	}
-	until := time.Now().Add(150 * time.Second)
+	until := time.Now().Add(240 * time.Second)
 	for time.Now().Before(until) {
 		g, err = e.Store.Graph(g.ID)
 		if err != nil {
@@ -245,6 +251,60 @@ func TestAutomaticInstalledCodex(t *testing.T) {
 		}
 		if g.Status == "accepted" {
 			t.Logf("Native Codex finished with %d attempts and %d orchestrator calls", g.Attempts, g.OrchestratorCalls)
+			if os.Getenv("MITOS_TEST_HANDOFF_LARGE") == "1" {
+				workers := 0
+				toolsSeen := map[string]bool{}
+				var readBytes int64
+				for _, member := range g.Members {
+					run, err := e.Store.Get(member.CurrentRunID)
+					if err != nil {
+						continue
+					}
+					if member.OrchestratorFor != "" {
+						readBytes += run.HandoffBytes
+						activity, _ := e.Store.Artifact(run.ID, "activity.jsonl")
+						for _, line := range strings.Split(string(activity), "\n") {
+							var record struct {
+								Kind string `json:"kind"`
+								Name string `json:"name"`
+							}
+							if json.Unmarshal([]byte(line), &record) == nil && record.Kind == "tool" {
+								toolsSeen[record.Name] = true
+							}
+						}
+						continue
+					}
+					if member.Spec.Kind != "application" {
+						continue
+					}
+					workers++
+					if run.Result == nil || member.Accepted == nil || member.Accepted.ResultID != run.Result.ID {
+						t.Fatal("missing accepted typed result")
+					}
+					var reportBytes, patchBytes int64
+					for _, a := range run.Artifacts {
+						if a.Role == "report" {
+							reportBytes = max(reportBytes, a.Bytes)
+						}
+						if a.Name == "changes.patch" {
+							patchBytes = a.Bytes
+						}
+					}
+					if reportBytes <= 1<<20 || patchBytes <= 1<<20 {
+						t.Fatal("large evidence was not produced", reportBytes, patchBytes)
+					}
+					t.Logf("Retained report %d bytes; patch %d bytes", reportBytes, patchBytes)
+				}
+				if workers != 1 || g.Attempts != 3 || g.OrchestratorCalls != 2 || readBytes == 0 || readBytes > HandoffRetrievalBudget {
+					t.Fatal("unexpected workflow or evidence reads", workers, g.Attempts, g.OrchestratorCalls, readBytes)
+				}
+				for _, name := range []string{"result_get", "artifact_list", "artifact_search", "artifact_read"} {
+					if !toolsSeen[name] {
+						t.Fatal("review did not call", name, toolsSeen)
+					}
+				}
+				t.Logf("Reviewer consumed %d retrieval bytes; tools %v; no operator interventions", readBytes, toolsSeen)
+			}
 			return
 		}
 		for _, x := range g.Expansions {
@@ -265,7 +325,7 @@ func TestAutomaticInstalledCodex(t *testing.T) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatal("native workflow did not complete within 150 seconds")
+	t.Fatal("native workflow did not complete within 240 seconds")
 }
 
 func automaticScriptEngine(t *testing.T, script string) (*Engine, CreateGraph) {
@@ -409,6 +469,14 @@ func appServerFixture(script string) string {
 script=` + string(encoded) + `
 wire=sys.stdin
 outwire=sys.stdout
+toolseq=1000
+def tool(name,arguments):
+ global toolseq
+ toolseq+=1
+ send({'id':toolseq,'method':'item/tool/call','params':{'threadId':'fixture-thread','turnId':'fixture-turn','callId':str(toolseq),'tool':name,'arguments':arguments}})
+ reply=json.loads(wire.readline())['result']
+ assert reply['success'],reply
+ return json.loads(reply['contentItems'][0]['text'])
 def send(value):
  outwire.write(json.dumps(value)+'\n');outwire.flush()
 for line in wire:
@@ -425,12 +493,81 @@ for line in wire:
    if 'outputSchema' in params:sys.argv+=['--output-schema','fixture-schema']
    sys.stdin=io.StringIO(prompt)
    try:
-    with contextlib.redirect_stdout(sys.stderr):exec(compile(script,__file__,'exec'),{'__file__':__file__})
+    with contextlib.redirect_stdout(sys.stderr):exec(compile(script,__file__,'exec'),{'__file__':__file__,'tool':tool})
    finally:sys.argv=oldargv;sys.stdin=oldin
    if result.exists():
     text=result.read_text()
+    if 'outputSchema' not in params and 'fixture-no-submit' not in prompt and 'fixture-manual-submit' not in prompt:
+     pathlib.Path('fixture-report.md').write_text(text)
+     ref=tool('artifact_register',{'path':'fixture-report.md','role':'report'})
+     pathlib.Path('fixture-report.md').unlink()
+     tool('result_submit',{'version':'mitos.handoff/v1','key':'fixture-result','summary':text[:400],'artifacts':[{'artifact_id':ref['id'],'role':'report'}],'checks':[],'limitations':[],'unresolved_requests':[]})
     send({'method':'item/agentMessage/delta','params':{'delta':text}})
     send({'method':'item/completed','params':{'threadId':'fixture-thread','turnId':'fixture-turn','item':{'id':'final','type':'agentMessage','phase':'final_answer','text':text}}})
   send({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed'}}})
 `
+}
+
+func TestAutomaticLargeEvidenceUsesBoundedTools(t *testing.T) {
+	script := `import json,pathlib,sys,base64
+prompt=sys.stdin.read()
+out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
+if '--output-schema' in sys.argv:
+ ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Read retained report through bounded tools.','result':{'title':'','markdown':'','source_tasks':[],'items':[]}}
+ if not workers:
+  plan['operations']=[{'kind':'add','spec':{'id':'audit','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce an independently readable large report.','brief':{'title':'Audit evidence','intent':'fixture-manual-submit: produce report','app_id':'agent:mitos.engineer','timeout_minutes':1}}}]
+ else:
+  assert len(workers)==1,workers
+  worker=workers[0]
+  receipt=tool('result_get',{'run_id':worker['run_id'],'cursor':0,'limit':16})
+  assert receipt['state']=='candidate',receipt
+  page=tool('artifact_list',{'run_id':worker['run_id'],'cursor':0,'limit':32})
+  report=next(a for a in page['artifacts'] if a['role']=='report')
+  patch=next(a for a in page['artifacts'] if a['name']=='changes.patch')
+  assert report['bytes']>1048576 and patch['bytes']>1048576,page
+  matches=tool('artifact_search',{'run_id':worker['run_id'],'artifact_id':report['id'],'query':'verified finding 48','cursor':0,'limit':4})
+  assert matches['offsets']==[0],matches
+  data=tool('artifact_read',{'run_id':worker['run_id'],'artifact_id':report['id'],'offset':0,'limit':128})
+  assert not data['complete'] and data['next_offset']==128,data
+  assert base64.b64decode(data['data']).startswith(b'verified finding 48')
+  plan['accept']=[{'task':worker['id'],'rationale':'Read exact registered report and verified finding.'}]
+  plan['result']={'title':'Audit','markdown':'Verified finding 48. Large report inspected with bounded tools.','source_tasks':[worker['id']],'items':[]}
+ out.write_text(json.dumps(plan))
+else:
+ pathlib.Path('report.md').write_text('verified finding 48\n'+'supporting audit evidence\n'*60000)
+ a=tool('artifact_register',{'path':'report.md','role':'report'})
+ tool('result_submit',{'version':'mitos.handoff/v1','key':'audit','summary':'Verified finding 48; full report retained.','artifacts':[{'artifact_id':a['id'],'role':'report'}],'checks':[],'limitations':['Only the fixture finding is verified.'],'unresolved_requests':[]})
+ out.write_text('Audit complete; see registered report.')
+`
+	e, req := automaticScriptEngine(t, script)
+	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "large-handoff", ProjectID: req.ProjectID, Goal: "fixture-manual-submit: audit and review large evidence"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		current, _ := e.Store.Graph(g.ID)
+		if current.Status == "accepted" {
+			if current.Attempts != 3 || current.OrchestratorCalls != 2 {
+				t.Fatal("extra copying worker", current.Attempts, current.OrchestratorCalls)
+			}
+			return
+		}
+		for _, x := range current.Expansions {
+			if x.Error != "" {
+				for _, m := range current.Members {
+					if r, err := e.Store.Get(m.CurrentRunID); err == nil {
+						t.Log(r.Summary)
+						data, _ := e.Store.Artifact(r.ID, "output.txt")
+						t.Log(string(data))
+					}
+				}
+				t.Fatal(x.Error)
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	t.Fatal("large evidence review did not complete")
 }

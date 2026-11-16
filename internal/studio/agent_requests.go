@@ -192,7 +192,7 @@ func (s *Store) agentRequestView(key string) (AgentRequestView, error) {
 		view.RunIDs = append(view.RunIDs, r.ID)
 	}
 	if answer, ok := s.agentAnswers[key]; ok {
-		if answer.State == "accepted" {
+		if answer.State != "applied" {
 			for _, r := range request.Runs {
 				current := s.runs[r.ID]
 				if current != nil && current.Decision != nil && current.Decision.Resolution != nil && current.Decision.Resolution.Via == "automation" {
@@ -274,6 +274,15 @@ func (s *Store) AgentDelivery(id, token, key, digest, state string) error {
 	}
 	if answer.State == "applied" || answer.State == state {
 		return nil
+	}
+	if state == "applied" {
+		view, err := s.agentRequestView(key)
+		if err != nil {
+			return err
+		}
+		if view.Digest != digest || view.State == "pending" {
+			return deviceError(409, "answer_no_longer_authorized")
+		}
 	}
 	answer.State = state
 	return s.commit("", "effect", "agent_answer_delivery", change{AgentAnswer: &answer})

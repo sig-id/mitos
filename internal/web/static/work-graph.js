@@ -478,6 +478,7 @@
   runDetail(m,runID).then(async run=>{
    if(token!==epoch||selected!==chosen||!holder.isConnected)return;
    holder.replaceChildren();const attemptIndex=(m.attempts||[]).indexOf(run.id);const attemptHeader=node('div',undefined,'graph-attempt-summary');attemptHeader.append(node('strong','Attempt '+(attemptIndex+1)));if(run.id!==m.current_run_id)attemptHeader.append(badge(run.status==='done'?'finished':run.status));if(showAttempt)holder.append(attemptHeader);const files=run.artifacts||[];if(run.status==='failed'||run.status==='parked'){const failure=node('section',undefined,'graph-run-failure');failure.append(node('h4','Why this attempt stopped'),node('p',run.summary||'No failure explanation was saved.'),node('p',failureHelp(run.summary||'')));holder.append(failure)}const events=renderRunActivity(holder,m,run);
+   window.MitosHandoff.render(holder,run,request,m.accepted?.run_id===run.id);
    const readable=files.filter(a=>/\.(txt|md|json|patch)$/.test(a.name)&&a.bytes<=512*1024);
    const report=readable.find(a=>a.name==='report.md')||[...readable].reverse().find(a=>/report\.md$/.test(a.name))||(m.orchestrator_for&&readable.find(a=>a.name==='graph-proposal.json'));
    const live=['queued','running','stopping'].includes(run.status);

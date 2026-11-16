@@ -220,7 +220,11 @@ func (s *Store) apply(e Event) error {
 		if s.cooperation == nil {
 			s.cooperation = map[string]CooperationRecord{}
 		}
-		s.cooperation[c.Cooperation.ProjectID+"/"+c.Cooperation.Message.ID] = graphClone(*c.Cooperation)
+		record := graphClone(*c.Cooperation)
+		// The journal position is authoritative, including records written before
+		// cooperation payloads carried their own sequence field.
+		record.Seq = e.Seq
+		s.cooperation[record.ProjectID+"/"+record.Message.ID] = record
 		return nil
 	}
 	if c.SystemConfiguration != nil {
@@ -341,6 +345,12 @@ func (s *Store) apply(e Event) error {
 	}
 	if c.Verified {
 		r.Verified = true
+	}
+	if c.Result != nil {
+		r.Result = c.Result
+	}
+	if c.HandoffBytes != 0 {
+		r.HandoffBytes = c.HandoffBytes
 	}
 	if c.Artifact != nil {
 		r.Artifacts = append(r.Artifacts, *c.Artifact)
@@ -729,6 +739,15 @@ func (s *Store) Complete(id, summary string, verified bool) error {
 	}
 	if r.Status == "stopping" {
 		return ErrConflict
+	}
+	if requiresHandoff(r) {
+		if err := s.resultIntegrity(r); err != nil {
+			return err
+		}
+		verified = false
+	}
+	if s.cooperationBlocks(id) {
+		return errors.New("cooperation_blocked: acceptance requires an answered request")
 	}
 	var claim *fleet.Claim
 	if r.Claim != nil && r.Claim.ReleasedAt == nil {

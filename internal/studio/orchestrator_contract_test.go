@@ -2,6 +2,7 @@ package studio
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,6 +26,12 @@ func TestOrchestratorContractRejectsOldShorthandAndUnknownFields(t *testing.T) {
 	props := schema["properties"].(map[string]any)
 	if props["operations"] == nil || props["steps"] != nil || props["retry"] != nil {
 		t.Fatal("native schema diverges from shared plan")
+	}
+	brief := orchestratorTypeSchema(reflect.TypeFor[Brief]())["properties"].(map[string]any)
+	for _, field := range []string{"workspace", "project_id", "project_limits"} {
+		if brief[field] != nil {
+			t.Fatalf("model can invent runtime binding %s", field)
+		}
 	}
 	encoded := string(OrchestratorSchema())
 	if strings.Contains(encoded, `"project_limits"`) {

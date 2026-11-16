@@ -22,6 +22,11 @@ func graphFailure(w http.ResponseWriter, err error) {
 	if errors.Is(err, studio.ErrConflict) {
 		code = 409
 	}
+	var failure *studio.HandoffFailure
+	if errors.As(err, &failure) {
+		writeJSON(w, code, map[string]any{"error": err.Error(), "details": failure})
+		return
+	}
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 func graphBody(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -36,6 +41,7 @@ func graphBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 func (s *Server) graphRoutes(mux *http.ServeMux) {
+	s.handoffRoutes(mux)
 	mux.HandleFunc("GET /agents", func(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, s.base("agents", "Agent library", "agents"), 200)
 	})
@@ -146,7 +152,22 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 			graphFailure(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"version": cooperation.Version, "messages": s.engine.Store.Cooperation(r.PathValue("project")), "effects": "Recorded proposals and evidence; approval and task acceptance require runtime resolution."})
+		cursor, err := strconv.ParseInt(defaultQuery(r, "cursor", "0"), 10, 64)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		limit, err := strconv.Atoi(defaultQuery(r, "limit", "16"))
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		page, err := s.engine.Store.CooperationPage(r.PathValue("project"), r.URL.Query().Get("run_id"), cursor, limit)
+		if err != nil {
+			graphFailure(w, err)
+			return
+		}
+		writeJSON(w, 200, page)
 	})
 	mux.HandleFunc("GET /api/projects/{project}/supervision/incidents", func(w http.ResponseWriter, r *http.Request) {
 		project := r.PathValue("project")
@@ -445,4 +466,11 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, receipt)
 	})
+}
+
+func defaultQuery(r *http.Request, key, fallback string) string {
+	if value := r.URL.Query().Get(key); value != "" {
+		return value
+	}
+	return fallback
 }

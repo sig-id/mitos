@@ -10,8 +10,10 @@ import (
 )
 
 type ArtifactData struct {
-	Name string
-	Data []byte
+	DisplayName string
+	Role        string
+	Name        string
+	Data        []byte
 }
 
 func (s *Store) SaveArtifact(id, name string, data []byte) error {
@@ -41,6 +43,23 @@ func (s *Store) saveArtifacts(id string, replaceUncommitted bool, artifacts ...A
 	if s.writeErr != nil {
 		return s.writeErr
 	}
+	if len(r.Artifacts)+len(artifacts) > handoffArtifactLimit {
+		return handoffError("storage_file_limit", 0)
+	}
+	var evidenceBytes int64
+	for _, a := range r.Artifacts {
+		if a.Role != "" {
+			evidenceBytes += a.Bytes
+		}
+	}
+	for _, a := range artifacts {
+		if a.Role != "" {
+			evidenceBytes += int64(len(a.Data))
+		}
+	}
+	if evidenceBytes > 128<<20 {
+		return handoffError("storage_byte_limit", 0)
+	}
 	names := map[string]bool{}
 	for _, a := range r.Artifacts {
 		names[a.Name] = true
@@ -56,7 +75,7 @@ func (s *Store) saveArtifacts(id string, replaceUncommitted bool, artifacts ...A
 		}
 		names[a.Name] = true
 		sum := sha256.Sum256(a.Data)
-		c := change{Artifact: &Artifact{Name: a.Name, SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(a.Data))}}
+		c := change{Artifact: &Artifact{Name: a.Name, DisplayName: a.DisplayName, Role: a.Role, SHA256: hex.EncodeToString(sum[:]), Bytes: int64(len(a.Data))}}
 		// Artifact records do not change scheduling or lifecycle state and can
 		// therefore be prepared together against the same durable state.
 		e, err := s.prepareEvent(id, "effect", "artifact_harvested", c, seq+1, previous)

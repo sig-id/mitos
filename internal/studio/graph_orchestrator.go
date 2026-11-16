@@ -171,13 +171,15 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				// Disclosure is explicitly enabled by configuring the orchestrator application;
 				// include bounded facts and references, not arbitrary workspace contents.
 				type fact struct {
-					ID        string     `json:"id"`
-					Spec      GraphSpec  `json:"spec"`
-					State     string     `json:"state"`
-					RunID     string     `json:"run_id"`
-					Accepted  bool       `json:"accepted"`
-					Summary   string     `json:"summary,omitempty"`
-					Artifacts []Artifact `json:"artifacts,omitempty"`
+					ID            string     `json:"id"`
+					Spec          GraphSpec  `json:"spec"`
+					State         string     `json:"state"`
+					RunID         string     `json:"run_id"`
+					Accepted      bool       `json:"accepted"`
+					Summary       string     `json:"summary,omitempty"`
+					Artifacts     []Artifact `json:"artifacts,omitempty"`
+					ResultID      string     `json:"result_id,omitempty"`
+					ArtifactCount int        `json:"artifact_count"`
 				}
 				facts := []fact{}
 				reads := map[string]GraphRead{}
@@ -193,8 +195,12 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 						if len(f.Summary) > 2000 {
 							f.Summary = f.Summary[:2000]
 						}
-						f.Artifacts = append([]Artifact(nil), r.Artifacts...)
-						if s.graphSettled(m) {
+						f.ArtifactCount = len(r.Artifacts)
+						f.Artifacts = append([]Artifact(nil), r.Artifacts[:min(8, len(r.Artifacts))]...)
+						if r.Result != nil {
+							f.ResultID = r.Result.ID
+						}
+						if s.graphSettled(m) && r.Result == nil {
 							names := []string{}
 							for _, a := range r.Artifacts {
 								if (a.Name == "output.txt" || a.Name == "report.md") && a.Bytes <= 1<<20 {
