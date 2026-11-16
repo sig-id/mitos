@@ -76,6 +76,7 @@ type GraphMember struct {
 	Accepted        *GraphAcceptance `json:"accepted,omitempty"`
 }
 type GraphAcceptance struct {
+	ResultID     string    `json:"result_id,omitempty"`
 	SpecRevision int64     `json:"spec_revision"`
 	FactRevision int64     `json:"fact_revision"`
 	RunID        string    `json:"run_id,omitempty"`

@@ -29,11 +29,11 @@ func TestCooperationSnapshotAndRequestLifecycle(t *testing.T) {
 	}
 	s := e.Store
 	s.mu.Lock()
-	s.tasks["task"] = &Task{ID: "task", ProjectID: req.ProjectID, Revision: 1}
+	s.tasks["task"] = &Task{ID: "task", ProjectID: req.ProjectID, Revision: 1, CurrentRunID: "run"}
 	s.runs["run"] = &Run{ID: "run", ProjectID: req.ProjectID, TaskID: "task", Status: "running"}
 	s.mu.Unlock()
 	expiry := time.Now().Add(time.Hour)
-	m := cooperation.Message{Version: cooperation.Version, ID: "q", TaskID: "task", RunID: "run", Revision: 1, Kind: "question", Body: "Choose", ExpiresAt: &expiry}
+	m := cooperation.Message{Version: cooperation.Version, ID: "q", TaskID: "task", RunID: "run", Revision: 1, Kind: "question", Body: "Choose", ExpiresAt: &expiry, PermittedResolvers: []cooperation.Resolver{{TaskID: "task", RunID: "run", Revision: 1}}}
 	a, err := e.SubmitCooperation(req.ProjectID, m)
 	if err != nil {
 		t.Fatal(err)

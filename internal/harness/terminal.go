@@ -20,7 +20,16 @@ func RunCodexTerminalOptions(ctx context.Context, b Broker, server io.ReadWriteC
 	return RunCodex(ctx, b, server, input, output, workspace, prompt, CodexOptions{Plan: plan, KeepOpen: keepOpen})
 }
 
+type DynamicTool struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
 type CodexOptions struct {
+	Tools                    []DynamicTool
+	ToolCall                 func(string, json.RawMessage) (any, error)
 	Plan, KeepOpen, Headless bool
 	Model, Sandbox           string
 	ResumeThread             string
@@ -136,6 +145,9 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 		return err
 	}
 	threadParams := map[string]any{"cwd": workspace}
+	if len(options.Tools) > 0 {
+		threadParams["dynamicTools"] = options.Tools
+	}
 	if options.Model != "" {
 		threadParams["model"] = options.Model
 	}
@@ -237,6 +249,46 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 				writeCodexActivity(output, options.Activity, event)
 			}
 			if len(event.ID) > 0 && event.Method != "" {
+				if event.Method == "item/tool/call" && options.ToolCall != nil {
+					var call struct {
+						Tool      string          `json:"tool"`
+						Arguments json.RawMessage `json:"arguments"`
+						Thread    string          `json:"threadId"`
+						Turn      string          `json:"turnId"`
+					}
+					var value any
+					var callErr error
+					if json.Unmarshal(event.Params, &call) != nil || call.Thread != activeThread || call.Turn != activeTurn {
+						callErr = errors.New("invalid dynamic tool origin")
+					} else {
+						allowed := false
+						for _, tool := range options.Tools {
+							if tool.Name == call.Tool {
+								allowed = true
+							}
+						}
+						if !allowed {
+							callErr = errors.New("unsupported dynamic tool")
+						} else {
+							value, callErr = options.ToolCall(call.Tool, call.Arguments)
+						}
+					}
+					if callErr != nil {
+						value = map[string]any{"error": callErr.Error(), "details": callErr}
+					}
+					body, marshalErr := json.Marshal(value)
+					if marshalErr != nil {
+						return marshalErr
+					}
+					if len(body) > 64<<10 {
+						body = []byte(`{"error":"response_limit"}`)
+						callErr = errors.New("response_limit")
+					}
+					if err := send(map[string]any{"id": event.ID, "result": map[string]any{"success": callErr == nil, "contentItems": []any{map[string]any{"type": "inputText", "text": string(body)}}}}); err != nil {
+						return err
+					}
+					continue
+				}
 				if options.Headless {
 					if event.Method == "mcpServer/elicitation/request" {
 						// Supported confirmations have already gone through the broker.

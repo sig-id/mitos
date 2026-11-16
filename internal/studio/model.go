@@ -65,6 +65,9 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	Result             *ResultReceipt         `json:"result,omitempty"`
+	ReviewRuns         []string               `json:"review_runs,omitempty"`
+	HandoffBytes       int64                  `json:"handoff_bytes,omitempty"`
 	BlockedReason      string                 `json:"blocked_reason,omitempty"`
 	NativeThreadID     string                 `json:"native_thread_id,omitempty"`
 	GraphAttempt       *GraphAttempt          `json:"graph_attempt,omitempty"`
@@ -133,9 +136,11 @@ func (r Run) Duration() time.Duration {
 }
 
 type Artifact struct {
-	Name   string `json:"name"`
-	SHA256 string `json:"sha256"`
-	Bytes  int64  `json:"bytes"`
+	DisplayName string `json:"display_name,omitempty"`
+	Role        string `json:"role,omitempty"`
+	Name        string `json:"name"`
+	SHA256      string `json:"sha256"`
+	Bytes       int64  `json:"bytes"`
 }
 
 type Option = decision.Option
@@ -163,6 +168,8 @@ type Event struct {
 }
 
 type change struct {
+	Result              *ResultReceipt             `json:"result,omitempty"`
+	HandoffBytes        int64                      `json:"handoff_bytes,omitempty"`
 	BlockedReason       string                     `json:"blocked_reason,omitempty"`
 	SystemConfiguration *SystemConfiguration       `json:"system_configuration,omitempty"`
 	NativeThreadID      string                     `json:"native_thread_id,omitempty"`

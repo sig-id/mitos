@@ -54,9 +54,9 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			name := strings.Split(f.Tag.Get("json"), ",")[0]
-			// ProjectLimits belongs to recurring workflow services. Graph workers
-			// already inherit the graph deadline and cannot enable that setting.
-			if t == reflect.TypeFor[Brief]() && name == "project_limits" {
+			// Project identity and workspace are runtime bindings, not model choices.
+			// ProjectLimits belongs only to recurring workflow services.
+			if t == reflect.TypeFor[Brief]() && (name == "project_limits" || name == "workspace" || name == "project_id") {
 				continue
 			}
 			if f.IsExported() && name != "-" && name != "" {

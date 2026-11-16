@@ -811,6 +811,23 @@ func (s *Store) acceptGraphMember(g *WorkGraph, id, evidence, rationale string, 
 		if r == nil || !r.Terminal() || r.Status != "done" || !s.graphSettled(m) {
 			return graphError("candidate execution must finish and settle before acceptance")
 		}
+		if s.cooperationBlocks(r.ID) {
+			return graphError("cooperation request blocks acceptance")
+		}
+		if r.Result != nil && r.Result.Revision != int(m.Revision) {
+			return graphError("result revision is stale")
+		}
+		if r.Result != nil || requiresHandoff(r) {
+			if err := s.resultIntegrity(r); err != nil {
+				return err
+			}
+			for _, id := range r.Result.Submission.UnresolvedRequests {
+				rec, ok := s.cooperation[r.ProjectID+"/"+id]
+				if !ok || s.cooperationState(rec, at) != "answered" {
+					return graphError("result has unresolved requests")
+				}
+			}
+		}
 	}
 	manifest := graphDigest(struct {
 		Members  map[string]*GraphMember
@@ -818,6 +835,9 @@ func (s *Store) acceptGraphMember(g *WorkGraph, id, evidence, rationale string, 
 		Policy   int64
 	}{g.Members, g.Revision + 1, g.PolicyRevision})
 	m.Accepted = &GraphAcceptance{SpecRevision: m.Revision, FactRevision: m.FactRevision, RunID: m.CurrentRunID, Evidence: evidence, Rationale: rationale, At: at, Manifest: manifest}
+	if r := s.runs[m.CurrentRunID]; r != nil && r.Result != nil {
+		m.Accepted.ResultID = r.Result.ID
+	}
 	m.State = "accepted"
 	m.FactRevision++
 	if id == g.RootTask {

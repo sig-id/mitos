@@ -112,7 +112,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 			projects = append(projects, row)
 		}
 
-		writeJSON(w, 200, map[string]any{"server": s.engine.Store.Home(), "observed_at": time.Now().UTC(), "projects": projects, "decisions": inbox, "attention": s.engine.Store.Attention()})
+		writeJSON(w, 200, map[string]any{"server": s.engine.Store.Home(), "observed_at": time.Now().UTC(), "projects": projects, "decisions": inbox, "attention": s.engine.Store.Attention(), "cooperation": s.engine.Store.CooperationNotices()})
 	})
 	mux.HandleFunc("GET /api/projects/{project}/work", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.engine.ProjectWork(r.PathValue("project"))

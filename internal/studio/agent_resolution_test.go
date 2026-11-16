@@ -186,12 +186,18 @@ func TestProjectDecisionProviderResolvesAndCanBeRevoked(t *testing.T) {
 	if len(e.Store.Attention()) != 0 {
 		t.Fatal("resolved request remains in notifications")
 	}
+	if err = e.Store.AgentDelivery(session.ID, token, request.RequestID, status.Digest, "application_blocked"); err != nil {
+		t.Fatal(err)
+	}
 	saved.Autonomy = "manual"
 	if _, err = e.SaveAgentPolicy(req.ProjectID, saved); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = e.Store.AgentRequestStatus(session.ID, token, request.RequestID); err == nil {
 		t.Fatal("revoked automation answer delivered")
+	}
+	if err = e.Store.AgentDelivery(session.ID, token, request.RequestID, status.Digest, "applied"); err == nil {
+		t.Fatal("revoked retry acknowledged")
 	}
 }
 

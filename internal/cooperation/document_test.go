@@ -36,7 +36,7 @@ func TestDocumentCASAndBoundary(t *testing.T) {
 }
 func TestMessageRequestSemantics(t *testing.T) {
 	now := time.Now()
-	m := Message{Version: Version, ID: "q1", TaskID: "task", RunID: "run", Revision: 1, Kind: "question", Body: "Which option?", Blocking: true}
+	m := Message{Version: Version, ID: "q1", TaskID: "task", RunID: "run", Revision: 1, Kind: "question", Body: "Which option?", BlockedActions: []BlockedAction{{TaskID: "task", RunID: "run", Revision: 1, Action: "acceptance"}}, PermittedResolvers: []Resolver{{TaskID: "task", RunID: "run", Revision: 1}}}
 	if err := m.Validate(now); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,8 @@ func TestMessageRequestSemantics(t *testing.T) {
 	if m.Validate(now) == nil {
 		t.Fatal("result blocks work")
 	}
-	m.Blocking = false
+	m.BlockedActions = nil
+	m.PermittedResolvers = nil
 	m.Kind = "answer"
 	if m.Validate(now) == nil {
 		t.Fatal("uncorrelated answer")
