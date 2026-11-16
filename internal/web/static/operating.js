@@ -121,12 +121,37 @@
  }
  function updateProfiles(){const f=$('work-form'),a=agents.find(a=>a.id===f.elements.agent_id.value);f.elements.profile_id.replaceChildren(new Option('Configured default profile',''));for(const p of a?.profiles||[])f.elements.profile_id.append(new Option(p.name||p.id,p.id))}
  $('work-form').elements.agent_id.onchange=updateProfiles;
- let bridgeAgents=[], bridgeLaunchKey='';
- const bridgeForm=$('agent-session-form');
- function bridgeProfiles(){const a=bridgeAgents.find(a=>a.id===bridgeForm.elements.agent_id.value);bridgeForm.elements.profile_id.replaceChildren(new Option('Configured default profile',''));for(const p of a?.profiles||[])bridgeForm.elements.profile_id.append(new Option(p.name||p.id,p.id))}
- bridgeForm.elements.agent_id.onchange=bridgeProfiles;
- $('start-agent-session')?.addEventListener('click',async()=>{bridgeForm.reset();bridgeLaunchKey=key();bridgeForm.querySelector('.form-error').textContent='';dialog('agent-session-dialog');try{bridgeAgents=(await api('/api/agents?project='+project)).filter(a=>a.installed&&['codex','claude'].includes(a.id));bridgeForm.elements.agent_id.replaceChildren(...bridgeAgents.map(a=>new Option(a.name,a.id)));bridgeProfiles();if(!bridgeAgents.length)throw Error('Install Codex or Claude to start an agent session.')}catch(e){bridgeForm.querySelector('.form-error').textContent=e.message}});
- bridgeForm.onsubmit=e=>{e.preventDefault();submit(bridgeForm,async()=>{const s=await api(endpoint('sessions'),{key:bridgeLaunchKey,agent_id:bridgeForm.elements.agent_id.value,profile_id:bridgeForm.elements.profile_id.value,prompt:bridgeForm.elements.prompt.value,bridge:true});window.location.href=terminal(s)})};
+ let sessionAgents=[], sessionLaunchKey='';
+ const sessionForm=$('agent-session-form'),sessionSubmit=sessionForm.querySelector('[type=submit]');
+ function sessionProfiles(){
+  const a=sessionAgents.find(a=>a.id===sessionForm.elements.agent_id.value);
+  sessionForm.elements.profile_id.replaceChildren(new Option('Configured default profile',''));
+  for(const p of a?.profiles||[])sessionForm.elements.profile_id.append(new Option(p.name||p.id,p.id));
+  sessionSubmit.disabled=!a?.capabilities.initial_prompt;
+  $('agent-session-capabilities').textContent=!a?'':a.capabilities.request_bridge
+   ?'Questions and approvals appear in Notifications and alongside your work. Your conversation opens in the terminal.'
+   :'This opens a native session. Answer questions and approvals in its terminal; they are not routed to Mitos Notifications.';
+ }
+ sessionForm.elements.agent_id.onchange=sessionProfiles;
+ $('start-agent-session')?.addEventListener('click',async()=>{
+  sessionForm.reset();sessionLaunchKey=key();sessionAgents=[];
+  sessionForm.elements.agent_id.replaceChildren();sessionProfiles();dialog('agent-session-dialog');
+  try{
+   sessionAgents=(await api('/api/agents?project='+encodeURIComponent(project))).filter(a=>a.installed&&a.kind==='agent');
+   sessionForm.elements.agent_id.replaceChildren(...sessionAgents.map(a=>{
+    const option=new Option(a.name+(a.capabilities.initial_prompt?'':' – initial assignment unavailable'),a.id);
+    option.disabled=!a.capabilities.initial_prompt;return option;
+   }));
+   sessionForm.elements.agent_id.value=sessionAgents.find(a=>a.capabilities.initial_prompt)?.id||'';
+   sessionProfiles();
+   if(!sessionAgents.length)throw Error('No coding agents were detected on the Mitos server’s PATH. Install an agent or configure its environment, then reopen this dialog.');
+   if(sessionSubmit.disabled)throw Error('The detected agents cannot receive an initial assignment through their current adapters.');
+  }catch(e){sessionForm.querySelector('.form-error').textContent=e.message}
+ });
+ sessionForm.onsubmit=e=>{e.preventDefault();const agent=sessionAgents.find(a=>a.id===sessionForm.elements.agent_id.value);if(!agent?.capabilities.initial_prompt)return;submit(sessionForm,async()=>{
+  const s=await api(endpoint('sessions'),{key:sessionLaunchKey,agent_id:agent.id,profile_id:sessionForm.elements.profile_id.value,prompt:sessionForm.elements.prompt.value,bridge:!!agent.capabilities.request_bridge});
+  window.location.href=terminal(s);
+ })};
  $('new-session-work')?.addEventListener('click',()=>openWork().catch(showError));
  $('edit-work').onclick=()=>{reviewed=false;$('work-fields').hidden=false;$('launch-review').hidden=true;$('edit-work').hidden=true;$('work-submit').textContent='Review work';};
  $('work-form').onsubmit=e=>{e.preventDefault();const f=e.target;submit(f,async()=>{

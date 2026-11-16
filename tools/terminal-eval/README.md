@@ -57,6 +57,11 @@ folders, filtering, editable suggested names, invalid paths, stale response
 protection, keyboard entry, mobile layout, and opening projects from both the
 project and terminal pages. It uses an isolated temporary directory and server.
 
+`npm run test:agent-picker --prefix tools/terminal-eval` checks detected coding
+agents, Codex/Claude request-bridge selection, Pi/OpenCode/custom native launches,
+environment profiles, assignment preservation, unsupported initial assignments,
+and empty or failed discovery. It uses local CLI fixtures without model calls.
+
 `npm run test:markdown --prefix tools/terminal-eval` checks the shared light-DOM
 `<mitos-markdown>` viewer/editor: formatting, native undo/redo, selection across
 Edit/Preview/Split modes, line numbers, form values/reset, save shortcuts, safe

@@ -27,10 +27,14 @@ sole judge of whether its own actions comply with policy.
 ## 1. Explicit single-agent sessions
 
 Projects MUST expose **Start agent session** alongside **Start coordinated work**.
-The first creates one bridge-backed CLI session with an assignment and selected
-runtime/profile. The second creates coordinated work. Both use the same request
-contract even when executor lifecycles differ. Ordinary native terminals remain an
-explicit separate compatibility path.
+The first lists detected coding CLIs and creates one session with an assignment and
+selected runtime/profile. It uses the request bridge where supported; otherwise it
+offers the native-session compatibility path with an explicit explanation that
+questions and approvals remain in the terminal. Agents whose adapters cannot accept
+an initial assignment remain visible but unavailable for this action. The second
+creates coordinated work. Bridge-backed sessions and coordinated work use the same
+request contract even when executor lifecycles differ. Native sessions MUST NOT
+claim request-bridge capabilities.
 
 A session MUST retain its project, task/session identity, original request IDs,
 profile, output, pending requests and resolution receipts. Launch MUST be

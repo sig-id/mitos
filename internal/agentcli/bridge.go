@@ -2,9 +2,13 @@ package agentcli
 
 import "errors"
 
+func supportsBridge(agent string) bool {
+	return agent == "codex" || agent == "claude"
+}
+
 // WrapBridge preserves the selected native binary and credential environment.
 func WrapBridge(launch Launch, binary, url, workspace, title string) (Launch, error) {
-	if !launch.Bridge || (launch.AgentID != "codex" && launch.AgentID != "claude") {
+	if !launch.Bridge || !supportsBridge(launch.AgentID) {
 		return Launch{}, errors.New("unsupported bridge adapter")
 	}
 	args := []string{"agent", launch.AgentID, "--url", url, "--workspace", workspace, "--title", title, "--executable", launch.Executable, "--bind-desk-session"}

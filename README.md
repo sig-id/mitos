@@ -71,9 +71,12 @@ Changes stay in workspace copies, with patches and complete workspace artifacts.
 Older untouched goals require **Start automatic work**; viewing them does not launch
 anything. See [automatic workflow](docs/adaptive-runtime.md#automatic-workflow).
 
-Use **Start agent session** to launch one Codex or Claude session through Mitos.
-The terminal opens in the browser; supported questions and approvals appear in
-**Inbox**. Select an installed CLI and environment profile, then enter an assignment.
+Use **Start agent session** to select an automatically detected coding CLI and
+environment profile, then enter an assignment. Codex and Claude sessions route
+supported questions and approvals to **Inbox**. Other agents, including Pi and
+OpenCode, open native sessions with questions and approvals handled in the browser
+terminal; the picker explains this before launch. Installed agents whose adapters
+cannot receive an initial assignment appear disabled with an explanation.
 The CLI equivalent is `./bin/mitos agent codex --workspace /path/to/project` while
 Mitos is serving. Add `--keep-open --prompt "Assignment"` to supply the initial
 assignment and keep the conversation open. Codex supports live turn steering and asynchronous clarification replies.
