@@ -27,6 +27,9 @@ func TestOrchestratorContractRejectsOldShorthandAndUnknownFields(t *testing.T) {
 		t.Fatal("native schema diverges from shared plan")
 	}
 	encoded := string(OrchestratorSchema())
+	if strings.Contains(encoded, `"project_limits"`) {
+		t.Fatal("native schema exposes workflow-only execution limits to graph workers")
+	}
 	for _, field := range []string{`"deps"`, `"join"`, `"guard"`, `"inbox"`, `"after_sequence"`} {
 		if !strings.Contains(encoded, field) {
 			t.Fatalf("native schema omits %s", field)
