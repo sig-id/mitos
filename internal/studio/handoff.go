@@ -298,7 +298,7 @@ func (e *Engine) handoffRequests(run string, raw json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	records := e.Store.Cooperation(r.ProjectID)
+	records := cooperationVisibleRecords(e.Store.Cooperation(r.ProjectID), run)
 	slices.SortFunc(records, func(a, b CooperationRecord) int {
 		if a.Seq < b.Seq {
 			return -1
@@ -314,23 +314,7 @@ func (e *Engine) handoffRequests(run string, raw json.RawMessage) (any, error) {
 		if rec.Seq <= in.Cursor {
 			continue
 		}
-		allowed := rec.Message.RunID == run
-		for _, resolver := range rec.Message.PermittedResolvers {
-			if resolver.RunID == run {
-				allowed = true
-			}
-		}
-		if rec.Message.InReplyTo != "" {
-			for _, origin := range records {
-				if origin.Message.ID == rec.Message.InReplyTo && origin.Message.RunID == run {
-					allowed = true
-				}
-			}
-		}
-		if !allowed {
-			next = rec.Seq
-			continue
-		}
+
 		candidate := append(append([]CooperationRecord{}, selected...), rec)
 		body, _ := json.Marshal(candidate)
 		if len(body) > 48<<10 || len(candidate) > in.Limit {

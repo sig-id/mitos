@@ -65,6 +65,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	HandoffProtocol    string                 `json:"handoff_protocol,omitempty"` // Frozen at attempt creation; absent in pre-contract history.
 	Result             *ResultReceipt         `json:"result,omitempty"`
 	ReviewRuns         []string               `json:"review_runs,omitempty"`
 	HandoffBytes       int64                  `json:"handoff_bytes,omitempty"`

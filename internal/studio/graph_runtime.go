@@ -84,6 +84,9 @@ func (e *Engine) reconcileGraphs() error {
 			rid := newID("local")
 			binding := GraphAttempt{ContinueFrom: m.ContinueFrom, GraphID: g.ID, GraphRevision: g.Revision, Specification: m.Revision, PolicyRevision: g.PolicyRevision, Generation: g.OrchestratorGeneration, Executor: *m.Executor, Criteria: m.Spec.Criteria, Context: m.Spec.Context}
 			r := Run{ID: rid, TaskID: tid, ProjectID: g.ProjectID, Tenant: decision.LocalTenant, Brief: m.Spec.Brief, AppName: m.Executor.Application.Name, GraphAttempt: &binding, Status: "queued", Stage: "Ready to start", Summary: "Graph task is waiting for execution capacity.", CreatedAt: g.UpdatedAt, UpdatedAt: g.UpdatedAt}
+			if agent := m.Executor.Application.Agent; agent != nil && !isOrchestratorKind(agent.Definition.Kind) {
+				r.HandoffProtocol = HandoffVersion
+			}
 			if m.OrchestratorFor != "" {
 				for _, member := range g.Members {
 					if member.OrchestratorFor == "" && member.CurrentRunID != "" {

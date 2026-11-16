@@ -220,7 +220,11 @@ func (s *Store) apply(e Event) error {
 		if s.cooperation == nil {
 			s.cooperation = map[string]CooperationRecord{}
 		}
-		s.cooperation[c.Cooperation.ProjectID+"/"+c.Cooperation.Message.ID] = graphClone(*c.Cooperation)
+		record := graphClone(*c.Cooperation)
+		// The journal position is authoritative, including records written before
+		// cooperation payloads carried their own sequence field.
+		record.Seq = e.Seq
+		s.cooperation[record.ProjectID+"/"+record.Message.ID] = record
 		return nil
 	}
 	if c.SystemConfiguration != nil {

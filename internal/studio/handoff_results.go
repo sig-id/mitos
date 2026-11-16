@@ -8,6 +8,9 @@ import (
 )
 
 func (s *Store) resultIntegrity(r *Run) error {
+	if r.HandoffProtocol != "" && r.HandoffProtocol != HandoffVersion {
+		return handoffError("unsupported_handoff_version", 0)
+	}
 	if r.Result == nil {
 		return handoffError("result_missing", 0)
 	}
@@ -164,5 +167,5 @@ func (s *Store) readResult(consumer string, in ResultRead) (ResultPage, error) {
 }
 
 func requiresHandoff(r *Run) bool {
-	return r.GraphAttempt != nil && r.GraphAttempt.Executor.Application.Agent != nil && !isOrchestratorKind(r.GraphAttempt.Executor.Application.Agent.Definition.Kind)
+	return r.HandoffProtocol != ""
 }

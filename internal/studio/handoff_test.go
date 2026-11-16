@@ -389,6 +389,28 @@ func TestCooperationExplicitCrossTaskResolverAndFrozenArtifactGrant(t *testing.T
 	if _, err := e.SubmitCooperation(origin.ProjectID, answer); err != nil {
 		t.Fatal(err)
 	}
+
+	first, err := e.Store.CooperationPage(origin.ProjectID, origin.ID, 0, 1)
+	if err != nil || len(first.Messages) != 1 || first.Messages[0].Message.ID != msg.ID || first.Next == nil {
+		t.Fatal("request page", first, err)
+	}
+	second, err := e.Store.CooperationPage(origin.ProjectID, origin.ID, *first.Next, 1)
+	if err != nil || len(second.Messages) != 1 || second.Messages[0].Message.ID != answer.ID || second.Messages[0].Message.Body != answer.Body || second.Next != nil {
+		t.Fatal("cross-task answer hidden", second, err)
+	}
+	raw, _ := json.Marshal(CooperationList{Limit: 16})
+	native, err := e.handoffRequests(origin.ID, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := native.(map[string]any)["messages"].([]CooperationRecord)
+	if len(messages) != 2 || messages[1].Message.ID != answer.ID {
+		t.Fatal("native history diverges", messages)
+	}
+	unrelated, err := e.Store.CooperationPage(origin.ProjectID, "unrelated-run", 0, 16)
+	if err != nil || len(unrelated.Messages) != 0 {
+		t.Fatal("unrelated run received conversation", unrelated, err)
+	}
 	// Merely belonging to the same graph or knowing an ID grants no artifact access.
 	ref := saveEvidence(t, e, origin, "report.txt", []byte("evidence"))
 	if _, err := e.Store.artifactRange(resolver.ID, ArtifactRead{RunID: origin.ID, ArtifactID: ref.ID, Limit: 10}, nil); err == nil {
@@ -444,6 +466,7 @@ func TestHandoffMetadataEnvelopeAndMissingSubmission(t *testing.T) {
 	e.Store.mu.Lock()
 	copy := graphClone(*e.Store.runs[r.ID])
 	copy.GraphAttempt.Executor.Application.Agent = &AgentBinding{}
+	copy.HandoffProtocol = HandoffVersion
 	e.Store.runs[r.ID] = &copy
 	e.Store.mu.Unlock()
 	if err := e.Store.Complete(r.ID, "prose only", true); err == nil {

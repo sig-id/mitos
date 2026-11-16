@@ -111,8 +111,10 @@ applications; native typed-result review uses the artifact tools instead.
 
 New native attempts require typed submissions; there is no prose parser or dual
 worker-result implementation. Existing journal entries are preserved verbatim;
-new fields are additive, and old runs simply have no typed receipt. No destructive
-journal rewrite is needed. New cooperation writes accept v2 only. Historical v1
+new worker attempts freeze `handoff_protocol` at creation, and old runs have no
+contract marker or typed receipt. Already completed candidates remain reviewable;
+receipt enforcement is not retroactive. Replayed cooperation records take their
+sequence from the enclosing journal event. No journal rewrite is needed. New cooperation writes accept v2 only. Historical v1
 messages are inspectable but project as `unsupported_version` for settlement;
 old pending requests cannot unblock new work. There is no automatic adoption or
 legacy write handler. See [cooperation.md](cooperation.md) for v2 lifetime rules.

@@ -256,7 +256,7 @@ func (s *Store) CooperationPage(project, run string, cursor int64, limit int) (C
 	if cursor < 0 || limit < 1 || limit > 16 {
 		return CooperationPage{}, handoffError("invalid_page", cursor)
 	}
-	records := s.Cooperation(project)
+	records := cooperationVisibleRecords(s.Cooperation(project), run)
 	sort.Slice(records, func(i, j int) bool { return records[i].Seq < records[j].Seq })
 	out := CooperationPage{Messages: []CooperationRecord{}, Version: cooperation.Version}
 	next := cursor
@@ -264,18 +264,7 @@ func (s *Store) CooperationPage(project, run string, cursor int64, limit int) (C
 		if record.Seq <= cursor {
 			continue
 		}
-		if run != "" {
-			visible := record.Message.RunID == run
-			for _, resolver := range record.Message.PermittedResolvers {
-				if resolver.RunID == run {
-					visible = true
-				}
-			}
-			if !visible {
-				next = record.Seq
-				continue
-			}
-		}
+
 		out.Messages = append(out.Messages, record)
 		body, _ := json.Marshal(out)
 		if len(out.Messages) > limit || len(body) > 48<<10 {
@@ -325,6 +314,35 @@ func (s *Store) CooperationNotices() []CooperationNotice {
 			body = append(body[:500], []rune("…")...)
 		}
 		out = append(out, CooperationNotice{ID: record.ProjectID + "/" + record.Message.ID, ProjectID: record.ProjectID, GraphID: run.GraphAttempt.GraphID, TaskID: run.TaskID, RunID: run.ID, Body: string(body), Blocking: len(record.Message.BlockedActions) > 0})
+	}
+	return out
+}
+
+// Both native tools and the frontend expose the same run-scoped conversation.
+// Replies carry the resolver's identity; their correlation retains visibility
+// for the request's originating run, even across page boundaries.
+func cooperationVisibleRecords(records []CooperationRecord, run string) []CooperationRecord {
+	if run == "" {
+		return records
+	}
+	owned := map[string]bool{}
+	for _, record := range records {
+		if record.Message.RunID == run && record.Message.Request() {
+			owned[record.Message.ID] = true
+		}
+	}
+	out := []CooperationRecord{}
+	for _, record := range records {
+		m := record.Message
+		visible := m.RunID == run || owned[m.InReplyTo]
+		for _, resolver := range m.PermittedResolvers {
+			if resolver.RunID == run {
+				visible = true
+			}
+		}
+		if visible {
+			out = append(out, record)
+		}
 	}
 	return out
 }
