@@ -187,15 +187,31 @@ mitos-file-browser{display:block;min-width:0}mitos-file-browser input{width:100%
 .graph-tool-row.failed{border-color:#f4aaa7}.graph-tool-row.failed .graph-tool-status{color:#f4aaa7}
 .graph-tool-row .analysis-code{max-height:280px;overflow:auto;margin:6px 0 12px}
 .graph-raw-log,.graph-attempt-files{border-top:1px solid var(--line);margin:22px 0 0;padding:14px 0}
-.graph-raw-log>summary,.graph-attempt-files>summary{color:var(--muted);cursor:pointer;font-size:13px}
+.graph-raw-log>summary{color:var(--muted);cursor:pointer;font-size:13px}
 .graph-attempt-report{margin:24px 0}.graph-attempt-report>h4{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-.graph-inline-files{margin-top:16px;min-width:0}.graph-inline-files .graph-file-layout{grid-template-columns:minmax(0,1fr);gap:18px}
-.graph-inline-files .graph-file-sidebar{border-right:0;border-bottom:1px solid var(--line);padding:0 0 16px}
-.graph-inline-files .file-list{max-height:220px}.graph-inline-files .graph-file-sidebar>h3,.graph-inline-files .graph-file-sidebar>p{display:none}
-.graph-inline-files .graph-result-heading{gap:12px;flex-wrap:wrap}.graph-inline-files .graph-result-heading h4{margin:0}
-.graph-inline-files button{font-size:13px}.graph-inline-files .graph-preview-origin{display:none}
+#graph-files-dialog{width:calc(100vw - 32px);max-width:none;height:calc(100dvh - 32px);max-height:none;margin:auto;padding:24px;overflow:hidden;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px}
+#graph-files-dialog::backdrop{background:#0009}
+#graph-attempt-browser{display:flex;flex-direction:column;height:100%;padding:0}
+#graph-attempt-browser>.graph-result-heading{flex:none;margin-bottom:20px}
+#graph-attempt-browser>.graph-result-heading h2{font-size:20px;margin:0}
+#graph-attempt-browser .graph-file-layout{flex:1;min-height:0}
+#graph-attempt-browser .graph-file-sidebar,#graph-attempt-browser .graph-result-reader{height:100%;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+#graph-attempt-browser .graph-result-reader{padding-right:8px}
+#graph-attempt-browser .file-list,#graph-attempt-browser .md-preview,#graph-attempt-browser .md-source,#graph-attempt-browser .graph-source-lines,#graph-attempt-browser .graph-execution-log{max-height:none}
+#graph-attempt-browser .md-preview{height:auto;overflow:visible}
+#graph-attempt-browser mitos-markdown[data-mode=preview] .md-resize-handle{display:none}
+.graph-file-toggle{display:none}
+@media(max-width:900px){
+ #graph-files-dialog{padding:16px;width:calc(100vw - 16px);height:calc(100dvh - 16px)}
+ #graph-attempt-browser>.graph-result-heading{gap:12px;margin-bottom:16px}
+ #graph-attempt-browser>.graph-result-heading h2{flex-basis:100%;font-size:18px}
+ #graph-attempt-browser .graph-file-toggle{display:block}
+ #graph-attempt-browser .graph-file-sidebar{display:none;border:0;padding:0}
+ #graph-attempt-browser .show-file-navigation .graph-file-sidebar{display:block}
+ #graph-attempt-browser .show-file-navigation .graph-result-reader{display:none}
+}
 .graph-structured-output>.graph-output-section{border:0;border-top:1px solid var(--line);border-radius:0;padding:14px 0}
 .graph-structured-output>.graph-output-section>summary{font-size:13px;color:var(--muted);font-weight:400}
-@media(max-width:640px){.graph-tool-row>summary{gap:6px}.graph-tool-label{font-size:12px}.graph-tool-name{font-size:12px}.graph-inline-files .graph-result-heading{align-items:flex-start}}
+@media(max-width:640px){.graph-tool-row>summary{gap:6px}.graph-tool-label{font-size:12px}.graph-tool-name{font-size:12px}}
 
 .graph-inspector .graph-tool-row{margin-top:0}.graph-inspector .graph-tool-row>summary{font-size:13px;color:var(--text)}

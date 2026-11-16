@@ -39,5 +39,25 @@ try{
  await page.getByRole('combobox',{name:'File view'}).selectOption('reports');await page.locator('button[data-path="empty.txt"]').click();await page.getByText('No content was saved in this file.',{exact:true}).waitFor();await page.locator('button[data-path="output.txt"]').click();await page.locator('.graph-execution-log').waitFor();assert.ok(!(await page.locator('.graph-execution-log').textContent()).includes('\x1b'));
  for(const width of [1440,390]){await page.setViewportSize({width,height:1000});assert.ok(await page.locator('.graph-execution-log').evaluate(n=>getComputedStyle(n).whiteSpace==='pre-wrap'&&n.scrollWidth<=n.clientWidth+1));assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1))}
  await page.screenshot({path:'/tmp/mitos-workflow-files-mobile.png',fullPage:true});await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:'/tmp/mitos-workflow-files.png',fullPage:true});
- assert.deepEqual(errors,[]);console.log('PASS: unfinished report discovery, directory browsing, pagination, search, source citations, inline diff, safe previews, wrapped ANSI-free logs and mobile layout');
+ // Long attempt reports scroll in the dedicated reader, with the navigation
+ // header remaining available and source citations scrolled into view.
+ await page.route('**/artifacts/report.md',route=>route.fulfill({contentType:'text/plain',body:'# Long saved report\n\n'+Array.from({length:80},(_,i)=>`Paragraph ${i+1}. Saved evidence for this attempt.\n\n`).join('')+'[Late source](src/file-474.go#L180)'}));
+ await page.route('**/file?*',route=>route.fulfill({contentType:'text/plain',body:Array.from({length:220},(_,i)=>'// Source line '+(i+1)).join('\n')}));
+ await page.evaluate(async()=>{
+  const dialog=document.createElement('dialog');dialog.id='graph-files-dialog';dialog.setAttribute('aria-label','Files from this attempt');const container=document.createElement('div');container.id='graph-attempt-browser';container.className='graph-result';dialog.append(container);document.body.append(dialog);
+  const graph={id:'graph',root_task:'worker',members:{worker:{spec:{id:'worker',kind:'application',brief:{title:'Diagnose execution'}}}}};
+  const loading=window.MitosGraphResult.open({graph,request:async path=>(await fetch(path)).json(),container,attemptOnly:true,initial:{task:'worker',run:'run'},onClose:()=>dialog.close()});dialog.showModal();await loading;
+ });
+ const dialog=page.getByRole('dialog',{name:'Files from this attempt',exact:true}),reader=dialog.locator('.graph-result-reader');
+ assert.equal(await dialog.getByRole('button',{name:'Back to activity',exact:true}).evaluate(n=>n===document.activeElement),true,'loading must preserve keyboard focus');
+ for(const width of [1440,390]){
+  await page.setViewportSize({width,height:1000});
+  assert.ok(await dialog.locator('.md-preview').evaluate(n=>n.scrollHeight<=n.clientHeight+1),'report must not add a nested vertical scrollbar');
+  assert.ok(await reader.evaluate(n=>n.scrollHeight>n.clientHeight),'long report should scroll in the reader');
+ }
+ await dialog.getByRole('button',{name:'Late source',exact:true}).click();await dialog.locator('.graph-source-line.cited').waitFor();
+ assert.ok(await reader.evaluate(n=>{const line=n.querySelector('.cited').getBoundingClientRect(),pane=n.getBoundingClientRect();return line.top>=pane.top&&line.bottom<=pane.bottom}),'a late source citation must be visible');
+ await dialog.getByRole('button',{name:'Back',exact:true}).click();await dialog.getByRole('heading',{name:'Long saved report',exact:true}).waitFor();assert.equal(await reader.evaluate(n=>n.scrollTop),0,'returning to a file should start at its heading');
+ await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
+ assert.deepEqual(errors,[]);console.log('PASS: unfinished report discovery, directory browsing, pagination, search, source citations, inline diff, safe previews, wrapped ANSI-free logs, mobile layout and full-window attempt reading');
 }finally{await browser.close()}
