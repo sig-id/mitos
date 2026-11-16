@@ -193,7 +193,7 @@ func (r *Registry) PrepareContinuation(request Request, mode, reference string) 
 }
 
 func (r *Registry) prepare(request Request, mode, reference string) (Launch, error) {
-	if request.Bridge && (mode != "new" || (request.AgentID != "codex" && request.AgentID != "claude")) {
+	if request.Bridge && (mode != "new" || !supportsBridge(request.AgentID)) {
 		return Launch{}, errors.New("bridge sessions support new Codex or Claude sessions only")
 	}
 	adapter, err := r.adapter(request.AgentID)

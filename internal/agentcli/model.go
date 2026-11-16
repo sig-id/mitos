@@ -5,6 +5,7 @@ package agentcli
 import "time"
 
 type Capabilities struct {
+	RequestBridge    bool   `json:"request_bridge"`
 	ProjectContext   bool   `json:"project_context"`
 	Transport        string `json:"transport"`
 	InitialPrompt    bool   `json:"initial_prompt"`
