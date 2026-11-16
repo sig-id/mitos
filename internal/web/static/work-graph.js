@@ -465,6 +465,13 @@
  }
  function renderDecision(box,d){box.append(node('h4','Decision'),node('p',d.outcome==='selected'?'A candidate has been selected. Review its changes before applying.':d.reason?.replaceAll('_',' ')||d.outcome));if(d.answer)box.append(node('p','Selected candidate '+(Number(d.answer.choice)+1)));for(const [index,candidate]of(d.candidates||[]).entries()){const details=node('details');details.open=String(index)===d.answer?.choice;details.append(node('summary',`${index+1}. ${candidate.explanation}`));const ul=node('ul');for(const op of candidate.operations)ul.append(node('li',(op.kind.replaceAll('_',' '))+': '+(op.spec?.brief?.title||graph.members[op.task]?.spec.brief.title||op.rationale||'')));details.append(ul);box.append(details)}if(d.outcome==='selected')box.append(button('Apply selected changes',()=>openAction('apply-decision',d.key),'primary'));if(!['applied','dismissed'].includes(d.outcome))box.append(button('Dismiss decision',()=>openAction('dismiss-decision',d.key)));}
  async function runDetail(m,runID){const key=runID+':'+m.fact_revision; if(cachedRuns.has(key))return cachedRuns.get(key);const value=await request(endpoint(graphID)+'/nodes/'+encodeURIComponent(m.spec.id)+'/runs/'+encodeURIComponent(runID));if(!['queued','running','stopping'].includes(value.status))cachedRuns.set(key,value);return value;}
+ $('graph-files-dialog').addEventListener('close',()=>{const browser=$('graph-attempt-browser');browser.hidden=true;browser.replaceChildren()});
+ async function openAttemptFiles(m,run,initial){
+  const dialog=$('graph-files-dialog'),browser=$('graph-attempt-browser');browser.hidden=false;
+  const loading=window.MitosGraphResult.open({graph:structuredClone(graph),request,container:browser,attemptOnly:true,initial:{task:m.spec.id,run:run.id,...initial},onClose:()=>dialog.close()});
+  if(!dialog.open)dialog.showModal();
+  await loading;
+ }
  function renderOutput(box,m,runID=m.current_run_id,showAttempt=true){
   if(!runID){box.append(node('p','This assignment is waiting to be scheduled.','muted'));return}
   const holder=node('div');holder.append(node('p','Loading output…','muted'));box.append(holder);const token=epoch,chosen=selected;
@@ -476,11 +483,9 @@
    const report=readable.find(a=>a.name==='report.md')||[...readable].reverse().find(a=>/report\.md$/.test(a.name))||(m.orchestrator_for&&readable.find(a=>a.name==='graph-proposal.json'));
    const live=['queued','running','stopping'].includes(run.status);
    if(live||!report)renderLiveOutput(holder,m,run);
-   const saved=node('details',undefined,'graph-attempt-files'),browser=node('div',undefined,'graph-inline-files');
-   saved.dataset.readKey='files:'+run.id;saved.append(node('summary','Saved files'+(files.length?' · '+files.length:'')),browser);
-   let loaded=false;
-   const openFiles=async initial=>{saved.open=true;loaded=true;await window.MitosGraphResult.open({graph:structuredClone(graph),request,container:browser,attemptOnly:true,initial:{task:m.spec.id,run:run.id,...initial},onClose:()=>{saved.open=false;saved.querySelector('summary').focus()}});if(initial?.path&&browser.isConnected)browser.scrollIntoView({block:'nearest'})};
-   saved.addEventListener('toggle',()=>{if(saved.open&&!loaded)openFiles()});
+   const openFiles=initial=>openAttemptFiles(m,run,initial);
+   const saved=node('div',undefined,'graph-attempt-files'),browse=button('Browse saved files'+(files.length?' · '+files.length:''),()=>openFiles());
+   browse.setAttribute('aria-haspopup','dialog');saved.append(browse);
    if(report){
     const content=node('section',undefined,'graph-attempt-report');content.append(node('h4',m.orchestrator_for?'Plan':'Report'));const body=node('div','Loading report…');content.append(body);holder.append(content);
     try{

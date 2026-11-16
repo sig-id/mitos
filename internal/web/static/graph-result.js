@@ -46,7 +46,7 @@
   },
   async open({graph,request,container,onClose,initial,attemptOnly=false}){
    const token=(generations.get(container)||0)+1;generations.set(container,token);const current=()=>generations.get(container)===token&&container.isConnected&&!container.hidden;
-   const header=el('div',undefined,'graph-result-heading');header.append(el(attemptOnly?'h4':'h2',attemptOnly?'Files from this attempt':graph.result?'Result':'Saved work'),button(attemptOnly?'Back to activity':'Back to graph',()=>{if(!attemptOnly)generations.set(container,token+1);onClose()}));container.replaceChildren(header,el('p','Loading saved result…','muted'));
+   const header=el('div',undefined,'graph-result-heading');header.append(el('h2',attemptOnly?'Files from this attempt':graph.result?'Result':'Saved work'),button(attemptOnly?'Back to activity':'Back to graph',()=>{generations.set(container,token+1);onClose()}));container.replaceChildren(header,el('p','Loading saved result…','muted'));
    try{
     const sources=attemptOnly?[{task:initial.task,run:initial.run}]:[...(graph.result?.sources||[])];
     for(const m of Object.values(graph.members))if(!attemptOnly&&m.spec.kind==='application'&&!m.orchestrator_for&&!m.replacement&&m.current_run_id&&!sources.some(s=>s.task===m.spec.id))sources.push({task:m.spec.id,run:m.accepted?.run_id||m.current_run_id});
@@ -56,9 +56,12 @@
      try{run=await request(base);if(run.artifacts?.some(a=>a.name==='workspace.tar.gz'))files=await inventory(base,request)}catch(e){problem=e.message}
      return {member,run,base,files,problem};
     }));
-    if(!current())return;container.replaceChildren(header);
+    if(!current())return;while(header.nextSibling)header.nextSibling.remove();
     const reader=el('article',undefined,'graph-result-reader'),readerHeading=el('div',undefined,'graph-result-heading'),body=el('div',undefined,'graph-result-content');reader.append(readerHeading,body);
     const layout=el('div',undefined,'graph-file-layout'),sidebar=el('aside',undefined,'graph-file-sidebar');layout.append(sidebar,reader);container.append(layout);
+    const fileToggle=button('Browse files',()=>setFileNavigation(fileToggle.getAttribute('aria-expanded')!=='true'));
+    function setFileNavigation(visible){layout.classList.toggle('show-file-navigation',visible);fileToggle.setAttribute('aria-expanded',String(visible));fileToggle.textContent=visible?'Hide files':'Browse files'}
+    if(attemptOnly){fileToggle.className='graph-file-toggle';sidebar.id='graph-attempt-file-navigation';fileToggle.setAttribute('aria-controls',sidebar.id);header.append(fileToggle);setFileNavigation(false)}
     let previewGeneration=0,history=[],location={kind:'result'};
     const open=file=>navigate({kind:'file',file});
     const options=context=>({link:(target,label)=>{const file=resolveFile(target,entries,context);return file?button(label,()=>open(file)):null}});
@@ -66,6 +69,7 @@
     function controls(title,url){readerHeading.replaceChildren();if(title)readerHeading.append(el('h3',title));const actions=el('div',undefined,'actions');if(history.length)actions.append(button('Back',()=>{location=history.pop();show()}));if(location.kind!=='result'&&graph.result&&!attemptOnly)actions.append(button('Final answer',()=>navigate({kind:'result'})));if(url)actions.append(download('Download file',url));readerHeading.append(actions);if(location.file)readerHeading.append(el('p',location.file.entry.member.spec.brief.title+' · '+location.file.entry.run.status,'graph-preview-origin muted'));readerHeading.hidden=!title&&!actions.children.length}
     async function show(){
      const version=++previewGeneration;
+     if(attemptOnly)reader.scrollTop=0;
      if(location.kind==='result'){
       if(attemptOnly){controls('');body.replaceChildren(el('p','Select a file to preview it here.','muted'));return;}
       controls(graph.result?'':'No final answer yet');
@@ -79,11 +83,11 @@
       if(!text.trim()&&!file.path.endsWith('.patch')){body.replaceChildren(window.MitosGraphOutput.render(text,{name:file.path}));
       }else if(file.line){
        const pre=el('pre',undefined,'graph-source-lines'),lang=window.MitosFormat.language(text),lines=text.split('\n');pre.tabIndex=0;
-       lines.forEach((line,i)=>{const row=el('span',undefined,'graph-source-line');row.dataset.line=String(i+1);row.append(el('span',String(i+1),'graph-line-number'),window.MitosFormat.highlight(line,lang));if(i+1>=file.line&&i+1<=file.end)row.classList.add('cited');pre.append(row,document.createTextNode('\n'))});body.replaceChildren(pre);const target=pre.querySelector('.cited');if(target)pre.scrollTop=Math.max(0,target.offsetTop-pre.offsetTop-70);
+       lines.forEach((line,i)=>{const row=el('span',undefined,'graph-source-line');row.dataset.line=String(i+1);row.append(el('span',String(i+1),'graph-line-number'),window.MitosFormat.highlight(line,lang));if(i+1>=file.line&&i+1<=file.end)row.classList.add('cited');pre.append(row,document.createTextNode('\n'))});body.replaceChildren(pre);const target=pre.querySelector('.cited');if(target){if(attemptOnly)target.scrollIntoView({block:'center'});else pre.scrollTop=Math.max(0,target.offsetTop-pre.offsetTop-70)}
       }else body.replaceChildren(file.path.endsWith('.patch')&&window.MitosDiff?window.MitosDiff.preview(text):file.path==='output.txt'?window.MitosGraphOutput.log(text):/\.(md|txt)$/i.test(file.path)?markup(text,file):window.MitosFormat.code(text));
      }catch(e){if(current()&&version===previewGeneration)body.replaceChildren(el('p',e.message,'muted'))}
     }
-    async function navigate(next){history.push(location);location=next;await show();reader.scrollIntoView({block:'start'})}
+    async function navigate(next){history.push(location);location=next;if(attemptOnly){setFileNavigation(false);if(matchMedia('(max-width:900px)').matches)fileToggle.focus()}await show();if(!attemptOnly)reader.scrollIntoView({block:'start'})}
     sidebar.append(el('h3','Saved files'),el('p','Preview files here. Downloads are optional.','muted'));
     const source=el('select'),scope=el('select'),browser=el('mitos-file-browser'),note=el('p',undefined,'muted'),exports=el('details');
     const sourceLabel=el('label','Assignment');sourceLabel.append(source);const scopeLabel=el('label','Show');scopeLabel.append(scope);
@@ -113,6 +117,7 @@
     const rationale=graph.members[graph.root_task].accepted?.rationale?.trim();
     if(rationale&&!attemptOnly){const review=el('details');review.append(el('summary','Orchestrator completion review'),markup(rationale));container.append(review)}
     if(initial){const entry=entries.find(e=>e.member.spec.id===initial.task&&e.run.id===initial.run);if(entry){const path=initial.path||(entry.run.artifacts?.some(a=>a.name==='report.md')?'report.md':!attemptOnly&&entry.run.artifacts?.some(a=>a.name==='output.txt')?'output.txt':'');if(path)location={kind:'file',file:{...initial,path,artifact:initial.artifact??!initial.path,entry}};else selectEntry(entry)}}
+    if(attemptOnly)setFileNavigation(location.kind!=='file');
     await show();
    }catch(e){if(current())container.append(el('p','Could not load the result: '+e.message,'form-error'))}
   }
