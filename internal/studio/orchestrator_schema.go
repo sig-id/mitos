@@ -54,6 +54,11 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			name := strings.Split(f.Tag.Get("json"), ",")[0]
+			// ProjectLimits belongs to recurring workflow services. Graph workers
+			// already inherit the graph deadline and cannot enable that setting.
+			if t == reflect.TypeFor[Brief]() && name == "project_limits" {
+				continue
+			}
 			if f.IsExported() && name != "-" && name != "" {
 				props[name] = orchestratorTypeSchema(f.Type)
 			}
