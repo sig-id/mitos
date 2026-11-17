@@ -43,6 +43,7 @@ type AgentBinding struct {
 	Runtime         string            `json:"runtime"`
 	Executable      string            `json:"executable"`
 	Specialization  *AgentSelection   `json:"specialization,omitempty"`
+	Selection       *RuntimeSelection `json:"selection,omitempty"`
 	GraphID         string            `json:"graph_id,omitempty"`
 	Digest          string            `json:"digest"`
 }
@@ -86,9 +87,12 @@ func (e *Engine) agentApplication(id string) (Application, bool) {
 	}
 	for _, d := range library {
 		if orchestratorAgentID(id) == agentAppPrefix+d.ID {
-			b := &AgentBinding{Definition: d, Runtime: "codex"}
+			b := &AgentBinding{Definition: d, Runtime: "codex", SelectionSource: "orchestrator library"}
 			if launch, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: "codex"}); err == nil {
 				b.Executable = launch.Executable
+			}
+			if err := e.selectAgentRuntime(b); err != nil {
+				return Application{}, false
 			}
 			b.Digest = graphDigest(b)
 			return Application{ID: id, Name: d.Name, Description: d.Description, GraphOrchestrator: isOrchestratorKind(d.Kind), Agent: b}, true

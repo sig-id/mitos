@@ -194,6 +194,15 @@ only when granted, the timeout is the smaller of the definition and attempt limi
 `max_turns` bounds model steps (completed tool actions plus the final answer).
 `GET /api/graphs/capabilities` publishes the policies and per-runtime profile.
 
+Every agent binding freezes a **runtime selection receipt**: the installed
+runtimes considered, each availability and `runtime.requires` compatibility
+check, and the rationale for the applied runtime. Unsupported hard requirements
+refuse the binding instead of disappearing; implicit defaults fall back to a
+compatible installed runtime, while presets, role rules and task selections are
+explicit pins that never silently switch. Multi-runtime negotiation beyond
+Codex/Claude discovery, scope-scoped discovery, lifecycle operations and the
+skill/knowledge registry remain unimplemented (`complete_profile` stays false).
+
 Each attempt's prompt is assembled under its definition's `context` policy and
 recorded in a **context receipt** (`context.json`): every input's kind, source,
 character count, SHA-256 and whether it was included, omitted or not requested.

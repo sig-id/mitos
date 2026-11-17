@@ -100,6 +100,9 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 		if err := e.bindExecution(g, spec, app.Agent); err != nil {
 			return spec, nil, err
 		}
+		if err := e.selectAgentRuntime(app.Agent); err != nil {
+			return spec, nil, err
+		}
 		if err := specializeAgent(app.Agent, spec.Agent, g.ID); err != nil {
 			return spec, nil, err
 		}
