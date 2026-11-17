@@ -44,9 +44,15 @@ func TestApplicationCapabilitiesAndStructuredAdmission(t *testing.T) {
 		Structured map[string]any  `json:"structured_work"`
 		Hosted     map[string]bool `json:"hosted"`
 	}
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &caps) != nil || caps.Versions[0] != "1" || caps.Structured["workspace"] != false || caps.Hosted["remote_workers"] {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &caps) != nil || caps.Versions[0] != "1" || caps.Structured["workspace"] != false {
 		t.Fatalf("capabilities: %d %s", w.Code, w.Body.String())
 	}
+	for name, want := range map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "remote_workers": true, "mqtt_work_claims": true, "conversation_waits": false, "postgresql": false} {
+		if caps.Hosted[name] != want {
+			t.Fatalf("hosted capability %s: got %v want %v", name, caps.Hosted[name], want)
+		}
+	}
+
 	post := func(body string) *httptest.ResponseRecorder {
 		r := versioned(httptest.NewRequest("POST", "http://localhost/api/tasks", strings.NewReader(body)))
 		r.Header.Set("Content-Type", "application/json")
