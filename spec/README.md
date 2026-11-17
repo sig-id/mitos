@@ -22,9 +22,11 @@ listed in the delivery baseline.
 roles, on-demand specialists, scoped knowledge/memory and immutable execution
 bindings. [ADR 0006](ADRs/0006_AGENT_LIBRARY.md) records the Chief Wiggum adaptation.
 The [default library](../agents/README.md) includes eight authored definitions that
-run through the local native-adapter subset: automatic goal planning, graph-scoped
-specialization and editable worker revisions. Multi-runtime negotiation,
-knowledge/skill attachment, deprecation and promotion remain future work; the
+run through the local native Codex and Claude Code adapters: automatic goal
+planning, graph-scoped specialization, explicit execution presets (worker
+defaults, role rules and task overrides) and editable worker revisions. General
+runtime negotiation, knowledge/skill attachment, deprecation and promotion
+remain future work; the
 delivery baseline in [06](system/06_DELIVERY_AND_CONFORMANCE.md) owns the current
 versus target split.
 
