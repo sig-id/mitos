@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"mitos/internal/failpoint"
 	"mitos/internal/structuredworker"
 )
 
@@ -78,6 +79,11 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 		c.Summary = "The worker released the attempt; a bounded replacement may claim the Task."
 		c.StructuredRetryPending = &pending
 	case "result":
+		for _, held := range s.externalOperations {
+			if held.TaskID == r.TaskID && s.actionHolds[actionHoldKey(held.TaskID, held.Target.ID)] != "" {
+				return response, ErrReconciliationRequired
+			}
+		}
 		var result structuredworker.Result
 		if json.Unmarshal(in.Data, &result) != nil || len(result.Artifacts) > 8 {
 			return response, ErrConflict
@@ -155,5 +161,9 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 			return response, err
 		}
 	}
-	return response, s.persist(events...)
+	err = s.persist(events...)
+	if err == nil && in.Kind == "result" {
+		failpoint.Hit("worker.result.before_reply")
+	}
+	return response, err
 }

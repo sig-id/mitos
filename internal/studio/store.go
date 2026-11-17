@@ -24,6 +24,10 @@ import (
 )
 
 type Store struct {
+	actionTargets          map[string]ActionTarget
+	externalOperations     map[string]ExternalOperation
+	operationKeys          map[string]string
+	actionHolds            map[string]string
 	workerIncarnations     map[string]bool
 	structuredCheckpoints  map[string]StructuredCheckpoint
 	workerOutbox           map[string]WorkerOutbox
@@ -153,6 +157,12 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.Action != nil {
+		s.applyAction(c.Action)
+		if e.RunID == "" {
+			return nil
+		}
 	}
 	if c.Worker != nil {
 		s.applyWorker(c.Worker)

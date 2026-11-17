@@ -16,6 +16,7 @@ import (
 	"mitos/internal/structuredworker"
 	"mitos/internal/workerwake"
 	workspacefs "mitos/internal/workspace"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ import (
 )
 
 type Engine struct {
+	actionHTTP          *http.Client
 	workerWake          *workerwake.Client
 	localWorkerToken    string
 	localWorkerIdentity structuredworker.Identity
@@ -41,14 +43,14 @@ type Engine struct {
 	egressRelay    *compute.EgressRelay
 	egressEndpoint string
 	Store          *Store
-	Apps          []Application
-	Root          string
-	mu            sync.Mutex
-	cancel        map[string]context.CancelFunc
-	ctx           context.Context
-	stop          context.CancelFunc
-	wg            sync.WaitGroup
-	actions       sync.Mutex
+	Apps           []Application
+	Root           string
+	mu             sync.Mutex
+	cancel         map[string]context.CancelFunc
+	ctx            context.Context
+	stop           context.CancelFunc
+	wg             sync.WaitGroup
+	actions        sync.Mutex
 	// Serializes idempotent structured-work admission by request key.
 	structuredMu sync.Mutex
 	setupMu      sync.Mutex
@@ -620,7 +622,7 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 	}
 	if e.ctx.Err() != nil {
 		if r.Brief.Structured != nil {
-			_ = e.Store.interruptStructured(r.ID, "Server shutdown interrupted effect-free work; a bounded replacement may resume the same Task after restart.")
+			_ = e.Store.interruptStructured(r.ID, "Server shutdown interrupted structured work; a bounded replacement may resume the same Task after restart.")
 			return
 		}
 		_ = e.Store.Park(r.ID, checkpointOption(current, recoveryDecision()))

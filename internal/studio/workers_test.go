@@ -25,7 +25,7 @@ func testWorker(t *testing.T, e *Engine, id string) (string, structuredworker.Id
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again, err := e.Store.RegisterWorker(token, request); err != nil || again != first {
+	if again, err := e.Store.RegisterWorker(token, request); err != nil || graphDigest(again) != graphDigest(first) {
 		t.Fatal("registration replay", again, err)
 	}
 	return token, identity
@@ -69,7 +69,7 @@ func TestWorkerClaimAcceptanceReplayAndEpoch(t *testing.T) {
 	}
 	before := e.Store.seq
 	again, err := e.Store.WorkerMutate(token, mutation)
-	if err != nil || again != receipt || e.Store.seq != before {
+	if err != nil || graphDigest(again) != graphDigest(receipt) || e.Store.seq != before {
 		t.Fatal("lost acceptance reply duplicated", again, err)
 	}
 	mutation.Data = json.RawMessage(`{"value":{"answer":43,"confidence":"high","tags":[]}}`)
@@ -138,7 +138,7 @@ func TestWorkerExpiredBindingReplacementAndStaleEvidence(t *testing.T) {
 		t.Fatal("stale evidence not saved", receipt, err)
 	}
 	seq := e.Store.seq
-	if again, err := e.Store.WorkerMutate(token, mutation); !errors.Is(err, ErrStaleBinding) || again != receipt || seq != e.Store.seq {
+	if again, err := e.Store.WorkerMutate(token, mutation); !errors.Is(err, ErrStaleBinding) || graphDigest(again) != graphDigest(receipt) || seq != e.Store.seq {
 		t.Fatal("stale result not deduplicated", again, err)
 	}
 	old, _ := e.Store.Get(r.ID)
@@ -208,7 +208,7 @@ func TestWorkerCheckpointSchemaProvenanceAndReplay(t *testing.T) {
 		t.Fatal("checkpoint provenance", cp)
 	}
 	seq := e.Store.seq
-	if again, err := e.Store.WorkerMutate(token, mutation); err != nil || again != receipt || seq != e.Store.seq {
+	if again, err := e.Store.WorkerMutate(token, mutation); err != nil || graphDigest(again) != graphDigest(receipt) || seq != e.Store.seq {
 		t.Fatal("checkpoint replay", again, err)
 	}
 	mutation.RequestID = "checkpoint-bad"
@@ -243,16 +243,30 @@ func TestLegacyStructuredRunsAreHydratedAndClaimable(t *testing.T) {
 	}
 	s := e.Store
 	token, identity := testWorker(t, e, "worker-legacy")
+	// A second, unresolvable legacy admission fails visibly instead of being
+	// silently skipped.
+	ghost, gerr := e.LaunchStructured(structuredBrief("legacy-ghost", "agent:mitos.generalist"))
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
 	s.mu.Lock()
 	s.runs[r.ID].Brief.Structured.Frozen = nil
+	s.runs[ghost.ID].Brief.Structured.Frozen = nil
+	s.runs[ghost.ID].Brief.Structured.Definition = "ghost.agent@9"
 	s.mu.Unlock()
-	// Without the frozen body the run is not claimable and has no context.
-	if receipt, claimErr := e.Store.WorkerClaim(token, structuredworker.Claim{Identity: identity, RequestID: "legacy-claim", RunID: r.ID}); claimErr != nil || receipt.Binding != nil {
-		t.Fatal("unhydrated legacy run was claimed", receipt, claimErr)
+	if _, claimErr := e.Store.WorkerClaim(token, structuredworker.Claim{Identity: identity, RequestID: "ghost-claim", RunID: ghost.ID}); claimErr != nil {
+		t.Fatal(claimErr)
 	}
-	if err = e.hydrateStructuredDefinitions(); err != nil {
+	failed, err := s.Get(ghost.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if failed.Status != "failed" || failed.Stage != "Exact definition unavailable" {
+		t.Fatalf("unresolvable legacy run not failed visibly: %s %s", failed.Status, failed.Stage)
+	}
+	// The claim path hydrates the resolvable run from the frozen revisions the
+	// store already holds, so pre-upgrade work is immediately executable.
+	binding := testWorkerClaim(t, e, token, identity, r.ID, "legacy-claim")
 	fresh, err := s.Get(r.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +274,6 @@ func TestLegacyStructuredRunsAreHydratedAndClaimable(t *testing.T) {
 	if d := fresh.Brief.Structured.Frozen; d == nil || d.ID != "mitos.generalist" || d.Digest != fresh.Brief.Structured.Digest {
 		t.Fatalf("definition not hydrated: %+v", fresh.Brief.Structured.Frozen)
 	}
-	binding := testWorkerClaim(t, e, token, identity, r.ID, "legacy-claim-2")
 	assignment, err := e.WorkerContext(token, binding)
 	if err != nil || !strings.Contains(assignment.Prompt, "6*7") {
 		t.Fatal("hydrated run has no executable context", err)

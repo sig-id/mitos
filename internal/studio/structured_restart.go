@@ -24,7 +24,7 @@ func (e *Engine) recoverStructured(r Run) error {
 		return err
 	}
 	if r.Status == "running" {
-		if err := s.interruptStructured(r.ID, "Server restart interrupted effect-free structured work; replacement retains the admitted request."); err != nil {
+		if err := s.interruptStructured(r.ID, "Server restart interrupted structured work; replacement retains the admitted request."); err != nil {
 			return err
 		}
 	}

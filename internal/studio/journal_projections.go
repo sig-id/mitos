@@ -15,6 +15,24 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 		if err := json.Unmarshal(e.Data, &c); err != nil {
 			return nil, err
 		}
+		if c.Action != nil {
+			if c.Action.Target != nil {
+				raw, _ := json.Marshal(c.Action.Target)
+				out = append(out, journalProjection{Namespace: "action_target", Key: c.Action.Target.ID, Value: raw})
+			}
+			if c.Action.Operation != nil {
+				op := c.Action.Operation
+				raw, _ := json.Marshal(op)
+				out = append(out, journalProjection{Namespace: "external_operation", Key: op.ID, Value: raw})
+				held := op.State != "applied" && op.State != "not_applied"
+				holdValue := raw
+				if !held {
+					holdValue = nil
+				}
+				out = append(out, journalProjection{Namespace: "task_action_hold", Key: actionHoldKey(op.TaskID, op.Target.ID), Value: holdValue})
+			}
+		}
+
 		if c.Worker != nil {
 			wc := c.Worker
 			add := func(namespace, key string, value any) {

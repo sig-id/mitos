@@ -330,6 +330,21 @@ func (s *Store) readyRunsLocked(activeIDs []string) ([]ReadyRun, error) {
 		if r == nil || r.ExecutionKind == "interactive" || r.Status != "queued" || r.Sample || s.supervisionHeld(r.ProjectID) || activeRuns[r.ID] {
 			continue
 		}
+		if r.Brief.Structured != nil && r.Brief.Structured.Frozen == nil {
+			// The admitted body may still be known from the frozen revisions
+			// this store already holds; hydrate instead of failing.
+			if d := s.hydratableDefinitionLocked(r.Brief.Structured); d != nil {
+				if err := s.commit(r.ID, "effect", "structured_definition_hydrated", change{StructuredDefinition: d}); err != nil {
+					return nil, err
+				}
+				r = s.runs[t.CurrentRunID]
+			} else if err := s.commit(r.ID, "effect", "frozen_definition_unavailable", change{Status: "failed", Stage: "Exact definition unavailable", Summary: "This legacy admission lacks a durable exact definition body. Submit a new request with an available definition."}); err != nil {
+				return nil, err
+			} else {
+				continue
+			}
+		}
+
 		if deadline := s.structuredTaskDeadline(r); !deadline.IsZero() && !time.Now().Before(deadline) {
 			if err := s.commit(r.ID, "effect", "tenant_budget_exhausted", change{Status: "failed", Stage: "Budget exhausted", Summary: "The tenant's elapsed task budget includes queued and waiting time."}); err != nil {
 				return nil, err

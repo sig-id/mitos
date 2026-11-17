@@ -45,15 +45,22 @@ type Mutation struct {
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 type Receipt struct {
-	WakeAuthority string   `json:"wake_authority,omitempty"`
-	RequestID     string   `json:"request_id"`
-	Seq           int64    `json:"seq"`
-	State         string   `json:"state"`
-	SHA256        string   `json:"sha256,omitempty"`
-	LeaseSeconds  int      `json:"lease_seconds,omitempty"`
-	Binding       *Binding `json:"binding,omitempty"`
+	OperationID   string          `json:"operation_id,omitempty"`
+	Result        json.RawMessage `json:"result,omitempty"`
+	WakeAuthority string          `json:"wake_authority,omitempty"`
+	RequestID     string          `json:"request_id"`
+	Seq           int64           `json:"seq"`
+	State         string          `json:"state"`
+	SHA256        string          `json:"sha256,omitempty"`
+	LeaseSeconds  int             `json:"lease_seconds,omitempty"`
+	Binding       *Binding        `json:"binding,omitempty"`
 }
 type Context struct {
+	Actions map[string]json.RawMessage `json:"actions,omitempty"`
+	// PendingActions lists operations this Task still holds from earlier
+	// attempts, with their original worker keys, so a replacement attempt can
+	// reconcile them. Credentials and endpoints are never included.
+	PendingActions []PendingAction `json:"pending_actions,omitempty"`
 	Binding
 	Definition   agents.Definition          `json:"definition"`
 	Prompt       string                     `json:"prompt"`
@@ -61,6 +68,12 @@ type Context struct {
 	Model        string                     `json:"model,omitempty"`
 	MaxTurns     int                        `json:"max_turns"`
 	Artifacts    map[string]json.RawMessage `json:"artifacts"`
+}
+type PendingAction struct {
+	OperationID string `json:"operation_id"`
+	Target      string `json:"target"`
+	Key         string `json:"key"`
+	State       string `json:"state"`
 }
 type Artifact struct {
 	Name string `json:"name"`
@@ -77,4 +90,10 @@ type LeaseRecord struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 	BudgetEndsAt time.Time `json:"budget_ends_at"`
 	Closed       bool      `json:"closed,omitempty"`
+}
+
+type ActionRequest struct {
+	Target  string          `json:"target"`
+	Key     string          `json:"key"`
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
