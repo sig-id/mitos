@@ -1,6 +1,8 @@
 package studio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,13 +27,17 @@ type libraryReceipt struct {
 	Digest     string            `json:"digest"`
 	Definition agents.Definition `json:"definition"`
 }
+
+const libraryProfile = "agent-library-store/v1"
+
 type savedLibrary struct {
+	Profile   string                         `json:"profile"`
 	Revisions map[string][]agents.Definition `json:"revisions"`
 	Receipts  map[string]libraryReceipt      `json:"receipts"`
 }
 
 func (e *Engine) readLibrary() (savedLibrary, error) {
-	saved := savedLibrary{Revisions: map[string][]agents.Definition{}, Receipts: map[string]libraryReceipt{}}
+	saved := savedLibrary{Profile: libraryProfile, Revisions: map[string][]agents.Definition{}, Receipts: map[string]libraryReceipt{}}
 	f, err := os.Open(filepath.Join(e.Store.Dir(), "agent-library.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return saved, nil
@@ -47,8 +53,27 @@ func (e *Engine) readLibrary() (savedLibrary, error) {
 	if len(raw) > 8<<20 {
 		return saved, errors.New("agent library exceeds 8 MiB")
 	}
-	err = json.Unmarshal(raw, &saved)
-	return saved, err
+	saved = savedLibrary{}
+	if err = json.Unmarshal(raw, &saved); err != nil {
+		return saved, err
+	}
+	if saved.Revisions == nil {
+		saved.Revisions = map[string][]agents.Definition{}
+	}
+	if saved.Receipts == nil {
+		saved.Receipts = map[string]libraryReceipt{}
+	}
+	if saved.Profile != libraryProfile {
+		return saved, fmt.Errorf("agent library %s is not %s; move it aside to start from the bundled library", filepath.Join(e.Store.Dir(), "agent-library.json"), libraryProfile)
+	}
+	for _, revisions := range saved.Revisions {
+		for _, d := range revisions {
+			if err = d.Verify(); err != nil {
+				return saved, err
+			}
+		}
+	}
+	return saved, nil
 }
 func libraryDefinitions(saved savedLibrary) ([]agents.Definition, error) {
 	library, err := agents.Library()
@@ -122,18 +147,14 @@ func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
 	if prior == nil && len(library) >= 128 {
 		return agents.Definition{}, errors.New("agent library capacity reached")
 	}
-	id := req.ID
-	revision := 1
-	if prior == nil {
-		id = "custom." + newID("agent")
-	} else {
-		revision = prior.Revision + 1
-	}
-	if len(saved.Revisions[id]) >= 64 || len(saved.Receipts) >= 2048 {
+	if len(saved.Revisions[req.ID]) >= 64 || len(saved.Receipts) >= 2048 {
 		return agents.Definition{}, errors.New("agent revision capacity reached")
 	}
-	d := agents.Definition{ID: id, Revision: revision, Name: strings.TrimSpace(req.Name), Description: strings.TrimSpace(req.Description), Kind: "worker", Instructions: req.Instructions}
-	d.Digest = graphDigest(d)
+	d, err := editedDefinition(library, prior, req)
+	if err != nil {
+		return agents.Definition{}, err
+	}
+	id := d.ID
 	saved.Revisions[id] = append(saved.Revisions[id], d)
 	saved.Receipts[req.Key] = libraryReceipt{Digest: digest, Definition: d}
 	raw, err := json.MarshalIndent(saved, "", "  ")
@@ -168,6 +189,41 @@ func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
 	defer dir.Close()
 	if err = dir.Sync(); err != nil {
 		return agents.Definition{}, err
+	}
+	return d, nil
+}
+
+// editedDefinition derives the next revision from the prior typed manifest, so an
+// edit changes only the authored text and keeps runtime requirements, capability
+// ceiling, context, limits and provenance. A new agent starts from the generalist.
+func editedDefinition(library []agents.Definition, prior *agents.Definition, req AgentEdit) (agents.Definition, error) {
+	var m agents.Manifest
+	if prior != nil {
+		m = prior.Manifest
+		m.Revision = prior.Revision + 1
+	} else {
+		var base *agents.Definition
+		for i := range library {
+			if library[i].ID == "mitos.generalist" {
+				base = &library[i]
+			}
+		}
+		if base == nil {
+			return agents.Definition{}, errors.New("the generalist base definition is unavailable")
+		}
+		m = base.Manifest
+		m.ID = "custom." + strings.ReplaceAll(newID("agent"), "_", "-")
+		m.Revision = 1
+		m.Provenance = agents.Provenance{Origin: "original", License: "operator-authored", Base: &agents.Base{Scope: "installation", ID: base.ID, Revision: base.Revision, SHA256: base.Digest}}
+	}
+	m.Name = strings.TrimSpace(req.Name)
+	m.Description = strings.TrimSpace(req.Description)
+	body := []byte(req.Instructions)
+	sum := sha256.Sum256(body)
+	m.Instructions.SHA256 = hex.EncodeToString(sum[:])
+	d, err := agents.NewDefinition(m, body)
+	if err != nil {
+		return agents.Definition{}, fmt.Errorf("edited agent is invalid: %w", err)
 	}
 	return d, nil
 }

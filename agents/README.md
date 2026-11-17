@@ -60,7 +60,17 @@ an explicit proposal interface; the runtime still owns authority and completion.
 
 ## Validate authored packages
 
-Run `python3 agents/validate.py` with the Python `jsonschema` package available.
-This optional authoring check validates manifests, unique bundle identities,
-package paths and exact instruction digests. It does not register definitions,
-verify native authentication, or claim runtime compatibility.
+`go test ./agents` validates every bundled package with the same typed loader the
+runtime uses: strict `agent-definition/v1` decoding (unknown fields, duplicate keys
+and missing members are refused), semantic checks (bounded unique lists, disjoint
+required/optional sets, finite limits, provenance rules), unique index entries,
+package-path containment and exact instruction digests. Skill and knowledge
+references are refused until a registry can resolve them. The definition digest is
+SHA-256 over the canonical compact manifest, which binds the instruction digest.
+This does not verify native authentication or runtime compatibility.
+
+Edits in the local library create a new immutable revision from the prior manifest,
+changing only name, description and instructions. New local agents derive from
+`mitos.generalist` and record it as their base. The local store
+(`agent-library.json`, profile `agent-library-store/v1`) is verified on every read;
+stores without that profile are refused rather than migrated.

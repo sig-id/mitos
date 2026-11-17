@@ -106,6 +106,12 @@ it. `GET /api/graphs/agents` reports runtime readiness and library summaries.
 `GET /api/agent-library` reads definitions; `POST /api/agent-library` publishes a
 worker revision with `{key, id, revision, name, description, instructions}` (empty
 `id` creates an agent). The built-in control orchestrator is not editable through this API.
+An edit keeps the prior manifest (runtime requirements, capabilities, context policy,
+limits, provenance) and changes only those three fields; a new agent derives its manifest
+from `mitos.generalist`. Task-specific specializations are bounded by the base
+definition's `specialization.allow` and `max_instruction_bytes`, which the library
+summary exposes as `max_specialization_bytes`. Authored capabilities and limits are
+recorded, not yet enforced.
 
 Goal limits are 64 tasks, 96 attempts, 24 orchestrator calls, two retries per worker and
 a two-hour deadline. Rejected orchestrator proposals get at most two repair calls using

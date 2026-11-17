@@ -2,7 +2,13 @@ package studio
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+
+	"mitos/agents"
 )
 
 func TestAgentLibraryRevisionsAndReplay(t *testing.T) {
@@ -51,6 +57,99 @@ func TestAgentLibraryRevisionsAndReplay(t *testing.T) {
 			if _, err = e.SaveAgent(request); err == nil {
 				t.Fatal("orchestrator authority editable")
 			}
+		}
+	}
+}
+
+func TestEditingBundledAgentPreservesManifest(t *testing.T) {
+	e, _ := graphEngine(t, false)
+	library, err := e.AgentLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var base agents.Definition
+	for _, d := range library {
+		if d.ID == "mitos.researcher" {
+			base = d
+		}
+	}
+	edited, err := e.SaveAgent(AgentEdit{Key: "edit-researcher", ID: base.ID, Revision: base.Revision, Name: base.Name, Description: base.Description, Instructions: "Investigate primary sources first."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Revision != base.Revision+1 || edited.Manifest.Revision != edited.Revision || edited.Digest == base.Digest || edited.Verify() != nil {
+		t.Fatalf("edited identity inconsistent: %+v", edited)
+	}
+	m, b := edited.Manifest, base.Manifest
+	if !slices.Equal(m.Capabilities.Required, b.Capabilities.Required) || !slices.Equal(m.Runtime.Requires, b.Runtime.Requires) || m.Limits != b.Limits || m.Context.MaxCharacters != b.Context.MaxCharacters || m.Provenance.SourceRevision != b.Provenance.SourceRevision || m.Instructions.SHA256 == b.Instructions.SHA256 {
+		t.Fatalf("edit lost manifest content: %+v", m)
+	}
+	reloaded, err := e.AgentLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range reloaded {
+		if d.ID == base.ID && (d.Digest != edited.Digest || d.Manifest.Limits != b.Limits) {
+			t.Fatal("reloaded revision differs from saved edit")
+		}
+	}
+	saved, err := e.readLibrary()
+	if err != nil || len(saved.Revisions[base.ID]) != 1 {
+		t.Fatal("edit history not retained", err)
+	}
+
+	created, err := e.SaveAgent(AgentEdit{Key: "new-agent", Name: "Data auditor", Description: "Audit data quality", Instructions: "Check schemas and report anomalies."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := created.Manifest.Provenance; p.Origin != "original" || p.Base == nil || p.Base.ID != "mitos.generalist" || created.Manifest.Kind != "worker" || created.Verify() != nil {
+		t.Fatalf("new agent not derived from the generalist: %+v", created.Manifest)
+	}
+}
+
+func TestAgentLibraryRejectsUnversionedOrTamperedStore(t *testing.T) {
+	e, _ := graphEngine(t, false)
+	if _, err := e.SaveAgent(AgentEdit{Key: "seed", Name: "Seed agent", Description: "Seed", Instructions: "Seed instructions."}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(e.Store.Dir(), "agent-library.json")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"unversioned": strings.Replace(string(raw), `"profile": "agent-library-store/v1",`, "", 1),
+		"tampered":    strings.Replace(string(raw), "Seed instructions.", "Other instructions.", 1),
+	} {
+		if err = os.WriteFile(file, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = e.AgentLibrary(); err == nil {
+			t.Errorf("%s store accepted", name)
+		}
+	}
+}
+
+func TestSpecializationRespectsDefinitionBounds(t *testing.T) {
+	library, err := agents.Library()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range library {
+		if d.ID != "mitos.engineer" {
+			continue
+		}
+		b := &AgentBinding{Definition: d}
+		limit := d.Manifest.Specialization.MaxInstructionBytes
+		if err = specializeAgent(b, &AgentSelection{Role: "Parser engineer", Instructions: strings.Repeat("x", limit)}, "g"); err != nil {
+			t.Fatal(err)
+		}
+		if err = specializeAgent(b, &AgentSelection{Role: "Parser engineer", Instructions: strings.Repeat("x", limit+1)}, "g"); err == nil {
+			t.Fatal("oversized specialization accepted")
+		}
+		d.Manifest.Specialization.Allow = []string{"name"}
+		if err = specializeAgent(&AgentBinding{Definition: d}, &AgentSelection{Role: "Parser engineer", Instructions: "extra"}, "g"); err == nil {
+			t.Fatal("disallowed instruction specialization accepted")
 		}
 	}
 }

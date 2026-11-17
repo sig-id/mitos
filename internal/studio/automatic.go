@@ -51,11 +51,18 @@ func graphContextLimit(g *WorkGraph) int {
 }
 func specializeAgent(b *AgentBinding, selection *AgentSelection, graphID string) error {
 	if selection != nil {
-		if len(selection.Role) > 200 || len(selection.Instructions) > 12000 || strings.TrimSpace(selection.Role) == "" {
-			return graphError("specialization needs a bounded role and instructions")
+		if len(selection.Role) > 200 || strings.TrimSpace(selection.Role) == "" {
+			return graphError("specialization needs a role of at most 200 bytes")
 		}
 		if isOrchestratorKind(b.Definition.Kind) {
 			return graphError("worker specialization cannot alter orchestrator authority")
+		}
+		s := b.Definition.Manifest.Specialization
+		if !slices.Contains(s.Allow, "name") || (selection.Instructions != "" && !slices.Contains(s.Allow, "instructions")) {
+			return graphError(fmt.Sprintf("agent %s does not permit this specialization", b.Definition.ID))
+		}
+		if len(selection.Instructions) > s.MaxInstructionBytes {
+			return graphError(fmt.Sprintf("specialized instructions exceed the %d bytes agent %s allows", s.MaxInstructionBytes, b.Definition.ID))
 		}
 		copy := *selection
 		b.Specialization = &copy
@@ -101,7 +108,7 @@ func (e *Engine) AutomaticAgents() map[string]any {
 	}
 	rows := []map[string]any{}
 	for _, d := range library {
-		rows = append(rows, map[string]any{"id": d.ID, "name": d.Name, "description": d.Description, "kind": d.Kind, "revision": d.Revision})
+		rows = append(rows, map[string]any{"id": d.ID, "name": d.Name, "description": d.Description, "kind": d.Kind, "revision": d.Revision, "max_specialization_bytes": d.Manifest.Specialization.MaxInstructionBytes})
 	}
 	return map[string]any{"ready": ready, "runtime": "Codex", "reason": reason, "agents": rows}
 }
