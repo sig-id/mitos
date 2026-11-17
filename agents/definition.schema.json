@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Mitos agent-definition/v1 authoring manifest",
+  "title": "Mitos agent-definition/v2 authoring manifest",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "profile": {
-      "const": "agent-definition/v1"
+      "const": "agent-definition/v2"
     },
     "id": {
       "type": "string",
@@ -60,6 +60,43 @@
       "required": [
         "use_for",
         "avoid_for"
+      ]
+    },
+    "natures": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Task natures this worker can take on, and the default for tasks that state none. Orchestrators declare an empty list and an empty default.",
+      "properties": {
+        "supported": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "context",
+              "design",
+              "implement",
+              "document",
+              "review",
+              "verify"
+            ]
+          },
+          "maxItems": 6,
+          "uniqueItems": true
+        },
+        "default": {
+          "enum": [
+            "",
+            "context",
+            "design",
+            "implement",
+            "document",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "required": [
+        "supported",
+        "default"
       ]
     },
     "instructions": {
@@ -489,6 +526,7 @@
     "description",
     "kind",
     "match",
+    "natures",
     "instructions",
     "runtime",
     "skills",

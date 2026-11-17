@@ -29,7 +29,7 @@ if '--output-schema' in sys.argv:
  if workers and workers[0]['state']=='failed':sys.exit(9)
  plan={'explanation':'Continue the same work.','operations':[],'accept':[],'complete':bool(workers),'result':{'title':'','markdown':'','source_tasks':[]}}
  if not workers:
-  plan['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Preserve partial work','brief':{'title':'Keep partial work','intent':'Finish answer.txt','app_id':'agent:'+ ('mitos.engineer'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
+  plan['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Preserve partial work','brief':{'title':'Keep partial work','intent':'Finish answer.txt','app_id':'agent:'+ ('mitos.engineer'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  else:
   assert workers[0]['state']=='done',str(workers)
   plan['accept']=[{'task':workers[0]['id'],'rationale':'Verified the saved result'}]

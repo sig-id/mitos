@@ -28,7 +28,7 @@ if '--output-schema' in sys.argv:
  plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:
   for i in range(2):
-   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
+   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
  else:
   inputs=json.loads(section(prompt,'selected_artifacts','[]'))
   assert len(inputs)==0,inputs
@@ -423,7 +423,7 @@ prompt=sys.stdin.read();out=pathlib.Path(sys.argv[sys.argv.index('--output-last-
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'));workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  p={'explanation':'Inspect evidence and repair the failed attempt.','operations':[],'accept':[],'complete':False}
- if not workers:p['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Report 42','brief':{'title':'Produce answer','intent':'Produce an answer','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
+ if not workers:p['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Report 42','brief':{'title':'Produce answer','intent':'Produce an answer','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  elif workers[0]['state']=='failed':p['operations']=[{'kind':'retry','task':workers[0]['id']}]
  else:p['accept']=[{'task':workers[0]['id'],'rationale':'The saved report contains 42.'}];p['complete']=True
  if p['complete']:p['result']={'title':'Answer','markdown':'The answer is 42.','source_tasks':[workers[0]['id']]}
@@ -474,7 +474,7 @@ if '--output-schema' in sys.argv:
  plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':False}
  if not workers:
   for i in range(2):
-   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
+   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
  out.write_text(json.dumps(plan))
 else:
  if 'Check upstream patch and evidence.' in prompt:
@@ -627,7 +627,7 @@ if '--output-schema' in sys.argv:
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Read retained report through bounded tools.','result':{'title':'','markdown':'','source_tasks':[],'items':[]}}
  if not workers:
-  plan['operations']=[{'kind':'add','spec':{'id':'audit','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce an independently readable large report.','brief':{'title':'Audit evidence','intent':'fixture-manual-submit: produce report','app_id':'agent:mitos.engineer','timeout_minutes':1}}}]
+  plan['operations']=[{'kind':'add','spec':{'id':'audit','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Produce an independently readable large report.','brief':{'title':'Audit evidence','intent':'fixture-manual-submit: produce report','app_id':'agent:mitos.engineer','timeout_minutes':1}}}]
  else:
   assert len(workers)==1,workers
   worker=workers[0]

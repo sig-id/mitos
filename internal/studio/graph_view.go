@@ -65,19 +65,18 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 }
 
 type GraphNodeView struct {
-	Execution         *ExecutionPreset `json:"execution,omitempty"`
-	ExecutionSource   string           `json:"execution_source,omitempty"`
-	BlockedReason     string           `json:"blocked_reason,omitempty"`
-	HumanRequests     int              `json:"human_requests,omitempty"`
-	ReviewingRequests int              `json:"reviewing_requests,omitempty"`
-	DecisionSetup     bool             `json:"decision_setup,omitempty"`
-	Summary           string           `json:"summary,omitempty"`
-	PendingRequests   int              `json:"pending_requests,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	State             string           `json:"state"`
-	Executor          string           `json:"executor,omitempty"`
-	Settled           bool             `json:"settled"`
-	Waiting           []string         `json:"waiting,omitempty"`
+	Execution         *ExecutionView `json:"execution,omitempty"`
+	BlockedReason     string         `json:"blocked_reason,omitempty"`
+	HumanRequests     int            `json:"human_requests,omitempty"`
+	ReviewingRequests int            `json:"reviewing_requests,omitempty"`
+	DecisionSetup     bool           `json:"decision_setup,omitempty"`
+	Summary           string         `json:"summary,omitempty"`
+	PendingRequests   int            `json:"pending_requests,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	State             string         `json:"state"`
+	Executor          string         `json:"executor,omitempty"`
+	Settled           bool           `json:"settled"`
+	Waiting           []string       `json:"waiting,omitempty"`
 }
 type GraphView struct {
 	Graph      WorkGraph                `json:"graph"`
@@ -221,8 +220,9 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		if m.Executor != nil {
 			n.Executor = m.Executor.Application.Name
 			if b := m.Executor.Application.Agent; b != nil {
-				n.Execution = graphClone(b.Preset)
-				n.ExecutionSource = b.SelectionSource
+				if b.Selection != nil {
+					n.Execution = &ExecutionView{ExecutionSelection: *b.Selection, Runtime: b.Runtime, Model: b.Model, Effort: b.Effort, ProfileID: b.ProfileID}
+				}
 			}
 		}
 		if t := s.tasks[id]; t != nil && m.Spec.Kind != "scope" {
@@ -273,4 +273,13 @@ func (e *Engine) GraphApplications() []map[string]any {
 	}
 	slices.SortFunc(out, func(a, b map[string]any) int { return strings.Compare(a["name"].(string), b["name"].(string)) })
 	return out
+}
+
+// ExecutionView shows how a task's harness and model were chosen.
+type ExecutionView struct {
+	ExecutionSelection
+	Runtime   string `json:"runtime"`
+	Model     string `json:"model,omitempty"`
+	Effort    string `json:"effort,omitempty"`
+	ProfileID string `json:"profile_id,omitempty"`
 }

@@ -33,8 +33,18 @@ func executionFixture(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("MITOS_TEST_ACCOUNT", "selected-profile")
 }
+func sameTiers(model string) map[string]ModelTier {
+	return map[string]ModelTier{"low": {Model: model, Effort: "low"}, "medium": {Model: model, Effort: "medium"}, "high": {Model: model, Effort: "high"}}
+}
 func mixedExecution() *AgentExecutionPolicy {
-	return &AgentExecutionPolicy{Presets: []ExecutionPreset{{ID: "code", Name: "Implement", Runtime: "codex", Model: "codex-test"}, {ID: "design", Name: "Design", Runtime: "claude", Model: "claude-test", ProfileID: "claude-work"}}, Orchestrator: "code", Worker: "code", Roles: map[string]string{"mitos.architect": "design"}, AllowedWorkers: []string{"code", "design"}}
+	p := defaultExecution("codex", "")
+	p.Harnesses = []ExecutionHarness{{ID: "code", Name: "Implement", Runtime: "codex", Tiers: sameTiers("codex-test")}, {ID: "design", Name: "Design", Runtime: "claude", ProfileID: "claude-work", Tiers: sameTiers("claude-test")}}
+	p.HarnessRules = []HarnessRule{{Match: HarnessMatch{Role: "mitos.architect"}, Harness: "design"}}
+	p.DefaultHarness, p.AllowedHarnesses, p.Orchestrator = "code", []string{"code", "design"}, OrchestratorExecution{Harness: "code", Tier: "high"}
+	return p
+}
+func traits(size, intelligence string) *TaskTraits {
+	return &TaskTraits{Size: size, Intelligence: intelligence}
 }
 func configureExecutionRegistry(t *testing.T, e *Engine) {
 	t.Helper()
@@ -51,7 +61,7 @@ func TestMixedCoordinatedExecution(t *testing.T) {
 			e, req := graphEngine(t, true)
 			configureExecutionRegistry(t, e)
 			policy := mixedExecution()
-			policy.Orchestrator = orchestrator
+			policy.Orchestrator.Harness = orchestrator
 			request := AutomaticGoal{Key: "mixed", ProjectID: req.ProjectID, Goal: "Implement and design with the selected agents", Execution: policy}
 			g, err := e.StartAutomaticGoal(request)
 			if err != nil {
@@ -63,7 +73,7 @@ func TestMixedCoordinatedExecution(t *testing.T) {
 			}
 			changed := request
 			changed.Execution = graphClone(policy)
-			changed.Execution.Worker = "design"
+			changed.Execution.DefaultHarness = "design"
 			if _, err = e.StartAutomaticGoal(changed); !errors.Is(err, ErrConflict) {
 				t.Fatalf("changed request replay: %v", err)
 			}
@@ -95,14 +105,14 @@ func TestMixedCoordinatedExecution(t *testing.T) {
 				}
 				b := m.Executor.Application.Agent
 				found[b.Runtime] = true
-				expected := policy.Worker
-				if v := policy.Roles[b.Definition.ID]; v != "" {
-					expected = v
+				expected := policy.DefaultHarness
+				if b.Definition.ID == "mitos.architect" {
+					expected = "design"
 				}
 				if isOrchestratorKind(b.Definition.Kind) {
-					expected = policy.Orchestrator
+					expected = policy.Orchestrator.Harness
 				}
-				if b.Preset == nil || b.Preset.ID != expected || b.Model != b.Runtime+"-test" {
+				if b.Selection == nil || b.Selection.Harness != expected || b.Model != b.Runtime+"-test" {
 					t.Fatalf("wrong binding: %+v", b)
 				}
 				if b.Runtime == "claude" && (b.ProfileID != "claude-work" || b.Profile == nil) {
@@ -135,19 +145,40 @@ func TestExecutionRulesAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ role, pin, want string }{{"mitos.engineer", "", "code"}, {"mitos.architect", "", "design"}, {"mitos.engineer", "design", "design"}, {"mitos.orchestrator", "", "code"}} {
+	for _, tc := range []struct {
+		role, pin, want string
+		traits          *TaskTraits
+	}{{"mitos.engineer", "", "code", traits("small", "low")}, {"mitos.architect", "", "design", traits("small", "low")}, {"mitos.engineer", "design", "design", traits("small", "low")}, {"mitos.orchestrator", "", "code", nil}} {
 		app, ok := e.agentApplication("agent:" + tc.role)
 		if !ok {
 			t.Fatal(tc.role)
 		}
-		if err = e.bindExecution(&g, GraphSpec{ExecutionPreset: tc.pin}, app.Agent); err != nil {
+		if err = e.bindExecution(&g, GraphSpec{Harness: tc.pin, Traits: tc.traits}, app.Agent); err != nil {
 			t.Fatal(err)
 		}
-		if app.Agent.Preset.ID != tc.want {
+		if app.Agent.Selection.Harness != tc.want {
 			t.Fatal(app.Agent)
 		}
 	}
-	for _, mutate := range []func(*AgentExecutionPolicy){func(p *AgentExecutionPolicy) { p.Worker = "missing" }, func(p *AgentExecutionPolicy) { p.Roles["unknown"] = "code" }, func(p *AgentExecutionPolicy) { p.Presets[1].Runtime = "pi" }, func(p *AgentExecutionPolicy) { p.Presets[1].ProfileID = "missing" }, func(p *AgentExecutionPolicy) { p.AllowedWorkers = []string{"code"} }} {
+	for _, mutate := range []func(*AgentExecutionPolicy){
+		func(p *AgentExecutionPolicy) { p.DefaultHarness = "missing" },
+		func(p *AgentExecutionPolicy) {
+			p.HarnessRules = append(p.HarnessRules, HarnessRule{Match: HarnessMatch{Role: "unknown.role"}, Harness: "code"})
+		},
+		func(p *AgentExecutionPolicy) { p.Harnesses[1].Runtime = "pi" },
+		func(p *AgentExecutionPolicy) { p.Harnesses[1].ProfileID = "missing" },
+		func(p *AgentExecutionPolicy) { p.AllowedHarnesses = []string{"code"} },
+		func(p *AgentExecutionPolicy) { p.Version = "" },
+		func(p *AgentExecutionPolicy) { delete(p.Harnesses[0].Tiers, "high") },
+		func(p *AgentExecutionPolicy) { p.Harnesses[1].Tiers["low"] = ModelTier{Effort: "minimal"} },
+		func(p *AgentExecutionPolicy) { p.SizeBudgets["large"] = SizeBudget{Minutes: 1, MaxTurns: 1} },
+		func(p *AgentExecutionPolicy) {
+			p.HarnessRules = append(p.HarnessRules, HarnessRule{Match: HarnessMatch{Role: "mitos.architect", Nature: "deploy"}, Harness: "code"})
+		},
+		func(p *AgentExecutionPolicy) {
+			p.HarnessRules = append(p.HarnessRules, HarnessRule{Match: HarnessMatch{Nature: "context"}, Harness: "code"})
+		},
+	} {
 		bad := graphClone(policy)
 		mutate(bad)
 		if err = e.validateExecution(bad); err == nil {
@@ -155,8 +186,11 @@ func TestExecutionRulesAndValidation(t *testing.T) {
 		}
 	}
 	app, _ := e.agentApplication("agent:mitos.engineer")
-	if err = e.bindExecution(&g, GraphSpec{ExecutionPreset: "missing"}, app.Agent); err == nil {
-		t.Fatal("unpermitted task preset accepted")
+	if err = e.bindExecution(&g, GraphSpec{Harness: "missing", Traits: traits("small", "low")}, app.Agent); err == nil {
+		t.Fatal("unpermitted task harness accepted")
+	}
+	if err = e.bindExecution(&g, GraphSpec{}, app.Agent); err == nil {
+		t.Fatal("native task without traits accepted")
 	}
 	document := "```mitos\n" + string(executionJSON(t, ExecutionPolicy{Execution: policy})) + "\n```\n"
 	preferences, err := documentPolicy(document)
@@ -200,7 +234,8 @@ func TestExecutionBindingsSurviveRestartAndDefaultChanges(t *testing.T) {
 	}
 	worker := graphWorker("implement", g.RootTask)
 	worker.Brief.AppID = "agent:mitos.engineer"
-	worker.ExecutionPreset = "design"
+	worker.Harness = "design"
+	worker.Traits = traits("small", "low")
 	g, _ = amendGraphTest(t, e, g, "pin-execution", GraphOperation{Kind: "add", Spec: &worker})
 	var binding *AgentBinding
 	for _, m := range g.Members {
@@ -208,7 +243,7 @@ func TestExecutionBindingsSurviveRestartAndDefaultChanges(t *testing.T) {
 			binding = m.Executor.Application.Agent
 		}
 	}
-	if binding == nil || binding.Runtime != "claude" || binding.SelectionSource != "task selection" {
+	if binding == nil || binding.Runtime != "claude" || binding.Selection.HarnessSource != "task override" {
 		t.Fatal(binding)
 	}
 	before := graphDigest(binding)
@@ -249,7 +284,7 @@ func TestClaudeAuthorityDoesNotClaimConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range library {
-		receipt, err := resolveAuthority(d, "claude", EnforcementAdvisory, 60)
+		receipt, err := resolveAuthority(d, "claude", EnforcementAdvisory, 60, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -260,7 +295,7 @@ func TestClaudeAuthorityDoesNotClaimConfinement(t *testing.T) {
 				}
 			}
 		}
-		if _, err = resolveAuthority(d, "claude", EnforcementStrict, 60); err == nil {
+		if _, err = resolveAuthority(d, "claude", EnforcementStrict, 60, ""); err == nil {
 			t.Fatalf("strict policy admitted %s on an advisory runtime", d.ID)
 		}
 	}
@@ -289,6 +324,7 @@ func TestClaudeExecutionDoesNotRequireCodex(t *testing.T) {
 	}
 	worker := graphWorker("architect", g.RootTask)
 	worker.Brief.AppID = "agent:mitos.architect"
+	worker.Traits = traits("small", "low")
 	_, executor, err := e.resolveGraphSpec(&g, worker)
 	if err != nil {
 		t.Fatal(err)

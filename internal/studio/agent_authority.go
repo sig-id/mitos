@@ -112,8 +112,25 @@ type CapabilityReceipt struct {
 	Note     string `json:"note,omitempty"`
 }
 
+// natureCeilings lists capabilities a task nature withholds whatever the role
+// may be granted. A nature narrows authority; it never widens it.
+var natureCeilings = map[string][]string{
+	"context": {"workspace.write"},
+	"review":  {"workspace.write"},
+}
+
+// NatureCeilings publishes which capabilities each task nature withholds.
+func NatureCeilings() map[string][]string {
+	out := map[string][]string{}
+	for k, v := range natureCeilings {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
 // AuthorityReceipt freezes the effective authority and limits of one attempt.
 type AuthorityReceipt struct {
+	Nature         string              `json:"nature,omitempty"`
 	Policy         string              `json:"policy"`
 	Runtime        string              `json:"runtime"`
 	Definition     string              `json:"definition"`
@@ -138,7 +155,7 @@ func (r AuthorityReceipt) Granted(name string) bool {
 // resolveAuthority intersects the definition's requests with what the runtime can
 // provide and applies the enforcement policy. Without a project grant model the
 // grant is the supported part of the definition's request.
-func resolveAuthority(d agents.Definition, runtime, policy string, attemptSeconds int) (AuthorityReceipt, error) {
+func resolveAuthority(d agents.Definition, runtime, policy string, attemptSeconds int, nature string) (AuthorityReceipt, error) {
 	if !validEnforcement(policy) {
 		return AuthorityReceipt{}, fmt.Errorf("unknown enforcement policy %q", policy)
 	}
@@ -147,7 +164,7 @@ func resolveAuthority(d agents.Definition, runtime, policy string, attemptSecond
 		return AuthorityReceipt{}, fmt.Errorf("runtime %s has no registered capability profile", runtime)
 	}
 	m := d.Manifest
-	r := AuthorityReceipt{Policy: policy, Runtime: runtime, Definition: fmt.Sprintf("%s@%d", d.ID, d.Revision), Digest: d.Digest, Features: slices.Clone(m.Runtime.Requires), GrantSource: "definition request intersected with runtime support; no project capability grants are configured", MaxTurns: m.Limits.MaxTurns, TimeoutSeconds: m.Limits.TimeoutSeconds, TurnCounting: "model steps, counted as completed tool actions plus the final answer"}
+	r := AuthorityReceipt{Nature: nature, Policy: policy, Runtime: runtime, Definition: fmt.Sprintf("%s@%d", d.ID, d.Revision), Digest: d.Digest, Features: slices.Clone(m.Runtime.Requires), GrantSource: "definition request intersected with runtime support; no project capability grants are configured", MaxTurns: m.Limits.MaxTurns, TimeoutSeconds: m.Limits.TimeoutSeconds, TurnCounting: "model steps, counted as completed tool actions plus the final answer"}
 	if attemptSeconds > 0 && attemptSeconds < r.TimeoutSeconds {
 		r.TimeoutSeconds = attemptSeconds
 	}
@@ -170,9 +187,20 @@ func resolveAuthority(d agents.Definition, runtime, policy string, attemptSecond
 	for _, name := range names {
 		required := slices.Contains(m.Capabilities.Required, name)
 		requested := required || slices.Contains(m.Capabilities.Optional, name)
+		withheld := slices.Contains(natureCeilings[nature], name)
+		if withheld {
+			required, requested = false, false
+		}
 		support, supported := profile.Capabilities[name]
 		c := CapabilityReceipt{Name: name, Required: required, Granted: requested && supported, Note: support.Note}
 		switch {
+		case withheld && support.BlockedDenial:
+			c.Status, c.Note = CapabilityEnforced, "Withheld by the task's "+nature+" nature."
+		case withheld:
+			c.Status, c.Note = CapabilityAdvisory, "Withheld by the task's "+nature+" nature; "+runtime+" cannot block it: "+support.Note
+			if policy == EnforcementStrict {
+				problems = append(problems, name+" cannot be withheld: "+support.Note)
+			}
 		case requested && !supported:
 			c.Status, c.Note = CapabilityRefused, "The runtime cannot provide this capability."
 			if required {

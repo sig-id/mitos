@@ -20,6 +20,9 @@ func ClaudeArguments(options CodexOptions, nativeTools []string) []string {
 	if options.Model != "" {
 		args = append(args, "--model", options.Model)
 	}
+	if options.Effort != "" {
+		args = append(args, "--effort", options.Effort)
+	}
 	if options.ResumeThread != "" {
 		args = append(args, "--resume="+options.ResumeThread)
 	}

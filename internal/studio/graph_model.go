@@ -41,17 +41,21 @@ type GraphPolicy struct {
 	DecisionApplication     string   `json:"decision_application,omitempty"`
 }
 type GraphSpec struct {
-	ExecutionPreset string          `json:"execution_preset,omitempty"`
-	Agent           *AgentSelection `json:"agent,omitempty"`
-	ID              string          `json:"id"` // proposal-local reference at creation
-	Parent          string          `json:"parent,omitempty"`
-	Kind            string          `json:"kind"` // scope or application
-	Required        bool            `json:"required"`
-	Criteria        string          `json:"criteria"`
-	Acceptance      string          `json:"acceptance"` // operator or application
-	Brief           Brief           `json:"brief"`
-	Arguments       []string        `json:"arguments,omitempty"` // append to registered argv only by policy
-	Context         string          `json:"context,omitempty"`
+	// Traits are the requester's declared requirements (native agent tasks).
+	Traits *TaskTraits `json:"traits,omitempty"`
+	// Harness optionally overrides harness selection, within the permitted
+	// worker harnesses. Models are never named directly.
+	Harness    string          `json:"harness,omitempty"`
+	Agent      *AgentSelection `json:"agent,omitempty"`
+	ID         string          `json:"id"` // proposal-local reference at creation
+	Parent     string          `json:"parent,omitempty"`
+	Kind       string          `json:"kind"` // scope or application
+	Required   bool            `json:"required"`
+	Criteria   string          `json:"criteria"`
+	Acceptance string          `json:"acceptance"` // operator or application
+	Brief      Brief           `json:"brief"`
+	Arguments  []string        `json:"arguments,omitempty"` // append to registered argv only by policy
+	Context    string          `json:"context,omitempty"`
 }
 type GraphExecutor struct {
 	Application Application `json:"application"`
@@ -85,6 +89,21 @@ type GraphMember struct {
 	Proposed int `json:"proposed,omitempty"`
 	// Continuation is consumed by the next attempt, like ContinueFrom.
 	Continuation *GraphContinuation `json:"continuation,omitempty"`
+	// Escalations records each trait raised for a retry, oldest first.
+	Escalations []GraphEscalation `json:"escalations,omitempty"`
+	// Requester is who added the task: operator or orchestrator.
+	Requester string `json:"requester,omitempty"`
+	// ProposedBy links a task admitted for a worker proposal to its record.
+	ProposedBy string `json:"proposed_by,omitempty"`
+}
+
+// GraphEscalation raises one trait of a task for its next attempt.
+type GraphEscalation struct {
+	Axis  string    `json:"axis"` // size or intelligence
+	From  string    `json:"from"`
+	To    string    `json:"to"`
+	RunID string    `json:"run_id"`
+	At    time.Time `json:"at"`
 }
 
 // GraphYield binds a yielded attempt to the blocking proposals it waits on.
@@ -96,8 +115,9 @@ type GraphYield struct {
 // GraphContinuation tells a continued attempt why it was resumed and how its
 // proposals were reviewed.
 type GraphContinuation struct {
-	Reason    string            `json:"reason"` // yield
-	Proposals []ProposalOutcome `json:"proposals"`
+	Reason     string            `json:"reason"` // yield or escalation
+	Proposals  []ProposalOutcome `json:"proposals,omitempty"`
+	Escalation *GraphEscalation  `json:"escalation,omitempty"`
 }
 type ProposalOutcome struct {
 	ID        string `json:"id"`
@@ -227,6 +247,9 @@ type GraphOperation struct {
 	Evidence     string                `json:"evidence,omitempty"`
 	Rationale    string                `json:"rationale,omitempty"`
 	Proposal     string                `json:"proposal,omitempty"`
+	// Escalate raises one trait for a retry: size (budget) or intelligence
+	// (model tier within the same harness).
+	Escalate string `json:"escalate,omitempty"`
 }
 type GraphProposal struct {
 	Profile        string               `json:"profile"`
@@ -354,7 +377,7 @@ var graphOperationFields = map[string][]string{
 	"dependencies": {"task", "dependencies", "join"}, "priority": {"task", "priority"},
 	"open_expansion": {"task", "expansion"}, "close_expansion": {"expansion", "rationale"},
 	"classify_trigger": {"trigger", "rationale"}, "seal": {"task", "cursor"}, "reopen": {"task"},
-	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task"},
+	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task", "escalate"},
 	"accept": {"task", "evidence", "rationale"}, "dismiss_decision": {"expansion", "rationale"},
 	"accept_proposal": {"proposal", "dependencies", "rationale"}, "reject_proposal": {"proposal", "rationale"},
 }
