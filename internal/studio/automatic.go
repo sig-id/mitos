@@ -34,18 +34,18 @@ type AgentSelection struct {
 // Binding freezes the portable definition and task specialization with the native
 // runtime identity. Credentials are resolved anew and are never in this record.
 type AgentBinding struct {
-	Profile          *agentcli.Profile    `json:"environment_profile,omitempty"`
-	RuntimeSelection *RuntimeSelection    `json:"runtime_selection,omitempty"`
-	Selection        *ExecutionSelection  `json:"selection,omitempty"`
-	ProfileID        string               `json:"profile_id,omitempty"`
-	Model            string               `json:"model,omitempty"`
-	Effort           string               `json:"effort,omitempty"`
-	Definition       agents.Definition    `json:"definition"`
-	Runtime          string               `json:"runtime"`
-	Executable       string               `json:"executable"`
-	Specialization   *AgentSelection      `json:"specialization,omitempty"`
-	GraphID          string               `json:"graph_id,omitempty"`
-	Digest           string               `json:"digest"`
+	Profile          *agentcli.Profile   `json:"environment_profile,omitempty"`
+	RuntimeSelection *RuntimeSelection   `json:"runtime_selection,omitempty"`
+	Selection        *ExecutionSelection `json:"selection,omitempty"`
+	ProfileID        string              `json:"profile_id,omitempty"`
+	Model            string              `json:"model,omitempty"`
+	Effort           string              `json:"effort,omitempty"`
+	Definition       agents.Definition   `json:"definition"`
+	Runtime          string              `json:"runtime"`
+	Executable       string              `json:"executable"`
+	Specialization   *AgentSelection     `json:"specialization,omitempty"`
+	GraphID          string              `json:"graph_id,omitempty"`
+	Digest           string              `json:"digest"`
 }
 
 func graphContextLimit(g *WorkGraph) int {

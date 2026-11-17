@@ -60,10 +60,10 @@ func TestRuntimeSelectionRecordsCandidatesAndRefusesIncompatible(t *testing.T) {
 	if err := e.selectAgentRuntime(bound); err != nil {
 		t.Fatal(err)
 	}
-	if bound.Selection == nil || bound.Selection.Runtime != "codex" || len(bound.Selection.Candidates) != 2 {
-		t.Fatalf("selection receipt missing: %+v", bound.Selection)
+	if bound.RuntimeSelection == nil || bound.RuntimeSelection.Runtime != "codex" || len(bound.RuntimeSelection.Candidates) != 2 {
+		t.Fatalf("selection receipt missing: %+v", bound.RuntimeSelection)
 	}
-	for _, c := range bound.Selection.Candidates {
+	for _, c := range bound.RuntimeSelection.Candidates {
 		if c.Runtime == "codex" && (!c.Available || !c.Compatible) {
 			t.Fatalf("codex candidate wrong: %+v", c)
 		}
@@ -75,7 +75,7 @@ func TestRuntimeSelectionRecordsCandidatesAndRefusesIncompatible(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "missing features: vision") {
 		t.Fatalf("unsupported requirement accepted: %v", err)
 	}
-	if vision.Selection != nil {
+	if vision.RuntimeSelection != nil {
 		t.Fatal("refused selection left a receipt")
 	}
 
@@ -85,22 +85,22 @@ func TestRuntimeSelectionRecordsCandidatesAndRefusesIncompatible(t *testing.T) {
 	if err = e.selectAgentRuntime(preferred); err != nil {
 		t.Fatal(err)
 	}
-	if preferred.Selection.Candidates[0].Runtime != "claude" || preferred.Selection.Runtime != "codex" {
+	if preferred.RuntimeSelection.Candidates[0].Runtime != "claude" || preferred.RuntimeSelection.Runtime != "codex" {
 		t.Fatalf("preferences not recorded: %+v", preferred.Selection)
 	}
 
 	// An explicitly selected incompatible runtime is refused even when a
 	// compatible one exists; the default worker runtime falls back.
-	pinned := &AgentBinding{Definition: selectionDefinition(t, []string{"native_output", "proposal_tools"}, nil), Runtime: "claude", Executable: "/usr/bin/claude", SelectionSource: "role rule"}
+	pinned := &AgentBinding{Definition: selectionDefinition(t, []string{"native_output", "proposal_tools"}, nil), Runtime: "claude", Executable: "/usr/bin/claude", Selection: &ExecutionSelection{Harness: "claude", HarnessSource: "role rule"}}
 	if err = e.selectAgentRuntime(pinned); err != nil {
 		t.Fatal(err)
 	}
-	if pinned.Selection.Runtime != "claude" {
-		t.Fatalf("compatible pinned runtime refused: %+v", pinned.Selection)
+	if pinned.RuntimeSelection.Runtime != "claude" {
+		t.Fatalf("compatible pinned runtime refused: %+v", pinned.RuntimeSelection)
 	}
-	defaults := &AgentBinding{Definition: selectionDefinition(t, []string{"native_output"}, nil), Runtime: "claude", SelectionSource: "worker default"}
-	if err = e.selectAgentRuntime(defaults); err != nil || defaults.Selection.Runtime != "claude" {
-		t.Fatalf("default selection failed: %v %+v", err, defaults.Selection)
+	defaults := &AgentBinding{Definition: selectionDefinition(t, []string{"native_output"}, nil), Runtime: "claude", Selection: &ExecutionSelection{Harness: "claude", HarnessSource: "worker default"}}
+	if err = e.selectAgentRuntime(defaults); err != nil || defaults.RuntimeSelection.Runtime != "claude" {
+		t.Fatalf("default selection failed: %v %+v", err, defaults.RuntimeSelection)
 	}
 }
 
@@ -149,9 +149,9 @@ func TestRuntimeSelectionPreservesProfileBackedInstallations(t *testing.T) {
 	if err = e.selectAgentRuntime(bound); err != nil {
 		t.Fatal(err)
 	}
-	codex := bound.Selection.Candidates[0]
-	if bound.Selection.Runtime != "codex" || !codex.Available || !codex.Compatible || codex.Profile != "profiled" || codex.Executable != script {
-		t.Fatalf("profile-backed runtime not discovered: %+v", bound.Selection.Candidates)
+	codex := bound.RuntimeSelection.Candidates[0]
+	if bound.RuntimeSelection.Runtime != "codex" || !codex.Available || !codex.Compatible || codex.Profile != "profiled" || codex.Executable != script {
+		t.Fatalf("profile-backed runtime not discovered: %+v", bound.RuntimeSelection.Candidates)
 	}
 
 	// A binding without a profile still discovers the installation, so
@@ -160,7 +160,7 @@ func TestRuntimeSelectionPreservesProfileBackedInstallations(t *testing.T) {
 	if err = e.selectAgentRuntime(lookup); err != nil {
 		t.Fatal(err)
 	}
-	if lookup.Selection.Runtime != "codex" || lookup.Selection.Candidates[0].Profile != "profiled" || lookup.Executable != script {
-		t.Fatalf("profile discovery lost: %+v", lookup.Selection.Candidates)
+	if lookup.RuntimeSelection.Runtime != "codex" || lookup.RuntimeSelection.Candidates[0].Profile != "profiled" || lookup.Executable != script {
+		t.Fatalf("profile discovery lost: %+v", lookup.RuntimeSelection.Candidates)
 	}
 }
