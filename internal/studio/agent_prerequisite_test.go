@@ -68,6 +68,11 @@ for line in sys.stdin:
 	if err != nil || !strings.Contains(string(patch), "preserved drafts") {
 		t.Fatal("lost prepared work", err)
 	}
+	var authority AuthorityReceipt
+	raw, err := e.Store.Artifact(run, "authority.json")
+	if err != nil || json.Unmarshal(raw, &authority) != nil || authority.Policy != EnforcementAdvisory || authority.Definition != "mitos.researcher@1" || authority.Granted("workspace.write") {
+		t.Fatalf("attempt authority receipt missing or wrong: %v %s", err, raw)
+	}
 	view, _ = e.Store.GraphView(g.ID, task)
 	if view.Nodes[task].State != "needs_attention" || view.Nodes[task].BlockedReason == "" {
 		t.Fatal("missing prerequisite banner facts", view.Nodes[task])

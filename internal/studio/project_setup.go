@@ -30,9 +30,11 @@ type RuntimePreferences struct {
 	Revision  int                    `json:"revision"`
 	Runtime   string                 `json:"runtime"`
 	Model     string                 `json:"model"`
-	Minutes   int                    `json:"minutes"`
-	Attempts  int                    `json:"attempts"`
-	Guidance  string                 `json:"guidance"`
+	// Enforcement selects which unenforceable agent permissions block an attempt.
+	Enforcement string `json:"enforcement"`
+	Minutes     int    `json:"minutes"`
+	Attempts    int    `json:"attempts"`
+	Guidance    string `json:"guidance"`
 }
 type ProjectSetup struct {
 	ResourceControls []resourcepolicy.Control `json:"resource_controls"`
@@ -59,6 +61,7 @@ type FrozenSetup struct {
 	Personal    string                `json:"personal,omitempty"`
 	Runtime     string                `json:"runtime"`
 	Model       string                `json:"model,omitempty"`
+	Enforcement string                `json:"enforcement"`
 	Minutes     int                   `json:"minutes"`
 	Attempts    int                   `json:"attempts"`
 }
@@ -155,6 +158,9 @@ func validatePreferences(v RuntimePreferences) error {
 	if err := validateResourcePreferences(v); err != nil {
 		return err
 	}
+	if v.Enforcement != "" && !validEnforcement(v.Enforcement) {
+		return errors.New("enforcement must be advisory, strict_required or strict")
+	}
 	if v.Runtime != "" && v.Runtime != "codex" {
 		return errors.New("automatic work currently supports Codex only; other installed runtimes can be used where their adapters support the requested action")
 	}
@@ -250,8 +256,14 @@ func effectivePreferences(global, project RuntimePreferences) RuntimePreferences
 	if project.Model != "" {
 		v.Model = project.Model
 	}
+	if project.Enforcement != "" {
+		v.Enforcement = project.Enforcement
+	}
 	if v.Runtime == "" {
 		v.Runtime = "codex"
+	}
+	if v.Enforcement == "" {
+		v.Enforcement = EnforcementAdvisory
 	}
 	resources := resourcepolicy.Resolve(resourcepolicy.Defaults(), preferenceResources(global))
 	resources = resourcepolicy.Resolve(resources, preferenceResources(project))
@@ -425,7 +437,7 @@ func (e *Engine) freezeSetup(id string) (*FrozenSetup, error) {
 	if !v.Exists {
 		document = sectionBlock(v.Sections) + "\n"
 	}
-	return &FrozenSetup{Resources: *v.Effective.Resources, Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
+	return &FrozenSetup{Resources: *v.Effective.Resources, Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Enforcement: v.Effective.Enforcement, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
 }
 func (s *FrozenSetup) prompt() string {
 	if s == nil {

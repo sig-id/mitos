@@ -11,7 +11,7 @@
   }
   return result;
  }
- function signature(preferences={}) {return JSON.stringify([preferences.runtime||'codex',preferences.model||'',preferences.guidance||'',policy(preferences)]);}
+ function signature(preferences={}) {return JSON.stringify([preferences.runtime||'codex',preferences.model||'',preferences.enforcement||'',preferences.guidance||'',policy(preferences)]);}
  function describe(limit,unit){return limit.mode==='limit'?`${limit.amount.toLocaleString()} ${unit}`:limit.mode==='unlimited'?'No cap':'Inherited';}
  function fields(preferences,controls) {
   const box=el('div',undefined,'resource-policy-fields'),values=policy(preferences),inputs=[];

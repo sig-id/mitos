@@ -35,7 +35,10 @@ type CodexOptions struct {
 	ResumeThread             string
 	ThreadStarted            func(string) error
 	OutputSchema             json.RawMessage
-	Result                   func(string) error
+	// MaxTurns bounds model steps, counted as completed tool actions plus the
+	// final answer. Zero means unbounded.
+	MaxTurns int
+	Result   func(string) error
 	// Activity receives public records separately from stdout, stderr, and tool output.
 	Activity io.Writer
 }
@@ -193,6 +196,7 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 		fmt.Fprintln(output, "Connected to Codex. Review supported requests in Mitos or on the paired device.")
 	}
 	once := prompt != "" && !options.KeepOpen
+	actions := 0
 	requestID := 3
 	for {
 		if prompt == "" {
@@ -348,6 +352,12 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 				if json.Unmarshal(event.Params, &p) == nil && p.Item.Type == "agentMessage" && p.Item.Delivery != "async" && (p.Item.Phase == "final_answer" || p.Item.Phase == "") {
 					finalText = p.Item.Text
 				}
+				if !conversationalItem(p.Item.Type) {
+					actions++
+					if options.MaxTurns > 0 && actions >= options.MaxTurns {
+						return &TurnLimitError{Limit: options.MaxTurns}
+					}
+				}
 			}
 			if event.Method == "turn/completed" {
 				steering = nil
@@ -377,4 +387,20 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 		}
 		prompt = ""
 	}
+}
+
+// TurnLimitError reports that an agent used its definition's step allowance.
+type TurnLimitError struct{ Limit int }
+
+func (e *TurnLimitError) Error() string {
+	return fmt.Sprintf("agent reached its limit of %d model steps", e.Limit)
+}
+
+// Items that carry conversation rather than an action taken by the model.
+func conversationalItem(kind string) bool {
+	switch kind {
+	case "agentMessage", "reasoning", "userMessage", "plan", "contextCompaction":
+		return true
+	}
+	return false
 }

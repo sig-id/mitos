@@ -294,6 +294,25 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if native.Executable != b.Executable {
 		return errors.New("native runtime changed since admission; start a new work attempt")
 	}
+	authorityGraph, err := e.Store.Graph(r.GraphAttempt.GraphID)
+	if err != nil {
+		return err
+	}
+	// Manually defined graphs have no frozen project setup and use the default.
+	policy := EnforcementAdvisory
+	if authorityGraph.Setup != nil {
+		policy = authorityGraph.Setup.Enforcement
+	}
+	authority, authorityErr := resolveAuthority(b.Definition, b.Runtime, policy, r.Brief.TimeoutMinutes*60)
+	receipt, _ := json.MarshalIndent(authority, "", "  ")
+	if err = e.Store.SaveArtifact(r.ID, "authority.json", receipt); err != nil {
+		return err
+	}
+	if authorityErr != nil {
+		return authorityErr
+	}
+	ctx, cancelLimit := context.WithTimeout(ctx, time.Duration(authority.TimeoutSeconds)*time.Second)
+	defer cancelLimit()
 	if err = e.Store.TransitionAfterDecision(r.ID, "advance", "Run the admitted agent assignment.", "run_started", "running", "Preparing agent", "Preparing an isolated workspace copy."); err != nil {
 		return err
 	}
@@ -407,11 +426,16 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	defer os.RemoveAll(cache)
 	cacheJSON, _ := json.Marshal(cache)
 	args = append(args, "-c", "shell_environment_policy.set.GOCACHE="+string(cacheJSON))
+	if authority.Granted("network.read") {
+		args = append(args, "-c", "sandbox_workspace_write.network_access=true")
+	}
 	native.Env = agentCacheEnvironment(native.Env, cache)
 	prompt += "\nGo checks have a writable GOCACHE in the temporary directory. Use that cache rather than escalating for cache access. Bound optional checks; if a test needs unavailable network or local socket access, preserve the limitation and continue the audit using source evidence unless that test is essential to the assignment.\n"
-	options := harness.CodexOptions{Headless: true, ResumeThread: prior.NativeThreadID, ThreadStarted: func(thread string) error { return e.Store.recordNativeThread(r.ID, thread) }, Model: b.Model, Sandbox: "workspace-write", Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
+	options := harness.CodexOptions{Headless: true, ResumeThread: prior.NativeThreadID, ThreadStarted: func(thread string) error { return e.Store.recordNativeThread(r.ID, thread) }, Model: b.Model, Sandbox: "read-only", MaxTurns: authority.MaxTurns, Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
+	if authority.Granted("workspace.write") {
+		options.Sandbox = "workspace-write"
+	}
 	if orchestrator {
-		options.Sandbox = "read-only"
 		options.OutputSchema = OrchestratorSchema()
 		prompt = orchestratorInstructions + "\n" + prompt
 	}
@@ -437,11 +461,17 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	defer e.Store.CloseAgentSession(bridge.ID, token)
 	broker := engineBroker{e: e, id: bridge.ID, token: token}
-	options.Tools = HandoffTools()
+	options.Tools = grantedHandoffTools(authority)
 	options.ToolCall = func(method string, raw json.RawMessage) (any, error) {
+		if !handoffToolGranted(authority, method) {
+			return nil, &HandoffFailure{Code: "capability_not_granted", Detail: method + " requires a capability this attempt was not granted"}
+		}
 		return e.HandoffCall(bridge.ID, token, method, raw)
 	}
 	prompt += "\nHandoff protocol mitos.handoff/v1: use cooperation_list to check requests addressed to this attempt before finishing; messages never grant approvals. Use artifact_list, artifact_read and artifact_search to inspect retained evidence using the run IDs in graph facts or dependency witnesses. Reads return base64 exact bytes and explicit continuation; follow next offsets. Metadata is not proof of contents. A 2 MiB per-attempt retrieval-byte budget is enforced, not a model-token budget. Report any unavailable evidence; never accept work with missing or corrupt evidence.\n"
+	if !orchestrator && !authority.Granted("workspace.write") {
+		prompt += "This agent definition does not grant workspace writes, so the workspace is read-only. Put your report in the final answer; register only existing files you rely on as evidence.\n"
+	}
 	if !orchestrator {
 		prompt += "Before finishing, call artifact_register for each deliverable/report/test log (role report, file, patch, log, test_evidence or publication_receipt), then result_submit with version mitos.handoff/v1, a stable key, summary <=2048 bytes, returned artifact IDs and roles, checks (passed/failed/not_run with registered evidence IDs), limitations and unresolved_requests. Checks are your claims, not automatic verification. Submission does not accept your work. Missing typed submission fails this attempt; ordinary final prose remains a human-readable report. Preserve partial evidence with artifact_register before risky work.\n"
 	}

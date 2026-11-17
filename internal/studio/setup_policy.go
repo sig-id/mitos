@@ -12,8 +12,10 @@ type ExecutionPolicy struct {
 	Resources *resourcepolicy.Policy `json:"resources,omitempty"`
 	Runtime   string                 `json:"runtime,omitempty"`
 	Model     string                 `json:"model,omitempty"`
-	Minutes   int                    `json:"minutes,omitempty"`
-	Attempts  int                    `json:"attempts,omitempty"`
+	// advisory, strict_required or strict; see agent_authority.go.
+	Enforcement string `json:"enforcement,omitempty"`
+	Minutes     int    `json:"minutes,omitempty"`
+	Attempts    int    `json:"attempts,omitempty"`
 }
 
 func documentPolicy(document string) (RuntimePreferences, error) {
@@ -40,7 +42,7 @@ func documentPolicy(document string) (RuntimePreferences, error) {
 		if err := DecodeGraphJSON([]byte(strings.Join(lines[start:i], "\n")), &v); err != nil {
 			return result, err
 		}
-		result = RuntimePreferences{Resources: v.Resources, Runtime: v.Runtime, Model: v.Model, Minutes: v.Minutes, Attempts: v.Attempts}
+		result = RuntimePreferences{Resources: v.Resources, Runtime: v.Runtime, Model: v.Model, Enforcement: v.Enforcement, Minutes: v.Minutes, Attempts: v.Attempts}
 		if err := validatePreferences(result); err != nil {
 			return result, err
 		}

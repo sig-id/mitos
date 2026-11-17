@@ -110,8 +110,24 @@ An edit keeps the prior manifest (runtime requirements, capabilities, context po
 limits, provenance) and changes only those three fields; a new agent derives its manifest
 from `mitos.generalist`. Task-specific specializations are bounded by the base
 definition's `specialization.allow` and `max_instruction_bytes`, which the library
-summary exposes as `max_specialization_bytes`. Authored capabilities and limits are
-recorded, not yet enforced.
+summary exposes as `max_specialization_bytes`.
+
+Before launch, each agent attempt resolves its **authority receipt** (`authority.json`):
+the definition's requested capabilities intersected with what the runtime can provide,
+with each capability marked `enforced` (the runtime bounds the grant or blocks the
+withheld capability), `advisory` (it cannot) or `refused`. Missing runtime features and
+unsupported required capabilities always refuse the attempt as a setup prerequisite.
+The `enforcement` setting (personal defaults, overridable in the project's `mitos`
+settings block) selects what else refuses: `advisory` (default) refuses nothing more,
+`strict_required` refuses advisory required capabilities and `strict` refuses any
+advisory capability. With Codex on local processes, reads are not confined, command
+execution cannot be disabled and granted network access is not read-only, so
+`strict_required` refuses `mitos.engineer` and `mitos.tester`. The receipt drives the
+attempt: `workspace.write` selects the writable sandbox (otherwise read-only),
+`network.read` enables sandbox network access, artifact tools are exposed and accepted
+only when granted, the timeout is the smaller of the definition and attempt limits, and
+`max_turns` bounds model steps (completed tool actions plus the final answer).
+`GET /api/graphs/capabilities` publishes the policies and per-runtime profile.
 
 Goal limits are 64 tasks, 96 attempts, 24 orchestrator calls, two retries per worker and
 a two-hour deadline. Rejected orchestrator proposals get at most two repair calls using
