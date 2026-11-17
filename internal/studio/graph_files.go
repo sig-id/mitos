@@ -16,6 +16,28 @@ import (
 	workspacefs "mitos/internal/workspace"
 )
 
+// readRegisteredArtifact reads an artifact only after verifying it against its
+// committed registration, mirroring Store.Artifact for callers already holding
+// the store lock. Unregistered or replaced archives are rejected so published
+// results stay readable through the same artifact path.
+func (s *Store) readRegisteredArtifact(r *Run, name string) ([]byte, error) {
+	for _, a := range r.Artifacts {
+		if a.Name != name {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(s.dir, "artifacts", r.ID, name))
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(b)
+		if int64(len(b)) != a.Bytes || hex.EncodeToString(sum[:]) != a.SHA256 {
+			return nil, errors.New("saved artifact does not match its registration")
+		}
+		return b, nil
+	}
+	return nil, ErrNotFound
+}
+
 // resolveResultFile binds a final-answer file item to the immutable evidence of
 // one exact run. Registered artifacts are authoritative; changed and unchanged
 // workspace files resolve through the checksum-verified retained archive.
@@ -29,18 +51,13 @@ func (s *Store) resolveResultFile(run, path string) (string, int64, error) {
 		if a.Name != path || a.Bytes < 0 || len(a.SHA256) != 64 {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(s.dir, "artifacts", run, path))
-		if err != nil {
+		if _, err := s.readRegisteredArtifact(r, path); err != nil {
 			return "", 0, err
-		}
-		sum := sha256.Sum256(b)
-		if int64(len(b)) != a.Bytes || hex.EncodeToString(sum[:]) != a.SHA256 {
-			return "", 0, errors.New("saved artifact does not match its registration")
 		}
 		return a.SHA256, a.Bytes, nil
 	}
 	expected, deleted := "", false
-	if raw, err := os.ReadFile(filepath.Join(s.dir, "artifacts", run, "changes.json")); err == nil && len(raw) <= graphMaxBytes {
+	if raw, err := s.readRegisteredArtifact(r, "changes.json"); err == nil && len(raw) <= graphMaxBytes {
 		var manifest workspacefs.Harvest
 		if json.Unmarshal(raw, &manifest) == nil {
 			for _, c := range manifest.Changes {
@@ -53,7 +70,7 @@ func (s *Store) resolveResultFile(run, path string) (string, int64, error) {
 	if deleted {
 		return "", 0, errors.New("file was deleted by the accepted run")
 	}
-	archive, err := os.ReadFile(filepath.Join(s.dir, "artifacts", run, "workspace.tar.gz"))
+	archive, err := s.readRegisteredArtifact(r, "workspace.tar.gz")
 	if err != nil {
 		return "", 0, errors.New("no retained workspace archive")
 	}

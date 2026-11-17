@@ -82,6 +82,7 @@ func (s *Store) bindGraphResult(g *WorkGraph, answer FinalAnswer, author string)
 			if err != nil || len(item.URL) > 4096 || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || item.Task != "" || item.Path != "" {
 				return nil, graphError("result link must be an HTTP URL")
 			}
+			result.Items = append(result.Items, item)
 		default:
 			return nil, graphError("unknown result item kind")
 		}

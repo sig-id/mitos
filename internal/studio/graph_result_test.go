@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -127,6 +129,51 @@ func TestFinalAnswerPresentationItems(t *testing.T) {
 		if _, err := s.bindGraphResult(g, base, "orchestrator:test"); err == nil {
 			t.Fatalf("accepted invalid item %+v", item)
 		}
+	}
+}
+
+// Validated links must survive publication: the result reader renders external
+// links exclusively from the stored result items.
+func TestFinalAnswerPreservesLinkItems(t *testing.T) {
+	s, g := resultStore(t)
+	answer := FinalAnswer{Title: "Implementation", Markdown: "Updated the implementation.", SourceTasks: []string{"worker"}, Items: []ResultItem{
+		{Kind: "link", Title: "Pull request", URL: "https://example.com/pull/7"},
+		{Kind: "file", Title: "Workspace file", Task: "worker", Path: "notes/kept.txt"},
+	}}
+	result, err := s.bindGraphResult(g, answer, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 || result.Items[0].Kind != "link" || result.Items[0].URL != "https://example.com/pull/7" || result.Items[0].Title != "Pull request" {
+		t.Fatalf("validated link item missing from published result: %+v", result.Items)
+	}
+}
+
+// Publication must bind workspace files to the registered archive: a replaced
+// or unregistered tar.gz on disk cannot back a deliverable, matching the
+// checksum-verified artifact reads used by result readers.
+func TestFinalAnswerRejectsTamperedWorkspaceArchive(t *testing.T) {
+	s, g := resultStore(t)
+	run := g.Members["worker"].Accepted.RunID
+	replaced := resultArchive(t, map[string]string{"docs/answer.md": "final answer", "notes/kept.txt": "unchanged source", "extra.txt": "extra"})
+	if err := os.WriteFile(filepath.Join(s.dir, "artifacts", run, "workspace.tar.gz"), replaced, 0600); err != nil {
+		t.Fatal(err)
+	}
+	tampered := FinalAnswer{Title: "Implementation", Markdown: "Updated.", SourceTasks: []string{"worker"}, Items: []ResultItem{{Kind: "file", Title: "Kept", Task: "worker", Path: "notes/kept.txt"}}}
+	if _, err := s.bindGraphResult(g, tampered, "operator"); err == nil {
+		t.Fatal("replaced workspace archive accepted")
+	}
+	stray := createRun(t, s)
+	if err := os.MkdirAll(filepath.Join(s.dir, "artifacts", stray.ID), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.dir, "artifacts", stray.ID, "workspace.tar.gz"), resultArchive(t, map[string]string{"notes/kept.txt": "unchanged source"}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unregistered := FinalAnswer{Title: "Implementation", Markdown: "Updated.", SourceTasks: []string{"stray"}, Items: []ResultItem{{Kind: "file", Title: "Kept", Task: "stray", Path: "notes/kept.txt"}}}
+	strayGraph := &WorkGraph{Members: map[string]*GraphMember{"stray": {Spec: GraphSpec{Kind: "application"}, Accepted: &GraphAcceptance{RunID: stray.ID}}}}
+	if _, err := s.bindGraphResult(strayGraph, unregistered, "operator"); err == nil {
+		t.Fatal("unregistered workspace archive accepted")
 	}
 }
 
