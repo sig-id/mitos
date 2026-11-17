@@ -439,9 +439,12 @@ func (e *Engine) freezeSetup(id string) (*FrozenSetup, error) {
 	}
 	return &FrozenSetup{Resources: *v.Effective.Resources, Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Enforcement: v.Effective.Enforcement, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
 }
-func (s *FrozenSetup) prompt() string {
+
+// constraints renders the frozen project policy without the project document,
+// which is assembled separately as optional project context.
+func (s *FrozenSetup) constraints() string {
 	if s == nil {
 		return ""
 	}
-	return s.Cooperation.Prompt() + fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nFull project instructions (%s, frozen for this work):\n%s\nRuntime: %s; model: %s. Workflow elapsed-time budget: %d minutes, including waits; shared agent-attempt budget: %d, including orchestrators and retries. CPU and memory are per-agent resources; model tokens are a shared workflow budget. Only supported structured caps are enforced. Monetary and qualitative budgets in prose are guidance, not enforced accounting.\n", s.Personal, s.FileName, s.Document, s.Runtime, s.Model, s.Minutes, s.Attempts)
+	return s.Cooperation.Prompt() + fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nRuntime: %s; model: %s. Workflow elapsed-time budget: %d minutes, including waits; shared agent-attempt budget: %d, including orchestrators and retries. CPU and memory are per-agent resources; model tokens are a shared workflow budget. Only supported structured caps are enforced. Monetary and qualitative budgets in prose are guidance, not enforced accounting.\n", s.Personal, s.Runtime, s.Model, s.Minutes, s.Attempts)
 }

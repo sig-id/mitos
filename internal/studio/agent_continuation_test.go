@@ -24,7 +24,7 @@ func TestAutomaticResourceContinuation(t *testing.T) {
 prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ ctx=json.loads(section(prompt,'graph_state'))
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  if workers and workers[0]['state']=='failed':sys.exit(9)
  plan={'explanation':'Continue the same work.','operations':[],'accept':[],'complete':bool(workers),'result':{'title':'','markdown':'','source_tasks':[]}}

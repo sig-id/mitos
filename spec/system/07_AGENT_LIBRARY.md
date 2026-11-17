@@ -7,7 +7,7 @@ worker revisions. This does not claim full profile conformance: multi-runtime
 negotiation, knowledge/skill attachment, deprecation, and promotion remain future
 work. Typed definition validation, manifest-preserving edits and per-attempt
 authority receipts (capability intersection, enforcement policy, timeout and turn
-limits) are implemented; context assembly receipts are not yet. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow).
+limits) and bounded context assembly receipts are implemented. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow).
 
 ## Purpose and ownership
 

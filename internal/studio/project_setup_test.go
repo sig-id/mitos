@@ -130,7 +130,8 @@ func TestSetupDefaultsOverridesAndFrozenExecution(t *testing.T) {
 	if !strings.Contains(stored.Setup.Document, "Frozen original guidance") || strings.Contains(stored.Setup.Document, "New guidance") {
 		t.Fatal("running setup changed")
 	}
-	if !strings.Contains(stored.Setup.prompt(), stored.Setup.Document) {
-		t.Fatal("orchestrator did not get full setup")
+	// The frozen document is assembled as project context; constraints carry the policy only.
+	if constraints := stored.Setup.constraints(); strings.Contains(constraints, "Frozen original guidance") || !strings.Contains(constraints, "Workflow elapsed-time budget") {
+		t.Fatal("frozen constraints mix in the project document or lose the policy")
 	}
 }

@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.orchestrator",
-  "revision": 3,
+  "revision": 4,
   "name": "Orchestrator",
   "description": "Turn a goal and evolving evidence into bounded work, selecting or creating agent roles as needed.",
   "kind": "orchestrator",
@@ -44,7 +44,7 @@
       "prior_findings",
       "assignment_memory"
     ],
-    "max_characters": 64000,
+    "max_characters": 131072,
     "overflow": "summarize_optional"
   },
   "memory": {
