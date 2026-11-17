@@ -77,12 +77,20 @@ Mitos MUST inject a bounded, immutable snapshot into coordinated assignments and
 show its origin/revision in project setup. This filename is a proposed convention,
 not a claim that existing third-party tools discover it automatically.
 
-The `mitos.cooperation/v1` protocol defines structured assignments, help/delegation
+The `mitos.cooperation/v2` protocol defines structured assignments, help/delegation
 requests, questions, approval requests, observations, handoffs and result submissions.
-Each message binds a unique ID, task/session, causal request where applicable,
-revision, kind, payload and timestamp. Requests identify blocking dependencies and
-permitted resolvers. Responses reference the originating request and expire with
-it. Duplicate delivery MUST NOT duplicate effects; conflicts are rejected.
+Each message binds a unique ID, task/session or task/run origin, causal request
+where applicable, revision, kind, payload and timestamp. Requests MUST identify
+explicit permitted resolvers bound to exact current attempts (task, run, revision)
+and MAY declare blocked actions; the implemented subset blocks only the
+originating attempt's acceptance, and cross-task resolvers are supported inside
+one explicit graph scope. Responses reference the originating request and expire
+with it: expired, cancelled, stale-revision, cancelled-task and replaced-attempt
+requests cannot be answered, and no pending request is adopted or rebound to a
+retry. Duplicate delivery MUST NOT duplicate effects; conflicts are rejected.
+Historical v1 records remain readable while new writes reject v1; portable
+cross-runtime routing and hosted transports remain outside the local subset.
+See [cooperation operations](../../docs/cooperation.md) for the shipped contract.
 
 Assignment scope, dependencies and completion criteria MUST be explicit. Results
 reference artifacts/evidence; submission is distinct from acceptance. Shared-file
