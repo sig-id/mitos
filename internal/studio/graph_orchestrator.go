@@ -19,6 +19,14 @@ const (
 	graphJournalCompactAt   = 96
 	graphJournalCompactKeep = 32
 	graphJournalSummary     = 512
+	// Summaries are also bounded by serialized bytes, not runes alone, so
+	// multibyte and JSON-escaped text cannot inflate one entry past the journal
+	// budget.
+	graphJournalEntryBytes = 1024
+	// The serialized journal stays under half the planning allowance: byte
+	// compaction enforces this budget even before the entry boundary is
+	// reached, leaving the agent library and remaining fields their room.
+	graphJournalBytes = 32 << 10
 	// The inline journal is small; detail is behind graph_read. The planning
 	// payload allowance is halved from the old full-snapshot budget.
 	orchestratorPlanLimit = 64 << 10
@@ -52,28 +60,84 @@ func appendFactJournal(g *WorkGraph, s *Store) {
 			entry.Summary = r.Summary
 			entry.ArtifactCount = len(r.Artifacts)
 		}
-		if runes := []rune(entry.Summary); len(runes) > graphJournalSummary {
-			entry.Summary = string(runes[:graphJournalSummary])
-		}
+		boundJournalSummary(&entry)
 		g.FactJournal = append(g.FactJournal, entry)
 	}
-	if len(g.FactJournal) >= graphJournalCompactAt {
-		absorbed := map[string]int64{}
-		for _, e := range g.FactJournal[:len(g.FactJournal)-graphJournalCompactKeep] {
-			if e.Compacted > 0 {
-				for task, fact := range e.Facts {
-					if fact > absorbed[task] {
-						absorbed[task] = fact
-					}
-				}
-				continue
-			}
-			if e.Fact > absorbed[e.Task] {
-				absorbed[e.Task] = e.Fact
+	compactJournal(g)
+}
+
+// boundJournalSummary shrinks the entry summary until the serialized entry
+// fits the per-entry byte allowance. Truncation is rune-safe, so multibyte
+// text and JSON escaping cannot inflate a single entry past the journal
+// budget.
+func boundJournalSummary(entry *GraphFactEntry) {
+	if runes := []rune(entry.Summary); len(runes) > graphJournalSummary {
+		entry.Summary = string(runes[:graphJournalSummary])
+	}
+	for entry.Summary != "" {
+		raw, err := json.Marshal(entry)
+		if err == nil && len(raw) <= graphJournalEntryBytes {
+			return
+		}
+		// Escaping expands one source byte to at most six serialized bytes, so
+		// dropping a third of the overshoot in runes always makes progress.
+		drop := (len(raw) - graphJournalEntryBytes + 2) / 3
+		if drop < 1 {
+			drop = 1
+		}
+		runes := []rune(entry.Summary)
+		if drop >= len(runes) {
+			entry.Summary = ""
+			return
+		}
+		entry.Summary = string(runes[:len(runes)-drop])
+	}
+}
+
+// absorbJournalFact folds one entry into the per-task fact highs recorded by a
+// compaction marker.
+func absorbJournalFact(absorbed map[string]int64, e GraphFactEntry) {
+	if e.Compacted > 0 {
+		for task, fact := range e.Facts {
+			if fact > absorbed[task] {
+				absorbed[task] = fact
 			}
 		}
-		kept := append([]GraphFactEntry(nil), g.FactJournal[len(g.FactJournal)-graphJournalCompactKeep:]...)
-		g.FactJournal = append([]GraphFactEntry{{Compacted: graphJournalCompactAt - graphJournalCompactKeep + 1, Facts: absorbed}}, kept...)
+		return
+	}
+	if e.Fact > absorbed[e.Task] {
+		absorbed[e.Task] = e.Fact
+	}
+}
+
+// compactJournalKeep absorbs every entry older than the newest keep entries
+// into one marker that records the absorbed count and the highest fact
+// revision observed per task. The kept tail stays frozen verbatim.
+func compactJournalKeep(g *WorkGraph, keep int) {
+	if keep < 0 || len(g.FactJournal) <= keep {
+		return
+	}
+	absorbed := map[string]int64{}
+	n := 0
+	for _, e := range g.FactJournal[:len(g.FactJournal)-keep] {
+		n++
+		absorbJournalFact(absorbed, e)
+	}
+	kept := append([]GraphFactEntry(nil), g.FactJournal[len(g.FactJournal)-keep:]...)
+	g.FactJournal = append([]GraphFactEntry{{Compacted: n + 1, Facts: absorbed}}, kept...)
+}
+
+// compactJournal bounds the journal twice: at the fixed entry boundary, and —
+// because multibyte or heavily escaped summaries can inflate entries well
+// before that boundary is reached — at a serialized byte budget. Compaction
+// absorbs the oldest entries into a marker while keeping the newest entries
+// verbatim, so prompts remain cache-stable outside these compaction points.
+func compactJournal(g *WorkGraph) {
+	if len(g.FactJournal) >= graphJournalCompactAt {
+		compactJournalKeep(g, graphJournalCompactKeep)
+	}
+	for len(g.FactJournal) > 2 && len(renderPlanJournal(g)) > graphJournalBytes {
+		compactJournalKeep(g, (len(g.FactJournal)-1)/2)
 	}
 }
 

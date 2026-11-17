@@ -180,3 +180,62 @@ func TestOrchestratorJournalStaysBoundedOnLargeGraphs(t *testing.T) {
 	}
 	s.mu.Unlock()
 }
+
+// Multibyte summaries serialize to several times their rune count, so the
+// journal must enforce its byte budget before the entry boundary is reached;
+// otherwise valid graphs stall on orchestrator_context_limit.
+func TestOrchestratorJournalBoundsMultibyteSummaries(t *testing.T) {
+	e, req := graphEngine(t, false)
+	req.Limits.Tasks = 128
+	req.Limits.Fanout = 128
+	cjk := strings.Repeat("詳細", 256) // 512 runes, 1536 UTF-8 bytes
+	specs := []GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Large summaries", Acceptance: "operator", Brief: Brief{Title: "Large summaries"}}}
+	for i := range 48 {
+		id := "task" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		specs = append(specs, GraphSpec{ID: id, Parent: "goal", Kind: "application", Required: false, Criteria: "Produce evidence", Acceptance: "operator", Brief: Brief{Title: "Work", AppID: "workspace-inventory", TimeoutMinutes: 1}})
+	}
+	req.Tasks = specs
+	g := createGraphTest(t, e, req)
+	s := e.Store
+	s.mu.Lock()
+	graph := s.graphs[g.ID]
+	for id, member := range graph.Members {
+		member.FactRevision = int64(2 + len(id))
+		member.State = "done"
+		rid := "run_" + id
+		s.runs[rid] = &Run{ID: rid, TaskID: id, Status: "done", Summary: cjk}
+		member.CurrentRunID = rid
+	}
+	appendFactJournal(graph, s)
+	state := renderPlanJournal(graph)
+	if len(state) >= orchestratorPlanLimit {
+		t.Fatalf("journal state %d exceeds the %d planning allowance", len(state), orchestratorPlanLimit)
+	}
+	if len(state) > graphJournalBytes {
+		t.Fatalf("journal state %d exceeds the %d byte budget", len(state), graphJournalBytes)
+	}
+	compacted := 0
+	for _, entry := range graph.FactJournal {
+		if entry.Compacted > 0 {
+			compacted++
+		}
+		raw, err := json.Marshal(entry)
+		if err != nil || len(raw) > graphJournalEntryBytes {
+			t.Fatalf("entry %d exceeds the per-entry byte allowance: %d bytes", entry.Fact, len(raw))
+		}
+	}
+	if compacted == 0 {
+		t.Fatal("byte compaction did not run before the entry boundary")
+	}
+	// The newest entries stay verbatim and the journal still grows append-only
+	// outside this byte compaction point.
+	before := renderPlanJournal(graph)
+	newest := graph.FactJournal[len(graph.FactJournal)-1]
+	graph.Members[newest.Task].FactRevision++
+	appendFactJournal(graph, s)
+	after := renderPlanJournal(graph)
+	if shared, _ := sharedStatePrefix(before, after); shared < len(before)-96 {
+		t.Fatalf("journal rewrote history outside a compaction boundary: shared %d of %d", shared, len(before))
+	}
+	s.mu.Unlock()
+}
