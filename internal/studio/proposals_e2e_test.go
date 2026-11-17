@@ -23,7 +23,7 @@ func TestAutomaticYieldProposalContinuation(t *testing.T) {
 prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 def spec(ref,intent,root):
- return {'id':ref,'parent':root,'kind':'application','required':True,'acceptance':'operator','criteria':'Answer','brief':{'title':ref,'intent':intent,'app_id':'agent:mitos.generalist','timeout_minutes':30,'scheduling':{'deps':[]}}}
+ return {'id':ref,'parent':root,'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Answer','brief':{'title':ref,'intent':intent,'app_id':'agent:mitos.generalist','timeout_minutes':30,'scheduling':{'deps':[]}}}
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'));root=ctx['root_task']
  latest={}
@@ -51,6 +51,7 @@ if '--output-schema' in sys.argv:
   plan['result']={'title':'Answer','markdown':'The answer is 7.','source_tasks':[lead[0]['task'],helper[0]['task']]}
  out.write_text(json.dumps(plan))
 elif 'HELPER' in prompt:
+ pathlib.Path(ARGV_RECORD).write_text(json.dumps(sys.modules['__main__'].oldargv))
  out.write_text('The sub-answer is 7.')
 else:
  pathlib.Path('fixture-report.md').write_text('lead report')
@@ -67,6 +68,9 @@ else:
   assert len(receipt['proposal_ids'])==1,receipt
   out.write_text('Yielding to a helper.')
 `
+	argvRecord := filepath.Join(bin, "helper-argv.json")
+	argvJSON, _ := json.Marshal(argvRecord)
+	script = strings.Replace(script, "ARGV_RECORD", string(argvJSON), 1)
 	fixture := appServerFixture(script)
 	fixture = strings.Replace(fixture, "elif method=='thread/start':", "elif method in ('thread/start','thread/resume'):", 1)
 	wireLog := filepath.Join(bin, "native-requests.jsonl")
@@ -119,6 +123,27 @@ else:
 	continued, _ := e.Store.Get(lead.Attempts[1])
 	if continued.GraphAttempt.ContinueFrom != lead.Attempts[0] || continued.Result == nil || continued.Result.Submission.Key != "lead-final" {
 		t.Fatal("continuation did not run on the yielded attempt", continued.GraphAttempt, continued.Result)
+	}
+	// Calibration attributes the helper to the worker proposal that asked for it.
+	groups, err := e.Store.ExecutionCalibration(req.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requesters := map[string]int{}
+	for _, c := range groups {
+		requesters[c.Requester] += c.Attempts
+		if c.Size != "small" || c.Intelligence != "low" || c.Tier != "low" || c.BudgetMinutes != 15 {
+			t.Fatalf("calibration group: %+v", c)
+		}
+	}
+	if requesters["orchestrator"] != 2 || requesters["proposal:mitos.generalist"] != 1 {
+		t.Fatalf("calibration requesters: %v", requesters)
+	}
+	if b := continued.GraphAttempt.Executor.Application.Agent; b.Effort != "low" || b.Selection == nil || b.Selection.Traits.Nature != "implement" {
+		t.Fatalf("binding lost the low-intelligence selection: %+v", b)
+	}
+	if argv, err := os.ReadFile(argvRecord); err != nil || !strings.Contains(string(argv), `model_reasoning_effort=\"low\"`) {
+		t.Fatalf("codex launch lacks the tier's effort: %s %v", argv, err)
 	}
 	wire, err := os.ReadFile(wireLog)
 	if err != nil {

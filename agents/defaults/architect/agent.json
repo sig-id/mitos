@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.architect",
-  "revision": 2,
+  "revision": 3,
   "name": "Architect",
   "description": "Design boundaries and interfaces from requirements, constraints and existing behavior.",
   "kind": "worker",
@@ -15,6 +15,10 @@
       "Treating a proposed design as already implemented",
       "Mandating a universal engineering phase sequence"
     ]
+  },
+  "natures": {
+    "supported": ["design", "context", "review"],
+    "default": "design"
   },
   "instructions": {
     "path": "instructions.md",

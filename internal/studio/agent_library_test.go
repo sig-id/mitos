@@ -119,7 +119,7 @@ func TestAgentLibraryRejectsUnversionedOrTamperedImport(t *testing.T) {
 	}
 	raw, _ := json.MarshalIndent(saved, "", "  ")
 	for name, content := range map[string]string{
-		"unversioned": strings.Replace(string(raw), `"profile": "agent-library-store/v1",`, "", 1),
+		"unversioned": strings.Replace(string(raw), `"profile": "agent-library-store/v2",`, "", 1),
 		"tampered":    strings.Replace(string(raw), "Seed instructions.", "Other instructions.", 1),
 	} {
 		t.Run(name, func(t *testing.T) {

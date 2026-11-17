@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	Profile              = "agent-definition/v1"
+	Profile              = "agent-definition/v2"
 	MaxManifestBytes     = 64 << 10
 	MaxInstructionBytes  = 64 << 10
 	maxText              = 4000
@@ -27,6 +27,9 @@ var (
 	idPattern     = regexp.MustCompile(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`)
 	digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	// Fields a specialization may be allowed to change.
+	// Natures is the closed set of task natures: what kind of work a task is.
+	// Role (the definition) is who does it; nature is a property of the task.
+	Natures       = []string{"context", "design", "implement", "document", "review", "verify"}
 	specializable = []string{"name", "description", "instructions", "knowledge", "skills", "runtime.preferences", "runtime.requires", "context.optional", "context.required", "capabilities.required", "capabilities.optional", "limits"}
 )
 
@@ -58,6 +61,17 @@ type Memory struct {
 	Scope       string `json:"scope"`
 	Publication string `json:"publication"`
 }
+
+// NatureSet declares the task natures a worker definition can take on and the
+// one a task gets when it does not state its own. Orchestrators declare none.
+type NatureSet struct {
+	Supported []string `json:"supported"`
+	Default   string   `json:"default"`
+}
+
+// Supports reports whether the definition can take on the nature.
+func (n NatureSet) Supports(nature string) bool { return slices.Contains(n.Supported, nature) }
+
 type Capabilities struct {
 	Required []string `json:"required"`
 	Optional []string `json:"optional"`
@@ -94,7 +108,7 @@ type Provenance struct {
 	Generation     *Generation `json:"generation,omitempty"`
 }
 
-// Manifest is the typed agent-definition/v1 authoring record. Field order is the
+// Manifest is the typed agent-definition/v2 authoring record. Field order is the
 // canonical serialization order; Canonical() is the digest input.
 type Manifest struct {
 	Profile        string          `json:"profile"`
@@ -104,6 +118,7 @@ type Manifest struct {
 	Description    string          `json:"description"`
 	Kind           string          `json:"kind"`
 	Match          Match           `json:"match"`
+	Natures        NatureSet       `json:"natures"`
 	Instructions   InstructionsRef `json:"instructions"`
 	Runtime        Runtime         `json:"runtime"`
 	Skills         []Resource      `json:"skills"`
@@ -172,6 +187,20 @@ func (m Manifest) Validate() error {
 	text(fail, "description", m.Description)
 	if m.Kind != "worker" && m.Kind != "orchestrator" {
 		fail("kind must be worker or orchestrator")
+	}
+	if m.Kind == "orchestrator" {
+		if len(m.Natures.Supported) > 0 || m.Natures.Default != "" {
+			fail("orchestrators declare no natures")
+		}
+	} else {
+		if len(m.Natures.Supported) == 0 || !unique(m.Natures.Supported) || !m.Natures.Supports(m.Natures.Default) {
+			fail("natures must list unique supported natures including the default")
+		}
+		for _, n := range m.Natures.Supported {
+			if !slices.Contains(Natures, n) {
+				fail("unknown nature %q", n)
+			}
+		}
 	}
 	list(fail, "match.use_for", m.Match.UseFor)
 	list(fail, "match.avoid_for", m.Match.AvoidFor)
@@ -314,7 +343,7 @@ func requireMembers(raw []byte) error {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return fmt.Errorf("manifest: %w", err)
 	}
-	for _, key := range []string{"profile", "id", "revision", "name", "description", "kind", "match", "instructions", "runtime", "skills", "knowledge", "context", "memory", "capabilities", "limits", "specialization", "evidence", "provenance"} {
+	for _, key := range []string{"profile", "id", "revision", "name", "description", "kind", "match", "natures", "instructions", "runtime", "skills", "knowledge", "context", "memory", "capabilities", "limits", "specialization", "evidence", "provenance"} {
 		if v, ok := top[key]; !ok || string(v) == "null" {
 			return fmt.Errorf("manifest is missing %s", key)
 		}

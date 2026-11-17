@@ -119,8 +119,18 @@ func Compile(request Request, providers map[string]Capabilities, development boo
 			if request.TrustTier == "T0" && caps.Isolation == "container" {
 				continue
 			}
-			if caps.Egress != "broker" || netMode != "deny-all-except-broker" || request.BrokerEndpoint == "" || !caps.WorkspaceConfined {
-				continue
+			// A local same-user container may run with no network at all, or
+			// with unrestricted egress under T1; brokered egress stays the
+			// requirement for every remote or T2 placement.
+			localContainer := caps.Isolation == "container" && !caps.Remote
+			if netMode == "off" {
+				if !localContainer || !slices.Contains(caps.NetModes, "off") || !caps.WorkspaceConfined {
+					continue
+				}
+			} else if !localContainer || netMode != "unrestricted" || request.TrustTier == "T2" || !caps.WorkspaceConfined {
+				if caps.Egress != "broker" || netMode != "deny-all-except-broker" || request.BrokerEndpoint == "" || !caps.WorkspaceConfined {
+					continue
+				}
 			}
 			if request.TrustTier == "T2" && (!caps.Remote || caps.Isolation != "microvm" || caps.DataMount != "snapshot-ro" || !caps.Metered) {
 				continue

@@ -3,6 +3,7 @@ package studio
 import (
 	"encoding/json"
 	"fmt"
+	"mitos/internal/compute"
 	"slices"
 	"strings"
 
@@ -40,6 +41,9 @@ type capabilitySupport struct {
 	BoundedGrant  bool
 	BlockedDenial bool
 	Note          string
+	// Withheld marks a capability the execution provider denies entirely, so a
+	// request can never become a grant even though the runtime knows it.
+	Withheld string
 }
 
 // Codex on the local process provider. Its sandbox confines writes and can disable
@@ -61,11 +65,17 @@ var codexProfile = runtimeProfile{
 }
 
 // RuntimeCapabilityProfiles publishes, per runtime, which capabilities a grant
-// keeps within scope and which withheld capabilities are actually blocked.
+// keeps within scope and which withheld capabilities are actually blocked. The
+// effective profile is derived from the execution provider's capabilities.
 func RuntimeCapabilityProfiles() map[string]any {
+	return RuntimeCapabilityProfilesFor(compute.Capabilities{Isolation: "process", Egress: "unrestricted", NetModes: []string{"unrestricted"}})
+}
+
+func RuntimeCapabilityProfilesFor(provider compute.Capabilities) map[string]any {
 	out := map[string]any{}
 	for _, runtime := range []string{"codex", "claude", "codex-headless"} {
-		p, _ := nativeRuntimeProfile(runtime)
+		base, _ := nativeRuntimeProfile(runtime)
+		p := confinedProfile(base, provider)
 		caps := map[string]any{}
 		for name, c := range p.Capabilities {
 			caps[name] = map[string]any{"bounded_grant": c.BoundedGrant, "blocked_denial": c.BlockedDenial, "note": c.Note}
@@ -73,6 +83,13 @@ func RuntimeCapabilityProfiles() map[string]any {
 		out[runtime] = map[string]any{"features": p.Features, "capabilities": caps}
 	}
 	return out
+}
+
+// AgentCapabilityReport publishes the execution provider's enforced posture and
+// the runtime profiles derived from it.
+func (e *Engine) AgentCapabilityReport() map[string]any {
+	caps := e.agentProviderCapabilities()
+	return map[string]any{"provider": caps, "runtimes": RuntimeCapabilityProfilesFor(caps)}
 }
 
 // Headless structured work runs Codex read-only in an empty scratch directory
@@ -112,8 +129,25 @@ type CapabilityReceipt struct {
 	Note     string `json:"note,omitempty"`
 }
 
+// natureCeilings lists capabilities a task nature withholds whatever the role
+// may be granted. A nature narrows authority; it never widens it.
+var natureCeilings = map[string][]string{
+	"context": {"workspace.write"},
+	"review":  {"workspace.write"},
+}
+
+// NatureCeilings publishes which capabilities each task nature withholds.
+func NatureCeilings() map[string][]string {
+	out := map[string][]string{}
+	for k, v := range natureCeilings {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
 // AuthorityReceipt freezes the effective authority and limits of one attempt.
 type AuthorityReceipt struct {
+	Nature         string              `json:"nature,omitempty"`
 	Policy         string              `json:"policy"`
 	Runtime        string              `json:"runtime"`
 	Definition     string              `json:"definition"`
@@ -127,27 +161,52 @@ type AuthorityReceipt struct {
 }
 
 func (r AuthorityReceipt) Granted(name string) bool {
+	return r.capability(name).Granted
+}
+
+func (r AuthorityReceipt) capability(name string) CapabilityReceipt {
 	for _, c := range r.Capabilities {
 		if c.Name == name {
-			return c.Granted
+			return c
 		}
 	}
-	return false
+	return CapabilityReceipt{Name: name, Status: CapabilityRefused}
+}
+
+// confinedProfile derives the effective runtime profile from the execution
+// provider instead of the fixed advisory table: OS confinement makes reads and
+// withheld network enforceable, and receipts say only what the provider proves.
+func confinedProfile(base runtimeProfile, caps compute.Capabilities) runtimeProfile {
+	if !caps.WorkspaceConfined {
+		return base
+	}
+	p := runtimeProfile{Features: slices.Clone(base.Features), Capabilities: map[string]capabilitySupport{}}
+	for name, c := range base.Capabilities {
+		p.Capabilities[name] = c
+	}
+	p.Capabilities["workspace.read"] = capabilitySupport{BoundedGrant: true, BlockedDenial: true, Note: "Reads are confined to the mounted workspace copy, dependency inputs, the runtime home and required toolchains; other host paths are not mounted."}
+	p.Capabilities["workspace.write"] = capabilitySupport{BoundedGrant: true, Note: "Writes are confined to the mounted workspace copy, the runtime home and temporary directories."}
+	p.Capabilities["command.run"] = capabilitySupport{BoundedGrant: true, Note: "Commands run inside the OS-confined sandbox; execution cannot be disabled."}
+	if !slices.Contains(caps.NetModes, compute.NetUnrestricted) || caps.Egress == compute.NetOff {
+		p.Capabilities["network.read"] = capabilitySupport{BlockedDenial: true, Withheld: "Network access is withheld for every attempt under the confining provider; the runtime's own model transport is equally unreachable, so agents are admitted only with unrestricted egress.", Note: "Network access is withheld for every attempt under the confining provider; the runtime's own model transport is equally unreachable, so agents are admitted only with unrestricted egress."}
+	}
+	return p
 }
 
 // resolveAuthority intersects the definition's requests with what the runtime can
 // provide and applies the enforcement policy. Without a project grant model the
 // grant is the supported part of the definition's request.
-func resolveAuthority(d agents.Definition, runtime, policy string, attemptSeconds int) (AuthorityReceipt, error) {
+func resolveAuthority(d agents.Definition, runtime, policy string, attemptSeconds int, nature string, caps compute.Capabilities) (AuthorityReceipt, error) {
 	if !validEnforcement(policy) {
 		return AuthorityReceipt{}, fmt.Errorf("unknown enforcement policy %q", policy)
 	}
-	profile, ok := nativeRuntimeProfile(runtime)
+	base, ok := nativeRuntimeProfile(runtime)
 	if !ok {
 		return AuthorityReceipt{}, fmt.Errorf("runtime %s has no registered capability profile", runtime)
 	}
+	profile := confinedProfile(base, caps)
 	m := d.Manifest
-	r := AuthorityReceipt{Policy: policy, Runtime: runtime, Definition: fmt.Sprintf("%s@%d", d.ID, d.Revision), Digest: d.Digest, Features: slices.Clone(m.Runtime.Requires), GrantSource: "definition request intersected with runtime support; no project capability grants are configured", MaxTurns: m.Limits.MaxTurns, TimeoutSeconds: m.Limits.TimeoutSeconds, TurnCounting: "model steps, counted as completed tool actions plus the final answer"}
+	r := AuthorityReceipt{Nature: nature, Policy: policy, Runtime: runtime, Definition: fmt.Sprintf("%s@%d", d.ID, d.Revision), Digest: d.Digest, Features: slices.Clone(m.Runtime.Requires), GrantSource: "definition request intersected with runtime support; no project capability grants are configured", MaxTurns: m.Limits.MaxTurns, TimeoutSeconds: m.Limits.TimeoutSeconds, TurnCounting: "model steps, counted as completed tool actions plus the final answer"}
 	if attemptSeconds > 0 && attemptSeconds < r.TimeoutSeconds {
 		r.TimeoutSeconds = attemptSeconds
 	}
@@ -170,9 +229,32 @@ func resolveAuthority(d agents.Definition, runtime, policy string, attemptSecond
 	for _, name := range names {
 		required := slices.Contains(m.Capabilities.Required, name)
 		requested := required || slices.Contains(m.Capabilities.Optional, name)
+		withheld := slices.Contains(natureCeilings[nature], name)
+		if withheld {
+			required, requested = false, false
+		}
 		support, supported := profile.Capabilities[name]
 		c := CapabilityReceipt{Name: name, Required: required, Granted: requested && supported, Note: support.Note}
+		if support.Withheld != "" {
+			// The provider denies this capability outright: no grant exists and
+			// the denial is enforced, but a required request still blocks.
+			c.Granted = false
+			c.Status = CapabilityEnforced
+			c.Note = support.Withheld
+			if required {
+				problems = append(problems, "required capability "+name+" is withheld by the execution provider")
+			}
+			r.Capabilities = append(r.Capabilities, c)
+			continue
+		}
 		switch {
+		case withheld && support.BlockedDenial:
+			c.Status, c.Note = CapabilityEnforced, "Withheld by the task's "+nature+" nature."
+		case withheld:
+			c.Status, c.Note = CapabilityAdvisory, "Withheld by the task's "+nature+" nature; "+runtime+" cannot block it: "+support.Note
+			if policy == EnforcementStrict {
+				problems = append(problems, name+" cannot be withheld: "+support.Note)
+			}
 		case requested && !supported:
 			c.Status, c.Note = CapabilityRefused, "The runtime cannot provide this capability."
 			if required {

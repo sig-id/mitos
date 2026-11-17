@@ -232,6 +232,9 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 		if len(in.Proposals) > 0 && !e.Store.runGranted(run, ProposalCapability) {
 			return nil, &HandoffFailure{Code: "capability_not_granted", Detail: "proposals require the " + ProposalCapability + " capability"}
 		}
+		if err := e.validateProposalExecution(run, in.Proposals); err != nil {
+			return nil, err
+		}
 		receipt, err := e.Store.submitResult(run, in)
 		if err != nil {
 			return nil, err

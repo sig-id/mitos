@@ -18,8 +18,9 @@ import (
 )
 
 type Local struct {
-	mu      sync.Mutex
-	handles map[string]*localHandle
+	Confinement Confinement
+	mu          sync.Mutex
+	handles     map[string]*localHandle
 }
 type localHandle struct {
 	prepared Workspace
@@ -48,6 +49,9 @@ func (s *localSession) Done() <-chan struct{}   { return s.done }
 func (s *localSession) Result() ([]byte, error) { <-s.done; return s.output.Bytes(), s.err }
 func (s *localSession) OutputOffset() uint64    { return s.output.Total() }
 func (l *Local) Capabilities() Capabilities {
+	if l.Confinement.enabled() {
+		return l.Confinement.capabilities()
+	}
 	return Capabilities{Isolation: "process", Egress: "unrestricted", DataMount: "unsupported", NetModes: []string{"unrestricted"}}
 }
 func (l *Local) Prepare(ctx context.Context, spec LaunchSpec) (Handle, error) {
@@ -158,7 +162,16 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	if !h.spec.Posture.Deadline.IsZero() {
 		commandCtx, cancel = context.WithDeadline(ctx, h.spec.Posture.Deadline)
 	}
-	cmd := exec.CommandContext(commandCtx, command.Argv[0], command.Argv[1:]...)
+	argv := command.Argv
+	base := h.spec.Base
+	if h.owner.Confinement.enabled() {
+		var confineErr error
+		if argv, confineErr = confineArgv(h.owner.Confinement, argv, base, h.spec.Workspace.Directory); confineErr != nil {
+			cancel()
+			return nil, confineErr
+		}
+	}
+	cmd := exec.CommandContext(commandCtx, argv[0], argv[1:]...)
 	s.cmd = cmd
 	cmd.Dir = h.spec.Workspace.Directory
 	if command.Directory != "" {
@@ -171,7 +184,7 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	if command.Interact == nil {
 		cmd.Stdin = bytes.NewReader(command.Input)
 	}
-	base := h.spec.Base
+	_ = base
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(cmd.Dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
 	if command.NativeEnv != nil {
 		cmd.Env = append([]string(nil), command.NativeEnv...)

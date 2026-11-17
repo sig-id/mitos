@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"mitos/agents"
 	"mitos/internal/cooperation"
 )
 
@@ -67,12 +68,23 @@ func TestCooperationHistoryUsesJournalSequenceOnReplay(t *testing.T) {
 func nativeHandoffGraph(t *testing.T) (*Engine, WorkGraph, string) {
 	t.Helper()
 	e, req := graphEngine(t, false)
-	e.Apps = append(e.Apps, Application{ID: "native-fixture", Name: "Native worker", Agent: &AgentBinding{}})
+	library, err := agents.Library()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generalist agents.Definition
+	for _, d := range library {
+		if d.ID == "mitos.generalist" {
+			generalist = d
+		}
+	}
+	e.Apps = append(e.Apps, Application{ID: "native-fixture", Name: "Native worker", Agent: &AgentBinding{Definition: generalist}})
 	req.Policy.Automatic = true
 	req.Policy.Mode = "defined"
 	req.Policy.Applications = append(req.Policy.Applications, "native-fixture")
 	worker := graphWorker("worker", "goal")
 	worker.Brief.AppID = "native-fixture"
+	worker.Traits = traits("small", "low")
 	worker.Acceptance = "operator"
 	req.Tasks = append(req.Tasks, worker)
 	g := createGraphTest(t, e, req)
