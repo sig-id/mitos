@@ -1,6 +1,8 @@
 package studio
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,97 @@ import (
 	"strings"
 	"time"
 )
+
+const (
+	// The planning journal is compacted only at this fixed entry boundary and
+	// keeps the newest entries verbatim, so prompts stay cache-stable except at
+	// rare, predictable compaction points.
+	graphJournalCompactAt   = 96
+	graphJournalCompactKeep = 32
+	graphJournalSummary     = 512
+	// The inline journal is small; detail is behind graph_read. The planning
+	// payload allowance is halved from the old full-snapshot budget.
+	orchestratorPlanLimit = 64 << 10
+)
+
+// appendFactJournal records one immutable entry per newly observed task fact
+// revision. Entries freeze the observed state and are never rewritten, so
+// consecutive planning calls share their prefix up to the newest entry.
+func appendFactJournal(g *WorkGraph, s *Store) {
+	last := map[string]int64{}
+	for _, e := range g.FactJournal {
+		if e.Compacted > 0 {
+			for task, fact := range e.Facts {
+				if fact > last[task] {
+					last[task] = fact
+				}
+			}
+			continue
+		}
+		if e.Fact > last[e.Task] {
+			last[e.Task] = e.Fact
+		}
+	}
+	for _, tid := range graphIDs(g) {
+		m := g.Members[tid]
+		if m == nil || m.OrchestratorFor != "" || m.FactRevision <= last[tid] {
+			continue
+		}
+		entry := GraphFactEntry{Task: tid, Kind: m.Spec.Kind, Parent: m.Spec.Parent, Fact: m.FactRevision, State: m.State, RunID: m.CurrentRunID, Accepted: m.Accepted != nil}
+		if r := s.runs[m.CurrentRunID]; r != nil {
+			entry.Summary = r.Summary
+			entry.ArtifactCount = len(r.Artifacts)
+		}
+		if runes := []rune(entry.Summary); len(runes) > graphJournalSummary {
+			entry.Summary = string(runes[:graphJournalSummary])
+		}
+		g.FactJournal = append(g.FactJournal, entry)
+	}
+	if len(g.FactJournal) >= graphJournalCompactAt {
+		absorbed := map[string]int64{}
+		for _, e := range g.FactJournal[:len(g.FactJournal)-graphJournalCompactKeep] {
+			if e.Compacted > 0 {
+				for task, fact := range e.Facts {
+					if fact > absorbed[task] {
+						absorbed[task] = fact
+					}
+				}
+				continue
+			}
+			if e.Fact > absorbed[e.Task] {
+				absorbed[e.Task] = e.Fact
+			}
+		}
+		kept := append([]GraphFactEntry(nil), g.FactJournal[len(g.FactJournal)-graphJournalCompactKeep:]...)
+		g.FactJournal = append([]GraphFactEntry{{Compacted: graphJournalCompactAt - graphJournalCompactKeep + 1, Facts: absorbed}}, kept...)
+	}
+}
+
+// renderPlanJournal renders the inline planning state as an append-only JSON
+// document: a stable header plus the journal in commit order.
+func renderPlanJournal(g *WorkGraph) string {
+	entries := append([]GraphFactEntry(nil), g.FactJournal...)
+	if entries == nil {
+		entries = []GraphFactEntry{}
+	}
+	raw, _ := json.Marshal(map[string]any{"journal_version": 1, "graph_id": g.ID, "root_task": g.RootTask, "journal": entries})
+	return string(raw)
+}
+
+// sharedStatePrefix measures the cache-stable prefix between consecutive
+// planning renders, including its digest for receipts.
+func sharedStatePrefix(previous, current string) (int, string) {
+	bound := min(len(previous), len(current))
+	n := 0
+	for n < bound && previous[n] == current[n] {
+		n++
+	}
+	if n == 0 {
+		return 0, ""
+	}
+	sum := sha256.Sum256([]byte(current[:n]))
+	return n, hex.EncodeToString(sum[:])
+}
 
 func (e *Engine) reconcileGraphOrchestrators() error {
 	for _, snapshot := range e.Store.Graphs() {
@@ -235,10 +328,23 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				}
 				raw, _ := json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "inbox": graphInboxAddress(&g, s.seq), "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json using the shared OrchestratorPlan: operations, accept, complete, result and explanation. Use the same scheduling dependencies and joins as the graph API. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."})
 				if g.Policy.Automatic {
+					// The automatic planning state is an append-only journal: entries are
+					// frozen once written and only compacted at fixed boundaries, so
+					// consecutive planning prompts share their prefix.
+					appendFactJournal(&g, s)
+					state := renderPlanJournal(&g)
+					prefixBytes, prefixSHA := sharedStatePrefix(g.LastPlanState, state)
+					g.LastPlanState = state
+					g.PlanPrefixCharacters = prefixBytes
+					g.PlanPrefixSHA256 = prefixSHA
 					library := e.AutomaticAgents()["agents"]
-					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "facts": facts, "agent_library": library, "execution_policy": graphExecution(&g), "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError})
+					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "graph_state": json.RawMessage(state), "agent_library": library, "execution_policy": graphExecution(&g), "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError, "plan_prefix": map[string]any{"bytes": prefixBytes, "sha256": prefixSHA}})
 				}
-				if len(raw) > graphContextLimit(&g) {
+				limit := graphContextLimit(&g)
+				if g.Policy.Automatic {
+					limit = orchestratorPlanLimit
+				}
+				if len(raw) > limit {
 					x.Error = "orchestrator_context_limit"
 					changed = true
 					break
@@ -306,6 +412,86 @@ func (e *Engine) graphOrchestratorError(id, key, task, reason string) error {
 		g.Expansions[key].Failures++
 	}
 	return s.commit("", "effect", "graph_orchestrator_blocked", change{Graph: &graphChange{Graph: g}})
+}
+
+// graphTaskRead pages bounded graph detail for orchestrator attempts. The
+// inline planning journal stays small; specs, criteria and artifact references
+// are fetched on demand. Workers cannot read beyond their own graph facts.
+type GraphTaskDetail struct {
+	Task      string     `json:"task"`
+	Spec      GraphSpec  `json:"spec"`
+	State     string     `json:"state"`
+	RunID     string     `json:"run_id,omitempty"`
+	Accepted  bool       `json:"accepted,omitempty"`
+	ResultID  string     `json:"result_id,omitempty"`
+	Artifacts []Artifact `json:"artifacts,omitempty"`
+	Revision  int64      `json:"revision"`
+}
+type GraphTaskPage struct {
+	Tasks      []GraphTaskDetail `json:"tasks"`
+	NextCursor int               `json:"next_cursor"`
+}
+
+func (s *Store) graphTaskRead(run string, in GraphTaskRead) (any, error) {
+	if in.Cursor < 0 || in.Limit > 16 || len(in.Task) > 160 || in.Task == "" && in.Limit < 1 {
+		return nil, handoffError("invalid_graph_read", 0)
+	}
+	limit := in.Limit
+	if in.Task != "" {
+		limit = 1
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r := s.runs[run]
+	if r == nil || r.GraphAttempt == nil {
+		return nil, handoffError("run_binding_required", 0)
+	}
+	g := s.graphs[r.GraphAttempt.GraphID]
+	if g == nil {
+		return nil, handoffError("graph_unavailable", 0)
+	}
+	orchestrator := false
+	for _, m := range g.Members {
+		if m.OrchestratorFor != "" && slices.Contains(m.Attempts, run) {
+			orchestrator = true
+		}
+	}
+	if !orchestrator {
+		return nil, handoffError("graph_read_requires_orchestrator", 0)
+	}
+	ids := []string{}
+	for _, tid := range graphIDs(g) {
+		if g.Members[tid].OrchestratorFor == "" && (in.Task == "" || tid == in.Task) {
+			ids = append(ids, tid)
+		}
+	}
+	if in.Task != "" && len(ids) == 0 {
+		return nil, handoffError("task_unavailable", 0)
+	}
+	page := GraphTaskPage{Tasks: []GraphTaskDetail{}}
+	end := in.Cursor + limit
+	for i, tid := range ids {
+		if i < in.Cursor {
+			continue
+		}
+		if i >= end {
+			break
+		}
+		m := g.Members[tid]
+		detail := GraphTaskDetail{Task: tid, Spec: m.Spec, State: m.State, RunID: m.CurrentRunID, Accepted: m.Accepted != nil, Revision: m.Revision}
+		detail.Spec.Context = ""
+		if current := s.runs[m.CurrentRunID]; current != nil {
+			detail.Artifacts = append([]Artifact(nil), current.Artifacts[:min(8, len(current.Artifacts))]...)
+			if current.Result != nil {
+				detail.ResultID = current.Result.ID
+			}
+		}
+		page.Tasks = append(page.Tasks, detail)
+	}
+	if in.Cursor+len(page.Tasks) < len(ids) {
+		page.NextCursor = in.Cursor + len(page.Tasks)
+	}
+	return page, nil
 }
 
 // Caller holds the store lock. Reports retain priority over supplementary files.

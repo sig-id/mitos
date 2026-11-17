@@ -185,7 +185,6 @@ func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, 
 	if !m.RefreshContext {
 		return true, nil
 	}
-	facts := []map[string]any{}
 	reads := map[string]GraphRead{}
 	deps := []workpool.Dependency{}
 	for _, id := range graphIDs(g) {
@@ -198,16 +197,8 @@ func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, 
 				return false, nil
 			}
 		}
-		spec := worker.Spec
-		spec.Context = ""
-		if spec.Agent != nil {
-			spec.Agent = &AgentSelection{Role: spec.Agent.Role}
-		}
-		f := map[string]any{"id": id, "spec": spec, "state": worker.State, "run_id": worker.CurrentRunID, "accepted": worker.Accepted != nil}
 		reads[id] = GraphRead{worker.Revision, worker.FactRevision}
 		if r := s.runs[worker.CurrentRunID]; r != nil {
-			f["summary"] = r.Summary[:min(len(r.Summary), 2000)]
-			f["artifacts"] = r.Artifacts
 			names := []string{}
 			for _, a := range r.Artifacts {
 				if (a.Name == "report.md" || a.Name == "output.txt") && a.Bytes <= 1<<20 {
@@ -225,22 +216,36 @@ func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, 
 				deps = append(deps, workpool.Dependency{From: id, Guard: guard, Payload: "data", Artifacts: names})
 			}
 		}
-		facts = append(facts, f)
 	}
 	var context map[string]any
 	if err := json.Unmarshal([]byte(m.Spec.Context), &context); err != nil {
 		return false, err
 	}
-	context["facts"], context["remaining_tasks"], context["remaining_attempts"], context["remaining_plans"] = facts, g.Limits.Tasks-len(g.Members), g.Limits.Attempts-g.Attempts, g.Limits.OrchestratorCalls-g.OrchestratorCalls
+	// The refreshed planning state uses the same append-only journal as new
+	// rounds, so the resumed conversation keeps its cache-stable prefix.
+	appendFactJournal(g, s)
+	state := renderPlanJournal(g)
+	prefixBytes, prefixSHA := sharedStatePrefix(g.LastPlanState, state)
+	g.LastPlanState = state
+	g.PlanPrefixCharacters = prefixBytes
+	g.PlanPrefixSHA256 = prefixSHA
+	delete(context, "facts")
+	context["graph_state"] = json.RawMessage(state)
+	context["remaining_tasks"], context["remaining_attempts"], context["remaining_plans"] = g.Limits.Tasks-len(g.Members), g.Limits.Attempts-g.Attempts, g.Limits.OrchestratorCalls-g.OrchestratorCalls
 	context["triggers"] = g.Triggers
 	context["inbox"] = graphInboxAddress(g, s.seq)
 	context["instruction"] = orchestratorInstructions
 	context["execution_policy"] = graphExecution(g)
+	context["plan_prefix"] = map[string]any{"bytes": prefixBytes, "sha256": prefixSHA}
 	raw, err := json.Marshal(context)
 	if err != nil {
 		return false, err
 	}
-	if len(raw) > graphContextLimit(g) {
+	limit := graphContextLimit(g)
+	if g.Policy.Automatic {
+		limit = orchestratorPlanLimit
+	}
+	if len(raw) > limit {
 		return false, graphError("resumed orchestrator context exceeds its limit")
 	}
 	m.Spec.Context = string(raw)

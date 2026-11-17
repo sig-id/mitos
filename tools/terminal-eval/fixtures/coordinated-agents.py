@@ -41,7 +41,9 @@ def execute(prompt, orchestrator):
         library = json.loads(section(prompt, 'agent_library'))
         policy = library['execution_policy']
         assert next(p for p in policy['presets'] if p['id']==policy['roles']['mitos.architect'])['runtime'] == 'claude'
-        workers = [f for f in context['facts'] if f['spec']['kind'] == 'application']
+        latest = {}
+        for entry in context['journal']: latest[entry['task']] = entry
+        workers = [{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind'] == 'application']
         plan = {'explanation':'Read fixture evidence.','operations':[],'accept':[],'complete':bool(workers),'result':{'title':'','markdown':'','source_tasks':[],'items':[]}}
         if not workers:
             for role in ['engineer','architect']:

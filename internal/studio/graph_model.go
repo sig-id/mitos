@@ -107,6 +107,24 @@ type GraphTrigger struct {
 	Kind    string `json:"kind"`
 	Outcome string `json:"outcome,omitempty"`
 }
+
+// GraphFactEntry is one immutable line of the append-only planning journal.
+// Entries are written once when a task's fact revision is first observed and
+// never rewritten, so consecutive planning prompts share their prefix up to
+// the newest entry. Detail stays behind the bounded graph_read tool.
+type GraphFactEntry struct {
+	Task          string           `json:"task"`
+	Kind          string           `json:"kind,omitempty"`
+	Parent        string           `json:"parent,omitempty"`
+	Fact          int64            `json:"fact"`
+	State         string           `json:"state"`
+	RunID         string           `json:"run_id,omitempty"`
+	Accepted      bool             `json:"accepted,omitempty"`
+	Summary       string           `json:"summary,omitempty"`
+	ArtifactCount int              `json:"artifact_count,omitempty"`
+	Compacted     int              `json:"compacted,omitempty"`
+	Facts         map[string]int64 `json:"facts,omitempty"`
+}
 type GraphReceipt struct {
 	Key      string            `json:"key"`
 	Digest   string            `json:"digest"`
@@ -144,6 +162,10 @@ type WorkGraph struct {
 	CreatedAt              time.Time                  `json:"created_at"`
 	UpdatedAt              time.Time                  `json:"updated_at"`
 	Decisions              map[string]*GraphDecision  `json:"decisions,omitempty"`
+	FactJournal            []GraphFactEntry           `json:"fact_journal,omitempty"`
+	LastPlanState          string                     `json:"last_plan_state,omitempty"`
+	PlanPrefixCharacters   int                        `json:"plan_prefix_characters,omitempty"`
+	PlanPrefixSHA256       string                     `json:"plan_prefix_sha256,omitempty"`
 }
 type CreateGraph struct {
 	serviceRunID string
