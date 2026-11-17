@@ -22,6 +22,7 @@ import (
 
 	"mitos/internal/application"
 	"mitos/internal/autonomy"
+	"mitos/internal/compute"
 	"mitos/internal/device"
 	"mitos/internal/fleet"
 	"mitos/internal/messaging"
@@ -63,6 +64,9 @@ func run(args []string) error {
 		return serve(args[1:])
 	case "stop":
 		return stopServer(args[1:])
+	case "egress-loop":
+		// Internal helper mounted inside mediated sandboxes; not for operators.
+		return egressLoop(args[1:])
 	case "run", "status", "log", "interrupts", "checkpoints", "rewind", "decisions", "resolve", "autonomy", "fleet", "evidence", "release-claims", "tasks", "task", "pools", "configure-pool", "services", "services-preview", "services-configure", "service-run", "heartbeat", "service-signal", "emit-event", "service-events", "service-stop", "service-restart", "service-resume", "service-lifecycle":
 		return client(args[0], args[1:])
 	case "help", "--help", "-h":
@@ -72,6 +76,21 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command %q; use mitos help", args[0])
 	}
 }
+func egressLoop(args []string) error {
+	f := flag.NewFlagSet("egress-loop", flag.ContinueOnError)
+	socket := f.String("socket", "", "Host relay UNIX socket mounted in this namespace")
+	listen := f.String("listen", compute.EgressLoopAddr, "Loopback listen address")
+	if err := f.Parse(args); err != nil {
+		return err
+	}
+	if *socket == "" {
+		return errors.New("egress-loop requires --socket")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return compute.RunEgressLoop(ctx, *socket, *listen)
+}
+
 func serve(args []string) error {
 	f := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := f.String("addr", "127.0.0.1:4646", "Loopback HTTP address")

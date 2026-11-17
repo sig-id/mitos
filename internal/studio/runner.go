@@ -30,7 +30,12 @@ type Engine struct {
 	// posture they were admitted against.
 	agentProvider compute.Provider
 	confinement   compute.Confinement
-	Store         *Store
+	// egressRelay mediates model transport for network-isolated tenant
+	// workers; egressEndpoint is its UNIX socket, empty when confinement is
+	// off or the network is fully withheld.
+	egressRelay    *compute.EgressRelay
+	egressEndpoint string
+	Store          *Store
 	Apps          []Application
 	Root          string
 	mu            sync.Mutex
@@ -60,6 +65,8 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	provider := compute.Provider(&compute.Local{})
 	agentProvider := provider
 	var confinement compute.Confinement
+	var egressRelay *compute.EgressRelay
+	egressEndpoint := ""
 	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
 		var confineErr error
 		confinement, confineErr = compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
@@ -67,9 +74,30 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			cancel()
 			return nil, confineErr
 		}
-		agentProvider = &compute.Local{Confinement: confinement}
+		// Withheld networks stay withheld. An unrestricted posture is mediated:
+		// the worker sandbox gets its own network namespace whose only egress
+		// is this allowlisted relay, so host listeners — including the
+		// loopback operator API — stay unreachable. Failing to start the relay
+		// fails closed instead of sharing the host network.
+		if confinement.NetMode == compute.NetUnrestricted {
+			egressEndpoint = filepath.Join(s.Dir(), "egress", "model.sock")
+			egressRelay, confineErr = compute.StartEgressRelay(egressEndpoint, compute.DefaultModelHosts)
+			if confineErr != nil {
+				cancel()
+				return nil, confineErr
+			}
+			confinement.EgressSocket = egressEndpoint
+			if helper, helperErr := os.Executable(); helperErr == nil {
+				confinement.HelperExecutable = helper
+			}
+			agentLocal := &compute.Local{Confinement: confinement}
+			agentLocal.SetEgressHelper(confinement.HelperExecutable)
+			agentProvider = agentLocal
+		} else {
+			agentProvider = &compute.Local{Confinement: confinement}
+		}
 	}
-	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, egressRelay: egressRelay, egressEndpoint: egressEndpoint, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err
@@ -176,6 +204,9 @@ func (e *Engine) Close() {
 	e.setupMu.Lock()
 	e.stop()
 	e.setupMu.Unlock()
+	if e.egressRelay != nil {
+		e.egressRelay.Close()
+	}
 	if e.Messages != nil {
 		e.Messages.Close()
 	}

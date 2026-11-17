@@ -191,10 +191,16 @@ a replacement. Exact definition bodies are in the admission journal and backups;
 recovery never silently selects the current bundled revision.
 
 Tenant application execution requires `MITOS_AGENT_CONFINEMENT=bwrap` and
-`MITOS_AGENT_NETWORK=unrestricted` for the model transport. Workers use a fresh
-native home and dedicated `OPENAI_API_KEY`; operator OAuth stores, native history,
-MCP configuration and unrelated credentials are not shared. Missing prerequisites
-fail visibly. Local operator S1 work retains its existing native-login profile.
+`MITOS_AGENT_NETWORK=unrestricted`. Workers then run in an isolated network
+namespace whose only egress is a mediated model transport: an allowlisted
+CONNECT relay on a UNIX socket admitting just the model API endpoints, reached
+through a loopback forwarder inside the sandbox (`HTTPS_PROXY`). Host services —
+including the loopback operator listener — are unreachable from the sandbox, and
+the conformance stand-in proves both the mount and network boundaries. Workers
+use a fresh native home and dedicated `OPENAI_API_KEY`; operator OAuth stores,
+native history, MCP configuration and unrelated credentials are not shared.
+Missing prerequisites fail visibly. Local operator S1 work retains its existing
+native-login profile and its unmediated network posture.
 
 `examples/appfixture` is a separate Go module and database using HTTP only. It
 atomically saves message/dispatch intent, admits one Task, reads bounded event

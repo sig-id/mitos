@@ -226,6 +226,12 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 		if !e.confinement.Enabled() || confinementBlocksTransport(e.confinement) {
 			return errors.New("application_execution_unavailable: configure MITOS_AGENT_CONFINEMENT=bwrap and MITOS_AGENT_NETWORK=unrestricted for isolated model transport")
 		}
+		// Mediated transport is mandatory for tenant workers: without it the
+		// sandbox would share the host network namespace and could reach
+		// loopback services. Fail closed when the relay is absent.
+		if e.egressEndpoint == "" {
+			return errors.New("application_execution_unavailable: the mediated model transport is not running")
+		}
 		provider = e.agentProvider
 	} else if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
 		return err
@@ -283,6 +289,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	}
 	if scoped {
 		launch.Posture.NetMode = compute.NetUnrestricted
+		launch.Posture.BrokerEndpoint = "unix://" + e.egressEndpoint
 	}
 	launch.RunID = r.ID
 	launch.CapabilityRef = r.Brief.AppID
@@ -294,10 +301,17 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 		return err
 	}
 	if scoped {
-		native.Env, err = structuredApplicationEnvironment(base, native.Env)
-		if err != nil {
+		if native.Env, err = structuredApplicationEnvironment(base, native.Env); err != nil {
 			return err
 		}
+		// Route the runtime's own HTTPS through the in-sandbox loop forwarder;
+		// the host relay admits only the model endpoints on its allowlist.
+		native.Env = append(native.Env,
+			"HTTPS_PROXY=http://"+compute.EgressLoopAddr,
+			"HTTP_PROXY=http://"+compute.EgressLoopAddr,
+			"ALL_PROXY=http://"+compute.EgressLoopAddr,
+			"NO_PROXY=localhost,127.0.0.1",
+		)
 	}
 	preview, closePreview := e.beginAgentOutput(r.ID)
 	defer closePreview()

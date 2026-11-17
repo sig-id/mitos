@@ -5,10 +5,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"time"
 )
 
 var forbiddenPath string
+var forbiddenDial string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
@@ -42,6 +45,12 @@ func main() {
 			if forbiddenPath != "" {
 				if file, err := os.Open(forbiddenPath); err == nil {
 					file.Close()
+					reply = "EXPOSED"
+				}
+			}
+			if forbiddenDial != "" {
+				if conn, err := net.DialTimeout("tcp", forbiddenDial, 1500*time.Millisecond); err == nil {
+					conn.Close()
 					reply = "EXPOSED"
 				}
 			}

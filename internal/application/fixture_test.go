@@ -120,14 +120,17 @@ func TestIndependentApplicationCrashMatrix(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			modelBuild := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X main.forbiddenPath="+filepath.Join(data, "runtime.db"), "-o", filepath.Join(bin, "codex"), "./testdata/codex.go")
+			cert, key := fixtureCertificate(t, dir)
+			operator := fixtureAddress(t)
+			remote := fixtureAddress(t)
+			// The stand-in proves confinement from inside the real worker path:
+			// it reports EXPOSED if the runtime database is readable or the
+			// operator listener is reachable from the sandbox.
+			modelBuild := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X main.forbiddenPath="+filepath.Join(data, "runtime.db")+" -X main.forbiddenDial="+operator, "-o", filepath.Join(bin, "codex"), "./testdata/codex.go")
 			modelBuild.Dir = filepath.Join(root, "examples", "appfixture")
 			if raw, err := modelBuild.CombinedOutput(); err != nil {
 				t.Fatalf("build confined model stand-in: %v\n%s", err, raw)
 			}
-			cert, key := fixtureCertificate(t, dir)
-			operator := fixtureAddress(t)
-			remote := fixtureAddress(t)
 			roots := x509.NewCertPool()
 			pemBytes, _ := os.ReadFile(cert)
 			roots.AppendCertsFromPEM(pemBytes)
