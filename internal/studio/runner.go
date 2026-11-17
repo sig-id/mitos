@@ -30,7 +30,12 @@ type Engine struct {
 	// posture they were admitted against.
 	agentProvider compute.Provider
 	confinement   compute.Confinement
-	Store         *Store
+	// egressRelay mediates model transport for network-isolated tenant
+	// workers; egressEndpoint is its UNIX socket, empty when confinement is
+	// off or the network is fully withheld.
+	egressRelay    *compute.EgressRelay
+	egressEndpoint string
+	Store          *Store
 	Apps          []Application
 	Root          string
 	mu            sync.Mutex
@@ -60,6 +65,8 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	provider := compute.Provider(&compute.Local{})
 	agentProvider := provider
 	var confinement compute.Confinement
+	var egressRelay *compute.EgressRelay
+	egressEndpoint := ""
 	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
 		var confineErr error
 		confinement, confineErr = compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
@@ -67,9 +74,30 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			cancel()
 			return nil, confineErr
 		}
-		agentProvider = &compute.Local{Confinement: confinement}
+		// Withheld networks stay withheld. An unrestricted posture is mediated:
+		// the worker sandbox gets its own network namespace whose only egress
+		// is this allowlisted relay, so host listeners — including the
+		// loopback operator API — stay unreachable. Failing to start the relay
+		// fails closed instead of sharing the host network.
+		if confinement.NetMode == compute.NetUnrestricted {
+			egressEndpoint = filepath.Join(s.Dir(), "egress", "model.sock")
+			egressRelay, confineErr = compute.StartEgressRelay(egressEndpoint, compute.DefaultModelHosts)
+			if confineErr != nil {
+				cancel()
+				return nil, confineErr
+			}
+			confinement.EgressSocket = egressEndpoint
+			if helper, helperErr := os.Executable(); helperErr == nil {
+				confinement.HelperExecutable = helper
+			}
+			agentLocal := &compute.Local{Confinement: confinement}
+			agentLocal.SetEgressHelper(confinement.HelperExecutable)
+			agentProvider = agentLocal
+		} else {
+			agentProvider = &compute.Local{Confinement: confinement}
+		}
 	}
-	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, egressRelay: egressRelay, egressEndpoint: egressEndpoint, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err
@@ -105,6 +133,13 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			continue
 		}
 		if r.ExecutionKind == "interactive" {
+			continue
+		}
+		if r.Brief.Structured != nil && !r.Sample && (r.Status == "running" || r.RestartRetry) {
+			if err = e.recoverStructured(r); err != nil {
+				cancel()
+				return nil, err
+			}
 			continue
 		}
 		if r.Status == "stopping" && !r.Sample {
@@ -169,6 +204,9 @@ func (e *Engine) Close() {
 	e.setupMu.Lock()
 	e.stop()
 	e.setupMu.Unlock()
+	if e.egressRelay != nil {
+		e.egressRelay.Close()
+	}
 	if e.Messages != nil {
 		e.Messages.Close()
 	}
@@ -437,7 +475,7 @@ func (e *Engine) dispatch() {
 					continue
 				}
 				e.mu.Lock()
-				if len(e.cancel) >= 2 {
+				if len(e.cancel) >= e.Store.RuntimeCapacity() {
 					e.mu.Unlock()
 					break
 				}
@@ -469,6 +507,12 @@ func (e *Engine) dispatch() {
 				deadline := time.Now().Add(time.Duration(r.Brief.TimeoutMinutes) * time.Minute)
 				if current.Execution != nil {
 					deadline = current.Execution.Deadline
+				}
+				e.Store.mu.RLock()
+				taskDeadline := e.Store.structuredTaskDeadline(&current)
+				e.Store.mu.RUnlock()
+				if !taskDeadline.IsZero() && taskDeadline.Before(deadline) {
+					deadline = taskDeadline
 				}
 				if taskDeadline := current.Brief.Scheduling.Deadline; taskDeadline != nil && taskDeadline.Before(deadline) {
 					deadline = *taskDeadline
@@ -546,6 +590,10 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		return
 	}
 	if e.ctx.Err() != nil {
+		if r.Brief.Structured != nil {
+			_ = e.Store.interruptStructured(r.ID, "Server shutdown interrupted effect-free work; a bounded replacement may resume the same Task after restart.")
+			return
+		}
 		_ = e.Store.Park(r.ID, checkpointOption(current, recoveryDecision()))
 		return
 	}

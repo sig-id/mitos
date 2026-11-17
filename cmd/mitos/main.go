@@ -22,6 +22,7 @@ import (
 
 	"mitos/internal/application"
 	"mitos/internal/autonomy"
+	"mitos/internal/compute"
 	"mitos/internal/device"
 	"mitos/internal/fleet"
 	"mitos/internal/messaging"
@@ -63,6 +64,9 @@ func run(args []string) error {
 		return serve(args[1:])
 	case "stop":
 		return stopServer(args[1:])
+	case "egress-loop":
+		// Internal helper mounted inside mediated sandboxes; not for operators.
+		return egressLoop(args[1:])
 	case "run", "status", "log", "interrupts", "checkpoints", "rewind", "decisions", "resolve", "autonomy", "fleet", "evidence", "release-claims", "tasks", "task", "pools", "configure-pool", "services", "services-preview", "services-configure", "service-run", "heartbeat", "service-signal", "emit-event", "service-events", "service-stop", "service-restart", "service-resume", "service-lifecycle":
 		return client(args[0], args[1:])
 	case "help", "--help", "-h":
@@ -72,6 +76,21 @@ func run(args []string) error {
 		return fmt.Errorf("unknown command %q; use mitos help", args[0])
 	}
 }
+func egressLoop(args []string) error {
+	f := flag.NewFlagSet("egress-loop", flag.ContinueOnError)
+	socket := f.String("socket", "", "Host relay UNIX socket mounted in this namespace")
+	listen := f.String("listen", compute.EgressLoopAddr, "Loopback listen address")
+	if err := f.Parse(args); err != nil {
+		return err
+	}
+	if *socket == "" {
+		return errors.New("egress-loop requires --socket")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return compute.RunEgressLoop(ctx, *socket, *listen)
+}
+
 func serve(args []string) error {
 	f := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := f.String("addr", "127.0.0.1:4646", "Loopback HTTP address")
@@ -250,6 +269,9 @@ func serve(args []string) error {
 }
 func client(command string, args []string) error {
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
+	readCursor := f.Int64("cursor", 0, "Journal sequence cursor for bounded list/log reads")
+	readAfterID := f.String("after-run", "", "Tie-breaker from Mitos-Next-Run for a run list")
+	readLimit := f.Int("limit", 50, "Bounded list/log page size (1..200)")
 	catalogFile := f.String("file", "", "Service catalog, signal, or event payload JSON file")
 	signalSource := f.String("source", "", "Configured external signal source")
 	revision := f.Int64("expected-revision", -1, "Required current service catalog revision when saving")
@@ -571,6 +593,18 @@ func client(command string, args []string) error {
 	}
 	req.Header.Set("X-Mitos-Client", "cli")
 	apiversion.Set(req)
+	if req.URL.Path == "/api/runs" && req.Method == "GET" || strings.HasSuffix(req.URL.Path, "/events") && command == "log" {
+		if *readCursor < 0 || *readLimit < 1 || *readLimit > studio.ReadMaxLimit {
+			return studio.ErrInvalidPage
+		}
+		query := req.URL.Query()
+		query.Set("after", strconv.FormatInt(*readCursor, 10))
+		query.Set("limit", strconv.Itoa(*readLimit))
+		if *readAfterID != "" {
+			query.Set("after_id", *readAfterID)
+		}
+		req.URL.RawQuery = query.Encode()
+	}
 	c := http.Client{Timeout: 30 * time.Second}
 	res, err := c.Do(req)
 	if err != nil {
@@ -583,6 +617,13 @@ func client(command string, args []string) error {
 	}
 	if res.StatusCode >= 400 {
 		return fmt.Errorf("Studio: %s", strings.TrimSpace(string(b)))
+	}
+	if res.Header.Get("Mitos-Has-More") == "true" {
+		fmt.Fprintf(os.Stderr, "Next page: --cursor %s", res.Header.Get("Mitos-Next-After"))
+		if id := res.Header.Get("Mitos-Next-Run"); id != "" {
+			fmt.Fprintf(os.Stderr, " --after-run %s", id)
+		}
+		fmt.Fprintln(os.Stderr)
 	}
 	var pretty bytes.Buffer
 	if json.Indent(&pretty, b, "", "  ") == nil {

@@ -654,6 +654,9 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
+	if e.confinement.Enabled() {
+		launch.Posture.NetMode = e.confinement.NetMode
+	}
 	launch.RunID = r.ID
 	launch.CapabilityRef = r.Brief.AppID
 	launch.Base = base

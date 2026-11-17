@@ -12,6 +12,7 @@ import (
 )
 
 const Capacity = 2
+const MaxCapacity = 128
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
@@ -23,8 +24,8 @@ type Pool struct {
 }
 
 func (p Pool) Validate() error {
-	if !namePattern.MatchString(p.ID) || p.Concurrency < 1 || p.Concurrency > Capacity || p.Reserved < 0 || p.Reserved > p.Concurrency {
-		return errors.New("pool requires a bounded identifier, concurrency 1–2, and reserved capacity within concurrency")
+	if !namePattern.MatchString(p.ID) || p.Concurrency < 1 || p.Concurrency > MaxCapacity || p.Reserved < 0 || p.Reserved > p.Concurrency {
+		return errors.New("pool requires a bounded identifier, concurrency 1–128, and reserved capacity within concurrency")
 	}
 	switch p.Discipline {
 	case "fifo", "lifo", "priority", "deadline_edf":
@@ -339,6 +340,9 @@ func Order(pool Pool, candidates []Candidate, at time.Time) []Candidate {
 	return out
 }
 func Available(pool string, pools map[string]Pool, active map[string]int) bool {
+	return AvailableWithin(pool, pools, active, Capacity)
+}
+func AvailableWithin(pool string, pools map[string]Pool, active map[string]int, capacity int) bool {
 	p, ok := pools[pool]
 	if !ok || active[pool] >= p.Concurrency {
 		return false
@@ -350,5 +354,5 @@ func Available(pool string, pools map[string]Pool, active map[string]int) bool {
 			reserved += max(0, p.Reserved-active[id])
 		}
 	}
-	return used < Capacity && used+reserved < Capacity
+	return used < capacity && used+reserved < capacity
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mitos/agents"
 	"mitos/internal/acceptance"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/decision"
@@ -22,6 +23,10 @@ import (
 )
 
 type Store struct {
+	frozenAgents           atomic.Pointer[map[string]agents.Definition]
+	runtimePolicy          *RuntimePolicy
+	tenantScheduler        TenantScheduler
+	tenantEvents           map[string][]Event
 	servicePrincipals      map[string]ServicePrincipal
 	serviceTokens          map[string]string
 	structuredKeys         map[string]string
@@ -140,6 +145,15 @@ func (s *Store) apply(e Event) error {
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
 	}
+	if c.RuntimePolicy != nil {
+		copy := graphClone(*c.RuntimePolicy)
+		s.runtimePolicy = &copy
+		return nil
+	}
+	if c.TenantScheduler != nil {
+		s.tenantScheduler = graphClone(*c.TenantScheduler)
+	}
+	s.indexApplicationEvent(e, c)
 	if c.ServicePrincipal != nil {
 		s.applyServicePrincipal(*c.ServicePrincipal)
 		return nil
@@ -298,12 +312,15 @@ func (s *Store) apply(e Event) error {
 			return err
 		}
 		if s.pools == nil {
-			s.pools = workpool.Defaults()
+			s.pools = s.configuredPools()
 		}
 		s.pools[c.Pool.ID] = *c.Pool
 		return nil
 	}
 	if c.Run != nil {
+		if err := s.freezeStructuredAgent(c.Run); err != nil {
+			return err
+		}
 		if s.runs[e.RunID] != nil {
 			return errors.New("duplicate run creation")
 		}
@@ -318,6 +335,11 @@ func (s *Store) apply(e Event) error {
 			s.structuredKeys[key] = c.Run.ID
 		}
 		s.runs[e.RunID] = c.Run
+		if c.Run.Brief.Structured != nil && c.Run.ParentID != "" {
+			if parent := s.runs[c.Run.ParentID]; parent != nil {
+				parent.RestartRetry = false
+			}
+		}
 	}
 	r := s.runs[e.RunID]
 	if r == nil {
@@ -325,6 +347,9 @@ func (s *Store) apply(e Event) error {
 	}
 	if err := s.applyRecovery(e, r, c); err != nil {
 		return err
+	}
+	if c.StructuredRetryPending != nil {
+		r.RestartRetry = *c.StructuredRetryPending
 	}
 	if c.Claim != nil {
 		r.Claim = c.Claim
@@ -537,6 +562,11 @@ func (s *Store) prepareEvent(id, typ, kind string, c change, seq int64, previous
 			return Event{}, err
 		}
 	}
+	if kind == "claims_acquired" || kind == "task_scheduled" {
+		if r := s.runs[id]; r != nil {
+			c.TenantScheduler = s.nextTenantScheduler(r)
+		}
+	}
 	data, err := json.Marshal(c)
 	if c.Graph != nil && len(data) > 8<<20 {
 		return Event{}, errors.New("graph journal record capacity exceeded")
@@ -633,6 +663,9 @@ func (s *Store) createWithEventLocked(b Brief, appName, parentID string, sample 
 }
 
 func (s *Store) createWithPrincipalLocked(b Brief, appName, parentID string, sample bool, call *ServiceCall, retry *ServiceRetryPlan, delivery *ServiceEventDelivery, p decision.Principal) (Run, error) {
+	if err := s.tenantAdmissionLocked(p, b, parentID); err != nil {
+		return Run{}, err
+	}
 	if !s.admittedPrincipalAllowedLocked(p.ID, p.Tenant) {
 		return Run{}, ErrForbidden
 	}
@@ -707,7 +740,15 @@ func (s *Store) createWithPrincipalLocked(b Brief, appName, parentID string, sam
 			call.Queue = s.serviceQueueBinding(call.ServiceID, call.Revision)
 		}
 	}
-	r := Run{Tenant: p.Tenant, PrincipalID: p.ID, ID: newID("local"), TaskID: taskID, ParentID: parentID, Brief: b, AppName: appName, Status: "queued", Stage: "Ready to start", Summary: "The brief is saved. Waiting for an execution slot.", CreatedAt: time.Now().UTC(), Sample: sample}
+	var admissionLimits *TenantLimits
+	if b.Structured != nil {
+		limits := s.tenantLimitsLocked(p.Tenant)
+		if parent := s.runs[parentID]; parent != nil && parent.AdmissionLimits != nil {
+			limits = *parent.AdmissionLimits
+		}
+		admissionLimits = &limits
+	}
+	r := Run{AdmissionLimits: admissionLimits, Tenant: p.Tenant, PrincipalID: p.ID, ID: newID("local"), TaskID: taskID, ParentID: parentID, Brief: b, AppName: appName, Status: "queued", Stage: "Ready to start", Summary: "The brief is saved. Waiting for an execution slot.", CreatedAt: time.Now().UTC(), Sample: sample}
 	if retry != nil {
 		copy := *retry
 		copy.ChildRunID = r.ID

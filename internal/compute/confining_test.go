@@ -2,6 +2,9 @@ package compute
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,14 +122,30 @@ func TestConfiningProviderBlocksOutsideMountsAndNetwork(t *testing.T) {
 	if runErr != nil || strings.TrimSpace(out) != "work" {
 		t.Fatalf("workspace unusable: %q %v", out, runErr)
 	}
-	// Withheld network stays blocked at the OS level.
-	if python, pyErr := exec.LookPath("python3"); pyErr == nil {
-		out, runErr = runConfined(t, l, spec, []string{python, "-c", "import socket\ntry:\n socket.create_connection(('127.0.0.1', 9), timeout=2)\n print('leaked')\nexcept OSError:\n print('blocked')"})
-		if runErr != nil || strings.TrimSpace(out) != "blocked" {
-			t.Fatalf("network not blocked: %q %v", out, runErr)
-		}
-	} else {
-		t.Log("python3 unavailable; network block asserted via unshare-net flag only")
+	// Probe a live host socket, not a refused port, and use this self-contained
+	// test executable so a user Python virtualenv cannot escape the mount set.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	out, runErr = runConfined(t, l, spec, []string{os.Args[0], "-test.run=^TestConfinementNetworkProbe$", "--", listener.Addr().String()})
+	if runErr != nil || strings.TrimSpace(out) != "blocked" {
+		t.Fatalf("network not blocked: %q %v", out, runErr)
+	}
+	open := &Local{Confinement: Confinement{Tool: ConfinementBwrap, NetMode: NetUnrestricted}}
+	openSpec := spec
+	openSpec.Capabilities = open.Capabilities()
+	openSpec.Posture.NetMode = NetUnrestricted
+	out, runErr = runConfined(t, open, openSpec, []string{os.Args[0], "-test.run=^TestConfinementNetworkProbe$", "--", listener.Addr().String()})
+	if runErr != nil || strings.TrimSpace(out) != "connected" {
+		t.Fatalf("live-socket positive control failed: %q %v", out, runErr)
+	}
+	// The same configured provider must enforce an admitted net-off request.
+	openSpec.Posture.NetMode = NetOff
+	out, runErr = runConfined(t, open, openSpec, []string{os.Args[0], "-test.run=^TestConfinementNetworkProbe$", "--", listener.Addr().String()})
+	if runErr != nil || strings.TrimSpace(out) != "blocked" {
+		t.Fatalf("provider ignored admitted network posture: %q %v", out, runErr)
 	}
 	// The per-attempt runtime home is mounted and writable.
 	out, runErr = runConfined(t, l, spec, []string{sh, "-c", "echo state > $HOME/.runtime && cat $HOME/.runtime"})
@@ -160,4 +179,18 @@ func TestConfinementOmitsHostControlSockets(t *testing.T) {
 	if strings.Contains(joined, "\x00/run\x00") || strings.Contains(joined, "/run\x00/run") {
 		t.Fatalf("host /run mounted read-only: %v", argv)
 	}
+}
+
+func TestConfinementNetworkProbe(t *testing.T) {
+	if len(flag.Args()) != 1 {
+		return
+	}
+	connection, err := net.DialTimeout("tcp", flag.Args()[0], time.Second)
+	if err != nil {
+		fmt.Println("blocked")
+	} else {
+		connection.Close()
+		fmt.Println("connected")
+	}
+	os.Exit(0)
 }

@@ -349,7 +349,7 @@ func (s *Server) headers(next http.Handler) http.Handler {
 			// A supported 64 KiB document can expand sixfold under JSON escaping, on top of its hash envelope.
 			limit = 512 << 10
 		}
-		if r.Method == "POST" && r.URL.Path == "/api/agent-library" {
+		if r.Method == "POST" && (r.URL.Path == "/api/agent-library" || r.URL.Path == "/api/runtime-policy") {
 			// 32,000 instruction bytes plus name/description can expand under JSON escaping.
 			limit = 256 << 10
 		}
@@ -607,23 +607,45 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func (s *Server) apiRuns(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.engine.Store.List())
+	after, limit, err := readPageParameters(r)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	page, err := s.engine.Store.RunPage(after, r.URL.Query().Get("after_id"), limit)
+	if err != nil {
+		writeJSON(w, 422, map[string]string{"error": err.Error()})
+		return
+	}
+	writePageHeaders(w, page.Next, page.NextID, page.HasMore)
+	writeJSON(w, 200, page.Runs)
 }
 func (s *Server) apiRun(w http.ResponseWriter, r *http.Request) {
-	run, err := s.engine.Store.Get(r.PathValue("id"))
+	run, err := s.engine.Store.RunDetail(r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": err.Error()})
 		return
 	}
+	run.Events = nil
 	writeJSON(w, 200, run)
 }
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
-	run, err := s.engine.Store.Get(r.PathValue("id"))
+	after, limit, err := readPageParameters(r)
 	if err != nil {
-		writeJSON(w, 404, map[string]string{"error": err.Error()})
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, 200, run.Events)
+	page, err := s.engine.Store.EventPage(r.PathValue("id"), after, limit)
+	if err != nil {
+		code := 422
+		if errors.Is(err, studio.ErrNotFound) {
+			code = 404
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
+		return
+	}
+	writePageHeaders(w, page.Next, "", page.HasMore)
+	writeJSON(w, 200, page.Events)
 }
 func (s *Server) apiLaunch(w http.ResponseWriter, r *http.Request) {
 	var b studio.Brief

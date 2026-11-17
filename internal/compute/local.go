@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,9 +20,17 @@ import (
 
 type Local struct {
 	Confinement Confinement
-	mu          sync.Mutex
-	handles     map[string]*localHandle
+	// helper is the host binary mounted into mediated sandboxes to run the
+	// in-sandbox egress loop.
+	helper  string
+	mu      sync.Mutex
+	handles map[string]*localHandle
 }
+
+// SetEgressHelper records the host executable used as the in-sandbox egress
+// loop for mediated launches.
+func (l *Local) SetEgressHelper(path string) { l.helper = path }
+
 type localHandle struct {
 	prepared Workspace
 	owner    *Local
@@ -166,7 +175,19 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	base := h.spec.Base
 	if h.owner.Confinement.enabled() {
 		var confineErr error
-		if argv, confineErr = confineArgv(h.owner.Confinement, argv, base, h.spec.Workspace.Directory); confineErr != nil {
+		posture := h.owner.Confinement
+		posture.NetMode = h.spec.Posture.NetMode
+		// A per-launch mediated egress endpoint isolates this workload's
+		// network namespace even under an unrestricted posture.
+		if h.spec.Posture.BrokerEndpoint != "" {
+			if !strings.HasPrefix(h.spec.Posture.BrokerEndpoint, "unix://") {
+				cancel()
+				return nil, errors.New("mediated local egress requires a unix broker endpoint")
+			}
+			posture.EgressSocket = strings.TrimPrefix(h.spec.Posture.BrokerEndpoint, "unix://")
+			posture.HelperExecutable = h.owner.helper
+		}
+		if argv, confineErr = confineArgv(posture, argv, base, h.spec.Workspace.Directory); confineErr != nil {
 			cancel()
 			return nil, confineErr
 		}

@@ -86,7 +86,12 @@ func (s *Store) Tasks() []Task {
 }
 func (s *Store) configuredPools() map[string]workpool.Pool {
 	if s.pools == nil {
-		return workpool.Defaults()
+		pools := workpool.Defaults()
+		for id, pool := range pools {
+			pool.Concurrency = s.runtimePolicyLocked().Capacity
+			pools[id] = pool
+		}
+		return pools
 	}
 	return s.pools
 }
@@ -124,7 +129,7 @@ func (s *Store) ConfigurePool(p workpool.Pool) error {
 			reserved += other.Reserved
 		}
 	}
-	if reserved > workpool.Capacity {
+	if reserved > s.runtimePolicyLocked().Capacity || p.Concurrency > s.runtimePolicyLocked().Capacity {
 		return errors.New("pool reservations exceed provider capacity")
 	}
 	if old, exists := pools[p.ID]; exists && old == p {
@@ -321,6 +326,12 @@ func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 		if r == nil || r.ExecutionKind == "interactive" || r.Status != "queued" || r.Sample || s.supervisionHeld(r.ProjectID) || activeRuns[r.ID] {
 			continue
 		}
+		if deadline := s.structuredTaskDeadline(r); !deadline.IsZero() && !time.Now().Before(deadline) {
+			if err := s.commit(r.ID, "effect", "tenant_budget_exhausted", change{Status: "failed", Stage: "Budget exhausted", Summary: "The tenant's elapsed task budget includes queued and waiting time."}); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if deadline := t.Scheduling.Deadline; deadline != nil && !time.Now().Before(*deadline) {
 			if err := s.commit(r.ID, "effect", "task_deadline_expired", change{Status: "failed", Stage: "Task deadline expired", Summary: "The absolute task deadline expired before dispatch. No new execution was started."}); err != nil {
 				return nil, err
@@ -385,7 +396,7 @@ func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 			}
 			t = s.tasks[id]
 		}
-		if ready.Ready && serviceReady && workpool.Available(t.Scheduling.Pool, pools, active) {
+		if ready.Ready && serviceReady && workpool.AvailableWithin(t.Scheduling.Pool, pools, active, s.runtimePolicyLocked().Capacity) && s.tenantCanDispatchLocked(r, activeIDs) {
 			byPool[t.Scheduling.Pool] = append(byPool[t.Scheduling.Pool], workpool.Candidate{ID: r.ID, Request: t.Scheduling, ReadyAt: t.ReadyAt, SoftScore: ready.SoftScore, PriorityAdjustment: taskServiceAdjustment(t)})
 		}
 	}
@@ -405,7 +416,7 @@ func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 			out = append(out, ReadyRun{Run: cloneRun(s.runs[candidate.ID]), Policy: pools[pool]})
 		}
 	}
-	return out, nil
+	return s.fairReadyRuns(out), nil
 }
 func (s *Store) Schedule(id string, activeIDs []string) (bool, error) {
 	return s.schedule(id, activeIDs, nil)
@@ -434,7 +445,7 @@ func (s *Store) schedule(id string, activeIDs []string, expected *workpool.Pool)
 		return false, nil
 	}
 	ready := s.readiness(task, s.taskStates())
-	if !ready.Ready || !s.serviceCanDispatch(task, activeIDs) || !workpool.Available(task.Scheduling.Pool, s.configuredPools(), s.activePools(activeIDs)) {
+	if !ready.Ready || !s.serviceCanDispatch(task, activeIDs) || !workpool.AvailableWithin(task.Scheduling.Pool, s.configuredPools(), s.activePools(activeIDs), s.runtimePolicyLocked().Capacity) || !s.tenantCanDispatchLocked(r, activeIDs) {
 		return false, nil
 	}
 	if task.AdmittedRunID != id {

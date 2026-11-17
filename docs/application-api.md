@@ -156,6 +156,56 @@ identical retry returns its original Run; changing either conflicts. Expired key
 retain tenant-scoped tombstones. Current principal permissions are checked before
 local execution and before acceptance.
 
-This is the principals/isolation preparation slice. Hosted capability flags remain
-false until bounded reads, capacity and the separate crash-tested application
-fixture demonstrate the complete S2 application boundary.
+S2 application-boundary conformance is demonstrated by the independent application
+fixture and its four runtime/application crash cases. `service_principal_auth` and
+`tenant_isolation` are true; PostgreSQL, remote workers and dormant waits retain
+their separate gates.
+
+
+## Bounded reads, capacity and restart recovery
+
+`GET /api/runs`, per-run events, tenant `GET /api/events`, and `GET /api/receipts`
+accept `after` (nonnegative journal sequence) and `limit` (1..200, default 50).
+They return arrays bounded by item count and 16 MiB. Run/detail replies omit inline
+event histories; use the event endpoint. `Mitos-Next-After` and `Mitos-Has-More`
+carry pagination state. Run lists also return `Mitos-Next-Run`; send it as
+`after_id` when several graph runs share a creation event. Application receipts
+contain admission/outcome identity and accepted result digests; filtered empty
+pages still advance the cursor. Tenant feed indexes rebuild from canonical replay.
+The local CLI accepts `--cursor`, `--after-run` and `--limit` on list/log reads.
+
+The local operator configures `GET/POST /api/runtime-policy`: `capacity` (1..128),
+`default_tenant` and optional `tenants` overrides keyed by `org/project`. Tenant
+limits are `concurrency`, `queue`, `attempts_per_task`,
+`elapsed_minutes_per_task`, and `weight` (1..16). Queue overflow returns 429; budget
+refusal returns 422. Weighted unit-cost deficit round-robin preserves pool ordering
+within each tenant; its consumed credit commits with admission. Existing pool
+configuration still applies within global capacity. Task attempt/time limits freeze
+at admission and include waiting time. These are execution/attempt limits, not
+claims of native model-token or monetary metering.
+
+Interrupted effect-free structured work automatically receives a bounded new Run
+under its original Task, request key, frozen definition and remaining budget.
+Workspace/PTY work retains inspection-based recovery. Cancellation never triggers
+a replacement. Exact definition bodies are in the admission journal and backups;
+recovery never silently selects the current bundled revision.
+
+Tenant application execution requires `MITOS_AGENT_CONFINEMENT=bwrap` and
+`MITOS_AGENT_NETWORK=unrestricted`. Workers then run in an isolated network
+namespace whose only egress is a mediated model transport: an allowlisted
+CONNECT relay on a UNIX socket admitting just the model API endpoints, reached
+through a loopback forwarder inside the sandbox (`HTTPS_PROXY`). Host services —
+including the loopback operator listener — are unreachable from the sandbox, and
+the conformance stand-in proves both the mount and network boundaries. Workers
+use a fresh native home and dedicated `OPENAI_API_KEY`; operator OAuth stores,
+native history, MCP configuration and unrelated credentials are not shared.
+Missing prerequisites fail visibly. Local operator S1 work retains its existing
+native-login profile and its unmediated network posture.
+
+`examples/appfixture` is a separate Go module and database using HTTP only. It
+atomically saves message/dispatch intent, admits one Task, reads bounded event
+feeds and accepted results, and deduplicates one durable domain reply. The test
+kills both application and runtime at before/after admission and before/after
+publication. Run it with `go test -race ./internal/application -run
+TestIndependentApplicationCrashMatrix`; it uses a deterministic model stand-in
+through the real confined worker path, not a production-model benchmark.
