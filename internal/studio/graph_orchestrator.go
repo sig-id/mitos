@@ -13,16 +13,39 @@ import (
 )
 
 const (
-	// The planning journal is compacted only at this fixed entry boundary and
-	// keeps the newest entries verbatim, so prompts stay cache-stable except at
-	// rare, predictable compaction points.
+	// The planning journal is compacted at this fixed entry boundary and keeps
+	// the newest entries verbatim, so prompts stay cache-stable except at rare,
+	// predictable compaction points.
 	graphJournalCompactAt   = 96
 	graphJournalCompactKeep = 32
-	graphJournalSummary     = 512
+	// Summaries are bounded by their serialized JSON size, not rune count:
+	// multibyte and JSON-escaped text can inflate one rune up to sixfold.
+	graphJournalSummary = 512
+	// The serialized journal is also bounded by bytes independently of the
+	// entry count. Escaped or multibyte summaries can exceed the planning
+	// payload allowance well before the entry boundary, which would otherwise
+	// park valid work behind orchestrator_context_limit.
+	graphJournalByteBudget = 32 << 10
 	// The inline journal is small; detail is behind graph_read. The planning
 	// payload allowance is halved from the old full-snapshot budget.
 	orchestratorPlanLimit = 64 << 10
 )
+
+// boundJournalSummary truncates a summary until its serialized JSON form fits
+// the per-entry byte budget, counting multibyte and escaped bytes alike.
+func boundJournalSummary(summary string) string {
+	runes := []rune(summary)
+	lo, hi := 0, len(runes)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if encoded, err := json.Marshal(string(runes[:mid])); err == nil && len(encoded) <= graphJournalSummary {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return string(runes[:lo])
+}
 
 // appendFactJournal records one immutable entry per newly observed task fact
 // revision. Entries freeze the observed state and are never rewritten, so
@@ -52,15 +75,21 @@ func appendFactJournal(g *WorkGraph, s *Store) {
 			entry.Summary = r.Summary
 			entry.ArtifactCount = len(r.Artifacts)
 		}
-		if runes := []rune(entry.Summary); len(runes) > graphJournalSummary {
-			entry.Summary = string(runes[:graphJournalSummary])
-		}
+		entry.Summary = boundJournalSummary(entry.Summary)
 		g.FactJournal = append(g.FactJournal, entry)
 	}
-	if len(g.FactJournal) >= graphJournalCompactAt {
+	journal := func() int {
+		raw, _ := json.Marshal(g.FactJournal)
+		return len(raw)
+	}
+	// Compact at the fixed entry boundary, or earlier when serialized summaries
+	// (multibyte or JSON-escaped) already exceed the journal's byte budget.
+	if len(g.FactJournal) >= graphJournalCompactAt || (len(g.FactJournal) > graphJournalCompactKeep && journal() > graphJournalByteBudget) {
 		absorbed := map[string]int64{}
+		absorbedCount := 0
 		for _, e := range g.FactJournal[:len(g.FactJournal)-graphJournalCompactKeep] {
 			if e.Compacted > 0 {
+				absorbedCount += e.Compacted
 				for task, fact := range e.Facts {
 					if fact > absorbed[task] {
 						absorbed[task] = fact
@@ -68,12 +97,13 @@ func appendFactJournal(g *WorkGraph, s *Store) {
 				}
 				continue
 			}
+			absorbedCount++
 			if e.Fact > absorbed[e.Task] {
 				absorbed[e.Task] = e.Fact
 			}
 		}
 		kept := append([]GraphFactEntry(nil), g.FactJournal[len(g.FactJournal)-graphJournalCompactKeep:]...)
-		g.FactJournal = append([]GraphFactEntry{{Compacted: graphJournalCompactAt - graphJournalCompactKeep + 1, Facts: absorbed}}, kept...)
+		g.FactJournal = append([]GraphFactEntry{{Compacted: absorbedCount, Facts: absorbed}}, kept...)
 	}
 }
 
