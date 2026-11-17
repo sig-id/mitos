@@ -1,6 +1,6 @@
 # ADR 0001: Durable agent operating system
 
-Status: accepted, 2026-11-11.
+Status: accepted, 2026-11-11; storage amended 2026-11-17 (issue #77).
 Contracts: [OS architecture](../system/01_ARCHITECTURE.md),
 [durable runtime](../system/02_RUNTIME.md), [product](../product/01_PRODUCT.md).
 
@@ -26,7 +26,7 @@ claim that persistent Tasks or orchestrator replacement alone are novel.
 | Desktop/mobile/browser clients connect to an execution-owning runtime; SSH and paired servers are different modes | [Deployment modes](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/docs/site/content/docs/ways-to-run.mdx), [mobile RPC](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/mobile/README.md) | Separate interfaces, authority, and execution placement. |
 | Background daemon owns PTYs across app exit; reboot still ends processes | [Session restore](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/docs/site/content/docs/model/session-restore.mdx) | Advertise process survival separately from durable work and host recovery. |
 | Run namespace, Tasks, Dispatch attempts, messages and gates | [Orchestration](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/docs/site/content/docs/cli/orchestration.mdx) | Preserve assignment/attempt separation and a stable supervisory inbox. Keep Mitos Run meaning. |
-| SQLite WAL and transactions persist orchestration state | [Database](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/orchestration-db.ts) | Adopt atomic admission/settlement; retain Mitos's canonical journal pending a separate storage decision. |
+| SQLite WAL and transactions persist orchestration state | [Database](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/orchestration-db.ts) | Adopt atomic admission/settlement; preserve Mitos's canonical Event journal in the SQLite runtime store. |
 | Orchestrator rebinding advances consumer generation and fences deliveries | [Binding](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/runs/run-binding.ts), [delivery](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/runs/run-delivery.ts) | Make orchestrator ownership and consumer fencing runtime contracts. |
 | Caller/request identity and payload hash bind pending/completed mutation receipts | [Receipts](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/mutation-receipts/mutation-receipt-store.ts) | Make retriable mutations durable; preserve ambiguous outcomes. |
 | Worker authority binds attempt, process identity, launch-token commitment and terminal custody | [Worker authority](https://github.com/stablyai/orca/blob/1a4b0c76b1859d2ec4b905299cf7b7596fed11c6/src/main/runtime/orchestration/db/worker-dispatch/worker-dispatch-authority.ts) | Fence stale workers and retain resource custody through recovery. |
@@ -47,7 +47,14 @@ responsibility executed by replaceable processes.
 Use one common runtime contract beneath interactive and automated work. Separate
 clients, home authority, and execution hosts; support local deployment first and
 explicit remote placement subsequently. Keep Go, existing public identifiers,
-and current journal semantics. Add request receipts, authority generations,
+and current journal semantics. SQLite is the single local runtime store: retain the
+Event records, hash chain, apply and replay, with journal and rebuildable projections
+committed in one transaction. Use the pure-Go `modernc.org/sqlite` driver, WAL mode
+and `synchronous=FULL`; retain one writer and fsync-before-acknowledge durability.
+The cutover imports `events.jsonl` once after verifying its hash chain and keeps
+the original as a backup. After import there is no JSONL runtime reader or writer,
+opt-in flag, or dual-adapter mode. This storage change is a delivery target until
+the SQLite cutover passes conformance. Add request receipts, authority generations,
 control mailboxes, and durable wait registration before general federation.
 
 Each project has one home server, each server may own multiple projects, and clients
@@ -83,8 +90,9 @@ require actual provider enforcement. Deployment separation introduces a versione
 process-host protocol and inspection receipts. Durable operations require bounded
 receipt retention, cancellation, mailbox recovery, and fault-injection tests.
 
-No native mobile application, relay service, SQLite migration, or automatic host
-failover is committed by this decision. Clients can be added against the shared
+No native mobile application, relay service, or automatic host failover is
+committed by this decision. The SQLite migration is explicitly authorized by the
+2026-11-17 storage amendment. Clients can be added against the shared
 contract as needed. The first acceptance milestone is local task continuity with
 verified replacement, followed by paired clients and remote execution.
 

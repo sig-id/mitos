@@ -154,14 +154,18 @@ neither side may infer the other's commit from transport success. The applicatio
 MUST durably save its input and dispatch intent together, retry admission with the
 same request identity, and atomically deduplicate accepted results with domain updates.
 Mitos MUST commit runtime changes and outbound intent together. Recovery reconciles
-pending intents and receipts on both sides. Sharing a PostgreSQL installation does
-not establish a cross-service transaction.
+pending intents and receipts on both sides. Co-locating application and runtime
+databases does not establish a cross-service transaction.
 
-The local journal remains supported. A hosted PostgreSQL persistence adapter is a
-delivery target under [ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md), not an
-implemented storage option. Both adapters MUST preserve atomic transitions, durable
-receipts, replay/recovery, and one authoritative writer per object. Multi-writer
-replication and automatic authority failover are excluded.
+SQLite is the transactional runtime store under
+[ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md), preserving the canonical
+Event journal, hash chain and replay. The cutover replaces local JSONL persistence
+with a verified one-time import and retains the original as backup; no dual-adapter
+mode is supported. Until that cutover ships, JSONL remains the current adapter.
+A PostgreSQL server edition is deferred, outside the S2–S4 implementation plan.
+Storage MUST preserve atomic transitions, durable receipts, replay/recovery and one
+authoritative writer per object. Multi-writer replication and automatic authority
+failover are excluded.
 
 Applications MUST be able to submit structured context references and receive typed
 results without provisioning a filesystem workspace. Context remains subject to
@@ -219,9 +223,11 @@ Native conversation history MAY supplement, but MUST NOT override, runtime facts
 The runtime MUST preserve authority, budgets, claims, decisions, and uncertain
 external effects through replacement. Reported success is distinct from acceptance.
 
-Mitos retains Go and its local canonical journal. The application-server profile
-adds a planned PostgreSQL adapter without replacing local persistence. Replicated
-writers, commercial settlement, and automatic failover require separate decisions.
+Mitos retains Go and its canonical journal semantics in the SQLite runtime store.
+A PostgreSQL server edition is deferred. Remote execution initially covers headless
+structured work only; workspace, PTY and graph execution stay local. Local and
+remote structured workers share one execution path and scheduler. Replicated
+writers, commercial settlement and automatic failover require separate decisions.
 Details of admission and recovery belong to [runtime](02_RUNTIME.md); connection security,
 client protocols, and adapters belong to [interfaces](05_INTERFACES_AND_INTEGRATIONS.md).
 

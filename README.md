@@ -21,8 +21,9 @@ Mitos also targets use as the headless agent runtime behind independent applicat
 backends. Acegoat is the first design use case and remains a separate product and
 repository. Applications own their users, conversations and domain rules; Mitos owns
 durable work and replaceable execution through versioned APIs. Local use retains
-its lightweight defaults. PostgreSQL runtime storage, tenant isolation and remote
-worker claims are planned capabilities, not available deployment options today.
+its lightweight defaults. SQLite transactional runtime storage, tenant isolation and remote worker claims
+are planned capabilities, not available deployment options today. A PostgreSQL
+server edition is deferred beyond the SQLite S2–S4 plan.
 See the [server use case and delivery path](spec/README.md#application-server-reading-path).
 
 ## Start

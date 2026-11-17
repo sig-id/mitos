@@ -382,15 +382,29 @@ home authority. Acknowledgment MUST follow durable commit. Recovery MUST validat
 schema versions and integrity and MUST NOT repeat external effects while rebuilding
 state. Storage failure MUST prevent acknowledgment of an uncommitted transition.
 
-The local adapter uses the canonical journal and a single writer. Replay MUST
-validate framing, version, and integrity. An incomplete trailing write may follow
-the journal's recovery procedure; corruption inside committed history MUST fail
-visibly. An append/fsync failure MUST prevent further mutation until recovery.
-[ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md) authorizes a planned hosted
-PostgreSQL adapter preserving these transition and receipt guarantees through database
-transactions. It does not replace local JSONL persistence. Database locking and
-constraints MUST prevent concurrent claims or conflicting admissions; storage
-adapter selection MUST NOT change Task/Run identity or acceptance semantics.
+The transactional runtime adapter is SQLite, with the existing Event records and
+hash chain in an `events` table keyed by `seq`. Apply and replay retain the same
+semantics; projections are rebuildable and MUST be written in the journal
+transaction. Use `modernc.org/sqlite`, WAL mode and `synchronous=FULL`. The process
+flock stays on a lock file for writer exclusion and stop probing; the sequence
+primary key provides an additional guard.
+
+The one-time cutover MUST verify and import `events.jsonl` and retain the original
+as backup. After cutover there is no JSONL runtime reader/writer or opt-in adapter.
+Until delivery, the current JSONL adapter retains incomplete-tail recovery and
+MUST reject corruption in complete records. Replay MUST validate schema versions
+and integrity. Embedded migrations are forward-only; unknown or newer schema
+versions MUST refuse startup. Any commit failure MUST latch further mutations
+unavailable until recovery re-reads the durable tail to determine whether the
+transaction landed.
+
+Online backup MUST use the SQLite backup API. Restore MUST verify the hash chain
+and advance the authority epoch, fencing leases and tokens issued before restore.
+Exact frozen agent-library revisions MUST be backed up with the journal.
+[ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md) defers a PostgreSQL server
+edition beyond the SQLite S2–S4 plan. Database locking and constraints MUST prevent
+concurrent claims or conflicting admissions; storage changes MUST NOT change
+Task/Run identity or acceptance semantics.
 
 ## Operation receipts and dispatch
 
