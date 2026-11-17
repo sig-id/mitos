@@ -62,7 +62,7 @@ var codexProfile = runtimeProfile{
 // keeps within scope and which withheld capabilities are actually blocked.
 func RuntimeCapabilityProfiles() map[string]any {
 	out := map[string]any{}
-	for _, runtime := range []string{"codex", "codex-headless"} {
+	for _, runtime := range []string{"codex", "claude", "codex-headless"} {
 		p, _ := nativeRuntimeProfile(runtime)
 		caps := map[string]any{}
 		for name, c := range p.Capabilities {
@@ -87,6 +87,15 @@ func nativeRuntimeProfile(runtime string) (runtimeProfile, bool) {
 	switch runtime {
 	case "codex":
 		return codexProfile, true
+	case "claude":
+		p := runtimeProfile{Features: slices.Clone(codexProfile.Features), Capabilities: map[string]capabilitySupport{}}
+		for name, c := range codexProfile.Capabilities {
+			if strings.HasPrefix(name, "workspace.") || name == "command.run" || name == "network.read" {
+				c = capabilitySupport{Note: "Claude native tool restrictions are advisory on the local process provider; they do not provide OS confinement."}
+			}
+			p.Capabilities[name] = c
+		}
+		return p, true
 	case "codex-headless":
 		return codexHeadlessProfile, true
 	}

@@ -70,7 +70,7 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 		return Brief{}, "", err
 	}
 	app, ok := e.agentApplication(b.AppID)
-	if !ok || app.Agent == nil {
+	if !ok || app.Agent == nil || app.Agent.Executable == "" {
 		return Brief{}, "", errors.New("structured work runs an agent definition (agent:<id>) on an installed runtime")
 	}
 	d := app.Agent.Definition

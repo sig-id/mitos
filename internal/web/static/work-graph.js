@@ -171,11 +171,15 @@
    const child = graph.members[key]; return snapshot.nodes[key]?.settled && (!child.spec.required || obligationAccepted(graph,child));
   });
  }
+ let executionEditor;
  async function loadOptions() {
-  const library = await request('/api/graphs/agents');
+  const [library,installations,setup]=await Promise.all([request('/api/graphs/agents'),request('/api/agents?project='+encodeURIComponent(project)),request('/api/projects/'+encodeURIComponent(project)+'/setup')]);
+  executionEditor=MitosExecutionPolicy.editor(MitosExecutionPolicy.initial(setup.effective,installations),installations,library.agents);
+  $('graph-execution').replaceChildren(executionEditor.box);
   optionsLoaded=true; $('graph-create').disabled=!library.ready;
-  $('graph-orchestrator-note').textContent=library.ready ? `${library.agents.length} agent roles · ${library.runtime}` : library.reason;
+  $('graph-orchestrator-note').textContent=library.ready ? 'Your selected agents will plan, execute and review this work.' : library.reason;
  }
+ document.addEventListener('mitos-execution-changed',()=>loadOptions().catch(showError));
  function scrollWorkTo(element) { const view=$('work-view'); view.scrollTop += element.getBoundingClientRect().top-view.getBoundingClientRect().top-16; }
  function compose() { window.MitosProjectNav.select('work');$('graph-followup-form').hidden=true; $('graph-compose').hidden = false; $('graph-compose-close').hidden = !graph; $('graph-current').hidden = true; $('graph-prompt').focus({preventScroll:true}); scrollWorkTo($('graph-compose')); }
  $('new-work').addEventListener('click', compose);
@@ -185,16 +189,17 @@
   event.preventDefault(); const form = event.target, submit = $('graph-create'); submit.disabled = true; form.querySelector('.form-error').textContent = '';
   try {
    const goal = form.elements.goal.value.trim(); if (goal.length < 3) throw new Error('Describe what you want to accomplish.');
+   const execution=executionEditor.value();
    const mode=form.elements.trigger.value;
    if(mode!=='once'){
     const id='workflow-'+crypto.randomUUID();
     const catalog=await request('/api/services');
-    const body={id,project_id:project,goal,cron:mode==='event'?'':workSchedule.value().cron,timezone:mode==='event'?'':form.elements.timezone.value.trim(),event:mode==='cron'?'':form.elements.event.value.trim(),expected_revision:catalog.catalog.revision};
+    const body={id,project_id:project,goal,execution,cron:mode==='event'?'':workSchedule.value().cron,timezone:mode==='event'?'':form.elements.timezone.value.trim(),event:mode==='cron'?'':form.elements.event.value.trim(),expected_revision:catalog.catalog.revision};
     if(mode!=='event'&&!body.cron)throw new Error('Enter a cron schedule.');
     if(mode!=='cron'&&!body.event)throw new Error('Enter the external event name.');
     await sendMutation('/api/services/workflows',body,'schedule');location.href='/services';return;
    }
-   createBody={key:crypto.randomUUID(),project_id:project,goal};
+   createBody={key:crypto.randomUUID(),project_id:project,goal,execution};
    const result=await sendMutation('/api/graphs/automatic',createBody,'create');createBody=null;form.elements.goal.value='';await loadSummaries(true);await chooseGraph(result.id);
 
   } catch (error) { form.querySelector('.form-error').textContent = error.message; } finally { submit.disabled = false; }
@@ -453,6 +458,7 @@
   if(selectedTab==='progress'){renderGoalProgress(box,m)}else if(selectedTab==='result'){renderGoalResult(box)}else if(selectedTab==='details'){
    const intent=m.spec.brief.intent||m.spec.criteria||'This step is preparing its assignment.';box.append(node('p',intent,'prose'));if(m.spec.criteria&&m.spec.criteria!==intent){box.append(node('h4','Success criteria'),node('p',m.spec.criteria,'prose'))}
    if(snapshot.nodes[selected]?.executor)box.append(node('h4','Agent'),node('p',snapshot.nodes[selected].executor));
+   const execution=snapshot.nodes[selected]?.execution;if(execution)box.append(node('h4','Execution'),node('p',`${execution.name} · ${execution.runtime} · ${execution.model||'default model'}${execution.profile_id?' · '+execution.profile_id:''} (${snapshot.nodes[selected].execution_source})`));
    const schedule=m.spec.brief.scheduling||{},deps=schedule.deps||[];if(deps.length){const rule=schedule.join?.rule||'all';box.append(node('h4',rule==='any'?'Wait for any matching source':rule==='k_of_n'?`Wait for ${schedule.join.k} matching sources`:'Wait for all required sources'));for(const dep of deps){const waiting=snapshot.nodes[selected].waiting?.includes(dep.from)?' · waiting':'',condition=` · ${dep.guard||'terminal'}${dep.strength==='soft'?' · optional':''}`;if(dep.inbox){const i=dep.inbox;box.append(node('p',`MQTT inbox ${i.project}/${i.mailbox} · ${i.type}${i.correlation?' · '+i.correlation:''}${condition}${waiting}`,'graph-dependency-link'))}else{box.append(button((graph.members[dep.from]?title(graph.members[dep.from]):dep.from)+condition+waiting,()=>selectNode(dep.from),'graph-dependency-link'))}}}
    if(m.replacement)box.append(node('h4','Replacement'),button(title(graph.members[m.replacement]),()=>selectNode(m.replacement),'graph-dependency-link'));
    if(m.accepted)box.append(node('h4','Accepted result'),window.MitosFormat?window.MitosMarkdown.view(m.accepted.rationale):node('p',m.accepted.rationale),node('p',m.accepted.evidence,'muted'));

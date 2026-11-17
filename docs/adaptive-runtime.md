@@ -99,7 +99,7 @@ additional instructions, runtime executable, and digest. New custom agents becom
 available to subsequent goals. A running graph retains its original allowed agent
 IDs, while new assignments resolve the latest published revision of those IDs.
 
-`POST /api/graphs/automatic` accepts `{key, project_id, goal}`. Creation deduplicates
+`POST /api/graphs/automatic` accepts `{key, project_id, goal, execution?}`. Creation deduplicates
 before runtime checks. `POST /api/graphs/{id}/automatic` accepts `{key, revision}`
 to explicitly start an untouched old goal. Merely opening an old graph never starts
 it. `GET /api/graphs/agents` reports runtime readiness and library summaries.
@@ -111,6 +111,71 @@ limits, provenance) and changes only those three fields; a new agent derives its
 from `mitos.generalist`. Task-specific specializations are bounded by the base
 definition's `specialization.allow` and `max_instruction_bytes`, which the library
 summary exposes as `max_specialization_bytes`.
+
+### Execution presets and role rules
+
+**Start coordinated work** shows **Orchestrator** and **Default worker** selectors.
+Expand **Execution presets & permitted workers** to choose each preset's coding
+agent (Codex or Claude Code), model and environment/account profile. Add multiple
+presets for the same harness to use different models or accounts. Expand **Agent
+role rules** to choose, for example, Codex for Engineer and Claude for Architect.
+Custom roles created in Agent library appear here too. **Project setup →
+Coordinated work agents → Save agent rules** saves reusable defaults in the
+project's `mitos` instructions block. Launch edits apply to that work only.
+
+The `execution` object is accepted in personal/project runtime preferences, the
+project instructions block, automatic goals and scheduled goals. A project policy
+replaces the inherited policy as a whole; a launch policy replaces the project
+policy as a whole. For example:
+
+```json
+{
+  "presets": [
+    {"id":"implementation","name":"Implementation","runtime":"codex","model":"","profile_id":""},
+    {"id":"design","name":"Design","runtime":"claude","model":"sonnet","profile_id":""}
+  ],
+  "orchestrator":"implementation",
+  "worker":"implementation",
+  "roles":{"mitos.architect":"design","mitos.reviewer":"design"},
+  "allowed_workers":["implementation","design"]
+}
+```
+
+Worker selection is explicit task `execution_preset`, then the exact base role's
+rule, then the default worker. A specialization retains its base role's rule.
+Task choices must be in `allowed_workers`; they cannot change the orchestrator
+preset. The planner receives the frozen choices and can select permitted presets
+for individual assignments. To run both Codex and Claude implementers, allow both
+presets and request those separate assignments in the goal. A role rule establishes
+a default; it does not forbid an explicit permitted task override.
+
+Admission refuses unknown roles/presets, unsupported harnesses and unavailable
+profiles/executables. Model names are checked by the native provider at execution.
+Each graph freezes the policy; each admitted assignment freezes the selected
+preset, selection source, runtime, model, executable and profile configuration
+(environment **variable names**, never credential values). Retrying or resuming
+retains that binding. A changed executable/profile configuration is refused;
+credentials are resolved anew. Follow-ups inherit the previous graph's choices
+unless explicitly overridden. Scheduled work retains its launch policy for each
+occurrence; omitted policies inherit current project defaults. Assignment details
+show the resolved execution choice.
+
+Claude uses the bidirectional stream-json control protocol and an SDK MCP server
+over the same process pipes for the granted handoff tools. Structured orchestrator
+results, registered worker artifacts, approvals and questions use the existing
+Mitos contracts. Native delegation tools are disabled: Mitos schedules the workers.
+Only Mitos's handoff MCP server is connected in this adapter; other native MCP
+connections are not imported. Codex retains its app-server transport. Pi and other
+session adapters do not yet support coordinated work and are refused here.
+
+Claude's native tool restrictions do **not** provide OS confinement on the local
+provider. Its workspace, command and network capability receipts are advisory;
+strict policies refuse incompatible definitions. The adapter preserves native
+credentials but does not inherit user/project permission settings that could
+bypass Mitos request handling. Tests use local wire fixtures, including both
+orchestrator harnesses; they do not call paid model providers. Protocol references:
+[Claude CLI](https://code.claude.com/docs/en/cli-reference) and the official
+[SDK control implementation](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py).
 
 Before launch, each agent attempt resolves its **authority receipt** (`authority.json`):
 the definition's requested capabilities intersected with what the runtime can provide,
@@ -177,7 +242,7 @@ Mitos-specific section structure.
 The assistant uses installed runtime discovery. Codex, Claude Code and Pi have
 read-only setup adapters; other installed runtimes are listed with their actual
 capability. Setup runtime/model selection is independent of automatic task execution,
-which currently supports Codex only. A setup reply cannot save settings itself.
+which supports Codex and Claude Code through the coordinated-work adapters. A setup reply cannot save settings itself.
 Conversations and pending proposals persist in the server data directory, survive a
 browser reload, and appear interrupted after a server restart. They have bounded
 history/output, a cancellation endpoint and an eight-minute reply timeout.

@@ -43,7 +43,7 @@ func TestAuthorityPoliciesForBundledAgents(t *testing.T) {
 	if _, err := resolveAuthority(library[0], "codex", "", 0); err == nil {
 		t.Fatal("missing policy accepted")
 	}
-	if _, err := resolveAuthority(library[0], "claude", EnforcementAdvisory, 0); err == nil {
+	if _, err := resolveAuthority(library[0], "unsupported", EnforcementAdvisory, 0); err == nil {
 		t.Fatal("runtime without a profile accepted")
 	}
 }

@@ -47,7 +47,13 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	if spec.Acceptance != "operator" && spec.Acceptance != "application" {
 		return spec, nil, graphError("acceptance must be operator or application")
 	}
+	if spec.Brief.Execution != nil {
+		return spec, nil, graphError("execution policy belongs to the work, not a generated brief")
+	}
 	if spec.Kind == "scope" {
+		if spec.ExecutionPreset != "" {
+			return spec, nil, graphError("scope cannot select an executor")
+		}
 		if spec.Acceptance != "operator" || spec.Brief.AppID != "" || len(spec.Arguments) > 0 || len(spec.Brief.Scheduling.Deps) > 0 {
 			return spec, nil, graphError("scope is a logical obligation, not an executor")
 		}
@@ -84,12 +90,15 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	if !ok {
 		return spec, nil, graphError("application is no longer registered")
 	}
+	if app.Agent == nil && spec.ExecutionPreset != "" {
+		return spec, nil, graphError("execution presets require a native agent assignment")
+	}
 	if app.Agent != nil {
 		if !g.Policy.Automatic || len(spec.Arguments) != 0 {
 			return spec, nil, graphError("native agents require automatic policy and cannot override invocation")
 		}
-		if g.Setup != nil {
-			app.Agent.Model = g.Setup.Model
+		if err := e.bindExecution(g, spec, app.Agent); err != nil {
+			return spec, nil, err
 		}
 		if err := specializeAgent(app.Agent, spec.Agent, g.ID); err != nil {
 			return spec, nil, err

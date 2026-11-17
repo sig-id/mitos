@@ -5,11 +5,11 @@
  function sourceEditor(title,value){const box=window.MitosMarkdown.editor(value,{filename:title,mode:'preview'});return {box,value:()=>box.value,set:v=>{box.value=v}}}
  function runtimeFields(value,defaults,global,installations=[],controls=[]){
   const form=el('div',undefined,'setup-fields');const field=(title,input,hint)=>{const label=el('label',title);label.append(input);if(hint)label.append(el('small',hint,'muted'));form.append(label);return input};
-  const runtime=el('select');runtime.setAttribute('aria-label',global?'Default runtime':'Project runtime');runtime.append(new Option(global?'Codex':'Use my default ('+(defaults.runtime||'Codex')+')',global?'codex':''));if(!global)runtime.append(new Option('Codex','codex'));for(const r of installations.filter(r=>r.kind==='agent'&&r.installed&&r.id!=='codex')){const option=new Option(r.name+' – automatic task adapter unavailable',r.id);option.disabled=true;runtime.append(option)}runtime.value=value.runtime||(global?'codex':'');field('Runtime',runtime);
+  const runtime=el('select');runtime.setAttribute('aria-label',global?'Default runtime':'Project runtime');runtime.append(new Option(global?'Codex':'Use my default ('+(defaults.runtime||'Codex')+')',global?'codex':''));if(!global)runtime.append(new Option('Codex','codex'));for(const r of installations.filter(r=>r.kind==='agent'&&r.installed&&!['codex','claude'].includes(r.id))){const option=new Option(r.name+' – automatic task adapter unavailable',r.id);option.disabled=true;runtime.append(option)}runtime.append(new Option('Claude Code','claude'));runtime.value=value.runtime||(global?'codex':'');field('Runtime',runtime);
   const model=el('input');model.value=value.model||'';model.maxLength=200;model.setAttribute('aria-label',global?'Default model':'Project model');model.placeholder=global?'Use the runtime’s configured model':defaults.model||'Use my default model';field('Model',model,'Model ID; availability is checked by the runtime.');
   const enforcement=el('select');enforcement.setAttribute('aria-label',global?'Default permission enforcement':'Project permission enforcement');if(!global)enforcement.append(new Option('Use my default ('+(defaults.enforcement||'advisory')+')',''));for(const [v,t] of [['advisory','Advisory – run and record unenforced permissions'],['strict_required','Strict for required permissions'],['strict','Strict for all permissions']])enforcement.append(new Option(t,v));enforcement.value=value.enforcement||(global?'advisory':'');field('Permission enforcement',enforcement,'Codex on this workstation cannot confine file reads or disable commands; strict policies refuse agents that rely on them.');
   const budgets=MitosResourcePolicy.fields(value,controls);form.append(budgets.box);
-  return {box:form,value:()=>({revision:value.revision,runtime:runtime.value,model:model.value.trim(),enforcement:enforcement.value,resources:budgets.value(),guidance:value.guidance||''})};
+  return {box:form,value:()=>({revision:value.revision,runtime:runtime.value,model:model.value.trim(),enforcement:enforcement.value,resources:budgets.value(),execution:value.execution,guidance:value.guidance||''})};
  }
 
  let generation=0;
@@ -22,6 +22,7 @@
   let setup;let installations;
   try{[setup,installations]=await Promise.all([api(base+'/setup'),api('/api/agents?project='+encodeURIComponent(project))])}catch(e){container.replaceChildren(el('p',e.message,'form-error'));return}
   if(token!==generation)return;
+  let projectDocumentChanged=()=>{};
   async function surface(root,target){
    const personal=target==='defaults',name=personal?'My defaults':setup.file_name;
    const heading=el('header',undefined,'setup-file-heading'),titles=el('div');titles.append(el('h2',name),el('p',personal?'Personal preferences · saved in this Mitos server’s preferences.json, outside your repositories.':snapshot.project.directory+'/'+setup.file_name,'muted'));heading.append(titles);
@@ -32,12 +33,12 @@
    const layout=el('div',undefined,'setup-agent-layout'),file=el('section',undefined,'setup-card setup-file'),assistant=el('aside',undefined,'setup-card setup-assistant');layout.append(file,assistant);root.append(layout);
    const fileHeading=el('div',undefined,'setup-file-toolbar'),fileState=el('strong'),actions=el('div',undefined,'setup-file-actions'),compare=button('Compare with saved',()=>{comparing=!comparing;drawDocument()}),apply=button(personal?'Save proposed defaults':'Apply to '+name,applyProposal,'primary');actions.append(compare,apply);fileHeading.append(fileState,actions);
    const contents=el('div',undefined,'setup-document-content'),manual=el('div',undefined,'setup-edit-surface');file.append(fileHeading,manual,contents);
-   let editor,fields,guidance;
+   let editor,fields,guidance,editorFileHash=setup.file_hash;
    if(personal){guidance=sourceEditor('Personal guidance',setup.defaults.guidance||'');fields=runtimeFields(setup.defaults,{},true,installations,setup.resource_controls);manual.append(guidance.box,fields.box)}
    else{editor=sourceEditor(name,seed(setup));manual.append(editor.box)}
    const save=button(personal?'Save my defaults':'Save '+name,async()=>{save.disabled=true;try{
     if(personal){setup.defaults=await api('/api/preferences',{...fields.value(),guidance:guidance.value()},'PUT')}
-    else{setup=await api(base+'/instructions',{file_hash:setup.file_hash,document:editor.value()},'PUT')}
+    else{setup=await api(base+'/instructions',{file_hash:editorFileHash,document:editor.value()},'PUT')}
     await reloadSetup();proposal=null;comparing=false;loadedKey='';drawDocument();feedback.textContent=personal?'Personal defaults saved.':name+' saved. New work will use these instructions.';feedback.classList.remove('error');
    }catch(e){showError(e)}finally{save.disabled=false}});
    const discard=button('Discard edits',()=>{if(personal){guidance.set(loadedPreferences.guidance||'');replaceFields(loadedPreferences)}else editor.set(loadedDocument);drawDocument()});
@@ -70,7 +71,7 @@
     if(key!==loadedKey&&!dirty()){
      loadedKey=key;
      if(personal){loadedPreferences={...(changed?proposal.preferences:setup.defaults),revision:changed?conversation.revision:setup.defaults.revision};guidance.set(loadedPreferences.guidance||'');replaceFields(loadedPreferences)}
-     else{loadedDocument=changed?proposal.document:seed(setup);editor.set(loadedDocument)}
+     else{loadedDocument=changed?proposal.document:seed(setup);editorFileHash=changed?conversation.file_hash:setup.file_hash;editor.set(loadedDocument)}
     }
     const pending=changed&&key!==loadedKey,editingProposal=changed&&!pending;
     apply.hidden=!editingProposal;compare.hidden=!changed;save.hidden=editingProposal;discard.hidden=!dirty();
@@ -90,9 +91,15 @@
    async function poll(){if(!root.isConnected||token!==generation)return;try{acceptConversation(await api(base+'/setup/conversation?target='+target));if(conversation.status==='running')timer=setTimeout(poll,1000)}catch(e){showError(e);timer=setTimeout(poll,3000)}}
    form.onsubmit=async event=>{event.preventDefault();if(!prompt.value.trim())return;send.disabled=true;feedback.textContent='';feedback.classList.remove('error');try{const c=await api(base+'/setup/conversation',{key:crypto.randomUUID(),prompt:prompt.value,target,runtime:runtime.value,model:model.value.trim(),reset});reset=false;prompt.value='';acceptConversation(c);clearTimeout(timer);timer=setTimeout(poll,1000)}catch(e){showError(e);send.disabled=!supported.length}};
    async function applyProposal(){apply.disabled=true;try{if(personal){setup.defaults=await api('/api/preferences',{...fields.value(),guidance:guidance.value(),revision:conversation.revision},'PUT')}else{setup=await api(base+'/instructions',{file_hash:conversation.file_hash,document:editor.value()},'PUT')}await reloadSetup();proposal=null;comparing=false;loadedKey='';drawDocument();feedback.classList.remove('error');feedback.textContent=personal?'Personal defaults saved.':name+' saved. New work will use these instructions.'}catch(e){showError(e)}finally{apply.disabled=false}}
+   if(!personal)projectDocumentChanged=()=>{executionSummary();drawDocument()};
    if(setup.settings_error)showError(new Error('AGENTS.md execution settings need attention: '+setup.settings_error));drawDocument();await poll();
   }
   await surface(container,'project');
+  const executionSection=el('section',undefined,'panel');executionSection.append(el('h2','Coordinated work agents'),el('p','Choose the orchestrator, worker defaults and role rules for new work.'));
+  const library=await api('/api/graphs/agents');
+  let executionHash=setup.file_hash;
+  const executionFields=MitosExecutionPolicy.editor(MitosExecutionPolicy.initial(setup.effective,installations),installations,library.agents),executionStatus=el('p');executionStatus.setAttribute('role','status');
+  executionSection.append(executionFields.box,button('Save agent rules',async()=>{try{const document=MitosExecutionPolicy.documentWithPolicy(setup.document,executionFields.value());setup=await api(base+'/instructions',{file_hash:executionHash,document},'PUT');executionHash=setup.file_hash;projectDocumentChanged();window.document.dispatchEvent(new Event('mitos-execution-changed'));executionStatus.textContent='Agent rules saved. New coordinated work will use these choices.'}catch(e){executionStatus.textContent=e.message}}),executionStatus);container.append(executionSection);
   window.MitosAgentPolicy.render(container,setup.agent_policy,base,api);
   const coop=el('details');coop.append(el('summary','COOPERATION.md'),el('p','Optional project conventions for delegation, shared work, handoffs and escalation. Link this file from AGENTS.md for other tools. Changes apply to new coordinated work.','muted'));
   let coopDoc=setup.cooperation;const coopEditor=sourceEditor('COOPERATION.md',coopDoc.text||''),coopStatus=el('p');coopStatus.setAttribute('role','status');

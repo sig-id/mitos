@@ -235,6 +235,7 @@ func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, 
 	context["triggers"] = g.Triggers
 	context["inbox"] = graphInboxAddress(g, s.seq)
 	context["instruction"] = orchestratorInstructions
+	context["execution_policy"] = graphExecution(g)
 	raw, err := json.Marshal(context)
 	if err != nil {
 		return false, err
