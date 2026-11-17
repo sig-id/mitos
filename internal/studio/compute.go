@@ -23,6 +23,11 @@ func compileApplication(app Application) (compute.LaunchSpec, error) {
 // per-agent resource request through the same provider admission contract.
 func (e *Engine) providerCapabilities() compute.Capabilities { return e.provider.Capabilities() }
 
+// agentProviderCapabilities reports the posture native agents are admitted
+// against: the confining provider when configured, the plain local provider
+// otherwise.
+func (e *Engine) agentProviderCapabilities() compute.Capabilities { return e.agentProvider.Capabilities() }
+
 // compileWorkflowLaunch keeps the broker/database-free local startup. Under a
 // confining provider the launch admits the container posture the provider can
 // actually enforce instead of the development exception.

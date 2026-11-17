@@ -47,6 +47,10 @@ func NewConfinement(tool, netMode string) (Confinement, error) {
 
 func (c Confinement) enabled() bool { return c.Tool != "" }
 
+// Enabled reports whether OS confinement is configured, so callers outside
+// the compute package can adapt admission and environment staging.
+func (c Confinement) Enabled() bool { return c.enabled() }
+
 func (c Confinement) capabilities() Capabilities {
 	if !c.enabled() {
 		return Capabilities{}
@@ -63,6 +67,9 @@ func (c Confinement) capabilities() Capabilities {
 // confineArgv wraps argv in the sandbox. Mounts are minimal and explicit: the
 // toolchains and system configuration read-only, a fresh /tmp, the per-attempt
 // runtime home, read-only dependency inputs and the writable workspace copy.
+// Host control sockets under /run are deliberately not mounted: a read-only
+// mount still lets a confined process issue requests to docker or the user's
+// systemd manager over those sockets, which would defeat the confinement.
 func confineArgv(c Confinement, argv []string, base, workspace string) ([]string, error) {
 	if len(argv) == 0 || !filepath.IsAbs(argv[0]) {
 		return nil, errors.New("command requires an absolute executable")
@@ -93,7 +100,6 @@ func confineArgv(c Confinement, argv []string, base, workspace string) ([]string
 		"--ro-bind-try", "/lib64", "/lib64",
 		"--ro-bind-try", "/sbin", "/sbin",
 		"--ro-bind-try", "/etc", "/etc",
-		"--ro-bind-try", "/run", "/run",
 		"--ro-bind-try", "/opt", "/opt",
 		"--ro-bind-try", "/nix", "/nix",
 		"--ro-bind-try", filepath.Dir(argv[0]), filepath.Dir(argv[0]),

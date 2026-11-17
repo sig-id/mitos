@@ -357,7 +357,10 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			return &agentPrerequisiteError{summary: "This workflow's frozen settings predate permission enforcement policies, so its agents cannot be admitted. Start the goal again to bind the current project settings; saved results and files remain available."}
 		}
 	}
-	authority, authorityErr := resolveAuthority(b.Definition, b.Runtime, policy, r.Brief.TimeoutMinutes*60, e.providerCapabilities())
+	if confinementBlocksTransport(e.confinement) {
+		return &agentPrerequisiteError{summary: "Agent confinement is configured with the network withheld, and no mediated model transport is available: the sandbox namespace has no route to the model endpoint, so the agent could never answer. Configure MITOS_AGENT_NETWORK=unrestricted to admit agent egress, or keep confinement off until a mediated transport is provided."}
+	}
+	authority, authorityErr := resolveAuthority(b.Definition, b.Runtime, policy, r.Brief.TimeoutMinutes*60, e.agentProviderCapabilities())
 	receipt, _ := json.MarshalIndent(authority, "", "  ")
 	if err = e.Store.SaveArtifact(r.ID, "authority.json", receipt); err != nil {
 		return err
@@ -606,7 +609,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if currentGraph.Setup != nil {
 		resources = currentGraph.Setup.Resources.Agent
 	}
-	caps := e.providerCapabilities()
+	caps := e.agentProviderCapabilities()
 	development := true
 	if caps.WorkspaceConfined {
 		development = false
@@ -627,15 +630,21 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err = e.Store.RecordWorkspace(r.ID, "workspace_prepared", "Agent workspace prepared.", WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint}); err != nil {
 		return err
 	}
-	handle, err := e.provider.Prepare(ctx, launch)
+	handle, err := e.agentProvider.Prepare(ctx, launch)
 	if err != nil {
 		return err
+	}
+	agentEnv := native.Env
+	if e.confinement.Enabled() {
+		if agentEnv, err = stageConfinementHome(base, b.Runtime, agentEnv); err != nil {
+			return err
+		}
 	}
 	preview, closePreview := e.beginAgentOutput(r.ID)
 	defer closePreview()
 	var activity bytes.Buffer
 	options.Activity = io.MultiWriter(&activity, preview.activity)
-	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+	session, err := e.agentProvider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, NativeEnv: agentEnv, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		if b.Runtime == "claude" {
 			return harness.RunClaude(ctx, broker, stream, io.MultiWriter(output, preview), dir, prompt, options)
 		}
@@ -647,7 +656,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	stageErr := e.Store.Transition(r.ID, "agent_started", "running", "Agent working", b.Runtime+" is executing the assignment. Its report and files are saved when this attempt finishes.")
 	if stageErr != nil {
 		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = e.provider.Stop(cleanup, session)
+		_ = e.agentProvider.Stop(cleanup, session)
 		stop()
 	}
 	// A concurrent stop may reject the stage update. Still harvest the process's
@@ -665,7 +674,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	runErr = errors.Join(runErr, stageErr)
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err = e.provider.Stop(stopCtx, session); err != nil {
+	if err = e.agentProvider.Stop(stopCtx, session); err != nil {
 		return err
 	}
 	if err = e.Store.SaveArtifacts(r.ID, ArtifactData{Name: "output.txt", Data: output}, ArtifactData{Name: "activity.jsonl", Data: activity.Bytes()}); err != nil {

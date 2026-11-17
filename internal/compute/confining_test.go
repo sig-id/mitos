@@ -134,3 +134,30 @@ func TestConfiningProviderBlocksOutsideMountsAndNetwork(t *testing.T) {
 		t.Fatalf("runtime home unusable: %q %v", out, runErr)
 	}
 }
+
+// Host control sockets under /run are never mounted: a read-only mount still
+// accepts requests over docker or systemd bus sockets, which would defeat the
+// confinement.
+func TestConfinementOmitsHostControlSockets(t *testing.T) {
+	if _, err := exec.LookPath(ConfinementBwrap); err != nil {
+		t.Skip("bwrap required for confinement argv tests")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh required")
+	}
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err = os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := Confinement{Tool: ConfinementBwrap, NetMode: NetOff}
+	argv, err := confineArgv(c, []string{sh, "-c", "true"}, filepath.Join(root, "attempt"), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, "\x00")
+	if strings.Contains(joined, "\x00/run\x00") || strings.Contains(joined, "/run\x00/run") {
+		t.Fatalf("host /run mounted read-only: %v", argv)
+	}
+}

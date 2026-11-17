@@ -24,6 +24,11 @@ type Engine struct {
 	Messages  *messaging.Service
 	Desk      *desk.Manager
 	provider  compute.Provider
+	// agentProvider is the provider for native agent execution only; OS
+	// confinement is scoped here so other launch paths keep the plain local
+	// posture they were admitted against.
+	agentProvider compute.Provider
+	confinement   compute.Confinement
 	Store     *Store
 	Apps      []Application
 	Root      string
@@ -53,15 +58,18 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	provider := compute.Provider(&compute.Local{})
+	agentProvider := provider
+	var confinement compute.Confinement
 	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
-		confinement, confineErr := compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
+		var confineErr error
+		confinement, confineErr = compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
 		if confineErr != nil {
 			cancel()
 			return nil, confineErr
 		}
-		provider = &compute.Local{Confinement: confinement}
+		agentProvider = &compute.Local{Confinement: confinement}
 	}
-	e := &Engine{provider: provider, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err

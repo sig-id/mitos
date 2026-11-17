@@ -86,7 +86,7 @@ func RuntimeCapabilityProfilesFor(provider compute.Capabilities) map[string]any 
 // AgentCapabilityReport publishes the execution provider's enforced posture and
 // the runtime profiles derived from it.
 func (e *Engine) AgentCapabilityReport() map[string]any {
-	caps := e.providerCapabilities()
+	caps := e.agentProviderCapabilities()
 	return map[string]any{"provider": caps, "runtimes": RuntimeCapabilityProfilesFor(caps)}
 }
 
@@ -169,7 +169,7 @@ func confinedProfile(base runtimeProfile, caps compute.Capabilities) runtimeProf
 	p.Capabilities["workspace.write"] = capabilitySupport{BoundedGrant: true, Note: "Writes are confined to the mounted workspace copy, the runtime home and temporary directories."}
 	p.Capabilities["command.run"] = capabilitySupport{BoundedGrant: true, Note: "Commands run inside the OS-confined sandbox; execution cannot be disabled."}
 	if !slices.Contains(caps.NetModes, compute.NetUnrestricted) || caps.Egress == compute.NetOff {
-		p.Capabilities["network.read"] = capabilitySupport{BlockedDenial: true, Withheld: "Network access is withheld for every attempt under the confining provider.", Note: "Network access is withheld for every attempt under the confining provider."}
+		p.Capabilities["network.read"] = capabilitySupport{BlockedDenial: true, Withheld: "Network access is withheld for every attempt under the confining provider; the runtime's own model transport is equally unreachable, so agents are admitted only with unrestricted egress.", Note: "Network access is withheld for every attempt under the confining provider; the runtime's own model transport is equally unreachable, so agents are admitted only with unrestricted egress."}
 	}
 	return p
 }
