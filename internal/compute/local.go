@@ -166,7 +166,9 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	base := h.spec.Base
 	if h.owner.Confinement.enabled() {
 		var confineErr error
-		if argv, confineErr = confineArgv(h.owner.Confinement, argv, base, h.spec.Workspace.Directory); confineErr != nil {
+		posture := h.owner.Confinement
+		posture.NetMode = h.spec.Posture.NetMode
+		if argv, confineErr = confineArgv(posture, argv, base, h.spec.Workspace.Directory); confineErr != nil {
 			cancel()
 			return nil, confineErr
 		}
