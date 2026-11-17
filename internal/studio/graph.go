@@ -355,6 +355,13 @@ func validateGraph(g *WorkGraph) error {
 			if dep.Guard == "candidate_available" && m.Spec.Acceptance != "application" && !(g.Policy.Automatic && m.Executor != nil && m.Executor.Application.Agent != nil) {
 				return graphError("candidate edges require an application verifier")
 			}
+			// A required task cannot wait for an ancestor scope's completion: the
+			// scope's own acceptance requires every required descendant to be
+			// accepted first, so the wait can never be satisfied. Guards that an
+			// operator can still break (failed/cancelled) stay expressible.
+			if m.Spec.Required && (dep.Guard == "done" || dep.Guard == "candidate_available") && g.Members[dep.From] != nil && g.Members[dep.From].Spec.Kind == "scope" && graphDescendant(g, id, dep.From) {
+				return graphError("required dependency cycle: %s waits for ancestor scope %s while %s cannot be accepted before %s is accepted", id, dep.From, dep.From, id)
+			}
 		}
 	}
 	for _, count := range children {
