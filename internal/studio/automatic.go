@@ -529,7 +529,6 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return contextErr
 	}
 	resultPath := filepath.Join(base, "agent-result.txt")
-	args := []string{native.Executable, "app-server"}
 	// The inherited Go cache is commonly outside workspace-write roots. Give
 	// routine checks a writable cache without asking for broader permissions.
 	cache, err := os.MkdirTemp("", "mitos-go-build-")
@@ -538,11 +537,17 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	defer os.RemoveAll(cache)
 	cacheJSON, _ := json.Marshal(cache)
-	args = append(args, "-c", "shell_environment_policy.set.GOCACHE="+string(cacheJSON))
+	config := []string{"shell_environment_policy.set.GOCACHE=" + string(cacheJSON)}
 	if authority.Granted("network.read") {
-		args = append(args, "-c", "sandbox_workspace_write.network_access=true")
+		config = append(config, "sandbox_workspace_write.network_access=true")
 	}
+	args := append([]string{native.Executable}, harness.CodexArguments(config...)...)
 	native.Env = agentCacheEnvironment(native.Env, cache)
+	if b.Runtime != "claude" {
+		if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
+			return err
+		}
+	}
 	options := harness.CodexOptions{Headless: true, ResumeThread: prior.NativeThreadID, ThreadStarted: func(thread string) error { return e.Store.recordNativeThread(r.ID, thread) }, Model: b.Model, Sandbox: "read-only", MaxTurns: authority.MaxTurns, Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
 	if authority.Granted("workspace.write") {
 		options.Sandbox = "workspace-write"
