@@ -302,6 +302,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	policy := EnforcementAdvisory
 	if authorityGraph.Setup != nil {
 		policy = authorityGraph.Setup.Enforcement
+		if policy == "" {
+			// Frozen before enforcement policies existed. Its settings are not
+			// reinterpreted; the operator restarts the goal under current settings.
+			return &agentPrerequisiteError{summary: "This workflow's frozen settings predate permission enforcement policies, so its agents cannot be admitted. Start the goal again to bind the current project settings; saved results and files remain available."}
+		}
 	}
 	authority, authorityErr := resolveAuthority(b.Definition, b.Runtime, policy, r.Brief.TimeoutMinutes*60)
 	receipt, _ := json.MarshalIndent(authority, "", "  ")

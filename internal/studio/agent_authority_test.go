@@ -1,8 +1,10 @@
 package studio
 
 import (
+	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"mitos/agents"
@@ -115,5 +117,31 @@ func TestHandoffToolsFollowArtifactGrants(t *testing.T) {
 		if handoffToolGranted(r, "artifact_register") {
 			t.Fatal("withheld tool callable")
 		}
+	}
+}
+
+func TestFrozenSetupWithoutPolicyIsRefusedNotReinterpreted(t *testing.T) {
+	e, g := nativeAuditGraph(t, "", 1)
+	var run string
+	for _, m := range g.Members {
+		if m.Spec.Kind == "application" {
+			run = m.CurrentRunID
+		}
+	}
+	// A setup frozen before enforcement policies existed has no policy value.
+	e.Store.mu.Lock()
+	e.Store.graphs[g.ID].Setup = &FrozenSetup{Runtime: "codex"}
+	e.Store.mu.Unlock()
+	if ok, err := e.Store.AcquireClaims(run); err != nil || !ok {
+		t.Fatal(err)
+	}
+	r, _ := e.Store.Get(run)
+	e.execute(context.Background(), r)
+	r, _ = e.Store.Get(run)
+	if r.Status != "failed" || !strings.Contains(r.Summary, "predate permission enforcement") {
+		t.Fatalf("pre-policy setup: %s %s", r.Status, r.Summary)
+	}
+	if _, err := e.Store.Artifact(run, "authority.json"); err == nil {
+		t.Fatal("authority resolved under an unknown policy")
 	}
 }
