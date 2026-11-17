@@ -216,7 +216,7 @@ concurrent-process capacity.
 ## Application-server delivery gates
 
 These gates extend the local milestones; they do not assert hosted readiness. The
-current build has no PostgreSQL runtime adapter, general remote worker protocol, or
+current build has no SQLite or PostgreSQL runtime adapter, general remote worker protocol, or
 complete multi-tenant application API. Acegoat is a design consumer in a separate
 repository. The initial slice MAY proceed alongside local delivery; it MUST NOT
 claim unrelated M1–M5 or G1–G5 guarantees. One home authority with remote workers does
@@ -237,12 +237,23 @@ binding, and mandatory `/api` version negotiation with unsupported-version refus
 see [application API](../../docs/application-api.md). Version negotiation covers the
 local `/api` surface, not an independently deployed application server.
 
-### S2 – Hosted persistence and application boundary
+### S2 – Transactional persistence and application boundary
 
-Implement the PostgreSQL runtime adapter with the same atomic transition, receipt,
-outbox and recovery guarantees as local persistence. Define schema migration,
-backup/restore and receipt retention behavior before deployment. Test crash recovery
-at commit boundaries and refusal of changed payloads under a reused request ID.
+Implement the SQLite runtime adapter with the same canonical Event records, hash
+chain, apply and replay, plus atomic journal/projection transactions. Replace
+`events.jsonl` with a verified one-time import, preserving it as backup; remove the
+JSONL runtime path rather than shipping an adapter toggle. Define embedded
+forward-only migrations, refusal of unknown/newer schemas, online backup, verified
+restore with authority-epoch fencing, and rejection tombstones for expired request
+keys before deployment. Include exact agent-library revisions in backups. Test
+crash recovery at commit boundaries and refusal of changed payloads under a reused
+request ID. Run the shared journal conformance suite against SQLite and an
+in-memory fake after cutover.
+
+A PostgreSQL server edition is deferred outside the issue #77 implementation plan.
+`hosted.postgresql` MUST remain false; the PostgreSQL-specific portion of issue #54
+remains open until separately implemented and demonstrated. SQLite acceptance does
+not imply PostgreSQL conformance.
 
 A separate application fixture MUST save a message and dispatch intent atomically,
 admit a Mitos Task, consume its accepted result, and publish one durable reply. Inject
@@ -254,7 +265,9 @@ and enforcement of configured tenant limits.
 
 ### S3 – Replaceable remote workers
 
-Run S2 through a separately deployed worker using the versioned claim/context/
+Limit remote execution to headless structured work; workspace, PTY and graph work
+stay local. Local and remote structured execution MUST share worker handlers and
+one scheduler. Run S2 through a separately deployed worker using the versioned claim/context/
 checkpoint/result contract. Inject worker crash, expired lease, duplicate results,
 lost acceptance receipt, server restart and missed MQTT notification. Recovery MUST
 find pending work, reconcile committed results, and reject a late replaced worker's
