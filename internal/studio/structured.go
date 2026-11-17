@@ -77,7 +77,7 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 	if isOrchestratorKind(d.Kind) {
 		return Brief{}, "", errors.New("structured work runs worker definitions only")
 	}
-	if _, err := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, b.TimeoutMinutes*60); err != nil {
+	if _, err := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, b.TimeoutMinutes*60, "", (&compute.Local{}).Capabilities()); err != nil {
 		return Brief{}, "", err
 	}
 	frozen := *w
@@ -185,7 +185,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
 		return err
 	}
-	authority, authorityErr := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, r.Brief.TimeoutMinutes*60)
+	authority, authorityErr := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, r.Brief.TimeoutMinutes*60, "", e.providerCapabilities())
 	receipt, _ := json.MarshalIndent(authority, "", "  ")
 	if err = e.Store.SaveArtifact(r.ID, "authority.json", receipt); err != nil {
 		return err
@@ -227,7 +227,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	}
 	defer e.Store.CloseAgentSession(bridge.ID, token)
 	broker := engineBroker{e: e, id: bridge.ID, token: token}
-	launch, err := compileWorkflowLaunch(resourcepolicy.Agent{})
+	launch, err := compileWorkflowLaunch(resourcepolicy.Agent{}, e.providerCapabilities(), true)
 	if err != nil {
 		return err
 	}

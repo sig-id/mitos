@@ -11,6 +11,7 @@ import (
 	"mitos/internal/compute"
 	"mitos/internal/decision"
 	"mitos/internal/desk"
+	"mitos/internal/harness"
 	"mitos/internal/messaging"
 	workspacefs "mitos/internal/workspace"
 	"os"
@@ -21,19 +22,24 @@ import (
 )
 
 type Engine struct {
-	Messages  *messaging.Service
-	Desk      *desk.Manager
-	provider  compute.Provider
-	Store     *Store
-	Apps      []Application
-	Root      string
-	mu        sync.Mutex
-	cancel    map[string]context.CancelFunc
-	ctx       context.Context
-	stop      context.CancelFunc
-	wg        sync.WaitGroup
-	actions   sync.Mutex
-	libraryMu sync.Mutex
+	Messages *messaging.Service
+	Desk     *desk.Manager
+	provider compute.Provider
+	// agentProvider is the provider for native agent execution only; OS
+	// confinement is scoped here so other launch paths keep the plain local
+	// posture they were admitted against.
+	agentProvider compute.Provider
+	confinement   compute.Confinement
+	Store         *Store
+	Apps          []Application
+	Root          string
+	mu            sync.Mutex
+	cancel        map[string]context.CancelFunc
+	ctx           context.Context
+	stop          context.CancelFunc
+	wg            sync.WaitGroup
+	actions       sync.Mutex
+	libraryMu     sync.Mutex
 	// Serializes idempotent structured-work admission by request key.
 	structuredMu sync.Mutex
 	setupMu      sync.Mutex
@@ -52,7 +58,19 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{provider: &compute.Local{}, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	provider := compute.Provider(&compute.Local{})
+	agentProvider := provider
+	var confinement compute.Confinement
+	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
+		var confineErr error
+		confinement, confineErr = compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
+		if confineErr != nil {
+			cancel()
+			return nil, confineErr
+		}
+		agentProvider = &compute.Local{Confinement: confinement}
+	}
+	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err
@@ -544,6 +562,13 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		message = "The time limit was reached. Review the output and try again with a longer limit."
+	}
+	// Budget exhaustion is recorded structurally so calibration never scrapes
+	// adapter-specific summary text.
+	var steps *harness.TurnLimitError
+	if errors.As(err, &steps) {
+		message = steps.Error()
+		_ = e.Store.RecordEvidence(r.ID, "execution_budget_exhausted", "The agent exhausted its model-step allowance.", map[string]int{"limit": steps.Limit})
 	}
 	_ = e.Store.Transition(r.ID, "run_failed", "failed", "Needs a new attempt", message)
 }

@@ -112,53 +112,124 @@ from `mitos.generalist`. Task-specific specializations are bounded by the base
 definition's `specialization.allow` and `max_instruction_bytes`, which the library
 summary exposes as `max_specialization_bytes`.
 
-### Execution presets and role rules
+### Task traits, harnesses and model tiers
 
-**Start coordinated work** shows **Orchestrator** and **Default worker** selectors.
-Expand **Execution presets & permitted workers** to choose each preset's coding
-agent (Codex or Claude Code), model and environment/account profile. Add multiple
-presets for the same harness to use different models or accounts. Expand **Agent
-role rules** to choose, for example, Codex for Engineer and Claude for Architect.
-Custom roles created in Agent library appear here too. **Project setup →
-Coordinated work agents → Save agent rules** saves reusable defaults in the
-project's `mitos` instructions block. Launch edits apply to that work only.
+Where a worker runs depends on four independent things:
+
+- **Role**: which agent definition does the work (Engineer, Architect…). It carries
+  instructions, context policy and authority.
+- **Nature**: what kind of work the task is: `context`, `design`, `implement`,
+  `document`, `review` or `verify`. Each worker definition declares the natures it
+  supports and a default (`natures` in `agent-definition/v2`); a task may choose
+  only a supported nature.
+- **Size**: how much work: `small`, `medium` or `large`. It sets the attempt's time
+  and turn budget.
+- **Intelligence required**: how much reasoning capability the work needs: `low`,
+  `medium` or `high`. It selects the model tier. Size and intelligence vary
+  independently: a mechanical rename across many files is large and low; a subtle
+  ten-line concurrency bug is small and high. Domain knowledge is not intelligence;
+  that belongs to role, skills and knowledge.
+
+Whoever requests a task declares its **traits**: the orchestrator in an `add`
+operation, or a worker in a proposal (same `GraphSpec` shape):
+
+```json
+"traits": {"nature": "", "size": "large", "intelligence": "low"}
+```
+
+`size` and `intelligence` are required for native agent tasks; an empty `nature`
+takes the role's default. Requesters never choose harnesses or models. The task's
+`brief.timeout_minutes` is derived from its size. A task may set `harness` to a
+permitted worker harness as an explicit override; models are never named in tasks.
+
+**Nature narrows authority.** `context` and `review` work runs without
+`workspace.write`, whatever the role may be granted; the authority receipt records
+the nature and the withheld capability. Such tasks may propose follow-up work but
+cannot yield on a blocking proposal.
+
+The execution policy (`agent-execution/v2`) separates the two decisions a former
+preset bundled:
+
+```json
+{
+  "version": "agent-execution/v2",
+  "harnesses": [
+    {"id":"code","name":"Implementation","runtime":"codex","profile_id":"",
+     "tiers":{"low":{"model":"","effort":"low"},"medium":{"model":"","effort":"medium"},"high":{"model":"","effort":"xhigh"}}},
+    {"id":"design","name":"Design","runtime":"claude","profile_id":"",
+     "tiers":{"low":{"model":"haiku","effort":"low"},"medium":{"model":"sonnet","effort":"medium"},"high":{"model":"opus","effort":"high"}}}
+  ],
+  "harness_rules": [
+    {"match":{"role":"mitos.architect"},"harness":"design"},
+    {"match":{"nature":"design"},"harness":"design"},
+    {"match":{"role":"mitos.architect","nature":"review"},"harness":"code"}
+  ],
+  "default_harness": "code",
+  "allowed_harnesses": ["code","design"],
+  "orchestrator": {"harness":"code","tier":"high"},
+  "size_budgets": {"small":{"minutes":15,"max_turns":40},"medium":{"minutes":30,"max_turns":80},"large":{"minutes":60,"max_turns":160}},
+  "context_floor": {"large":"medium"}
+}
+```
+
+1. **Harness** (Codex CLI or Claude Code, with an environment profile). Harnesses
+   that cannot run the task are filtered out first: the definition and nature must be
+   admissible on the runtime under the project's enforcement policy (for example,
+   `strict_required` with a required `workspace.write` excludes Claude, whose
+   restrictions are advisory locally). Among the rest, the most specific matching
+   `harness_rules` entry wins (role and nature beat either alone). Validation
+   refuses equal-specificity rules that overlap without a more specific rule for the
+   overlap, so rule order never decides. Without a match the `default_harness` is
+   used; if nothing eligible remains, the task is refused with the reason.
+2. **Model tier**. Within the chosen harness, `intelligence` selects the tier: a
+   model and a reasoning effort (Codex `model_reasoning_effort`: minimal…xhigh;
+   Claude `--effort`: low…max). A size's `context_floor` may raise the tier for a
+   larger context window, never lower it. An effort the harness cannot honour makes
+   the policy invalid at validation, not at launch.
+
+Size budgets set `brief.timeout_minutes` and cap the definition's `max_turns`; the
+definition's own limits and the graph's allowances still bound them.
 
 The `execution` object is accepted in personal/project runtime preferences, the
 project instructions block, automatic goals and scheduled goals. A project policy
 replaces the inherited policy as a whole; a launch policy replaces the project
-policy as a whole. For example:
+policy as a whole. Role-only preset policies (`presets`, `roles`,
+`allowed_workers`) are refused, not translated: redefine harnesses, tiers and
+rules. **Project setup → Coordinated work agents** edits the policy; **Start
+coordinated work** edits it for one launch.
 
-```json
-{
-  "presets": [
-    {"id":"implementation","name":"Implementation","runtime":"codex","model":"","profile_id":""},
-    {"id":"design","name":"Design","runtime":"claude","model":"sonnet","profile_id":""}
-  ],
-  "orchestrator":"implementation",
-  "worker":"implementation",
-  "roles":{"mitos.architect":"design","mitos.reviewer":"design"},
-  "allowed_workers":["implementation","design"]
-}
-```
+Admission refuses unknown roles, natures and harnesses, unsupported runtimes,
+efforts and unavailable profiles/executables. Model names are checked by the native
+provider at execution. Each graph freezes the policy; each admitted assignment
+freezes a `selection`: harness and the rule (or default/override) that chose it,
+tier and the trait (or floor/escalation) that chose it, the declared traits and the
+budget, plus runtime, model, effort, executable and profile configuration
+(environment **variable names**, never credential values). Assignment details show
+each decision and its reason. A changed executable/profile configuration is
+refused; credentials are resolved anew. Follow-ups inherit the previous graph's
+policy unless explicitly overridden.
 
-Worker selection is explicit task `execution_preset`, then the exact base role's
-rule, then the default worker. A specialization retains its base role's rule.
-Task choices must be in `allowed_workers`; they cannot change the orchestrator
-preset. The planner receives the frozen choices and can select permitted presets
-for individual assignments. To run both Codex and Claude implementers, allow both
-presets and request those separate assignments in the goal. A role rule establishes
-a default; it does not forbid an explicit permitted task override.
+**Escalation on retry.** A `retry` may set `escalate`:
 
-Admission refuses unknown roles/presets, unsupported harnesses and unavailable
-profiles/executables. Model names are checked by the native provider at execution.
-Each graph freezes the policy; each admitted assignment freezes the selected
-preset, selection source, runtime, model, executable and profile configuration
-(environment **variable names**, never credential values). Retrying or resuming
-retains that binding. A changed executable/profile configuration is refused;
-credentials are resolved anew. Follow-ups inherit the previous graph's choices
-unless explicitly overridden. Scheduled work retains its launch policy for each
-occurrence; omitted policies inherit current project defaults. Assignment details
-show the resolved execution choice.
+- `size` when the attempt ran out of its time or turn budget: one size up;
+- `intelligence` when its work fell short on quality: one tier up within the same
+  harness.
+
+The escalated retry continues the previous attempt's native conversation
+(`continue_from`, with an `escalation` continuation) on the larger budget or
+stronger model; conversation continuity is kept because only tier, effort and
+budget change. The harness never changes automatically, since a native
+conversation is tied to it; moving work to another harness is an explicit new
+assignment. Escalations are bounded by the retry allowance, only go up, and are
+recorded on the task.
+
+**Calibration.** `GET /api/projects/{project}/execution-calibration` groups settled
+native worker attempts by requester (`operator`, `orchestrator`, or
+`proposal:<role>` for work admitted for a worker's proposal), nature, size,
+intelligence, harness and tier. Each group reports attempts, finished and accepted
+counts, budget exhaustion, size and intelligence escalations, the budget, and
+median minutes and turns. Use it to see whether planners' estimates are calibrated
+and to tune the policy from evidence.
 
 Claude uses the bidirectional stream-json control protocol and an SDK MCP server
 over the same process pipes for the granted handoff tools. Structured orchestrator
@@ -209,6 +280,15 @@ attempt: `workspace.write` selects the writable sandbox (otherwise read-only),
 only when granted, the timeout is the smaller of the definition and attempt limits, and
 `max_turns` bounds model steps (completed tool actions plus the final answer).
 `GET /api/graphs/capabilities` publishes the policies and per-runtime profile.
+
+Every agent binding freezes a **runtime selection receipt**: the installed
+runtimes considered, each availability and `runtime.requires` compatibility
+check, and the rationale for the applied runtime. Unsupported hard requirements
+refuse the binding instead of disappearing; implicit defaults fall back to a
+compatible installed runtime, while presets, role rules and task selections are
+explicit pins that never silently switch. Multi-runtime negotiation beyond
+Codex/Claude discovery, scope-scoped discovery, lifecycle operations and the
+skill/knowledge registry remain unimplemented (`complete_profile` stays false).
 
 Each attempt's prompt is assembled under its definition's `context` policy and
 recorded in a **context receipt** (`context.json`): every input's kind, source,

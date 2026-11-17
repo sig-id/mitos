@@ -28,7 +28,7 @@ type libraryReceipt struct {
 	Definition agents.Definition `json:"definition"`
 }
 
-const libraryProfile = "agent-library-store/v1"
+const libraryProfile = "agent-library-store/v2"
 
 type savedLibrary struct {
 	Profile   string                         `json:"profile"`

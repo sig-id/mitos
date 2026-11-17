@@ -40,7 +40,7 @@ Each proposal has:
 | `id` | worker-local key, unique within the result |
 | `rationale` | why the work is needed (1–4000 bytes) |
 | `blocking` | `true`: the attempt yields and waits for the work; `false`: follow-up work, the result is final |
-| `tasks` | 1–8 application task specs in the orchestrator's `add` shape (suggestions; dependencies may only name tasks in the same proposal or existing graph tasks) |
+| `tasks` | 1–8 application task specs in the orchestrator's `add` shape (suggestions; dependencies may only name tasks in the same proposal or existing graph tasks). Native agent tasks declare `traits` `{nature, size, intelligence}`; requesters never choose models, and the execution policy may route the work to a different harness than the proposer's |
 | `artifacts` | registered artifact IDs of this run, as evidence |
 
 The receipt's `proposal_ids` holds one kernel ID per proposal, in order.
@@ -57,6 +57,11 @@ Proposals are refused with a typed failure when:
   (`proposals_unsupported`).
 - a proposal is malformed (`invalid_proposal`, with the proposal index as
   `position`) or cites an unknown artifact (`artifact_missing`).
+- a native task's traits are missing or unsupported by its role
+  (`invalid_proposal_traits`), or no permitted harness could run it, including an
+  unpermitted `harness` override (`proposal_unroutable`).
+- the proposer's own task is `context` or `review` work and the proposal is
+  blocking (`proposal_blocking_not_permitted`); follow-up proposals remain allowed.
 - the task would exceed 4 proposals across its attempts (`proposal_limit_exceeded`),
   or 2 yields (`yield_limit_exceeded`), or the proposed tasks exceed the graph's
   remaining task allowance (`proposal_over_budget`).

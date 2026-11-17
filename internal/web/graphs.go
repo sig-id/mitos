@@ -9,6 +9,7 @@ import (
 	"path"
 	"strconv"
 
+	"mitos/agents"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/cooperation"
 	"mitos/internal/studio"
@@ -351,8 +352,16 @@ func (s *Server) graphRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/graphs/orchestrator-schema", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, json.RawMessage(studio.OrchestratorSchema()))
 	})
+	mux.HandleFunc("GET /api/projects/{project}/execution-calibration", func(w http.ResponseWriter, r *http.Request) {
+		groups, err := s.engine.Store.ExecutionCalibration(r.PathValue("project"))
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"groups": groups})
+	})
 	mux.HandleFunc("GET /api/graphs/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "automatic_goal_planning": true, "completed_result_continuations": true, "intent_shaped_results": true, "native_agent_runtimes": []string{"codex", "claude"}, "execution_presets": true, "role_execution_rules": true, "editable_agent_library": true, "agent_specialization": true, "orchestrator_proposals": true, "orchestrator_contract": "work-graph/v1", "orchestrator_schema": "/api/graphs/orchestrator-schema", "dependency_sources": []string{"task", "mqtt_inbox"}, "dependency_guards": []string{"done", "candidate_available", "failed", "cancelled", "inbox_received"}, "joins": []string{"all", "any", "k_of_n"}, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "agent_enforcement_policies": []string{studio.EnforcementAdvisory, studio.EnforcementStrictRequired, studio.EnforcementStrict}, "default_agent_enforcement": studio.EnforcementAdvisory, "agent_capabilities": studio.RuntimeCapabilityProfiles(), "agent_context_receipts": true, "context_overflow": "omit_with_reference", "capacity": 2})
+		writeJSON(w, 200, map[string]any{"profile": studio.GraphProfile, "complete_profile": false, "adapters": []string{"application", "graph_decision"}, "planning": []string{"defined", "adaptive", "hybrid"}, "atomic_amendments": true, "native_worker_output": true, "automatic_dispatch": true, "automatic_goal_planning": true, "completed_result_continuations": true, "intent_shaped_results": true, "native_agent_runtimes": []string{"codex", "claude"}, "execution_policy": studio.ExecutionPolicyVersion, "task_traits": map[string]any{"natures": agents.Natures, "sizes": studio.TaskSizes, "intelligence": studio.TaskIntelligences, "nature_withholds": studio.NatureCeilings()}, "retry_escalation": []string{"size", "intelligence"}, "execution_calibration": true, "editable_agent_library": true, "agent_specialization": true, "orchestrator_proposals": true, "orchestrator_contract": "work-graph/v1", "orchestrator_schema": "/api/graphs/orchestrator-schema", "dependency_sources": []string{"task", "mqtt_inbox"}, "dependency_guards": []string{"done", "candidate_available", "failed", "cancelled", "inbox_received"}, "joins": []string{"all", "any", "k_of_n"}, "decision_selection": true, "interactive_pty_dispatch": false, "cross_graph_imports": false, "service_graph_templates": false, "enforced_confinement": false, "agent_enforcement_policies": []string{studio.EnforcementAdvisory, studio.EnforcementStrictRequired, studio.EnforcementStrict}, "default_agent_enforcement": studio.EnforcementAdvisory, "agent_capabilities": s.engine.AgentCapabilityReport(), "agent_context_receipts": true, "context_overflow": "omit_with_reference", "capacity": 2})
 	})
 	mux.HandleFunc("GET /api/graphs", func(w http.ResponseWriter, r *http.Request) {
 		state := r.URL.Query().Get("state")

@@ -205,7 +205,7 @@ if '--output-schema' in sys.argv:
  plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Wait for the requested release signal and review its evidence.'}
  if not workers:
   inbox=dict(json.loads(section(prompt,'remaining_allowance'))['inbox'],sender='remote',kind='event',type='workflow.signal',correlation='release-v1')
-  plan['operations']=[{'kind':'add','spec':{'id':'consumer','parent':ctx['root_task'],'kind':'application','required':True,'criteria':'Report the admitted release signal.','acceptance':'operator','brief':{'title':'Read release signal','intent':'Read the bound message.json and report its release.','app_id':'agent:mitos.generalist','timeout_minutes':1,'scheduling':{'deps':[{'from':'release','inbox':inbox,'guard':'inbox_received','payload':'data'}],'join':{'rule':'all'}}}}}]
+  plan['operations']=[{'kind':'add','spec':{'id':'consumer','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'criteria':'Report the admitted release signal.','acceptance':'operator','brief':{'title':'Read release signal','intent':'Read the bound message.json and report its release.','app_id':'agent:mitos.generalist','timeout_minutes':1,'scheduling':{'deps':[{'from':'release','inbox':inbox,'guard':'inbox_received','payload':'data'}],'join':{'rule':'all'}}}}}]
  else:
   assert workers[0]['state']=='done',workers
   plan['accept']=[{'task':workers[0]['id'],'rationale':'The saved report identifies release v1.'}]

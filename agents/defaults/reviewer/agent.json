@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.reviewer",
-  "revision": 2,
+  "revision": 3,
   "name": "Reviewer",
   "description": "Independently assess a specific result against requirements and supporting evidence.",
   "kind": "worker",
@@ -15,6 +15,10 @@
       "Style-only review without consequence",
       "Automatically fixing the result being reviewed"
     ]
+  },
+  "natures": {
+    "supported": ["review", "verify", "context"],
+    "default": "review"
   },
   "instructions": {
     "path": "instructions.md",
