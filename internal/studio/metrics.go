@@ -79,9 +79,29 @@ func ratio(n float64, d int) *float64 {
 // ReportAutonomy consumes event payloads rather than trusting mutable projections
 // supplied by a reader. Current writers have already verified their own log;
 // AuditAutonomyLogs additionally verifies every chain before calling this fold.
+// graphEventTouchesRun reports whether a shared graph journal event names this
+// run, either as a newly queued attempt or as a task's current attempt.
+func graphEventTouchesRun(gc *graphChange, runID string) bool {
+	if gc == nil {
+		return false
+	}
+	for _, r := range gc.Runs {
+		if r.ID == runID {
+			return true
+		}
+	}
+	for _, t := range gc.Tasks {
+		if t.CurrentRunID == runID {
+			return true
+		}
+	}
+	return false
+}
+
 func ReportAutonomy(runs []Run) (AutonomyReport, error) {
 	report := AutonomyReport{Limitations: []string{}, PerRun: []RunMetrics{}}
 	seen := map[string]string{}
+	graphEvents := 0
 	var horizons, horizonLower, horizonUpper []float64
 	var productiveIntervals []interval
 	for _, source := range runs {
@@ -107,14 +127,25 @@ func ReportAutonomy(runs []Run) (AutonomyReport, error) {
 		quiet := map[int64]bool{}
 		segmentStarts := map[string]int64{}
 		for _, event := range source.Events {
+			var c change
+			if err := json.Unmarshal(event.Data, &c); err != nil {
+				return report, err
+			}
 			if event.RunID != source.ID {
+				// Graph reconciliation commits shared journal events without a run
+				// ID and attaches them to every participating run. Projecting the
+				// change keeps the Task/Run binding and materializes the attempt in
+				// the fold without inventing run-level autonomy observations.
+				if event.RunID == "" && c.Graph != nil && graphEventTouchesRun(c.Graph, source.ID) {
+					graphEvents++
+					if err := fold.apply(event); err != nil {
+						return report, err
+					}
+					continue
+				}
 				return report, errors.New("mixed run events in metric input")
 			}
 			if err := fold.apply(event); err != nil {
-				return report, err
-			}
-			var c change
-			if err := json.Unmarshal(event.Data, &c); err != nil {
 				return report, err
 			}
 			if event.Kind == "quiescent" && event.Type == "effect" {
@@ -331,6 +362,9 @@ func ReportAutonomy(runs []Run) (AutonomyReport, error) {
 	}
 	if report.UnsupportedRuns > 0 {
 		report.Limitations = append(report.Limitations, "Unsupported historical records are excluded; missing metrics are not zero measurements.")
+	}
+	if graphEvents > 0 {
+		report.Limitations = append(report.Limitations, fmt.Sprintf("%d shared graph journal events bind task and run identity without run-level autonomy observations; they are projected as provenance, not measured as usage.", graphEvents))
 	}
 	return report, nil
 }
