@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"mitos/internal/decision"
 	"mitos/internal/workpool"
 )
 
@@ -280,6 +281,165 @@ func TestRejectedAndAbandonedProposalsContinueWithRationale(t *testing.T) {
 	if g.Proposals[ids[2]].Outcome != "" {
 		t.Fatal("non-blocking proposal changed without review")
 	}
+}
+
+// A yielded attempt is not an available candidate: downstream candidate_available
+// consumers must wait for the blocking proposals to be reviewed and integrated,
+// while the same dependency on an ordinary settled worker stays available.
+func TestYieldedMemberIsNotAnAvailableCandidate(t *testing.T) {
+	e, g, r, _ := yieldWithProposals(t, ResultProposal{ID: "dig", Rationale: "Needs a separate investigation", Blocking: true, Tasks: []GraphSpec{proposedTask("dig")}, Artifacts: []string{}})
+	consumer := graphWorker("consumer", g.RootTask)
+	consumer.Brief.Scheduling.Deps = []workpool.Dependency{{From: r.TaskID, Guard: "candidate_available"}}
+	plain := graphWorker("plain", g.RootTask)
+	plain.Acceptance = "operator"
+	watcher := graphWorker("watcher", g.RootTask)
+	watcher.Brief.Scheduling.Deps = []workpool.Dependency{{From: "plain", Guard: "candidate_available"}}
+	g, receipt := amendGraphTest(t, e, g, "consumers", GraphOperation{Kind: "add", Spec: &consumer}, GraphOperation{Kind: "add", Spec: &plain}, GraphOperation{Kind: "add", Spec: &watcher})
+	plainID := receipt.IDs["plain"]
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	plainRun := g.Members[plainID].CurrentRunID
+	if plainRun == "" {
+		t.Fatal("plain worker not started")
+	}
+	if err := e.Store.Transition(plainRun, "fixture_started", "running", "Running", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.Complete(plainRun, "plain finished", false); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	if e.Store.graphMemberReadiness(&g, g.Members[receipt.IDs["consumer"]]).Ready {
+		t.Fatal("yielded attempt exposed as an available candidate")
+	}
+	if !e.Store.graphMemberReadiness(&g, g.Members[receipt.IDs["watcher"]]).Ready {
+		t.Fatal("settled non-yielded candidate unavailable")
+	}
+}
+
+// Accepted proposal results must reach the continuation's dependency inputs even
+// when the original any join already matched an older source: workpool keeps
+// only the first matched quorum, which can exclude the just-accepted helper.
+func TestContinuationJoinsIncludeAcceptedProposalResults(t *testing.T) {
+	e, req := graphEngine(t, false)
+	g := createGraphTest(t, e, req)
+	early := graphWorker("early", g.RootTask)
+	early.Acceptance = "operator"
+	proposer := graphWorker("proposer", g.RootTask)
+	// The builtin inventory app cannot consume artifact inputs, so the original
+	// any-join edge is control-only; the accepted proposal below appends the
+	// helper's data dependency the continuation must integrate.
+	proposer.Brief.Scheduling = workpool.Request{Join: workpool.Join{Rule: "any"}, Deps: []workpool.Dependency{{From: "early", Guard: "candidate_available", Payload: "control"}}}
+	g, receipt := amendGraphTest(t, e, g, "workers", GraphOperation{Kind: "add", Spec: &early}, GraphOperation{Kind: "add", Spec: &proposer}, GraphOperation{Kind: "close_expansion", Expansion: "initial", Rationale: "fixture"})
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	earlyRun := g.Members[receipt.IDs["early"]].CurrentRunID
+	if earlyRun == "" {
+		t.Fatal("early worker not started")
+	}
+	if err := e.Store.Transition(earlyRun, "fixture_started", "running", "Running", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.Complete(earlyRun, "early finished", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	r, _ := e.Store.Get(g.Members[receipt.IDs["proposer"]].CurrentRunID)
+	if r.ID == "" {
+		t.Fatal("proposer not started on the early candidate")
+	}
+	if err := e.Store.Transition(r.ID, "fixture_started", "running", "Running", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	a, token, err := e.Store.CreateBoundAgentSession("codex", "Handoff", e.Root, req.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantProposals(t, e, r.ID, true)
+	callHandoff(t, e, a, token, "result_submit", submission("yield", ResultProposal{ID: "dig", Rationale: "Needs the helper", Blocking: true, Tasks: []GraphSpec{proposedTask("helper")}, Artifacts: []string{}}))
+	if err = e.Store.Complete(r.ID, "yielded", false); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	var proposalID string
+	for id := range g.Proposals {
+		proposalID = id
+	}
+	if proposalID == "" {
+		t.Fatal("proposal not journaled")
+	}
+	helper := proposedTask("helper")
+	helper.Parent = g.RootTask
+	g, receipt = amendGraphTest(t, e, g, "review",
+		GraphOperation{Kind: "add", Spec: &helper},
+		GraphOperation{Kind: "accept_proposal", Proposal: proposalID, Dependencies: []workpool.Dependency{{From: "helper", Guard: "done", Payload: "data", Artifacts: []string{"report.md"}}}, Rationale: "A helper answers"})
+	helperID := receipt.IDs["helper"]
+	if err = e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	helperRun := g.Members[helperID].CurrentRunID
+	if helperRun == "" {
+		t.Fatal("helper not started")
+	}
+	if err = e.Store.Transition(helperRun, "fixture_started", "running", "Running", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.Store.SaveArtifact(helperRun, "report.md", []byte("helper report")); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.Store.Complete(helperRun, "helper finished", false); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	accept := proposal(g, "accept-helper", GraphOperation{Kind: "accept", Task: helperID, Evidence: "report", Rationale: "Helper answered"})
+	accept.Reads = map[string]GraphRead{helperID: {g.Members[helperID].Revision, g.Members[helperID].FactRevision}}
+	if _, _, err = e.AmendGraph(accept); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	m := g.Members[r.TaskID]
+	next, err := e.Store.Get(m.CurrentRunID)
+	if err != nil || m.Yield != nil || next.GraphAttempt.ContinueFrom != r.ID || next.GraphAttempt.Continuation == nil || next.GraphAttempt.Continuation.Reason != "yield" {
+		t.Fatalf("continuation not readied after the accepted proposal settled: %+v %+v", m, next.GraphAttempt)
+	}
+	ready := e.Store.graphMemberReadiness(&g, m)
+	if !ready.Ready {
+		t.Fatal("continuation not ready")
+	}
+	var helperWitness *workpool.Witness
+	for i := range ready.Matched {
+		if ready.Matched[i].TaskID == helperID {
+			helperWitness = &ready.Matched[i]
+		}
+	}
+	if helperWitness == nil {
+		t.Fatalf("accepted proposal helper missing from continuation witnesses: %+v", ready.Matched)
+	}
+	task, err := e.Store.Task(r.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := e.Store.bindDependencyInputs(&task, ready.Matched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range bound {
+		if w.TaskID == helperID && len(w.Artifacts) == 1 && w.Artifacts[0].Name == "report.md" {
+			return
+		}
+	}
+	t.Fatalf("helper evidence not bound for the continuation: %+v", bound)
 }
 
 func TestYieldLimit(t *testing.T) {

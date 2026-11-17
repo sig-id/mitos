@@ -167,7 +167,10 @@ func (s *Store) graphMemberReadiness(g *WorkGraph, m *GraphMember) workpool.Read
 		if m.Accepted != nil {
 			status = "done"
 		} else if r := s.runs[m.CurrentRunID]; r != nil && s.graphSettled(m) {
-			if dep.Guard == "candidate_available" && r.Status == "done" {
+			// A yielded attempt is not an available candidate: its blocking
+			// proposals must be reviewed and integrated before downstream work
+			// may consume the partial result.
+			if dep.Guard == "candidate_available" && r.Status == "done" && m.Yield == nil {
 				status = "done"
 			} else if r.Status == "failed" || r.Status == "cancelled" {
 				status = r.Status
@@ -179,6 +182,39 @@ func (s *Store) graphMemberReadiness(g *WorkGraph, m *GraphMember) workpool.Read
 		states[dep.From] = workpool.State{ID: dep.From, Status: status, RunID: m.CurrentRunID, Seq: upstream.Head.Seq, Hash: upstream.Head.Hash}
 	}
 	ready := workpool.Evaluate(req, states)
+	continuation := m.Continuation
+	if continuation == nil {
+		if r := s.runs[m.CurrentRunID]; r != nil && r.GraphAttempt != nil {
+			continuation = r.GraphAttempt.Continuation
+		}
+	}
+	if continuation != nil && continuation.Reason == "yield" {
+		// Accepted proposal data must reach the continuation independently of the
+		// original join: any/k_of_n readiness keeps only the first matched
+		// quorum, which can exclude the just-accepted helper's results.
+		matched := map[string]bool{}
+		for _, w := range ready.Matched {
+			if w.Inbox == nil {
+				matched[w.TaskID] = true
+			}
+		}
+		dataDep := map[string]bool{}
+		for _, dep := range req.Deps {
+			if dep.Inbox == nil && dep.Payload == "data" {
+				dataDep[dep.From] = true
+			}
+		}
+		for _, o := range continuation.Proposals {
+			for _, tid := range o.Completed {
+				up, task := g.Members[tid], s.tasks[tid]
+				if matched[tid] || !dataDep[tid] || up == nil || up.Accepted == nil || task == nil {
+					continue
+				}
+				matched[tid] = true
+				ready.Matched = append(ready.Matched, workpool.Witness{TaskID: tid, RunID: up.CurrentRunID, Seq: task.Head.Seq, Hash: task.Head.Hash, Status: task.Status})
+			}
+		}
+	}
 	// Witnesses refer to the actual task event status; eligibility above separately
 	// establishes graph acceptance rather than treating process exit as acceptance.
 	for i := range ready.Matched {
