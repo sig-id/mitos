@@ -44,6 +44,9 @@ func workerClient(args []string) error {
 	once := f.Bool("once", false, "Exit after one attempt")
 	capabilities := f.String("agents", "mitos.generalist", "Comma-separated admitted agent IDs")
 	if err := f.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if f.NArg() != 0 || !studio.ValidDeviceID(*id) || *data == "" || *authority == "" {
@@ -129,6 +132,9 @@ func workerCredentialClient(args []string) error {
 	agents := f.String("agents", "mitos.generalist", "Comma-separated permitted agent IDs")
 	expires := f.Duration("expires", 30*24*time.Hour, "Credential lifetime")
 	if err := f.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if f.NArg() != 0 || !studio.ValidDeviceID(*id) {
