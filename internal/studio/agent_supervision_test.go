@@ -253,6 +253,143 @@ func TestAcceptedAutomatedAnswerCannotBeDeliveredAfterRevocation(t *testing.T) {
 	}
 }
 
+func blockedAnswerFixture(t *testing.T) (*Engine, CreateGraph, agentpolicy.Policy, AgentSession, string, AgentRequestView, string) {
+	t.Helper()
+	e, req := graphEngine(t, false)
+	p := agentpolicy.Default()
+	p.Autonomy = "delegated"
+	p.Rules = []agentpolicy.Rule{{ID: "approved", Command: "printf reviewed", Directory: ".", Action: "allow"}}
+	p, err := e.SaveAgentPolicy(req.ProjectID, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, token, err := e.Store.CreateBoundAgentSession("codex", "Approval", "/tmp", req.ProjectID, "", "", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := e.Store.IngestAgentRequest(session.ID, token, json.RawMessage(codexApproval))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.ResolveAgentRequest(context.Background(), session.ID, token, request.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	status, err := e.Store.AgentRequestStatus(session.ID, token, request.RequestID)
+	if err != nil || status.State != "accepted" || len(status.Body) == 0 {
+		t.Fatal(status, err)
+	}
+	// The native process could not apply the recorded answer; the adapter recorded
+	// a failed delivery, which stays retryable against the same request.
+	if err = e.Store.AgentDelivery(session.ID, token, request.RequestID, status.Digest, "application_blocked"); err != nil {
+		t.Fatal(err)
+	}
+	return e, req, p, session, token, status, request.RequestID
+}
+
+// A blocked delivery is retryable, so every retry must revalidate the live
+// authorization that produced the answer instead of replaying the saved body.
+func TestBlockedAutomatedAnswerRevalidatesAuthorizationOnRetry(t *testing.T) {
+	t.Run("revoked delegation rule", func(t *testing.T) {
+		e, req, p, session, token, status, key := blockedAnswerFixture(t)
+		p.Rules = nil
+		if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+			t.Fatal(err)
+		}
+		retried, err := e.Store.AgentRequestStatus(session.ID, token, key)
+		if err == nil || len(retried.Body) != 0 {
+			t.Fatal("revoked answer released after failed delivery", retried, err)
+		}
+		if !strings.Contains(fmt.Sprint(err), "automated_answer_policy_changed") {
+			t.Fatal("unexpected refusal", err)
+		}
+		if err = e.Store.AgentDelivery(session.ID, token, key, status.Digest, "applied"); err == nil {
+			t.Fatal("revoked retry acknowledged")
+		}
+	})
+	t.Run("supervision hold withholds the body", func(t *testing.T) {
+		e, req, _, session, token, status, key := blockedAnswerFixture(t)
+		incident := SupervisionIncident{ID: "hold", ProjectID: req.ProjectID, State: "stopping", At: time.Now().UTC()}
+		e.Store.mu.Lock()
+		err := e.Store.commit("", "effect", "supervision_incident_opened", change{SupervisionIncident: &incident})
+		e.Store.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		retried, err := e.Store.AgentRequestStatus(session.ID, token, key)
+		if err == nil || len(retried.Body) != 0 {
+			t.Fatal("supervision hold did not withhold the blocked answer", retried, err)
+		}
+		if err = e.Store.AgentDelivery(session.ID, token, key, status.Digest, "applied"); err == nil {
+			t.Fatal("answer under supervision hold acknowledged")
+		}
+	})
+	t.Run("revocation survives restart between failure and retry", func(t *testing.T) {
+		e, req, p, session, token, _, key := blockedAnswerFixture(t)
+		p.Rules = nil
+		if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+			t.Fatal(err)
+		}
+		dir := e.Store.Dir()
+		if err := e.Store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := OpenStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		if retried, err := reopened.AgentRequestStatus(session.ID, token, key); err == nil || len(retried.Body) != 0 {
+			t.Fatal("restart released the revoked answer", retried, err)
+		}
+	})
+	t.Run("authorized retry preserves the exact answer", func(t *testing.T) {
+		e, _, _, session, token, status, key := blockedAnswerFixture(t)
+		dir := e.Store.Dir()
+		if err := e.Store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := OpenStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		retried, err := reopened.AgentRequestStatus(session.ID, token, key)
+		if err != nil || retried.State != "application_blocked" || !bytes.Equal(retried.Body, status.Body) || retried.Digest != status.Digest {
+			t.Fatal("authorized retry lost the recorded answer", retried, status, err)
+		}
+		if err = reopened.AgentDelivery(session.ID, token, key, retried.Digest, "applied"); err != nil {
+			t.Fatal(err)
+		}
+		run, err := reopened.Get(retried.RunIDs[0])
+		if err != nil || run.Decision.AppliedAt == nil || run.Decision.ApplicationError != "" {
+			t.Fatalf("retry not applied: %+v %v", run.Decision, err)
+		}
+	})
+	t.Run("applied acknowledgment stays historical", func(t *testing.T) {
+		e, req, p, session, token, status, key := blockedAnswerFixture(t)
+		if err := e.Store.AgentDelivery(session.ID, token, key, status.Digest, "applied"); err != nil {
+			t.Fatal(err)
+		}
+		p.Rules = nil
+		if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
+			t.Fatal(err)
+		}
+		// The applied acknowledgment is durable evidence of a past authorized
+		// delivery; it must stay readable without granting a fresh retry.
+		historical, err := e.Store.AgentRequestStatus(session.ID, token, key)
+		if err != nil || historical.State != "applied" || !bytes.Equal(historical.Body, status.Body) {
+			t.Fatal("applied evidence lost", historical, err)
+		}
+		if err = e.Store.AgentDelivery(session.ID, token, key, status.Digest, "application_blocked"); err != nil {
+			t.Fatal(err)
+		}
+		replayed, err := e.Store.AgentRequestStatus(session.ID, token, key)
+		if err != nil || replayed.State != "applied" {
+			t.Fatal("historical acknowledgment rewritten", replayed, err)
+		}
+	})
+}
+
 func TestSupervisorStopsAutomaticOrchestratorThroughNativeObservation(t *testing.T) {
 	e, req := automaticScriptEngine(t, `import sys,time,json,os
 sys.stdin.read()
