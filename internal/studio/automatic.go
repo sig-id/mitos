@@ -34,17 +34,18 @@ type AgentSelection struct {
 // Binding freezes the portable definition and task specialization with the native
 // runtime identity. Credentials are resolved anew and are never in this record.
 type AgentBinding struct {
-	Profile        *agentcli.Profile   `json:"environment_profile,omitempty"`
-	Selection      *ExecutionSelection `json:"selection,omitempty"`
-	ProfileID      string              `json:"profile_id,omitempty"`
-	Model          string              `json:"model,omitempty"`
-	Effort         string              `json:"effort,omitempty"`
-	Definition     agents.Definition   `json:"definition"`
-	Runtime        string              `json:"runtime"`
-	Executable     string              `json:"executable"`
-	Specialization *AgentSelection     `json:"specialization,omitempty"`
-	GraphID        string              `json:"graph_id,omitempty"`
-	Digest         string              `json:"digest"`
+	Profile          *agentcli.Profile   `json:"environment_profile,omitempty"`
+	RuntimeSelection *RuntimeSelection   `json:"runtime_selection,omitempty"`
+	Selection        *ExecutionSelection `json:"selection,omitempty"`
+	ProfileID        string              `json:"profile_id,omitempty"`
+	Model            string              `json:"model,omitempty"`
+	Effort           string              `json:"effort,omitempty"`
+	Definition       agents.Definition   `json:"definition"`
+	Runtime          string              `json:"runtime"`
+	Executable       string              `json:"executable"`
+	Specialization   *AgentSelection     `json:"specialization,omitempty"`
+	GraphID          string              `json:"graph_id,omitempty"`
+	Digest           string              `json:"digest"`
 }
 
 func graphContextLimit(g *WorkGraph) int {
@@ -86,9 +87,11 @@ func (e *Engine) agentApplication(id string) (Application, bool) {
 	}
 	for _, d := range library {
 		if orchestratorAgentID(id) == agentAppPrefix+d.ID {
+			// Discovery stays profile-aware so a profile-installed runtime does
+			// not fail application lookup before a harness can be bound.
 			b := &AgentBinding{Definition: d, Runtime: "codex"}
-			if launch, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: "codex"}); err == nil {
-				b.Executable = launch.Executable
+			if err := e.selectAgentRuntime(b); err != nil {
+				return Application{}, false
 			}
 			b.Digest = graphDigest(b)
 			return Application{ID: id, Name: d.Name, Description: d.Description, GraphOrchestrator: isOrchestratorKind(d.Kind), Agent: b}, true
