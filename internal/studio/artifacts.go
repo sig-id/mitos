@@ -4,9 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"io"
-	"os"
 	"path/filepath"
+
+	"mitos/internal/failpoint"
 )
 
 type ArtifactData struct {
@@ -88,73 +88,15 @@ func (s *Store) saveArtifacts(id string, replaceUncommitted bool, artifacts ...A
 	if len(events) == 0 {
 		return nil
 	}
-	root := filepath.Join(s.dir, "artifacts")
-	dir := filepath.Join(root, id)
-	dirs := []string{dir}
-	if !s.artifactDirs[dir] {
-		dirs = append(dirs, root)
-	}
-	if !s.artifactDirs[root] {
-		dirs = append(dirs, s.dir)
-	}
 	err := s.mu.io(func() error {
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := s.artifacts.Put(id, artifacts, replaceUncommitted); err != nil {
 			return err
 		}
-		files := make([]*os.File, 0, len(artifacts))
-		defer func() {
-			for _, f := range files {
-				_ = f.Close()
-			}
-		}()
-		for _, a := range artifacts {
-			path := filepath.Join(dir, a.Name)
-			if replaceUncommitted {
-				// The journal has no record for this name (checked above under
-				// the store lock). The durable graph can reconstruct its bytes.
-				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-			}
-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-			if err != nil {
-				return err
-			}
-			files = append(files, f)
-			n, err := f.Write(a.Data)
-			if err != nil {
-				return err
-			}
-			if n != len(a.Data) {
-				return io.ErrShortWrite
-			}
-		}
-		for _, f := range files {
-			if err := f.Sync(); err != nil {
-				return err
-			}
-		}
-		for len(files) > 0 {
-			f := files[0]
-			files = files[1:]
-			if err := f.Close(); err != nil {
-				return err
-			}
-		}
-		// Persist names and new parents before the log can promise availability.
-		for _, path := range dirs {
-			if err := syncDirectory(path); err != nil {
-				return err
-			}
-		}
+		failpoint.Hit("artifacts.after_put")
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if s.artifactDirs == nil {
-		s.artifactDirs = map[string]bool{}
-	}
-	s.artifactDirs[root], s.artifactDirs[dir] = true, true
 	return s.persist(events...)
 }

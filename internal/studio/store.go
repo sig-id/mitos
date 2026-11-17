@@ -1,16 +1,15 @@
 package studio
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mitos/internal/acceptance"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/decision"
+	"mitos/internal/failpoint"
 	"mitos/internal/fleet"
 	"mitos/internal/messaging"
 	"mitos/internal/service"
@@ -18,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"syscall"
 	"time"
 )
 
@@ -62,13 +60,13 @@ type Store struct {
 	tasks                  map[string]*Task
 	pools                  map[string]workpool.Pool
 	mu                     storeMutex
-	file                   eventLog
+	journal                journal
+	artifacts              artifactStore
 	dir                    string
 	runs                   map[string]*Run
 	seq                    int64
 	hash                   string
 	writeErr               error
-	artifactDirs           map[string]bool
 }
 
 func OpenStore(dir string) (*Store, error) {
@@ -79,30 +77,19 @@ func OpenStore(dir string) (*Store, error) {
 	if err = os.MkdirAll(abs, 0700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(abs, "events.jsonl"), os.O_CREATE|os.O_RDWR, 0600)
+	j, err := openJSONLJournal(abs)
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, errors.New("this data directory is already open by another mitos process")
-	}
-	if err = syncDirectory(abs); err == nil {
-		err = syncDirectory(filepath.Dir(abs))
-	}
+	s, err := openStoreWithJournal(abs, j, &fileArtifactStore{dir: abs})
 	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	s := &Store{file: f, dir: abs, runs: map[string]*Run{}}
-	if err = s.replay(); err != nil {
-		f.Close()
+		j.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Store) Close() error { s.mu.Lock(); defer s.mu.Unlock(); return s.file.Close() }
+func (s *Store) Close() error { s.mu.Lock(); defer s.mu.Unlock(); return s.journal.Close() }
 func (s *Store) Dir() string  { return s.dir }
 
 func syncDirectory(path string) error {
@@ -121,42 +108,24 @@ func eventHash(e Event) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Store) replay() error {
-	r := bufio.NewReader(s.file)
-	var offset int64
-	for {
-		line, err := r.ReadBytes('\n')
-		if err == io.EOF {
-			// Only an incomplete final record can be discarded. A complete corrupt
-			// record is never silently skipped or rewritten.
-			if len(line) > 0 {
-				if err = s.file.Truncate(offset); err != nil {
-					return err
-				}
-				if err = s.file.Sync(); err != nil {
-					return err
-				}
-			}
-			_, err = s.file.Seek(0, io.SeekEnd)
+// openStoreWithJournal is shared by adapter setup and conformance tests. The
+// caller owns cleanup on failure; Store owns the journal on successful open.
+func openStoreWithJournal(dir string, j journal, artifacts artifactStore) (*Store, error) {
+	s := &Store{journal: j, artifacts: artifacts, dir: dir, runs: map[string]*Run{}}
+	err := j.Replay(func(e Event) error {
+		if err := validateJournalEvent(e, s.seq, s.hash); err != nil {
+			return fmt.Errorf("event chain damaged at sequence %d: %w", e.Seq, err)
+		}
+		if err := s.apply(e); err != nil {
 			return err
 		}
-		if err != nil {
-			return err
-		}
-		var e Event
-		if err = json.Unmarshal(line, &e); err != nil {
-			return fmt.Errorf("invalid event at byte %d: %w", offset, err)
-		}
-		if e.Seq != s.seq+1 || e.Previous != s.hash || e.Hash != eventHash(e) {
-			return fmt.Errorf("event chain damaged at sequence %d", e.Seq)
-		}
-		if err = s.apply(e); err != nil {
-			return err
-		}
-		s.seq = e.Seq
-		s.hash = e.Hash
-		offset += int64(len(line))
+		s.seq, s.hash = e.Seq, e.Hash
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return s, nil
 }
 
 func (s *Store) apply(e Event) error {
@@ -545,24 +514,13 @@ func (s *Store) persist(events ...Event) error {
 	if s.writeErr != nil {
 		return fmt.Errorf("event log unavailable: %w", s.writeErr)
 	}
-	var data []byte
-	for _, e := range events {
-		line, err := json.Marshal(e)
-		if err != nil {
+	err := s.mu.io(func() error {
+		failpoint.Hit("journal.before_append")
+		if err := s.journal.Append(events, nil); err != nil {
 			return err
 		}
-		data = append(data, line...)
-		data = append(data, '\n')
-	}
-	err := s.mu.io(func() error {
-		n, err := s.file.Write(data)
-		if err == nil && n != len(data) {
-			err = io.ErrShortWrite
-		}
-		if err == nil {
-			err = s.file.Sync()
-		}
-		return err
+		failpoint.Hit("journal.after_append")
+		return nil
 	})
 	if err != nil {
 		s.writeErr = err
@@ -764,20 +722,7 @@ func (s *Store) Artifact(id, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, a := range r.Artifacts {
-		if a.Name == name {
-			b, err := os.ReadFile(filepath.Join(s.dir, "artifacts", id, name))
-			if err != nil {
-				return nil, err
-			}
-			sum := sha256.Sum256(b)
-			if hex.EncodeToString(sum[:]) != a.SHA256 {
-				return nil, errors.New("artifact checksum mismatch")
-			}
-			return b, nil
-		}
-	}
-	return nil, ErrNotFound
+	return s.readRegisteredArtifact(&r, name)
 }
 
 // RecordEvidence appends observed data without deriving run state from harness

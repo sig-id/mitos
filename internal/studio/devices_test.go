@@ -204,7 +204,7 @@ func TestDeviceAcceptanceFailureDoesNotPublish(t *testing.T) {
 	}
 	_, token := pairTestDevice(t, s, decision.LocalOperator())
 	cmd, body := deviceCommand(t, s, token)
-	s.file = &controlledLog{eventLog: s.file, write: true, failure: errors.New("disk failure")}
+	s.journal = &controlledJournal{journal: s.journal, write: true, failure: errors.New("disk failure")}
 	if _, _, err := s.acceptDeviceCommand(token, cmd, body, false); err == nil {
 		t.Fatal("acknowledged failed commit")
 	}

@@ -12,40 +12,40 @@ import (
 	"time"
 )
 
-// controlledLog reproduces an indefinitely stalled disk without relying on
-// filesystem speed. Only the first selected operation stalls.
-type controlledLog struct {
-	eventLog
-	write   bool
+// controlledJournal models a stalled or ambiguous commit at the journal seam.
+// A post-append error may have landed durably: Store must latch the error and
+// recover by replay instead of publishing or attempting another mutation.
+type controlledJournal struct {
+	journal
+	write   bool // true: before commit, false: after commit
 	entered chan struct{}
 	release chan struct{}
 	failure error
-	writes  atomic.Int64
-	syncs   atomic.Int64
+	appends atomic.Int64
 }
 
-func (f *controlledLog) pause() error {
-	if f.entered != nil {
-		close(f.entered)
-		<-f.release
+func (j *controlledJournal) pause() error {
+	if j.entered != nil {
+		close(j.entered)
+		<-j.release
 	}
-	return f.failure
+	return j.failure
 }
-func (f *controlledLog) Write(b []byte) (int, error) {
-	if f.writes.Add(1) == 1 && f.write {
-		if err := f.pause(); err != nil {
-			return 0, err
-		}
-	}
-	return f.eventLog.Write(b)
-}
-func (f *controlledLog) Sync() error {
-	if f.syncs.Add(1) == 1 && !f.write {
-		if err := f.pause(); err != nil {
+
+func (j *controlledJournal) Append(events []Event, projections []journalProjection) error {
+	first := j.appends.Add(1) == 1
+	if first && j.write {
+		if err := j.pause(); err != nil {
 			return err
 		}
 	}
-	return f.eventLog.Sync()
+	if err := j.journal.Append(events, projections); err != nil {
+		return err
+	}
+	if first && !j.write {
+		return j.pause()
+	}
+	return nil
 }
 
 func awaitPersistence[T any](t *testing.T, ch <-chan T) T {
@@ -61,12 +61,12 @@ func awaitPersistence[T any](t *testing.T, ch <-chan T) T {
 }
 
 func TestReadsRemainResponsiveDuringPersistence(t *testing.T) {
-	for _, phase := range []string{"write", "sync"} {
+	for _, phase := range []string{"before_commit", "after_commit"} {
 		t.Run(phase, func(t *testing.T) {
 			s := testStore(t)
 			r := createRun(t, s)
-			log := &controlledLog{eventLog: s.file, write: phase == "write", entered: make(chan struct{}), release: make(chan struct{})}
-			s.file = log
+			log := &controlledJournal{journal: s.journal, write: phase == "before_commit", entered: make(chan struct{}), release: make(chan struct{})}
+			s.journal = log
 			var release sync.Once
 			defer release.Do(func() { close(log.release) })
 			first := make(chan error, 1)
@@ -122,8 +122,8 @@ func TestReadsRemainResponsiveDuringPersistence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if log.syncs.Load() != writers+1 {
-				t.Fatalf("decision and progress did not share a flush: %d", log.syncs.Load())
+			if log.appends.Load() != writers+1 {
+				t.Fatalf("decision and progress did not share a flush: %d", log.appends.Load())
 			}
 			before, _ := s.Get(r.ID)
 			if before.Status != "running" || len(before.Events) != len(r.Events)+writers+2 {
@@ -151,13 +151,13 @@ func assertPersistenceReplay(t *testing.T, s *Store, before Run) {
 }
 
 func TestFailedPersistenceDoesNotPublishOrPermitMoreWrites(t *testing.T) {
-	for _, phase := range []string{"write", "sync"} {
+	for _, phase := range []string{"before_commit", "after_commit"} {
 		t.Run(phase, func(t *testing.T) {
 			s := testStore(t)
 			r := createRun(t, s)
 			failure := errors.New("disk unavailable")
-			log := &controlledLog{eventLog: s.file, write: phase == "write", failure: failure}
-			s.file = log
+			log := &controlledJournal{journal: s.journal, write: phase == "before_commit", failure: failure}
+			s.journal = log
 			err := s.TransitionAfterDecision(r.ID, "advance", "Prepare", "run_started", "running", "Preparing", "Starting")
 			if !errors.Is(err, failure) {
 				t.Fatalf("lost persistence error: %v", err)
@@ -169,7 +169,7 @@ func TestFailedPersistenceDoesNotPublishOrPermitMoreWrites(t *testing.T) {
 			if err := s.Complete(r.ID, "Done", true); !errors.Is(err, failure) {
 				t.Fatalf("allowed completion after persistence failure: %v", err)
 			}
-			if log.writes.Load() != 1 {
+			if log.appends.Load() != 1 {
 				t.Fatal("wrote beyond uncertain log head")
 			}
 		})
@@ -179,8 +179,8 @@ func TestFailedPersistenceDoesNotPublishOrPermitMoreWrites(t *testing.T) {
 func TestArtifactBatchPublishesAfterOneLogFlush(t *testing.T) {
 	s := testStore(t)
 	r := createRun(t, s)
-	log := &controlledLog{eventLog: s.file, entered: make(chan struct{}), release: make(chan struct{})}
-	s.file = log
+	log := &controlledJournal{journal: s.journal, entered: make(chan struct{}), release: make(chan struct{})}
+	s.journal = log
 	var release sync.Once
 	defer release.Do(func() { close(log.release) })
 	artifacts := []ArtifactData{{Name: "inventory.json", Data: []byte("{}")}, {Name: "report.md", Data: []byte("Report")}}
@@ -205,8 +205,8 @@ func TestArtifactBatchPublishesAfterOneLogFlush(t *testing.T) {
 			t.Fatalf("artifact %s: %s %v", a.Name, data, err)
 		}
 	}
-	if log.writes.Load() != 1 || log.syncs.Load() != 1 {
-		t.Fatalf("artifact log writes=%d syncs=%d", log.writes.Load(), log.syncs.Load())
+	if log.appends.Load() != 1 {
+		t.Fatalf("artifact journal appends=%d", log.appends.Load())
 	}
 	// Validate the whole batch before creating any file.
 	if err := s.SaveArtifacts(r.ID, ArtifactData{Name: "new.txt"}, artifacts[0]); err == nil {
@@ -269,8 +269,8 @@ func TestBatchedEventsRecoverAtRecordBoundaries(t *testing.T) {
 func TestParkPublishesStatusAndDecisionTogether(t *testing.T) {
 	s := testStore(t)
 	r := createRun(t, s)
-	log := &controlledLog{eventLog: s.file, entered: make(chan struct{}), release: make(chan struct{})}
-	s.file = log
+	log := &controlledJournal{journal: s.journal, entered: make(chan struct{}), release: make(chan struct{})}
+	s.journal = log
 	var release sync.Once
 	defer release.Do(func() { close(log.release) })
 	done := make(chan error, 1)
@@ -286,8 +286,8 @@ func TestParkPublishesStatusAndDecisionTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := s.Get(r.ID)
-	if got.Status != "parked" || got.Decision == nil || got.PendingDecision != nil || log.syncs.Load() != 1 {
-		t.Fatalf("status and decision were not published together: status=%s decision=%v syncs=%d", got.Status, got.Decision, log.syncs.Load())
+	if got.Status != "parked" || got.Decision == nil || got.PendingDecision != nil || log.appends.Load() != 1 {
+		t.Fatalf("status and decision were not published together: status=%s decision=%v appends=%d", got.Status, got.Decision, log.appends.Load())
 	}
 	assertPersistenceReplay(t, s, got)
 }

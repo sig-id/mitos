@@ -63,7 +63,7 @@ func TestMessageApplicationAtomicReplayAndConflict(t *testing.T) {
 func TestMessageFailedCommitIsNotAcknowledged(t *testing.T) {
 	s := messageStore(t)
 	m := messageEnvelope(t, s, "failed")
-	s.file = &controlledLog{eventLog: s.file, failure: errors.New("sync failed")}
+	s.journal = &controlledJournal{journal: s.journal, failure: errors.New("sync failed")}
 	if _, err := s.AcceptMessage(m); err == nil {
 		t.Fatal("acknowledged failed sync")
 	}

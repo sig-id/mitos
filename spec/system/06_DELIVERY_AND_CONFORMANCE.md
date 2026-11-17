@@ -239,6 +239,14 @@ local `/api` surface, not an independently deployed application server.
 
 ### S2 – Transactional persistence and application boundary
 
+The storage preparation slice introduces a journal boundary (`Replay`,
+`Append(events, projections)`, `Close`), a separate artifact-store boundary, an
+in-memory transactional fake and a reusable conformance harness, plus opt-in
+subprocess crash injection. The current adapter remains JSONL until the SQLite
+cutover: it retains record-prefix crash recovery and refuses transactional
+projection updates. This seam alone does not demonstrate atomic multi-event crash
+recovery or complete S2; no hosted capability flag changes.
+
 Implement the SQLite runtime adapter with the same canonical Event records, hash
 chain, apply and replay, plus atomic journal/projection transactions. Replace
 `events.jsonl` with a verified one-time import, preserving it as backup; remove the

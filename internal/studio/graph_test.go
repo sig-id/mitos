@@ -161,7 +161,7 @@ func TestGraphConcurrentAmendmentsAndPersistenceFailure(t *testing.T) {
 		t.Fatal("CAS did not serialize")
 	}
 	before, _ := e.Store.Graph(g.ID)
-	e.Store.file = &controlledLog{eventLog: e.Store.file, failure: errors.New("sync failed")}
+	e.Store.journal = &controlledJournal{journal: e.Store.journal, failure: errors.New("sync failed")}
 	if _, _, err := e.AmendGraph(proposal(before, "fail", GraphOperation{Kind: "close_expansion", Expansion: "initial", Rationale: "no change"})); err == nil {
 		t.Fatal("sync failure ignored")
 	}

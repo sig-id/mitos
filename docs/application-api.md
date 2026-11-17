@@ -88,7 +88,31 @@ It needs no database, broker or remote worker.
 ## Not provided
 
 This is the S1 slice only. Service-principal authentication, tenant isolation,
-PostgreSQL persistence, remote worker claims/leases/checkpoints, MQTT work
+SQLite transactional persistence, remote worker claims/leases/checkpoints, MQTT work
 ownership and checkpointed conversation waits (gates S2–S4) are not implemented;
 the API remains loopback-only and same-user access is not multi-tenant
 authorization.
+
+## Storage preparation and crash fixtures
+
+The runtime Store uses a journal interface for ordered replay, durable event and
+projection append, and close. Task/Run state still comes from the existing Event
+records and `apply`; indexes do not define separate lifecycle semantics. Retained
+artifact bytes use a separate store interface and become accessible only after
+their journal metadata commits.
+
+The current JSONL adapter retains its historical complete-record-prefix recovery.
+It rejects projection updates because it cannot commit them transactionally. The
+SQLite replacement is the next storage slice; it will run the same transactional
+journal conformance harness as the in-memory test fake and remove the JSONL
+runtime path after a verified one-time import. This preparation does not change
+runtime capabilities or claim SQLite, tenant isolation, or remote-worker support.
+
+Crash fixtures explicitly set both `MITOS_ENABLE_FAILPOINTS=1` and
+`MITOS_FAILPOINT` to one of `journal.before_append`, `journal.after_append` or
+`artifacts.after_put`. The selected boundary exits with code 86 without shutdown
+cleanup. The append points bracket the adapter durability barrier and precede
+in-memory publication; the artifact point follows durable byte storage but
+precedes metadata commit. Leave failpoints disabled outside test subprocesses.
+The SQLite adapter must add injection inside its transaction to demonstrate
+all-or-none crash recovery, beyond these Store-level boundaries.

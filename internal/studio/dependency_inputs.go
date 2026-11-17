@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"mitos/internal/workpool"
 	workspacefs "mitos/internal/workspace"
@@ -171,23 +170,11 @@ func (s *Store) boundInput(w workpool.Witness, a workpool.Artifact) ([]byte, err
 	if !registered {
 		return nil, errors.New("dependency artifact registration changed")
 	}
-	root, err := os.OpenRoot(filepath.Join(s.dir, "artifacts", w.RunID))
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	file, err := root.OpenFile(a.Name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	file, err := s.openArtifact(producer.ID, Artifact{Name: a.Name, Bytes: a.Bytes, SHA256: a.SHA256})
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Size() != a.Bytes {
-		return nil, errors.New("dependency artifact size/type mismatch")
-	}
 	data, err := io.ReadAll(io.LimitReader(file, a.Bytes+1))
 	if err != nil {
 		return nil, err

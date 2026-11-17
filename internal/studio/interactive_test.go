@@ -220,7 +220,7 @@ func TestInteractiveAdmissionFailurePublishesNoTaskOrProcess(t *testing.T) {
 	}
 	before, _ := e.Desk.Work(project.ID)
 	s.mu.Lock()
-	s.file = &controlledLog{eventLog: s.file, write: true, failure: errors.New("injected journal failure")}
+	s.journal = &controlledJournal{journal: s.journal, write: true, failure: errors.New("injected journal failure")}
 	s.mu.Unlock()
 	if _, err = e.Desk.StartAgent(project.ID, agentcli.Request{Key: "failed", AgentID: "worker", Prompt: "Must not launch"}, "http://localhost"); err == nil {
 		t.Fatal("failed admission succeeded")
