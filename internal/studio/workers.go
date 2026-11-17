@@ -39,6 +39,7 @@ type WorkerOutbox struct {
 	Published  bool   `json:"published,omitempty"`
 }
 type StructuredCheckpoint struct {
+	Cursor           int64           `json:"cursor,omitempty"`
 	TaskID           string          `json:"task_id"`
 	RunID            string          `json:"run_id"`
 	Generation       uint64          `json:"generation"`
@@ -47,7 +48,14 @@ type StructuredCheckpoint struct {
 	SchemaDigest     string          `json:"schema_digest"`
 	Value            json.RawMessage `json:"value"`
 }
+type workerContextRecord struct {
+	RunID        string                     `json:"run_id"`
+	Generation   uint64                     `json:"generation"`
+	PromptSHA256 string                     `json:"prompt_sha256"`
+	Artifacts    map[string]json.RawMessage `json:"artifacts"`
+}
 type workerChange struct {
+	Context      *workerContextRecord          `json:"context,omitempty"`
 	Checkpoint   *StructuredCheckpoint         `json:"checkpoint,omitempty"`
 	Outbox       *WorkerOutbox                 `json:"outbox,omitempty"`
 	Credential   *WorkerCredential             `json:"credential,omitempty"`
@@ -64,6 +72,12 @@ func (s *Store) applyWorker(c *workerChange) {
 		s.workerLeases = map[string]structuredworker.LeaseRecord{}
 		s.workerGenerations = map[string]uint64{}
 		s.workerReceipts = map[string]workerReceipt{}
+	}
+	if c.Context != nil {
+		if s.workerContexts == nil {
+			s.workerContexts = map[string]workerContextRecord{}
+		}
+		s.workerContexts[c.Context.RunID] = graphClone(*c.Context)
 	}
 	if c.Checkpoint != nil {
 		if s.structuredCheckpoints == nil {
@@ -274,7 +288,15 @@ func (s *Store) WorkerClaim(token string, in structuredworker.Claim) (structured
 		if budget <= 0 {
 			continue
 		}
-		lease := structuredworker.LeaseRecord{Binding: structuredworker.Binding{Identity: reg.Identity, TaskID: r.TaskID, RunID: r.ID, Generation: s.workerGenerations[r.TaskID] + 1, Epoch: s.authorityEpoch, InputDigest: digestText(string(r.Brief.Structured.Input)), DefinitionDigest: r.Brief.Structured.Digest, SchemaDigest: digestText(string(r.Brief.Structured.ResultSchema)), Acceptance: "exact-schema/current-permissions", LeaseSeconds: 30, BudgetSeconds: budget}, ExpiresAt: time.Now().UTC().Add(30 * time.Second), BudgetEndsAt: time.Now().UTC().Add(time.Duration(budget) * time.Second)}
+		generation := s.workerGenerations[r.TaskID] + 1
+		if r.AuthorityGeneration > 0 && r.AuthorityGeneration == s.workerGenerations[r.TaskID] {
+			generation = r.AuthorityGeneration
+		}
+		inputPage, err := s.taskInputPageLocked(r.TaskID, s.structuredCheckpoints[r.TaskID].Cursor, ReadDefaultLimit)
+		if err != nil {
+			return structuredworker.Receipt{}, err
+		}
+		lease := structuredworker.LeaseRecord{Binding: structuredworker.Binding{InputCursor: inputPage.Next, InputLogDigest: graphDigest(inputPage.Inputs), Identity: reg.Identity, TaskID: r.TaskID, RunID: r.ID, Generation: generation, Epoch: s.authorityEpoch, InputDigest: digestText(string(r.Brief.Structured.Input)), DefinitionDigest: r.Brief.Structured.Digest, SchemaDigest: digestText(string(r.Brief.Structured.ResultSchema)), Acceptance: "exact-schema/current-permissions", LeaseSeconds: 30, BudgetSeconds: budget}, ExpiresAt: time.Now().UTC().Add(30 * time.Second), BudgetEndsAt: time.Now().UTC().Add(time.Duration(budget) * time.Second)}
 		response := structuredworker.Receipt{RequestID: in.RequestID, Seq: s.seq + 1, State: "claimed", Binding: &lease.Binding}
 		wc := &workerChange{Lease: &lease, Receipt: &workerReceipt{Key: key, Digest: digest, Response: response}}
 		acquired, err := s.scheduleLocked(r.ID, s.workerActiveLocked(), &candidate.Policy, wc)

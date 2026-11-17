@@ -335,7 +335,13 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	executor.Action = func(ctx context.Context, kind string, raw json.RawMessage) (structuredworker.Receipt, error) {
 		return e.WorkerAction(ctx, token, structuredworker.Mutation{Binding: lease.Binding, RequestID: newID("action"), Kind: kind, Data: raw})
 	}
+	executor.Wait = func(ctx context.Context, raw json.RawMessage) (structuredworker.Receipt, error) {
+		return e.Store.WorkerMutate(token, structuredworker.Mutation{Binding: lease.Binding, RequestID: newID("wait"), Kind: "wait", Data: raw})
+	}
 	result, err := executor.Execute(ctx, assignment)
+	if errors.Is(err, structuredworker.ErrDormant) {
+		return nil
+	}
 	if err != nil {
 		// Failed attempts keep their captured evidence for diagnosis.
 		if len(result.Artifacts) > 0 {

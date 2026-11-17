@@ -443,6 +443,9 @@ func (e *Engine) dispatch() {
 			if err := e.reconcileWorkerLeases(); err != nil {
 				continue
 			}
+			if err := e.reconcileDormantInputs(); err != nil {
+				continue
+			}
 			if err := e.Store.expireAgentSessions(); err != nil {
 				continue
 			}

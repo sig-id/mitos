@@ -15,6 +15,24 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 		if err := json.Unmarshal(e.Data, &c); err != nil {
 			return nil, err
 		}
+		if c.Input != nil {
+			add := func(namespace, key string, value any) {
+				raw, _ := json.Marshal(value)
+				out = append(out, journalProjection{Namespace: namespace, Key: key, Value: raw})
+			}
+			if c.Input.Record != nil {
+				r := c.Input.Record
+				add("task_input", r.TaskID+"/"+strconv.FormatInt(r.Seq, 10), r)
+				add("task_input_key", scopedRequestKey(r.Tenant, r.TaskID+"/"+r.Key), r.Receipt)
+			}
+			if c.Input.Wait != nil {
+				add("task_wait", c.Input.Wait.TaskID, c.Input.Wait)
+				if c.Input.Generation > 0 {
+					add("task_generation", c.Input.Wait.TaskID, c.Input.Generation)
+				}
+			}
+		}
+
 		if c.Action != nil {
 			if c.Action.Target != nil {
 				raw, _ := json.Marshal(c.Action.Target)
@@ -38,6 +56,9 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 			add := func(namespace, key string, value any) {
 				raw, _ := json.Marshal(value)
 				out = append(out, journalProjection{Namespace: namespace, Key: key, Value: raw})
+			}
+			if wc.Context != nil {
+				add("worker_context", wc.Context.RunID, wc.Context)
 			}
 			if wc.Checkpoint != nil {
 				add("structured_checkpoint", wc.Checkpoint.TaskID, wc.Checkpoint)

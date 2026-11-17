@@ -90,6 +90,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.ApplicationSession) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "tasks" && parts[3] == "inputs" {
+		if r.Method == "GET" {
+			after, limit, err := pageParameters(r)
+			if err != nil {
+				reply(w, 400, map[string]string{"error": "invalid_page"})
+				return
+			}
+			page, err := session.Inputs(parts[2], after, limit)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			pageHeaders(w, page.Next, "", page.HasMore)
+			reply(w, 200, page.Inputs)
+			return
+		}
+		if r.Method == "POST" {
+			var in studio.TaskInputRequest
+			d := json.NewDecoder(r.Body)
+			d.DisallowUnknownFields()
+			if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
+				reply(w, 400, map[string]string{"error": "invalid_input"})
+				return
+			}
+			receipt, err := session.AppendInput(parts[2], in)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			reply(w, 201, receipt)
+			return
+		}
+	}
+
 	if r.Method == "GET" && r.URL.Path == "/api/capabilities" {
 		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "operations": map[string]string{"admit": "POST /api/tasks", "status": "GET /api/runs/{id}", "events": "GET /api/runs/{id}/events", "result": "GET /api/runs/{id}/result", "cancel": "POST /api/runs/{id}/cancel", "decision": "POST /api/runs/{id}/decision"}, "hosted": map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "postgresql": false, "remote_workers": true, "mqtt_work_claims": true, "conversation_waits": false}})
 		return

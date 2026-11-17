@@ -109,7 +109,15 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 		err := c.Call(ctx, kind, Mutation{Binding: b, RequestID: RequestID(), Kind: kind, Data: raw}, &receipt)
 		return receipt, err
 	}
+	executor.Wait = func(ctx context.Context, raw json.RawMessage) (Receipt, error) {
+		var receipt Receipt
+		err := c.Call(ctx, "wait", Mutation{Binding: b, RequestID: RequestID(), Kind: "wait", Data: raw}, &receipt)
+		return receipt, err
+	}
 	result, err := executor.Execute(ctx, assignment)
+	if errors.Is(err, ErrDormant) {
+		return nil
+	}
 	if err != nil {
 		// Synchronize with the renewal watcher before reading its failure, so
 		// a stale binding surfaces as its own 409 instead of a process error

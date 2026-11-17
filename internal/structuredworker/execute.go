@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mitos/internal/compute"
@@ -17,7 +18,10 @@ import (
 	"mitos/internal/resourcepolicy"
 )
 
+var ErrDormant = errors.New("structured_worker_dormant")
+
 type Executor struct {
+	Wait        func(context.Context, json.RawMessage) (Receipt, error)
 	Action      func(context.Context, string, json.RawMessage) (Receipt, error)
 	Provider    compute.Provider
 	Executable  string
@@ -102,15 +106,31 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 		reconcileSchema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["target","key"],"properties":{"target":{"type":"string"},"key":{"type":"string"}}}`)
 		targets, _ := json.Marshal(assignment.Actions)
 		options.Tools = []harness.DynamicTool{{Type: "function", Name: "mitos_action", Description: "Request an external operation only on an admitted target. Schemas: " + string(targets) + ". A prepared or unknown outcome requires mitos_reconcile with the same target and key. Never invent a different key while reconciliation is required.", InputSchema: schema}, {Type: "function", Name: "mitos_reconcile", Description: "Query the original external operation identity; never dispatch an ambiguous action again.", InputSchema: reconcileSchema}}
-		options.ToolCall = func(name string, raw json.RawMessage) (any, error) {
-			kind := "action"
-			if name == "mitos_reconcile" {
-				kind = "reconcile"
-			} else if name != "mitos_action" {
-				return nil, errors.New("unknown action tool")
+	}
+	var dormant atomic.Bool
+	if len(assignment.CheckpointSchema) > 0 && e.Wait != nil {
+		schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"cursor", "checkpoint"}, "properties": map[string]any{"cursor": map[string]string{"type": "integer"}, "checkpoint": assignment.CheckpointSchema}})
+		options.Tools = append(options.Tools, harness.DynamicTool{Type: "function", Name: "mitos_wait", Description: "Save a portable checkpoint and consumed per-Task input cursor. If inputs already exist after the cursor, process the returned bounded page and continue; otherwise release this attempt and resume on a later input. Never put model/session/framework state in the checkpoint.", InputSchema: schema})
+	}
+	options.ToolCall = func(name string, raw json.RawMessage) (any, error) {
+		if name == "mitos_wait" && e.Wait != nil {
+			receipt, err := e.Wait(ctx, raw)
+			if err == nil && receipt.State == "dormant" {
+				dormant.Store(true)
+				cancel()
 			}
-			return e.Action(ctx, kind, raw)
+			return receipt, err
 		}
+		kind := "action"
+		if name == "mitos_reconcile" {
+			kind = "reconcile"
+		} else if name != "mitos_action" {
+			return nil, errors.New("unknown structured tool")
+		}
+		if e.Action == nil {
+			return nil, errors.New("action gateway unavailable")
+		}
+		return e.Action(ctx, kind, raw)
 	}
 
 	session, err := e.Provider.Start(ctx, handle, compute.Command{Argv: append([]string{e.Executable}, harness.CodexArguments()...), Directory: scratch, NativeEnv: env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
@@ -125,6 +145,9 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 	defer stop()
 	if err = e.Provider.Stop(stopCtx, session); err != nil {
 		return Result{}, err
+	}
+	if dormant.Load() {
+		return Result{}, ErrDormant
 	}
 	// Captured output and activity stay available even when the attempt fails:
 	// they are the evidence needed to diagnose timeouts and crashes.

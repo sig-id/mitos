@@ -47,3 +47,9 @@ real TLS, worker library, confinement and durable databases; they do not measure
 production model quality. Every case verifies one logical Task, one accepted
 result and one durable application reply, with one external POST in the action
 case.
+
+`--wait-for-input` declares the portable checkpoint schema used by the root
+`TestIndependentWorkerDurableWait` fixture. Its native worker checkpoints and
+releases the grant, and the test appends a per-Task HTTP input after dormancy
+(including an authority restart). The application still publishes one durable
+reply from the fresh attempt's accepted result.

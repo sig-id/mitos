@@ -26,6 +26,8 @@ type Claim struct {
 	RunID     string `json:"run_id,omitempty"`
 }
 type Binding struct {
+	InputCursor    int64  `json:"input_cursor"`
+	InputLogDigest string `json:"input_log_digest"`
 	Identity
 	TaskID           string `json:"task_id"`
 	RunID            string `json:"run_id"`
@@ -56,7 +58,10 @@ type Receipt struct {
 	Binding       *Binding        `json:"binding,omitempty"`
 }
 type Context struct {
-	Actions map[string]json.RawMessage `json:"actions,omitempty"`
+	CheckpointSchema json.RawMessage            `json:"checkpoint_schema,omitempty"`
+	Checkpoint       json.RawMessage            `json:"checkpoint,omitempty"`
+	Inputs           InputPage                  `json:"inputs"`
+	Actions          map[string]json.RawMessage `json:"actions,omitempty"`
 	// PendingActions lists operations this Task still holds from earlier
 	// attempts, with their original worker keys, so a replacement attempt can
 	// reconcile them. Credentials and endpoints are never included.
@@ -96,4 +101,25 @@ type ActionRequest struct {
 	Target  string          `json:"target"`
 	Key     string          `json:"key"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type Input struct {
+	Seq    int64           `json:"seq"`
+	Key    string          `json:"key"`
+	Data   json.RawMessage `json:"data"`
+	SHA256 string          `json:"sha256"`
+}
+type InputPage struct {
+	Inputs  []Input `json:"inputs"`
+	Next    int64   `json:"next"`
+	HasMore bool    `json:"has_more"`
+}
+type WaitRequest struct {
+	Cursor     int64           `json:"cursor"`
+	Checkpoint json.RawMessage `json:"checkpoint"`
+}
+
+type Resume struct {
+	Checkpoint json.RawMessage
+	Inputs     InputPage
 }

@@ -106,7 +106,7 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		value, err = s.Engine.WorkerAction(r.Context(), token, in)
-	case "/worker/v1/progress", "/worker/v1/renew", "/worker/v1/checkpoint", "/worker/v1/result", "/worker/v1/release":
+	case "/worker/v1/progress", "/worker/v1/renew", "/worker/v1/checkpoint", "/worker/v1/result", "/worker/v1/release", "/worker/v1/wait":
 		var in structuredworker.Mutation
 		if decode(&in) != nil {
 			send(400, map[string]string{"error": "invalid_request"})

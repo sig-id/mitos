@@ -26,6 +26,7 @@ type application struct {
 	http         *http.Client
 	base, token  string
 	actionTarget string
+	waitForInput bool
 }
 type task struct {
 	Status string `json:"status"`
@@ -48,6 +49,7 @@ func main() {
 	}
 }
 func run() error {
+	waitForInput := flag.Bool("wait-for-input", false, "Declare a portable checkpoint for the wait fixture")
 	actionTarget := flag.String("action-target", "", "Optional admitted target for the external-effect fixture")
 	path := flag.String("database", "application.db", "Application-owned SQLite file")
 	base := flag.String("mitos", "", "Mitos application HTTPS URL")
@@ -90,7 +92,7 @@ func run() error {
  CREATE TABLE IF NOT EXISTS cursor(id INTEGER PRIMARY KEY CHECK(id=1),seq INTEGER NOT NULL); INSERT OR IGNORE INTO cursor VALUES(1,0);`); err != nil {
 		return err
 	}
-	a := &application{db: db, http: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}}, base: strings.TrimRight(*base, "/"), token: token, actionTarget: *actionTarget}
+	a := &application{db: db, http: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}}, base: strings.TrimRight(*base, "/"), token: token, actionTarget: *actionTarget, waitForInput: *waitForInput}
 	if err = a.save(*id, *text); err != nil {
 		return err
 	}
@@ -118,6 +120,9 @@ func run() error {
 }
 func (a *application) save(id, text string) error {
 	structured := map[string]any{"key": "fixture-" + hash([]byte(id))[:32], "input": map[string]string{"message": text}, "result_schema": json.RawMessage(schema)}
+	if a.waitForInput {
+		structured["checkpoint_schema"] = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["state"],"properties":{"state":{"type":"string"}}}`)
+	}
 	if a.actionTarget != "" {
 		structured["action_targets"] = []string{a.actionTarget}
 	}
