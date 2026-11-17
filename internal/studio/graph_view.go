@@ -113,6 +113,10 @@ func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
 	if m.State == "done" {
 		return "review"
 	}
+	if m.State == "yielded" {
+		// Waiting on the work it proposed, like a dependency wait.
+		return "blocked"
+	}
 	if m.State == "running" || m.State == "parked" {
 		resuming, reviewing := false, false
 		for _, request := range s.graphPendingRequests(m.CurrentRunID) {

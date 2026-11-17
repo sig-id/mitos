@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.engineer",
-  "revision": 1,
+  "revision": 2,
   "name": "Engineer",
   "description": "Implement a bounded change and produce evidence that it meets its assignment.",
   "kind": "worker",
@@ -56,7 +56,8 @@
       "command.run",
       "artifact.read",
       "artifact.write",
-      "network.read"
+      "network.read",
+      "work.propose"
     ]
   },
   "limits": {

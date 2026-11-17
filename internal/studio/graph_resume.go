@@ -132,7 +132,7 @@ func (e *Engine) ResumeGraph(id string, req ResumeGraph) (WorkGraph, error) {
 		}
 		retry := orchestrator || run != nil && (run.Status == "failed" || run.Status == "cancelled")
 		if retry && run != nil {
-			if len(m.Attempts) > g.Limits.Retries {
+			if len(m.Attempts)-m.Yields > g.Limits.Retries {
 				return WorkGraph{}, graphError("increase the per-task retry allowance for %s", tid)
 			}
 			m.ContinueFrom = run.ID

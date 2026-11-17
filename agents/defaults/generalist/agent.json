@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.generalist",
-  "revision": 2,
+  "revision": 3,
   "name": "Generalist",
   "description": "Solve bounded tasks across domains and provide a base for newly generated specialists.",
   "kind": "worker",
@@ -53,7 +53,8 @@
       "command.run",
       "network.read",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {

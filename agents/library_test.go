@@ -116,7 +116,7 @@ func TestDefinitionBindsInstructionsAndCanonicalDigest(t *testing.T) {
 func TestBundleRejectsEscapesAndMismatches(t *testing.T) {
 	raw, body := bundled(t, "mitos.writer")
 	index := func(path string, revision int) []byte {
-		return []byte(`{"profile":"agent-library-bundle/v1","id":"t","revision":1,"agents":[{"id":"mitos.writer","revision":` + map[bool]string{true: "1", false: "2"}[revision == 1] + `,"path":"` + path + `"}]}`)
+		return []byte(`{"profile":"agent-library-bundle/v1","id":"t","revision":1,"agents":[{"id":"mitos.writer","revision":` + map[bool]string{true: "2", false: "3"}[revision == 1] + `,"path":"` + path + `"}]}`)
 	}
 	good := fstest.MapFS{"b/library.json": {Data: index("writer/agent.json", 1)}, "b/writer/agent.json": {Data: raw}, "b/writer/instructions.md": {Data: body}}
 	if _, err := loadBundle(good, "b"); err != nil {
