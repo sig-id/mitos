@@ -4,7 +4,7 @@ export default function(pi) {
   if(!base||!session)return;
   let timer, stopped=false, busy=false, notices=[], seen=new Set();
   const request=async(path,body)=>{
-    const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(4000)});
+    const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{'Content-Type':'application/json','Mitos-API-Version':'1'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(4000)});
     if(!r.ok)throw new Error('Mitos attention unavailable'); return r.json();
   };
   async function refresh() {

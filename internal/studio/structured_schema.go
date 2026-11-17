@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -30,8 +33,8 @@ type resultSchema struct {
 	Enum       []any
 	MinLength  *int
 	MaxLength  *int
-	Minimum    *float64
-	Maximum    *float64
+	Minimum    *big.Rat
+	Maximum    *big.Rat
 	MinItems   *int
 	MaxItems   *int
 }
@@ -92,17 +95,17 @@ func compileSchemaNode(v any, at string, depth int) (*resultSchema, error) {
 		v := int(i)
 		return &v, nil
 	}
-	bound := func(key string) (*float64, error) {
+	bound := func(key string) (*big.Rat, error) {
 		raw, ok := m[key]
 		if !ok {
 			return nil, nil
 		}
 		n, isNum := raw.(json.Number)
-		f, err := n.Float64()
+		r, err := exactNumber(n)
 		if !isNum || err != nil {
-			return nil, fmt.Errorf("%s: %s must be a number", at, key)
+			return nil, fmt.Errorf("%s: %s must be a bounded number", at, key)
 		}
-		return &f, nil
+		return r, nil
 	}
 	var err error
 	allowed := map[string][]string{"object": {"properties", "required", "additionalProperties"}, "array": {"items", "minItems", "maxItems"}, "string": {"enum", "minLength", "maxLength"}, "number": {"enum", "minimum", "maximum"}, "integer": {"enum", "minimum", "maximum"}, "boolean": {"enum"}, "null": {}}[s.Type]
@@ -258,16 +261,15 @@ func (s *resultSchema) check(v any, at string) error {
 		if !ok {
 			return fmt.Errorf("%s: expected %s", at, s.Type)
 		}
-		f, err := num.Float64()
+		// Compare exactly; float64 rounding would accept out-of-bounds values.
+		r, err := exactNumber(num)
 		if err != nil {
-			return fmt.Errorf("%s: number out of range", at)
+			return fmt.Errorf("%s: %v", at, err)
 		}
-		if s.Type == "integer" {
-			if _, err := num.Int64(); err != nil {
-				return fmt.Errorf("%s: expected integer", at)
-			}
+		if s.Type == "integer" && !r.IsInt() {
+			return fmt.Errorf("%s: expected integer", at)
 		}
-		if (s.Minimum != nil && f < *s.Minimum) || (s.Maximum != nil && f > *s.Maximum) {
+		if (s.Minimum != nil && r.Cmp(s.Minimum) < 0) || (s.Maximum != nil && r.Cmp(s.Maximum) > 0) {
 			return fmt.Errorf("%s: number is out of bounds", at)
 		}
 	case "boolean":
@@ -280,6 +282,26 @@ func (s *resultSchema) check(v any, at string) error {
 		}
 	}
 	return nil
+}
+
+// exactNumber parses a JSON number without rounding. Length and exponent are
+// bounded so a hostile value cannot force an enormous exact expansion.
+func exactNumber(n json.Number) (*big.Rat, error) {
+	s := n.String()
+	if len(s) == 0 || len(s) > 128 {
+		return nil, errors.New("number has too many digits")
+	}
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		exp, err := strconv.Atoi(strings.TrimPrefix(s[i+1:], "+"))
+		if err != nil || exp > 400 || exp < -400 {
+			return nil, errors.New("number exponent is out of range")
+		}
+	}
+	r, ok := new(big.Rat).SetString(s)
+	if !ok {
+		return nil, errors.New("invalid number")
+	}
+	return r, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

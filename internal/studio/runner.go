@@ -202,7 +202,7 @@ func (e *Engine) Workspace(path string) (string, error) {
 func (e *Engine) Launch(b Brief, parent string) (Run, error) {
 	if b.Structured != nil {
 		if parent != "" {
-			return Run{}, errors.New("structured work cannot be a child run")
+			return e.retryStructured(b, parent)
 		}
 		return e.LaunchStructured(b)
 	}

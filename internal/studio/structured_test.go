@@ -36,6 +36,22 @@ func TestResultSchemaSubsetAndExactValidation(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
+	// Bounds beyond float64's exact integer range are compared exactly.
+	precise, err := compileResultSchema(json.RawMessage(`{"type":"object","additionalProperties":false,"required":["n","x"],"properties":{"n":{"type":"integer","maximum":9007199254740992},"x":{"type":"number","minimum":0.1}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = validateResult(precise, []byte(`{"n":9007199254740992,"x":0.1}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range []string{`{"n":9007199254740993,"x":0.1}`, `{"n":1,"x":0.09999999999999999999}`, `{"n":1e999999999,"x":1}`, `{"n":1.5,"x":1}`} {
+		if _, err = validateResult(precise, []byte(result)); err == nil {
+			t.Errorf("imprecise comparison accepted %s", result)
+		}
+	}
+	if _, err = validateResult(precise, []byte(`{"n":1e2,"x":1}`)); err != nil {
+		t.Fatalf("integral exponent rejected: %v", err)
+	}
 	for name, schema := range map[string]string{
 		"open object":    `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`,
 		"optional field": `{"type":"object","additionalProperties":false,"properties":{"a":{"type":"string"}},"required":[]}`,
@@ -116,6 +132,19 @@ else:
 	if _, err = e.StructuredResult(r.ID); !errors.Is(err, ErrConflict) {
 		t.Fatal("rejected result readable as accepted")
 	}
+	// A retry reuses the frozen request and binding as a child attempt; replay
+	// of the admission key still returns the original run.
+	retry, err := e.Retry(r.ID)
+	if err != nil || retry.ParentID != r.ID || retry.Brief.Structured.Digest != r.Brief.Structured.Digest || retry.Brief.Structured.RequestHash != r.Brief.Structured.RequestHash {
+		t.Fatalf("structured retry: %v %+v", err, retry.Brief.Structured)
+	}
+	if again, err := e.Retry(r.ID); err != nil || again.ID != retry.ID {
+		t.Fatal("repeated retry created duplicate work")
+	}
+	if replay, err := e.Launch(bad, ""); err != nil || replay.ID != r.ID {
+		t.Fatalf("key replay after retry: %v %s", err, replay.ID)
+	}
+	finishRun(t, e, retry.ID)
 }
 
 func TestStructuredWorkRefusesUnsupportedShapes(t *testing.T) {

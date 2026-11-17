@@ -15,6 +15,9 @@ does not implement, is refused with `400` and
 `{"error":"unsupported_api_version","supported_versions":["1"]}`. Responses echo
 the negotiated version in the same header. There is no unversioned fallback.
 The browser pages, the `mitos` CLI and the agent bridge all send the header.
+Links in pages that point at `/api` are fetched with the header and saved as
+downloads, because plain navigation cannot carry it. The Claude and Pi attention
+adapters and the `tools/terminal-eval` scripts send it as well.
 Pages, static assets, webhooks and the separate HTTPS device API
 (`/api/device/v1/...`, path-versioned on its own listener) are outside this check.
 
@@ -60,7 +63,8 @@ Admit with `POST /api/tasks` (or `/api/runs`):
 - **Result schema:** the strict structured-output subset (up to 64 KiB, depth 16):
   `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`,
   `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`,
-  `description`, `title`. The root is an object; every object sets
+  `description`, `title`. Numeric bounds are compared exactly (no float rounding);
+  numbers are limited to 128 characters and exponents to ±400. The root is an object; every object sets
   `additionalProperties: false` and requires all of its properties. Other keywords
   are refused at admission.
 - **Execution:** Codex runs read-only in an empty scratch directory with the schema
@@ -71,6 +75,9 @@ Admit with `POST /api/tasks` (or `/api/runs`):
   against the schema. It is saved canonically as `result.json` and the run
   finishes verified. Anything else fails the attempt with
   `result_schema_mismatch`; the rejected text is kept as `rejected-result.txt`.
+- **Retry:** retrying a failed or interrupted run (including the restart
+  recovery decision) creates a child attempt that reuses the frozen request and
+  definition binding exactly; it is never re-admitted against the current library.
 - **Reads:** `GET /api/runs/{id}` (status), `GET /api/runs/{id}/events`,
   `GET /api/runs/{id}/result` (`409` until an accepted result exists), and
   `POST /api/runs/{id}/cancel`.

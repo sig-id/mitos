@@ -115,11 +115,30 @@ func (s *Store) structuredRun(key string) (Run, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, r := range s.runs {
-		if r.Brief.Structured != nil && r.Brief.Structured.Key == key {
+		// Replay returns the originally admitted run; retries are its children.
+		if r.Brief.Structured != nil && r.Brief.Structured.Key == key && r.ParentID == "" {
 			return *r, true
 		}
 	}
 	return Run{}, false
+}
+
+// retryStructured starts a fresh attempt of admitted structured work. The brief,
+// including its frozen definition revision and digest, is reused exactly; it is
+// never re-admitted against the current library.
+func (e *Engine) retryStructured(b Brief, parent string) (Run, error) {
+	prior, err := e.Store.Get(parent)
+	if err != nil {
+		return Run{}, err
+	}
+	if prior.Brief.Structured == nil || b.Structured == nil || prior.Brief.Structured.RequestHash != b.Structured.RequestHash || b.Structured.RequestHash == "" {
+		return Run{}, errors.New("a structured retry must repeat its parent's admitted request")
+	}
+	d, err := e.exactDefinition(b.Structured.Definition, b.Structured.Digest)
+	if err != nil {
+		return Run{}, err
+	}
+	return e.Store.Create(b, d.Name, parent, false)
 }
 
 // exactDefinition reads one immutable revision, never the latest of an ID.
