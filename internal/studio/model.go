@@ -76,6 +76,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	PrincipalID        string                 `json:"principal_id,omitempty"`
 	HandoffProtocol    string                 `json:"handoff_protocol,omitempty"` // Frozen at attempt creation; absent in pre-contract history.
 	Result             *ResultReceipt         `json:"result,omitempty"`
 	ReviewRuns         []string               `json:"review_runs,omitempty"`
@@ -180,6 +181,7 @@ type Event struct {
 }
 
 type change struct {
+	ServicePrincipal    *ServicePrincipal          `json:"service_principal,omitempty"`
 	AgentLibrary        *savedLibrary              `json:"agent_library,omitempty"`
 	AuthorityEpoch      string                     `json:"authority_epoch,omitempty"`
 	ExpiredRequestKeys  []string                   `json:"expired_request_keys,omitempty"`

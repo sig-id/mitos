@@ -15,8 +15,8 @@ func (s *Store) ExpireStructuredKeys(before time.Time) (int, error) {
 	defer s.mu.Unlock()
 	keys := []string{}
 	for _, r := range s.runs {
-		if r.ParentID == "" && r.Brief.Structured != nil && r.Terminal() && r.UpdatedAt.Before(before) && !s.expiredRequestKeys[r.Brief.Structured.Key] {
-			keys = append(keys, r.Brief.Structured.Key)
+		if r.ParentID == "" && r.Brief.Structured != nil && r.Terminal() && r.UpdatedAt.Before(before) && !s.expiredRequestKeys[scopedRequestKey(runTenant(r), r.Brief.Structured.Key)] {
+			keys = append(keys, scopedRequestKey(runTenant(r), r.Brief.Structured.Key))
 		}
 	}
 	if len(keys) == 0 {
@@ -31,7 +31,7 @@ func (s *Store) ExpireStructuredKeys(before time.Time) (int, error) {
 func (s *Store) requestKeyExpired(key string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.expiredRequestKeys[key]
+	return s.expiredRequestKeys[legacyOrScopedKey(key)]
 }
 
 func (s *Store) AuthorityEpoch() string {

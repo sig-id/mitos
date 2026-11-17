@@ -21,8 +21,9 @@ Mitos also targets use as the headless agent runtime behind independent applicat
 backends. Acegoat is the first design use case and remains a separate product and
 repository. Applications own their users, conversations and domain rules; Mitos owns
 durable work and replaceable execution through versioned APIs. Local use retains
-its lightweight defaults. SQLite is the transactional runtime store. Tenant isolation and remote worker
-claims remain planned capabilities. A PostgreSQL
+its lightweight defaults. SQLite is the transactional runtime store. A separate TLS application listener
+supports service principals and tenant-scoped headless work; complete S2 conformance
+and remote worker claims remain delivery targets. A PostgreSQL
 server edition is deferred beyond the SQLite S2–S4 plan.
 See the [server use case and delivery path](spec/README.md#application-server-reading-path).
 
@@ -492,3 +493,28 @@ and advances the authority epoch to fence pre-restore grants and tokens. It refu
 an existing destination. Receipt expiry through `storage expire-receipts --before
 2026-11-01T00:00:00Z` retains rejection tombstones, so an expired key cannot start
 work again. Run and artifact history remains retained until data-directory removal.
+
+
+## Application access
+
+Keep operator access on loopback and enable the application API separately:
+
+```sh
+./bin/mitos serve --application-addr :4747 --application-cert server.pem --application-key server-key.pem
+./bin/mitos principal create --id my-app --name 'My application' --org example --project assistant --write
+```
+
+The operator command returns a random bearer token once. Only its hash is saved.
+Send that token over TLS with `Authorization: Bearer TOKEN` and
+`Mitos-API-Version: 1`. The listener accepts headless structured work and exposes
+only the authenticated tenant's tasks, runs, events, results and artifacts. Foreign
+IDs return 404; workspace, graph, project and operator routes are absent. The
+local console remains the operator. Tenant-scoped request keys bind the original
+principal and payload; another principal cannot take over the same key.
+
+Use `principal list`, `principal rotate --id my-app` and `principal revoke --id
+my-app` on the local operator API. Rotation, revocation, expiry and restore fencing
+apply to existing connections and cached views. Principals are read-only unless
+`--write` is supplied and default to `mitos.generalist`; repeat `--agent AGENT_ID`
+to permit other worker definitions. Capacity, bounded feeds and end-to-end S2
+conformance remain the next slice; hosted readiness flags stay gated on that proof.

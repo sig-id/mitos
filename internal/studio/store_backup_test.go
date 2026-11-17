@@ -109,7 +109,7 @@ func TestReceiptTombstonesSurviveReopenAndIndexesRebuild(t *testing.T) {
 		t.Fatal("index rebuild changed canonical history")
 	}
 	var value []byte
-	if err = j.db.QueryRow("SELECT value FROM projections WHERE namespace='request_tombstone' AND key=?", b.Structured.Key).Scan(&value); err != nil || string(value) != "expired" {
+	if err = j.db.QueryRow("SELECT value FROM projections WHERE namespace='request_tombstone' AND key=?", scopedRequestKey(decision.LocalTenant, b.Structured.Key)).Scan(&value); err != nil || string(value) != "expired" {
 		t.Fatal("tombstone index not rebuilt", err)
 	}
 	e.Close()

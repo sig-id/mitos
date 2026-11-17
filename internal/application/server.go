@@ -1,0 +1,180 @@
+// Package application is the separately served TLS application boundary. Its
+// request handlers receive only a scoped application session, never a raw Store.
+package application
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+
+	"mitos/internal/apiversion"
+	"mitos/internal/decision"
+	"mitos/internal/studio"
+)
+
+type Server struct {
+	authenticate func(string) (decision.Principal, error)
+	as           func(decision.Principal) *studio.ApplicationSession
+}
+type principalKey struct{}
+
+func New(engine *studio.Engine) *Server {
+	return &Server{authenticate: engine.Store.AuthenticateServicePrincipal, as: engine.Application}
+}
+func Principal(ctx context.Context) (decision.Principal, bool) {
+	p, ok := ctx.Value(principalKey{}).(decision.Principal)
+	return p, ok
+}
+func reply(w http.ResponseWriter, status int, value any) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+func fail(w http.ResponseWriter, err error) {
+	status, code := 500, "backend_unavailable"
+	switch {
+	case errors.Is(err, studio.ErrUnauthenticated):
+		status, code = 401, "unauthenticated"
+	case errors.Is(err, studio.ErrForbidden):
+		status, code = 403, "forbidden"
+	case errors.Is(err, studio.ErrNotFound):
+		status, code = 404, "not_found"
+	case errors.Is(err, studio.ErrConflict):
+		status, code = 409, "request_conflict"
+	case errors.Is(err, studio.ErrRequestKeyExpired):
+		status, code = 410, "request_key_expired"
+	}
+	reply(w, status, map[string]string{"error": code})
+}
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.TLS == nil {
+		reply(w, 403, map[string]string{"error": "tls_required"})
+		return
+	}
+	if version, stated := apiversion.Requested(r); !stated || !apiversion.IsSupported(version) {
+		reply(w, 400, map[string]any{"error": "unsupported_api_version", "supported_versions": apiversion.Supported})
+		return
+	}
+	w.Header().Set(apiversion.Header, apiversion.Current)
+	auth := r.Header.Values("Authorization")
+	if len(auth) != 1 || !strings.HasPrefix(auth[0], "Bearer ") || len(auth[0]) != len("Bearer ")+64 {
+		fail(w, studio.ErrUnauthenticated)
+		return
+	}
+	p, err := s.authenticate(strings.TrimPrefix(auth[0], "Bearer "))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	s.serve(w, r, s.as(p))
+}
+
+func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.ApplicationSession) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if r.Method == "GET" && r.URL.Path == "/api/capabilities" {
+		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "hosted": map[string]bool{"service_principal_auth": false, "tenant_isolation": false, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false}})
+		return
+	}
+	if r.Method == "POST" && r.URL.Path == "/api/tasks" {
+		var brief studio.Brief
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&brief); err != nil || dec.Decode(new(any)) != io.EOF {
+			reply(w, 400, map[string]string{"error": "invalid_brief"})
+			return
+		}
+		run, err := session.Admit(brief)
+		if err != nil {
+			if errors.Is(err, studio.ErrConflict) || errors.Is(err, studio.ErrRequestKeyExpired) || errors.Is(err, studio.ErrUnauthenticated) || errors.Is(err, studio.ErrForbidden) {
+				fail(w, err)
+			} else {
+				reply(w, 422, map[string]string{"error": "invalid_structured_work", "detail": err.Error()})
+			}
+			return
+		}
+		task, err := session.Task(run.TaskID)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		w.Header().Set("Location", "/api/tasks/"+task.ID)
+		reply(w, 201, task)
+		return
+	}
+	if r.Method == "GET" && r.URL.Path == "/api/runs" {
+		runs, err := session.Runs()
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, runs)
+		return
+	}
+	if len(parts) == 3 && parts[0] == "api" && parts[1] == "tasks" && r.Method == "GET" {
+		task, err := session.Task(parts[2])
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 200, task)
+		return
+	}
+	if len(parts) >= 3 && parts[0] == "api" && parts[1] == "runs" {
+		id := parts[2]
+		if len(parts) == 3 && r.Method == "GET" {
+			run, err := session.Get(id)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			reply(w, 200, run)
+			return
+		}
+		if len(parts) == 4 && r.Method == "GET" {
+			switch parts[3] {
+			case "events":
+				events, err := session.Events(id)
+				if err != nil {
+					fail(w, err)
+					return
+				}
+				reply(w, 200, events)
+				return
+			case "result":
+				result, err := session.Result(id)
+				if err != nil {
+					fail(w, err)
+					return
+				}
+				_, _ = w.Write(result)
+				return
+			}
+		}
+		if len(parts) == 4 && parts[3] == "cancel" && r.Method == "POST" {
+			if err := session.Cancel(id); err != nil {
+				fail(w, err)
+				return
+			}
+			reply(w, 202, map[string]string{"status": "cancellation_requested"})
+			return
+		}
+		if len(parts) == 5 && parts[3] == "artifacts" && r.Method == "GET" {
+			data, err := session.Artifact(id, parts[4])
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(data)
+			return
+		}
+	}
+	reply(w, 404, map[string]string{"error": "not_found"})
+}

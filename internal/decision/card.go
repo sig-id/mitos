@@ -195,9 +195,11 @@ func (c Card) Expiry() string {
 }
 
 type Principal struct {
-	ID            string
-	Tenant        Tenant
-	Authenticated bool
+	CredentialRevision string
+	AuthorityEpoch     string
+	ID                 string
+	Tenant             Tenant
+	Authenticated      bool
 }
 
 // LocalOperator is asserted only by the loopback console boundary. It is not a

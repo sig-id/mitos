@@ -96,34 +96,57 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 // LaunchStructured admits structured work idempotently: the same key and request
 // returns the original run; the same key with a different request conflicts.
 func (e *Engine) LaunchStructured(b Brief) (Run, error) {
+	return e.launchStructuredAs(decision.LocalOperator(), b)
+}
+
+func (e *Engine) launchStructuredAs(p decision.Principal, b Brief) (Run, error) {
 	e.structuredMu.Lock()
 	defer e.structuredMu.Unlock()
+	e.Store.mu.RLock()
+	authErr := e.Store.authorizeServiceLocked(p, true)
+	e.Store.mu.RUnlock()
+	if authErr != nil {
+		return Run{}, authErr
+	}
 	b, name, err := e.prepareStructured(b)
 	if err != nil {
 		return Run{}, err
 	}
-	if e.Store.requestKeyExpired(b.Structured.Key) {
+	s := e.Store
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err = s.authorizeServiceLocked(p, true); err != nil {
+		return Run{}, err
+	}
+	if !strings.HasPrefix(b.AppID, agentAppPrefix) || !s.principalAgentAllowedLocked(p, b.AppID) {
+		return Run{}, ErrForbidden
+	}
+	key := scopedRequestKey(p.Tenant, b.Structured.Key)
+	if s.expiredRequestKeys[key] {
 		return Run{}, ErrRequestKeyExpired
 	}
-	if prior, ok := e.Store.structuredRun(b.Structured.Key); ok {
-		if prior.Brief.Structured.RequestHash != b.Structured.RequestHash {
+	if id := s.structuredKeys[key]; id != "" {
+		prior := s.runs[id]
+		owner := prior.PrincipalID
+		if owner == "" {
+			owner = decision.LocalOperator().ID
+		}
+		if owner != p.ID || prior.Brief.Structured.RequestHash != b.Structured.RequestHash {
 			return Run{}, ErrConflict
 		}
-		return prior, nil
+		return cloneRun(prior), nil
 	}
-	return e.Store.Create(b, name, "", false)
+	return s.createWithPrincipalLocked(b, name, "", false, nil, nil, nil, p)
 }
 
 func (s *Store) structuredRun(key string) (Run, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, r := range s.runs {
-		// Replay returns the originally admitted run; retries are its children.
-		if r.Brief.Structured != nil && r.Brief.Structured.Key == key && r.ParentID == "" {
-			return *r, true
-		}
+	r := s.runs[s.structuredKeys[scopedRequestKey(decision.LocalTenant, key)]]
+	if r == nil {
+		return Run{}, false
 	}
-	return Run{}, false
+	return cloneRun(r), true
 }
 
 // retryStructured starts a fresh attempt of admitted structured work. The brief,
@@ -166,6 +189,12 @@ func (e *Engine) exactDefinition(ref, digest string) (agents.Definition, error) 
 func headlessRuntime(runtime string) string { return runtime + "-headless" }
 
 func (e *Engine) performStructured(ctx context.Context, r Run) error {
+	e.Store.mu.RLock()
+	allowed := e.Store.admittedPrincipalAllowedLocked(r.PrincipalID, runTenant(&r))
+	e.Store.mu.RUnlock()
+	if !allowed {
+		return ErrForbidden
+	}
 	w := r.Brief.Structured
 	schema, err := compileResultSchema(w.ResultSchema)
 	if err != nil {
@@ -222,7 +251,12 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 
 	final := ""
 	options := harness.CodexOptions{Headless: true, Model: app.Agent.Model, Sandbox: "read-only", MaxTurns: authority.MaxTurns, OutputSchema: w.ResultSchema, Result: func(text string) error { final = text; return nil }}
-	bridge, token, err := e.Store.CreateBoundAgentSession(app.Agent.Runtime, r.Brief.Title, scratch, "", "", r.ID, decision.LocalOperator())
+	principal := decision.LocalOperator()
+	principal.Tenant = runTenant(&r)
+	if r.PrincipalID != "" {
+		principal.ID = r.PrincipalID
+	}
+	bridge, token, err := e.Store.CreateBoundAgentSession(app.Agent.Runtime, r.Brief.Title, scratch, "", "", r.ID, principal)
 	if err != nil {
 		return err
 	}

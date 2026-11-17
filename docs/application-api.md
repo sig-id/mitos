@@ -87,11 +87,10 @@ It needs no external database service, broker or remote worker.
 
 ## Not provided
 
-This is the S1 slice only. Service-principal authentication, tenant isolation,
 Remote worker claims/leases/checkpoints, MQTT work
 ownership and checkpointed conversation waits (gates S2–S4) are not implemented;
-the API remains loopback-only and same-user access is not multi-tenant
-authorization.
+the operator API remains loopback-only. Authenticated application access uses the
+separate TLS listener described below.
 
 ## Runtime storage and crash fixtures
 
@@ -125,3 +124,38 @@ to an exact boundary: `journal.before_append`, `journal.after_append`,
 exits with code 86 without cleanup. SQLite commit points test transaction rollback
 and durable recovery of complete event/projection batches. Leave these disabled
 outside fixture subprocesses.
+
+
+## Service principals and the application listener
+
+`serve --application-addr HOST:PORT --application-cert CERT --application-key KEY`
+serves a separate TLS-only API. The ordinary operator listener stays on loopback.
+Create scoped credentials through local `POST /api/service-principals` with `id`,
+`name`, `tenant: {org, project}`, `read: true`, optional `write: true`, permitted
+`agents` (default `mitos.generalist`), and future `expires_at` (at most 366 days).
+The response includes a one-time opaque token. Lists omit its hash; plaintext is
+never journaled. Rotate with `POST /api/service-principals/{id}/rotate` and
+`expires_at`, or revoke with `DELETE /api/service-principals/{id}`. The `principal`
+CLI wraps these operator operations.
+
+Every application request sends `Authorization: Bearer TOKEN` and the API version
+header over TLS. Its request-scoped principal produces a `Store.As(principal)`
+view; handlers receive that view through an application session, never the global
+store. The view revalidates permissions, expiry, credential revision and authority
+epoch on each operation. Cross-tenant identifiers return 404 for tasks, runs,
+artifacts, events, results and cancellation. Tenant identity is never taken from a
+submitted brief or a URL parameter. Operator, configuration, project, graph and
+storage routes are not installed on this listener.
+
+Application operations are `POST /api/tasks`, `GET /api/tasks/{id}`, `GET
+/api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/events`, `GET
+/api/runs/{id}/result`, `GET /api/runs/{id}/artifacts/{name}`, and `POST
+/api/runs/{id}/cancel`. Structured admission uses an index keyed by tenant and
+request key. The receipt binds the original principal and request digest: an
+identical retry returns its original Run; changing either conflicts. Expired keys
+retain tenant-scoped tombstones. Current principal permissions are checked before
+local execution and before acceptance.
+
+This is the principals/isolation preparation slice. Hosted capability flags remain
+false until bounded reads, capacity and the separate crash-tested application
+fixture demonstrate the complete S2 application boundary.
