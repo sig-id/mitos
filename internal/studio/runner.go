@@ -39,7 +39,6 @@ type Engine struct {
 	stop          context.CancelFunc
 	wg            sync.WaitGroup
 	actions       sync.Mutex
-	libraryMu     sync.Mutex
 	// Serializes idempotent structured-work admission by request key.
 	structuredMu sync.Mutex
 	setupMu      sync.Mutex

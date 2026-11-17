@@ -638,6 +638,10 @@ func (s *Server) apiLaunch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 409, map[string]string{"error": "request_key_conflict", "detail": "This request key was already used for a different request."})
 		return
 	}
+	if errors.Is(err, studio.ErrRequestKeyExpired) {
+		writeJSON(w, 410, map[string]string{"error": "request_key_expired"})
+		return
+	}
 	if err != nil {
 		writeJSON(w, 422, map[string]string{"error": err.Error()})
 		return

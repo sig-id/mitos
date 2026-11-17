@@ -63,7 +63,7 @@ func TestSavedDecisionCredentialLifecycle(t *testing.T) {
 	if first.APIKeyRef == second.APIKeyRef {
 		t.Fatal("rotation changed existing plan credential")
 	}
-	journal, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	journal, err := readTestJournal(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

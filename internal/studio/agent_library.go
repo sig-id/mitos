@@ -36,27 +36,21 @@ type savedLibrary struct {
 	Receipts  map[string]libraryReceipt      `json:"receipts"`
 }
 
+func emptySavedLibrary() savedLibrary {
+	return savedLibrary{Profile: libraryProfile, Revisions: map[string][]agents.Definition{}, Receipts: map[string]libraryReceipt{}}
+}
+
 func (e *Engine) readLibrary() (savedLibrary, error) {
-	saved := savedLibrary{Profile: libraryProfile, Revisions: map[string][]agents.Definition{}, Receipts: map[string]libraryReceipt{}}
-	f, err := os.Open(filepath.Join(e.Store.Dir(), "agent-library.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return saved, nil
+	// Immutable snapshots may be read while an orchestrator holds Store.mu.
+	// Never acquire the writer/state lock recursively or invert the edit lock.
+	saved := e.Store.agentLibrary.Load()
+	if saved == nil {
+		return emptySavedLibrary(), nil
 	}
-	if err != nil {
-		return saved, err
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, 8<<20+1))
-	if err != nil {
-		return saved, err
-	}
-	if len(raw) > 8<<20 {
-		return saved, errors.New("agent library exceeds 8 MiB")
-	}
-	saved = savedLibrary{}
-	if err = json.Unmarshal(raw, &saved); err != nil {
-		return saved, err
-	}
+	return graphClone(*saved), nil
+}
+
+func validateSavedLibrary(saved savedLibrary) error {
 	if saved.Revisions == nil {
 		saved.Revisions = map[string][]agents.Definition{}
 	}
@@ -64,17 +58,51 @@ func (e *Engine) readLibrary() (savedLibrary, error) {
 		saved.Receipts = map[string]libraryReceipt{}
 	}
 	if saved.Profile != libraryProfile {
-		return saved, fmt.Errorf("agent library %s is not %s; move it aside to start from the bundled library", filepath.Join(e.Store.Dir(), "agent-library.json"), libraryProfile)
+		return fmt.Errorf("agent library %s is not %s; move it aside to start from the bundled library", "agent-library.json", libraryProfile)
 	}
 	for _, revisions := range saved.Revisions {
 		for _, d := range revisions {
-			if err = d.Verify(); err != nil {
-				return saved, err
+			if err := d.Verify(); err != nil {
+				return err
 			}
 		}
 	}
-	return saved, nil
+	return nil
 }
+
+// Only the one-time runtime import reads the legacy library snapshot.
+func readLegacyLibrary(dir string) (*savedLibrary, error) {
+	f, err := os.Open(filepath.Join(dir, "agent-library.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, (8<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > 8<<20 {
+		return nil, errors.New("agent library exceeds 8 MiB")
+	}
+	var saved savedLibrary
+	if err = json.Unmarshal(raw, &saved); err != nil {
+		return nil, err
+	}
+	if err = validateSavedLibrary(saved); err != nil {
+		return nil, err
+	}
+	if saved.Revisions == nil {
+		saved.Revisions = map[string][]agents.Definition{}
+	}
+	if saved.Receipts == nil {
+		saved.Receipts = map[string]libraryReceipt{}
+	}
+	return &saved, nil
+}
+
 func libraryDefinitions(saved savedLibrary) ([]agents.Definition, error) {
 	library, err := agents.Library()
 	if err != nil {
@@ -99,8 +127,6 @@ func libraryDefinitions(saved savedLibrary) ([]agents.Definition, error) {
 	return library, nil
 }
 func (e *Engine) AgentLibrary() ([]agents.Definition, error) {
-	e.libraryMu.Lock()
-	defer e.libraryMu.Unlock()
 	saved, err := e.readLibrary()
 	if err != nil {
 		return nil, err
@@ -111,8 +137,8 @@ func (e *Engine) AgentLibrary() ([]agents.Definition, error) {
 // All edits create immutable revisions. Running attempts retain their own frozen
 // definition, so editing an agent cannot change an admitted assignment.
 func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
-	e.libraryMu.Lock()
-	defer e.libraryMu.Unlock()
+	e.Store.mu.Lock()
+	defer e.Store.mu.Unlock()
 	if !validGraphKey(req.Key) || len(strings.TrimSpace(req.Name)) < 2 || len(req.Name) > 100 || len(strings.TrimSpace(req.Description)) < 3 || len(req.Description) > 2000 || len(strings.TrimSpace(req.Instructions)) < 3 || len(req.Instructions) > 32000 {
 		return agents.Definition{}, errors.New("provide a name, description and instructions within the field limits")
 	}
@@ -164,32 +190,10 @@ func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
 	if len(raw) > 8<<20 {
 		return agents.Definition{}, errors.New("agent library capacity reached")
 	}
-	file, err := os.CreateTemp(e.Store.Dir(), ".agent-library-*")
-	if err != nil {
+	if err = e.Store.commit("", "effect", "agent_library_changed", change{AgentLibrary: &saved}); err != nil {
 		return agents.Definition{}, err
 	}
-	defer os.Remove(file.Name())
-	if _, err = file.Write(raw); err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return agents.Definition{}, err
-	}
-	if err = os.Rename(file.Name(), filepath.Join(e.Store.Dir(), "agent-library.json")); err != nil {
-		return agents.Definition{}, err
-	}
-	dir, err := os.Open(e.Store.Dir())
-	if err != nil {
-		return agents.Definition{}, err
-	}
-	defer dir.Close()
-	if err = dir.Sync(); err != nil {
-		return agents.Definition{}, err
-	}
+
 	return d, nil
 }
 

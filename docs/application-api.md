@@ -83,36 +83,45 @@ Admit with `POST /api/tasks` (or `/api/runs`):
   `POST /api/runs/{id}/cancel`.
 
 Structured work is not project-scoped and uses the `advisory` enforcement policy.
-It needs no database, broker or remote worker.
+It needs no external database service, broker or remote worker.
 
 ## Not provided
 
 This is the S1 slice only. Service-principal authentication, tenant isolation,
-SQLite transactional persistence, remote worker claims/leases/checkpoints, MQTT work
+Remote worker claims/leases/checkpoints, MQTT work
 ownership and checkpointed conversation waits (gates S2–S4) are not implemented;
 the API remains loopback-only and same-user access is not multi-tenant
 authorization.
 
-## Storage preparation and crash fixtures
+## Runtime storage and crash fixtures
 
-The runtime Store uses a journal interface for ordered replay, durable event and
-projection append, and close. Task/Run state still comes from the existing Event
-records and `apply`; indexes do not define separate lifecycle semantics. Retained
-artifact bytes use a separate store interface and become accessible only after
-their journal metadata commits.
+The runtime uses SQLite (`runtime.db`) with WAL and `synchronous=FULL`. Canonical
+Event records, their hash chain and rebuildable projections commit together. The
+one-time importer verifies `events.jsonl` and any legacy agent library, keeps the
+originals unchanged, and records completion transactionally. Later starts never
+read or write those snapshots. Unknown/newer schemas refuse startup. A failed or
+ambiguous commit latches the writer unavailable until reopen/replay discovers the
+durable tail; it cannot publish or perform another mutation against an uncertain head.
 
-The current JSONL adapter retains its historical complete-record-prefix recovery.
-It rejects projection updates because it cannot commit them transactionally. The
-SQLite replacement is the next storage slice; it will run the same transactional
-journal conformance harness as the in-memory test fake and remove the JSONL
-runtime path after a verified one-time import. This preparation does not change
-runtime capabilities or claim SQLite, tenant isolation, or remote-worker support.
+The journal interface exposes replay, event/projection append and close. Artifact
+bytes use a separate store, with metadata published only after durable byte storage.
+Exact library revisions are journaled. Offline audits read a consistent read-only
+SQLite snapshot and prefer the database over its same-directory JSONL backup;
+historical JSONL audit inputs remain supported without repair.
 
-Crash fixtures explicitly set both `MITOS_ENABLE_FAILPOINTS=1` and
-`MITOS_FAILPOINT` to one of `journal.before_append`, `journal.after_append` or
-`artifacts.after_put`. The selected boundary exits with code 86 without shutdown
-cleanup. The append points bracket the adapter durability barrier and precede
-in-memory publication; the artifact point follows durable byte storage but
-precedes metadata commit. Leave failpoints disabled outside test subprocesses.
-The SQLite adapter must add injection inside its transaction to demonstrate
-all-or-none crash recovery, beyond these Store-level boundaries.
+The local operator can `POST /api/storage/backup` with `{"directory":"/new/path"}`
+to create an online backup. `mitos storage restore --from BACKUP --data NEW_DIR`
+verifies a staging copy and advances its authority epoch before publication.
+Existing destinations are refused. Backups include the database, registered
+artifacts, the MQTT signing key and stored credential files; original workspaces, environment secrets
+and native CLI conversation stores remain separate. `POST
+/api/storage/expire-receipts` with a past RFC3339 `before` timestamp expires terminal
+structured request keys; tombstones reject retries with `410 request_key_expired`.
+The corresponding CLI is `mitos storage expire-receipts --before TIMESTAMP`.
+
+Crash fixtures explicitly set `MITOS_ENABLE_FAILPOINTS=1` and `MITOS_FAILPOINT`
+to an exact boundary: `journal.before_append`, `journal.after_append`,
+`sqlite.before_commit`, `sqlite.after_commit`, or `artifacts.after_put`. The process
+exits with code 86 without cleanup. SQLite commit points test transaction rollback
+and durable recovery of complete event/projection batches. Leave these disabled
+outside fixture subprocesses.

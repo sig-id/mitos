@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -41,8 +39,7 @@ func TestCooperationHistoryUsesJournalSequenceOnReplay(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(s.dir, "events.jsonl")
-	before, err := os.ReadFile(path)
+	before, err := readTestJournal(s.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +59,7 @@ func TestCooperationHistoryUsesJournalSequenceOnReplay(t *testing.T) {
 	if err != nil || len(next.Messages) != 1 || next.Messages[0].Seq != sequences[1] || next.Messages[0].Message.ID != "old-answer" || next.Next != nil {
 		t.Fatalf("next page: %+v %v", next, err)
 	}
-	after, err := os.ReadFile(path)
+	after, err := readTestJournal(s.dir)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("replay rewrote history", err)
 	}

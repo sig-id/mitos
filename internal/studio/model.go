@@ -180,6 +180,9 @@ type Event struct {
 }
 
 type change struct {
+	AgentLibrary        *savedLibrary              `json:"agent_library,omitempty"`
+	AuthorityEpoch      string                     `json:"authority_epoch,omitempty"`
+	ExpiredRequestKeys  []string                   `json:"expired_request_keys,omitempty"`
 	Result              *ResultReceipt             `json:"result,omitempty"`
 	HandoffBytes        int64                      `json:"handoff_bytes,omitempty"`
 	BlockedReason       string                     `json:"blocked_reason,omitempty"`

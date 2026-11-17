@@ -167,8 +167,15 @@ func readAuditCorpus(path string) ([]Run, int, error) {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() && d.Type()&os.ModeSymlink == 0 && d.Name() == "events.jsonl" {
-				files = append(files, path)
+			if !d.IsDir() && d.Type()&os.ModeSymlink == 0 {
+				if d.Name() == runtimeDatabase {
+					files = append(files, path)
+				}
+				if d.Name() == "events.jsonl" {
+					if _, err := os.Stat(filepath.Join(filepath.Dir(path), runtimeDatabase)); errors.Is(err, os.ErrNotExist) {
+						files = append(files, path)
+					}
+				}
 			}
 			return nil
 		})
@@ -177,13 +184,20 @@ func readAuditCorpus(path string) ([]Run, int, error) {
 		}
 	}
 	if len(files) == 0 {
-		return nil, 0, errors.New("no events.jsonl files found")
+		return nil, 0, errors.New("no runtime.db or legacy events.jsonl files found")
 	}
 	sort.Strings(files)
 	var runs []Run
 	legacyEvents := 0
 	for _, file := range files {
-		loaded, legacy, err := readInterruptLog(file)
+		var loaded []Run
+		var legacy int
+		var err error
+		if filepath.Base(file) == runtimeDatabase {
+			loaded, err = readSQLiteAudit(file)
+		} else {
+			loaded, legacy, err = readInterruptLog(file)
+		}
 		if err != nil {
 			return nil, 0, fmt.Errorf("%s: %w", file, err)
 		}
@@ -388,4 +402,20 @@ func readAuditLine(reader *bufio.Reader) ([]byte, error) {
 		}
 		return line, err
 	}
+}
+
+// readSQLiteAudit opens a consistent read-only WAL snapshot without taking the
+// writer flock, repairing storage, or executing any recovered work.
+func readSQLiteAudit(path string) ([]Run, error) {
+	db, err := openReadJournal(path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	j := &sqliteJournal{db: db}
+	fold := &Store{runs: map[string]*Run{}}
+	if err = j.Replay(fold.apply); err != nil {
+		return nil, err
+	}
+	return fold.List(), nil
 }

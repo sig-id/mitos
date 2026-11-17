@@ -219,13 +219,13 @@ func TestArtifactBatchPublishesAfterOneLogFlush(t *testing.T) {
 	assertPersistenceReplay(t, s, before)
 }
 
-func TestBatchedEventsRecoverAtRecordBoundaries(t *testing.T) {
+func TestLegacyBatchImportKeepsVerifiedRecordPrefix(t *testing.T) {
 	s := testStore(t)
 	r := createRun(t, s)
 	if err := s.TransitionAfterDecision(r.ID, "advance", "Prepare", "run_started", "running", "Preparing", "Starting"); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(s.Dir(), "events.jsonl"))
+	data, err := readTestJournal(s.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +254,8 @@ func TestBatchedEventsRecoverAtRecordBoundaries(t *testing.T) {
 				t.Fatalf("incorrect partial-batch recovery: %+v %v", got, err)
 			}
 			remaining, err := os.ReadFile(path)
-			if err != nil || !bytes.Equal(remaining, prefix) {
-				t.Fatalf("incorrect tail repair: %v", err)
+			if err != nil || !bytes.Equal(remaining, torn) {
+				t.Fatalf("legacy backup was modified: %v", err)
 			}
 			if err := recovered.Transition(r.ID, "run_started", "running", "Preparing", "Starting"); err != nil {
 				t.Fatal(err)

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"mitos/internal/failpoint"
@@ -21,7 +22,9 @@ func TestStoreCommitCrashRecovery(t *testing.T) {
 		}
 		defer s.Close()
 		run := os.Getenv("MITOS_JOURNAL_CRASH_RUN")
-		if os.Getenv("MITOS_JOURNAL_CRASH_ARTIFACT") == "1" {
+		if os.Getenv("MITOS_JOURNAL_CRASH_BATCH") == "1" {
+			err = s.TransitionAfterDecision(run, "advance", "Prepared", "run_started", "running", "Started", "Atomic batch")
+		} else if os.Getenv("MITOS_JOURNAL_CRASH_ARTIFACT") == "1" {
 			err = s.SaveArtifact(run, "report.txt", []byte("retained evidence"))
 		} else {
 			err = s.RecordDecision(run, "advance", "crash boundary")
@@ -31,7 +34,7 @@ func TestStoreCommitCrashRecovery(t *testing.T) {
 		}
 		t.Fatal("selected failpoint did not crash")
 	}
-	for _, point := range []string{"journal.before_append", "journal.after_append", "artifacts.after_put"} {
+	for _, point := range []string{"journal.before_append", "journal.after_append", "artifacts.after_put", "sqlite.before_commit", "sqlite.after_commit"} {
 		t.Run(point, func(t *testing.T) {
 			t.Setenv("MITOS_ENABLE_FAILPOINTS", "0")
 			dir := t.TempDir()
@@ -46,6 +49,10 @@ func TestStoreCommitCrashRecovery(t *testing.T) {
 			t.Setenv("MITOS_JOURNAL_CRASH_CHILD", dir)
 			t.Setenv("MITOS_JOURNAL_CRASH_RUN", r.ID)
 			t.Setenv("MITOS_JOURNAL_CRASH_ARTIFACT", "0")
+			t.Setenv("MITOS_JOURNAL_CRASH_BATCH", "0")
+			if strings.HasPrefix(point, "sqlite.") {
+				t.Setenv("MITOS_JOURNAL_CRASH_BATCH", "1")
+			}
 			if point == "artifacts.after_put" {
 				t.Setenv("MITOS_JOURNAL_CRASH_ARTIFACT", "1")
 			}
@@ -66,7 +73,11 @@ func TestStoreCommitCrashRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if point == "journal.after_append" {
+			if point == "sqlite.after_commit" {
+				if len(got.Events) != len(r.Events)+2 || got.Status != "running" {
+					t.Fatal("partial SQLite transaction recovered", got)
+				}
+			} else if point == "journal.after_append" {
 				if len(got.Events) != len(r.Events)+1 || got.Events[len(got.Events)-1].Kind != "advance" {
 					t.Fatal("durable commit lost after crash", got.Events)
 				}

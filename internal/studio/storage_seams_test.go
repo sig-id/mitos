@@ -80,25 +80,3 @@ func TestArtifactStoreFailureDoesNotPublishMetadata(t *testing.T) {
 		t.Fatal("artifact read bypassed adapter", err)
 	}
 }
-
-func TestLegacyJournalRefusesProjectionWrites(t *testing.T) {
-	s := testStore(t)
-	r := createRun(t, s)
-	before, _ := s.Get(r.ID)
-	e := conformanceEvent(s.seq+1, s.hash, "unsupported")
-	if err := s.journal.Append([]Event{e}, []journalProjection{{Namespace: "keys", Key: "request", Value: []byte("value")}}); err == nil {
-		t.Fatal("legacy adapter silently ignored projections")
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := OpenStore(s.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer recovered.Close()
-	after, _ := recovered.Get(r.ID)
-	if !reflect.DeepEqual(before, after) || recovered.seq != s.seq {
-		t.Fatal("refused projection write changed durable history")
-	}
-}

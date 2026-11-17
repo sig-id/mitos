@@ -166,8 +166,8 @@ Storage and implementation:
 
 - `internal/studio/system_configuration.go` validates and persists defaults as
   `system_configuration_changed` journal events. Project overrides remain in
-  `project_agent_policy_changed` events. Both live in `<--data>/events.jsonl`, normally
-  `.mitos/events.jsonl`; neither AGENTS.md nor browser storage owns these settings.
+  `project_agent_policy_changed` events. Both live in `<--data>/runtime.db`, normally
+  `.mitos/runtime.db`; neither AGENTS.md nor browser storage owns these settings.
 - `internal/web/settings.go` provides `GET/PUT /api/settings` and
   `GET/PUT /api/projects/{project}/settings`. Writes require the revision read from
   the corresponding GET. `POST /api/settings/decision-provider/test` tests an unsaved

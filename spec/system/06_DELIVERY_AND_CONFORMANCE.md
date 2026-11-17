@@ -216,8 +216,8 @@ concurrent-process capacity.
 ## Application-server delivery gates
 
 These gates extend the local milestones; they do not assert hosted readiness. The
-current build has no SQLite or PostgreSQL runtime adapter, general remote worker protocol, or
-complete multi-tenant application API. Acegoat is a design consumer in a separate
+current build uses SQLite but has no PostgreSQL runtime adapter, general remote
+worker protocol or complete multi-tenant application API. Acegoat is a design consumer in a separate
 repository. The initial slice MAY proceed alongside local delivery; it MUST NOT
 claim unrelated M1–M5 or G1–G5 guarantees. One home authority with remote workers does
 not require multi-server aggregation, but does require the relevant M2–M4 custody,
@@ -239,13 +239,14 @@ local `/api` surface, not an independently deployed application server.
 
 ### S2 – Transactional persistence and application boundary
 
-The storage preparation slice introduces a journal boundary (`Replay`,
-`Append(events, projections)`, `Close`), a separate artifact-store boundary, an
-in-memory transactional fake and a reusable conformance harness, plus opt-in
-subprocess crash injection. The current adapter remains JSONL until the SQLite
-cutover: it retains record-prefix crash recovery and refuses transactional
-projection updates. This seam alone does not demonstrate atomic multi-event crash
-recovery or complete S2; no hosted capability flag changes.
+Implemented storage subset: the SQLite journal uses WAL/FULL, transactional
+Event/projection append, embedded forward-only migrations and a verified one-time
+JSONL/library import. Journal and artifact-store boundaries retain common apply
+semantics. The transactional conformance harness runs against SQLite and an
+in-memory fake; subprocess crash fixtures bracket the actual SQLite commit. Online
+backup and verified restore include saved library revisions and artifacts; restore
+advances the authority epoch. Expired request keys retain rejection tombstones.
+This storage subset does not complete the application boundary or S2.
 
 Implement the SQLite runtime adapter with the same canonical Event records, hash
 chain, apply and replay, plus atomic journal/projection transactions. Replace

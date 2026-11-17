@@ -43,7 +43,7 @@ func TestInterruptReportCountsHumanResolutionsAndExcludesSamples(t *testing.T) {
 	}
 	// A reader must work while the writer is open, without taking its lock or
 	// changing the canonical bytes; the live API and offline CLI share the fold.
-	before, err := os.ReadFile(filepath.Join(s.Dir(), "events.jsonl"))
+	before, err := readTestJournal(s.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestInterruptReportCountsHumanResolutionsAndExcludesSamples(t *testing.T) {
 	if !reflect.DeepEqual(report, offline) {
 		t.Fatalf("offline/live reports differ: %+v %+v", report, offline)
 	}
-	after, _ := os.ReadFile(filepath.Join(s.Dir(), "events.jsonl"))
+	after, _ := readTestJournal(s.Dir())
 	if string(before) != string(after) {
 		t.Fatal("audit changed canonical log")
 	}
@@ -63,8 +63,7 @@ func TestInterruptReportCountsHumanResolutionsAndExcludesSamples(t *testing.T) {
 func TestInterruptAuditRejectsCorruptionAndNeverRepairsPartialTail(t *testing.T) {
 	s := testStore(t)
 	createRun(t, s)
-	path := filepath.Join(s.Dir(), "events.jsonl")
-	good, err := os.ReadFile(path)
+	good, err := readTestJournal(s.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,6 +46,8 @@ func run(args []string) error {
 		args = []string{"serve"}
 	}
 	switch args[0] {
+	case "storage":
+		return storageClient(args[1:])
 	case "message":
 		return messageClient(args[1:])
 	case "agent":
