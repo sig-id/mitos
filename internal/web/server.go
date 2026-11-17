@@ -345,6 +345,14 @@ func (s *Server) headers(next http.Handler) http.Handler {
 			// Structured input (256 KiB) and result schema (64 KiB) after JSON escaping.
 			limit = 1 << 20
 		}
+		if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/api/projects/") && strings.HasSuffix(r.URL.Path, "/cooperation-document") {
+			// A supported 64 KiB document can expand sixfold under JSON escaping, on top of its hash envelope.
+			limit = 512 << 10
+		}
+		if r.Method == "POST" && r.URL.Path == "/api/agent-library" {
+			// 32,000 instruction bytes plus name/description can expand under JSON escaping.
+			limit = 256 << 10
+		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			version, stated := apiversion.Requested(r)
 			if !stated || !apiversion.IsSupported(version) {
