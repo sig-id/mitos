@@ -10,19 +10,20 @@ import (
 )
 
 type AgentSession struct {
-	ProjectID     string          `json:"project_id,omitempty"`
-	DeskSessionID string          `json:"desk_session_id,omitempty"`
-	RunID         string          `json:"run_id,omitempty"`
-	EndedThreads  []string        `json:"ended_threads,omitempty"`
-	ID            string          `json:"session_id"`
-	Adapter       string          `json:"adapter"`
-	Title         string          `json:"title"`
-	Workspace     string          `json:"workspace"`
-	Operator      string          `json:"operator"`
-	Tenant        decision.Tenant `json:"tenant"`
-	TokenHash     string          `json:"token_hash,omitempty"`
-	LeaseUntil    time.Time       `json:"lease_until"`
-	Closed        bool            `json:"closed"`
+	AuthorityEpoch string          `json:"authority_epoch,omitempty"`
+	ProjectID      string          `json:"project_id,omitempty"`
+	DeskSessionID  string          `json:"desk_session_id,omitempty"`
+	RunID          string          `json:"run_id,omitempty"`
+	EndedThreads   []string        `json:"ended_threads,omitempty"`
+	ID             string          `json:"session_id"`
+	Adapter        string          `json:"adapter"`
+	Title          string          `json:"title"`
+	Workspace      string          `json:"workspace"`
+	Operator       string          `json:"operator"`
+	Tenant         decision.Tenant `json:"tenant"`
+	TokenHash      string          `json:"token_hash,omitempty"`
+	LeaseUntil     time.Time       `json:"lease_until"`
+	Closed         bool            `json:"closed"`
 }
 type AgentRequest struct {
 	SessionID   string          `json:"session_id"`
@@ -66,7 +67,7 @@ func (s *Store) CreateBoundAgentSession(adapter, title, workspace, project, sess
 	if s.supervisionHeld(project) {
 		return AgentSession{}, "", deviceError(409, "supervision_hold")
 	}
-	session := AgentSession{ProjectID: project, DeskSessionID: sessionID, RunID: runID, ID: newID("agent"), Adapter: adapter, Title: title, Workspace: workspace, Operator: p.ID, Tenant: p.Tenant, TokenHash: tokenHash(token), LeaseUntil: time.Now().UTC().Add(30 * time.Second)}
+	session := AgentSession{AuthorityEpoch: s.authorityEpoch, ProjectID: project, DeskSessionID: sessionID, RunID: runID, ID: newID("agent"), Adapter: adapter, Title: title, Workspace: workspace, Operator: p.ID, Tenant: p.Tenant, TokenHash: tokenHash(token), LeaseUntil: time.Now().UTC().Add(30 * time.Second)}
 	if err = s.commit("", "effect", "agent_session_started", change{AgentSession: &session}); err != nil {
 		return AgentSession{}, "", err
 	}
@@ -75,7 +76,7 @@ func (s *Store) CreateBoundAgentSession(adapter, title, workspace, project, sess
 }
 func (s *Store) agentSession(id, token string) (AgentSession, error) {
 	a, ok := s.agentSessions[id]
-	if !ok || a.TokenHash != tokenHash(token) || token == "" {
+	if !ok || a.TokenHash != tokenHash(token) || a.AuthorityEpoch != s.authorityEpoch || token == "" {
 		return a, deviceError(401, "unauthenticated")
 	}
 	if a.Closed || s.supervisionHeld(a.ProjectID) || !time.Now().Before(a.LeaseUntil) {
@@ -86,7 +87,7 @@ func (s *Store) agentSession(id, token string) (AgentSession, error) {
 func (s *Store) agentSourceActive(source *decision.Source) bool {
 	a, ok := s.agentSessions[source.SessionID]
 	r, exists := s.agentRequests[source.SessionID+"/"+source.RequestID]
-	return ok && exists && !a.Closed && time.Now().Before(a.LeaseUntil) && !r.Invalidated
+	return ok && exists && a.AuthorityEpoch == s.authorityEpoch && !a.Closed && time.Now().Before(a.LeaseUntil) && !r.Invalidated
 }
 func (s *Store) AgentHeartbeat(id, token string) error {
 	s.mu.Lock()
@@ -102,7 +103,7 @@ func (s *Store) CloseAgentSession(id, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a, ok := s.agentSessions[id]
-	if !ok || a.TokenHash != tokenHash(token) {
+	if !ok || a.TokenHash != tokenHash(token) || a.AuthorityEpoch != s.authorityEpoch {
 		return deviceError(401, "unauthenticated")
 	}
 	if a.Closed {

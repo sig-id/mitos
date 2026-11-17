@@ -21,8 +21,8 @@ Mitos also targets use as the headless agent runtime behind independent applicat
 backends. Acegoat is the first design use case and remains a separate product and
 repository. Applications own their users, conversations and domain rules; Mitos owns
 durable work and replaceable execution through versioned APIs. Local use retains
-its lightweight defaults. SQLite transactional runtime storage, tenant isolation and remote worker claims
-are planned capabilities, not available deployment options today. A PostgreSQL
+its lightweight defaults. SQLite is the transactional runtime store. Tenant isolation and remote worker
+claims remain planned capabilities. A PostgreSQL
 server edition is deferred beyond the SQLite S2–S4 plan.
 See the [server use case and delivery path](spec/README.md#application-server-reading-path).
 
@@ -202,8 +202,8 @@ as a JSON array. Resumes and forks retain the source environment profile while u
 current default arguments. Managed coordinated workers and read-only assistants
 retain their separate launch protocols.
 
-Settings are journaled in `<data-directory>/events.jsonl` (normally
-`.mitos/events.jsonl`), outside project instruction files. See
+Settings are journaled in `<data-directory>/runtime.db` (normally
+`.mitos/runtime.db`), outside project instruction files. See
 [configuration and implementation details](docs/agent-decisions.md#system-configuration-and-project-overrides).
 
 ## Optional decision models
@@ -236,7 +236,10 @@ The CLI connects to the running server:
 ./bin/mitos interrupts
 ```
 
-Work and interactive metadata are reconstructed from `.mitos/events.jsonl`. On first
+Work and interactive metadata are reconstructed from the hash-chained journal in
+`.mitos/runtime.db`. SQLite uses WAL and full synchronous commits. The first start
+imports any `events.jsonl` and `agent-library.json` once, verifies their integrity,
+and preserves the original files as backups. Subsequent starts use SQLite only. On first
 startup with this model, the server imports `desk/state.json` and retains that file
 as the pre-migration backup; it is no longer updated. Keep backups of the complete
 data directory, including terminal output and batch artifacts. Interrupted
@@ -461,3 +464,31 @@ capabilities. Update the owning specification and ADR when architecture changes.
 
 Mitos is licensed under the [MIT License](LICENSE). Bundled third-party components
 retain their accompanying license notices.
+
+
+## Runtime backup and restore
+
+While Mitos is serving, create a new private backup directory on the server:
+
+```sh
+./bin/mitos storage backup --out /path/to/new-backup
+```
+
+The SQLite online backup includes committed WAL data, canonical events, exact saved
+agent-library revisions, registered artifact bytes, the MQTT signing key and stored API-key files. It
+holds admission while copying; readers remain available. Environment credentials,
+original projects and native CLI conversation storage remain separate. An active
+process is not preserved by a database backup.
+
+Restore into a new data directory, then start the server with that directory:
+
+```sh
+./bin/mitos storage restore --from /path/to/new-backup --data /path/to/restored-data
+./bin/mitos serve --data /path/to/restored-data
+```
+
+Restore verifies the event chain and artifacts before publishing the new directory,
+and advances the authority epoch to fence pre-restore grants and tokens. It refuses
+an existing destination. Receipt expiry through `storage expire-receipts --before
+2026-11-01T00:00:00Z` retains rejection tombstones, so an expired key cannot start
+work again. Run and artifact history remains retained until data-directory removal.

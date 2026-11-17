@@ -30,7 +30,7 @@ func TestAutonomyMetricsReplayRealRecoveryWithoutTrustingProjection(t *testing.T
 	if report.PerRun[0].HorizonGrant == nil || report.PerRun[0].HorizonGrant.DurationMS != 0 {
 		t.Fatal("same-user execution acquired a grant")
 	}
-	before, err := os.ReadFile(filepath.Join(s.Dir(), "events.jsonl"))
+	before, err := readTestJournal(s.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestAutonomyMetricsReplayRealRecoveryWithoutTrustingProjection(t *testing.T
 	if err != nil || !reflect.DeepEqual(report, audited) {
 		t.Fatalf("live and audited metrics differ: %v\n%+v\n%+v", err, report, audited)
 	}
-	after, _ := os.ReadFile(filepath.Join(s.Dir(), "events.jsonl"))
+	after, _ := readTestJournal(s.Dir())
 	if string(before) != string(after) {
 		t.Fatal("metrics reader modified the log")
 	}

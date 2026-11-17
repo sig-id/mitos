@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -78,7 +76,7 @@ func TestDeviceLifecycleAndTenantIsolation(t *testing.T) {
 	if _, err = s.AuthenticateDevice(newToken, "read"); err == nil {
 		t.Fatal("revoked token accepted")
 	}
-	log, err := os.ReadFile(filepath.Join(s.Dir(), "events.jsonl"))
+	log, err := readTestJournal(s.Dir())
 	if err != nil {
 		t.Fatal(err)
 	}

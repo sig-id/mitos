@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -107,26 +108,30 @@ func TestEditingBundledAgentPreservesManifest(t *testing.T) {
 	}
 }
 
-func TestAgentLibraryRejectsUnversionedOrTamperedStore(t *testing.T) {
+func TestAgentLibraryRejectsUnversionedOrTamperedImport(t *testing.T) {
 	e, _ := graphEngine(t, false)
 	if _, err := e.SaveAgent(AgentEdit{Key: "seed", Name: "Seed agent", Description: "Seed", Instructions: "Seed instructions."}); err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(e.Store.Dir(), "agent-library.json")
-	raw, err := os.ReadFile(file)
+	saved, err := e.readLibrary()
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw, _ := json.MarshalIndent(saved, "", "  ")
 	for name, content := range map[string]string{
 		"unversioned": strings.Replace(string(raw), `"profile": "agent-library-store/v1",`, "", 1),
 		"tampered":    strings.Replace(string(raw), "Seed instructions.", "Other instructions.", 1),
 	} {
-		if err = os.WriteFile(file, []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = e.AgentLibrary(); err == nil {
-			t.Errorf("%s store accepted", name)
-		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err = os.WriteFile(filepath.Join(dir, "agent-library.json"), []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if s, err := OpenStore(dir); err == nil {
+				s.Close()
+				t.Fatal("corrupt library import accepted")
+			}
+		})
 	}
 }
 

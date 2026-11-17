@@ -24,7 +24,7 @@ func stopServer(args []string) error {
 	if f.NArg() != 0 || *timeout <= 0 {
 		return errors.New("stop accepts --data and a positive --timeout")
 	}
-	file, err := os.OpenFile(filepath.Join(*data, "events.jsonl"), os.O_RDWR, 0)
+	file, err := os.OpenFile(filepath.Join(*data, "runtime.lock"), os.O_RDWR, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		log.Printf("Mitos Studio already stopped (data: %s)", *data)
 		return nil

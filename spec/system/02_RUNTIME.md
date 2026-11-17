@@ -391,8 +391,8 @@ primary key provides an additional guard.
 
 The one-time cutover MUST verify and import `events.jsonl` and retain the original
 as backup. After cutover there is no JSONL runtime reader/writer or opt-in adapter.
-Until delivery, the current JSONL adapter retains incomplete-tail recovery and
-MUST reject corruption in complete records. Replay MUST validate schema versions
+The importer retains a verified complete-record prefix from interrupted JSONL
+and MUST reject corruption in complete records without editing the backup. Replay MUST validate schema versions
 and integrity. Embedded migrations are forward-only; unknown or newer schema
 versions MUST refuse startup. Any commit failure MUST latch further mutations
 unavailable until recovery re-reads the durable tail to determine whether the

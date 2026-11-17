@@ -51,12 +51,18 @@ func TestReplayRepairsOnlyIncompleteTail(t *testing.T) {
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0600)
+	raw, err := readTestJournal(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = f.WriteString(`{"seq":4`)
-	_ = f.Close()
+	migrated := t.TempDir()
+	if err = copyPrivateTree(filepath.Join(dir, "artifacts"), filepath.Join(migrated, "artifacts")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(migrated, "events.jsonl"), append(raw, []byte(`{"seq":4`)...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dir = migrated
 	s, err = OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -85,10 +91,9 @@ func TestCorruptCompletedRecordIsRejected(t *testing.T) {
 	}
 	createRun(t, s)
 	_ = s.Close()
-	path := filepath.Join(dir, "events.jsonl")
-	b, _ := os.ReadFile(path)
+	b, _ := readTestJournal(dir)
 	b = []byte(strings.Replace(string(b), "Inspect the workspace", "Changed the workspace", 1))
-	if err = os.WriteFile(path, b, 0600); err != nil {
+	if err = writeTestJournal(dir, b); err != nil {
 		t.Fatal(err)
 	}
 	if reopened, err := OpenStore(dir); err == nil {

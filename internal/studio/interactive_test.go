@@ -206,7 +206,7 @@ func TestInteractiveJournalIdentityReplacementAndAcceptance(t *testing.T) {
 	if _, err := ReportAutonomy(store.List()); err != nil {
 		t.Fatal("interactive history broke batch metrics", err)
 	}
-	if _, err := AuditAutonomyLogs(filepath.Join(dir, "events.jsonl")); err != nil {
+	if _, err := AuditAutonomyLogs(dir); err != nil {
 		t.Fatal("interactive history broke offline audit", err)
 	}
 }

@@ -21,6 +21,9 @@ import (
 )
 
 type Store struct {
+	agentLibrary           *savedLibrary
+	authorityEpoch         string
+	expiredRequestKeys     map[string]bool
 	systemConfiguration    SystemConfiguration
 	supervisorVerdicts     map[string]SupervisorVerdict
 	supervisionIncidents   map[string]SupervisionIncident
@@ -77,7 +80,7 @@ func OpenStore(dir string) (*Store, error) {
 	if err = os.MkdirAll(abs, 0700); err != nil {
 		return nil, err
 	}
-	j, err := openJSONLJournal(abs)
+	j, err := openSQLiteJournal(abs)
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +135,27 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.AgentLibrary != nil {
+		if err := validateSavedLibrary(*c.AgentLibrary); err != nil {
+			return err
+		}
+		copy := graphClone(*c.AgentLibrary)
+		s.agentLibrary = &copy
+		return nil
+	}
+	if c.AuthorityEpoch != "" {
+		s.authorityEpoch = c.AuthorityEpoch
+		return nil
+	}
+	if len(c.ExpiredRequestKeys) > 0 {
+		if s.expiredRequestKeys == nil {
+			s.expiredRequestKeys = map[string]bool{}
+		}
+		for _, key := range c.ExpiredRequestKeys {
+			s.expiredRequestKeys[key] = true
+		}
+		return nil
 	}
 	if c.Graph != nil {
 		if err := s.applyGraph(e, c.Graph); err != nil {
@@ -514,9 +538,13 @@ func (s *Store) persist(events ...Event) error {
 	if s.writeErr != nil {
 		return fmt.Errorf("event log unavailable: %w", s.writeErr)
 	}
-	err := s.mu.io(func() error {
+	projections, err := projectJournalEvents(events)
+	if err != nil {
+		return err
+	}
+	err = s.mu.io(func() error {
 		failpoint.Hit("journal.before_append")
-		if err := s.journal.Append(events, nil); err != nil {
+		if err := s.journal.Append(events, projections); err != nil {
 			return err
 		}
 		failpoint.Hit("journal.after_append")

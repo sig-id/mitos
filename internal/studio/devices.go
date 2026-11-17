@@ -34,16 +34,17 @@ type DevicePermissions struct {
 	Voice   bool `json:"voice"`
 }
 type Device struct {
-	ID            string            `json:"device_id"`
-	Name          string            `json:"name"`
-	Operator      string            `json:"operator"`
-	Tenant        decision.Tenant   `json:"tenant"`
-	Permissions   DevicePermissions `json:"permissions"`
-	ExpiresAt     time.Time         `json:"expires_at"`
-	Revoked       bool              `json:"revoked"`
-	Revision      string            `json:"revision"`
-	TokenHash     string            `json:"token_hash,omitempty"`
-	STTDisclosure string            `json:"stt_disclosure"`
+	AuthorityEpoch string            `json:"authority_epoch,omitempty"`
+	ID             string            `json:"device_id"`
+	Name           string            `json:"name"`
+	Operator       string            `json:"operator"`
+	Tenant         decision.Tenant   `json:"tenant"`
+	Permissions    DevicePermissions `json:"permissions"`
+	ExpiresAt      time.Time         `json:"expires_at"`
+	Revoked        bool              `json:"revoked"`
+	Revision       string            `json:"revision"`
+	TokenHash      string            `json:"token_hash,omitempty"`
+	STTDisclosure  string            `json:"stt_disclosure"`
 }
 type DevicePairInput struct {
 	Name          string            `json:"name"`
@@ -100,7 +101,7 @@ func (s *Store) PairDevice(in DevicePairInput, p decision.Principal) (Device, st
 	if err != nil {
 		return Device{}, "", err
 	}
-	d := Device{ID: "device_" + rand.Text(), Name: in.Name, Operator: p.ID, Tenant: p.Tenant, Permissions: in.Permissions, ExpiresAt: in.ExpiresAt.UTC(), Revision: rand.Text(), TokenHash: tokenHash(token), STTDisclosure: in.STTDisclosure}
+	d := Device{AuthorityEpoch: s.authorityEpoch, ID: "device_" + rand.Text(), Name: in.Name, Operator: p.ID, Tenant: p.Tenant, Permissions: in.Permissions, ExpiresAt: in.ExpiresAt.UTC(), Revision: rand.Text(), TokenHash: tokenHash(token), STTDisclosure: in.STTDisclosure}
 	if err := s.commit("", "effect", "device_paired", change{Device: &d}); err != nil {
 		return Device{}, "", err
 	}
@@ -137,6 +138,7 @@ func (s *Store) ChangeDevice(id string, rotate bool, expires time.Time, p decisi
 		}
 		token = replacement
 		d.TokenHash = tokenHash(token)
+		d.AuthorityEpoch = s.authorityEpoch
 		d.ExpiresAt = expires.UTC()
 		kind = "device_rotated"
 	} else {
@@ -151,7 +153,7 @@ func (s *Store) ChangeDevice(id string, rotate bool, expires time.Time, p decisi
 func (s *Store) authenticateDevice(token, permission string) (Device, error) {
 	id := s.deviceTokens[tokenHash(token)]
 	d, ok := s.devices[id]
-	if !ok || token == "" {
+	if !ok || token == "" || d.AuthorityEpoch != s.authorityEpoch {
 		return Device{}, deviceError(401, "unauthenticated")
 	}
 	if d.Revoked {

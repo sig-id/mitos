@@ -3,8 +3,6 @@ package studio
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -265,8 +263,7 @@ func TestServicePriorityLegacyPendingDeliveryRetainsZeroAdjustment(t *testing.T)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(directory, "events.jsonl")
-	data, err := os.ReadFile(path)
+	data, err := readTestJournal(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +298,7 @@ func TestServicePriorityLegacyPendingDeliveryRetainsZeroAdjustment(t *testing.T)
 		rewritten.Write(encoded)
 		rewritten.WriteByte('\n')
 	}
-	if err = os.WriteFile(path, rewritten.Bytes(), 0600); err != nil {
+	if err = writeTestJournal(directory, rewritten.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	replay, err := OpenStore(directory)

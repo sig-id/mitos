@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -178,14 +176,13 @@ func TestRequestCrashReconstructsCardBeforeAnyExecution(t *testing.T) {
 	}
 	saved, _ := s.Get(r.ID)
 	s.Close()
-	logPath := filepath.Join(dir, "events.jsonl")
-	data, err := os.ReadFile(logPath)
+	data, err := readTestJournal(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := bytes.SplitAfter(data, []byte{'\n'})
 	prefix := bytes.Join(lines[:len(lines)-2], nil)
-	if err = os.WriteFile(logPath, prefix, 0600); err != nil {
+	if err = writeTestJournal(dir, prefix); err != nil {
 		t.Fatal(err)
 	}
 	s, err = OpenStore(dir)

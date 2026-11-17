@@ -102,6 +102,9 @@ func (e *Engine) LaunchStructured(b Brief) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	if e.Store.requestKeyExpired(b.Structured.Key) {
+		return Run{}, ErrRequestKeyExpired
+	}
 	if prior, ok := e.Store.structuredRun(b.Structured.Key); ok {
 		if prior.Brief.Structured.RequestHash != b.Structured.RequestHash {
 			return Run{}, ErrConflict
@@ -298,20 +301,21 @@ func (e *Engine) StructuredResult(id string) (json.RawMessage, error) {
 // StructuredCapabilities publishes what headless structured work actually supports.
 func StructuredCapabilities() map[string]any {
 	return map[string]any{
-		"profile":                 "structured-work/v1",
-		"executor":                "agent definitions (agent:<id>, worker kind) on the codex-headless runtime profile",
-		"workspace":               false,
-		"git":                     false,
-		"pty":                     false,
-		"input":                   map[string]any{"type": "JSON object", "max_bytes": maxStructuredInputBytes},
-		"result_schema":           map[string]any{"max_bytes": maxResultSchemaBytes, "keywords": schemaKeywords, "rules": "root object; every object sets additionalProperties false and requires all properties; max depth 16"},
-		"result":                  map[string]any{"max_bytes": maxStructuredResultBytes, "acceptance": "exact validation against the declared schema; a mismatch fails the attempt"},
-		"idempotency":             "structured.key; the same key with a different request conflicts",
-		"enforcement_policy":      EnforcementAdvisory,
-		"definition_binding":      "exact revision and digest frozen at admission",
-		"project_scoped":          false,
-		"requires_database":       false,
-		"requires_broker":         false,
-		"requires_remote_workers": false,
+		"profile":                   "structured-work/v1",
+		"executor":                  "agent definitions (agent:<id>, worker kind) on the codex-headless runtime profile",
+		"workspace":                 false,
+		"git":                       false,
+		"pty":                       false,
+		"input":                     map[string]any{"type": "JSON object", "max_bytes": maxStructuredInputBytes},
+		"result_schema":             map[string]any{"max_bytes": maxResultSchemaBytes, "keywords": schemaKeywords, "rules": "root object; every object sets additionalProperties false and requires all properties; max depth 16"},
+		"result":                    map[string]any{"max_bytes": maxStructuredResultBytes, "acceptance": "exact validation against the declared schema; a mismatch fails the attempt"},
+		"idempotency":               "structured.key; the same key with a different request conflicts",
+		"enforcement_policy":        EnforcementAdvisory,
+		"definition_binding":        "exact revision and digest frozen at admission",
+		"project_scoped":            false,
+		"requires_database":         true,
+		"requires_database_service": false,
+		"requires_broker":           false,
+		"requires_remote_workers":   false,
 	}
 }

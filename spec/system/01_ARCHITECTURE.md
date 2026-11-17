@@ -161,7 +161,8 @@ SQLite is the transactional runtime store under
 [ADR 0005](../ADRs/0005_APPLICATION_SERVER_RUNTIME.md), preserving the canonical
 Event journal, hash chain and replay. The cutover replaces local JSONL persistence
 with a verified one-time import and retains the original as backup; no dual-adapter
-mode is supported. Until that cutover ships, JSONL remains the current adapter.
+mode is supported. The SQLite adapter and one-time import are implemented;
+authenticated application access and remote workers retain their delivery gates.
 A PostgreSQL server edition is deferred, outside the S2–S4 implementation plan.
 Storage MUST preserve atomic transitions, durable receipts, replay/recovery and one
 authoritative writer per object. Multi-writer replication and automatic authority
