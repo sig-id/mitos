@@ -131,6 +131,20 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		status, code := 422, "invalid_worker_request"
+		// Validation failures answer 4xx so the worker stops retrying them.
+		// Anything else — journal, artifact or context persistence — is a
+		// backend failure: report 5xx so the stable request-ID retry recovers
+		// instead of abandoning the attempt.
+		validation := errors.Is(err, studio.ErrConflict) || errors.Is(err, studio.ErrNotFound) || errors.Is(err, studio.ErrUnauthenticated) || errors.Is(err, studio.ErrForbidden) || errors.Is(err, studio.ErrStaleBinding) || errors.Is(err, studio.ErrInputsNotConsumed) || errors.Is(err, studio.ErrSuperseded) || errors.Is(err, studio.ErrReconciliationRequired)
+		if !validation {
+			switch message := err.Error(); {
+			case strings.HasPrefix(message, "checkpoint_"):
+			case strings.HasPrefix(message, "result_schema_mismatch"):
+			case strings.HasPrefix(message, "invalid worker"):
+			default:
+				status, code = 500, "backend_unavailable"
+			}
+		}
 		switch {
 		case errors.Is(err, studio.ErrUnauthenticated):
 			status, code = 401, "unauthenticated"
