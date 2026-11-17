@@ -168,6 +168,22 @@ Only Mitos's handoff MCP server is connected in this adapter; other native MCP
 connections are not imported. Codex retains its app-server transport. Pi and other
 session adapters do not yet support coordinated work and are refused here.
 
+Native delegation is removed from the tool surface of both harnesses, not
+discouraged by instructions. Claude workers launch with an explicit `--tools`
+allowlist, `--disallowedTools Agent,Task` and `--setting-sources ""`. Mitos-owned
+Codex launches (workers, structured stages and read-only investigations) pass
+`-c features.multi_agent=false -c features.multi_agent_v2=false` and run under a
+Mitos-owned `CODEX_HOME` at `<store>/native/codex/<hash of source home>/`. The
+operator's `config.toml`, feature flags, skills, plugins, rules and memories do
+not reach that home. Only `auth.json` passes through, as a symlink, so token
+refreshes write back to the operator's file. The home is stable per source home
+(the profile's `CODEX_HOME`, else `~/.codex`) because saved native threads live
+there and continuations resume them. Credentials in the environment
+(`OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL`) pass through unchanged.
+Keyring-stored Codex credentials and custom providers that exist only in the
+operator's `config.toml` are not available to workers. Interactive desk sessions
+keep the operator's own harness settings.
+
 Claude's native tool restrictions do **not** provide OS confinement on the local
 provider. Its workspace, command and network capability receipts are advisory;
 strict policies refuse incompatible definitions. The adapter preserves native

@@ -9,11 +9,13 @@ import (
 
 // FinalAnswer is authored for the original goal, separately from review receipts.
 type ResultItem struct {
-	Kind  string `json:"kind"`
-	Title string `json:"title"`
-	Task  string `json:"task"`
-	Path  string `json:"path"`
-	URL   string `json:"url"`
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	Task   string `json:"task"`
+	Path   string `json:"path"`
+	URL    string `json:"url"`
+	Digest string `json:"digest,omitempty"`
+	Bytes  int64  `json:"bytes,omitempty"`
 }
 type FinalAnswer struct {
 	Items       []ResultItem `json:"items,omitempty"`
@@ -38,18 +40,20 @@ type PublishGraphResult struct {
 	FinalAnswer
 }
 
-func bindGraphResult(g *WorkGraph, answer FinalAnswer, author string) (*GraphResult, error) {
+func (s *Store) bindGraphResult(g *WorkGraph, answer FinalAnswer, author string) (*GraphResult, error) {
 	if strings.TrimSpace(answer.Title) == "" || len(answer.Title) > 240 || strings.TrimSpace(answer.Markdown) == "" || len(answer.Markdown) > 128<<10 || len(answer.SourceTasks) == 0 || len(answer.SourceTasks) > 64 {
 		return nil, graphError("completion needs a bounded final answer to the original goal and accepted worker sources")
 	}
 	result := &GraphResult{Title: answer.Title, Markdown: answer.Markdown, Author: author, CreatedAt: time.Now().UTC()}
 	seen := map[string]bool{}
+	acceptedRun := map[string]string{}
 	for _, id := range answer.SourceTasks {
 		m := g.Members[id]
 		if m == nil || m.OrchestratorFor != "" || m.Spec.Kind != "application" || m.Accepted == nil || m.Replacement != "" || m.Accepted.RunID == "" || seen[id] {
 			return nil, graphError("final answer must cite distinct accepted, unreplaced workers")
 		}
 		seen[id] = true
+		acceptedRun[id] = m.Accepted.RunID
 		result.Sources = append(result.Sources, ResultSource{Task: id, Run: m.Accepted.RunID})
 	}
 	if len(answer.Items) > 48 {
@@ -64,16 +68,25 @@ func bindGraphResult(g *WorkGraph, answer FinalAnswer, author string) (*GraphRes
 			if !seen[item.Task] || !fs.ValidPath(item.Path) || item.Path == "." || len(item.Path) > 2048 || item.URL != "" {
 				return nil, graphError("result file must reference a saved source")
 			}
+			// Every deliverable must resolve against the exact accepted run's saved
+			// evidence now, so publication can never advertise a missing file.
+			digest, size, resolveErr := s.resolveResultFile(acceptedRun[item.Task], item.Path)
+			if resolveErr != nil {
+				return nil, graphError("result file %s is not saved by its accepted source: %v", item.Path, resolveErr)
+			}
+			item.Digest = digest
+			item.Bytes = size
+			result.Items = append(result.Items, item)
 		case "link":
 			u, err := url.Parse(item.URL)
 			if err != nil || len(item.URL) > 4096 || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || item.Task != "" || item.Path != "" {
 				return nil, graphError("result link must be an HTTP URL")
 			}
+			result.Items = append(result.Items, item)
 		default:
 			return nil, graphError("unknown result item kind")
 		}
 	}
-	result.Items = append([]ResultItem(nil), answer.Items...)
 	return result, nil
 }
 
@@ -90,7 +103,7 @@ func (s *Store) PublishResult(id string, req PublishGraphResult) (WorkGraph, err
 		return WorkGraph{}, ErrConflict
 	}
 	next := graphClone(*old)
-	result, err := bindGraphResult(&next, req.FinalAnswer, "operator")
+	result, err := s.bindGraphResult(&next, req.FinalAnswer, "operator")
 	if err != nil {
 		return WorkGraph{}, err
 	}
