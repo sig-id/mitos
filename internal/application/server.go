@@ -44,6 +44,12 @@ func fail(w http.ResponseWriter, err error) {
 		status, code = 403, "forbidden"
 	case errors.Is(err, studio.ErrNotFound):
 		status, code = 404, "not_found"
+	case errors.Is(err, studio.ErrInputsNotConsumed):
+		status, code = 409, "inputs_not_consumed"
+	case errors.Is(err, studio.ErrSuperseded):
+		status, code = 409, "superseded_context"
+	case errors.Is(err, studio.ErrVersionConflict):
+		status, code = 409, "version_conflict"
 	case errors.Is(err, studio.ErrConflict):
 		status, code = 409, "request_conflict"
 	case errors.Is(err, studio.ErrTenantCapacity):
@@ -90,6 +96,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.ApplicationSession) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if r.Method == "POST" && r.URL.Path == "/api/inputs" {
+		var in studio.TaskInputRequest
+		d := json.NewDecoder(r.Body)
+		d.DisallowUnknownFields()
+		if d.Decode(&in) != nil || d.Decode(new(any)) != io.EOF {
+			reply(w, 400, map[string]string{"error": "invalid_input"})
+			return
+		}
+		receipt, err := session.AppendInput("", in)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		reply(w, 201, receipt)
+		return
+	}
+
 	if len(parts) == 4 && parts[0] == "api" && parts[1] == "tasks" && parts[3] == "inputs" {
 		if r.Method == "GET" {
 			after, limit, err := pageParameters(r)
@@ -138,7 +161,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.A
 		}
 		run, err := session.Admit(brief)
 		if err != nil {
-			if errors.Is(err, studio.ErrConflict) || errors.Is(err, studio.ErrRequestKeyExpired) || errors.Is(err, studio.ErrUnauthenticated) || errors.Is(err, studio.ErrForbidden) || errors.Is(err, studio.ErrTenantCapacity) || errors.Is(err, studio.ErrTenantBudget) {
+			if errors.Is(err, studio.ErrConflict) || errors.Is(err, studio.ErrRequestKeyExpired) || errors.Is(err, studio.ErrUnauthenticated) || errors.Is(err, studio.ErrForbidden) || errors.Is(err, studio.ErrTenantCapacity) || errors.Is(err, studio.ErrTenantBudget) || errors.Is(err, studio.ErrSuperseded) {
 				fail(w, err)
 			} else {
 				reply(w, 422, map[string]string{"error": "invalid_structured_work", "detail": err.Error()})

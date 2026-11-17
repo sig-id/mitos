@@ -24,6 +24,8 @@ import (
 )
 
 type Store struct {
+	taskContextVersions    map[string]map[string]taskContextVersion
+	tenantVersions         map[string]uint64
 	pendingInputWakes      map[string]bool
 	workerContexts         map[string]workerContextRecord
 	taskInputs             map[string][]TaskInput
@@ -187,6 +189,9 @@ func (s *Store) apply(e Event) error {
 		s.tenantScheduler = graphClone(*c.TenantScheduler)
 	}
 	s.indexApplicationEvent(e, c)
+	if c.Input != nil && e.RunID == "" {
+		return nil
+	}
 	if c.ServicePrincipal != nil {
 		s.applyServicePrincipal(*c.ServicePrincipal)
 		return nil
@@ -730,6 +735,12 @@ func (s *Store) createWithEventLocked(b Brief, appName, parentID string, sample 
 }
 
 func (s *Store) createWithPrincipalLocked(b Brief, appName, parentID string, sample bool, call *ServiceCall, retry *ServiceRetryPlan, delivery *ServiceEventDelivery, p decision.Principal) (Run, error) {
+	if b.Structured != nil && !s.versionsCurrentLocked(p.Tenant, b.Structured.ConsumedVersions) {
+		prior := s.runs[parentID]
+		if prior == nil || !s.taskHasActionHoldLocked(prior.TaskID) {
+			return Run{}, ErrSuperseded
+		}
+	}
 	if err := s.tenantAdmissionLocked(p, b, parentID); err != nil {
 		return Run{}, err
 	}

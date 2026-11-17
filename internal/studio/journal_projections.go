@@ -22,7 +22,12 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 			}
 			if c.Input.Record != nil {
 				r := c.Input.Record
-				add("task_input", r.TaskID+"/"+strconv.FormatInt(r.Seq, 10), r)
+				if r.TaskID != "" {
+					add("task_input", r.TaskID+"/"+strconv.FormatInt(r.Seq, 10), r)
+				}
+				for _, v := range r.Versions {
+					add("tenant_version", scopedRequestKey(r.Tenant, v.Name), v.Value)
+				}
 				add("task_input_key", scopedRequestKey(r.Tenant, r.TaskID+"/"+r.Key), r.Receipt)
 			}
 			if c.Input.Wait != nil {
@@ -79,6 +84,15 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 			if wc.Outbox != nil {
 				add("worker_outbox", wc.Outbox.ID, wc.Outbox)
 			}
+		}
+
+		if c.Task != nil && c.Task.Brief.Structured != nil && c.Task.Brief.Structured.SerializationKey != "" {
+			t := c.Task
+			var raw []byte
+			if t.Status == "running" || t.Status == "scheduled" {
+				raw, _ = json.Marshal(map[string]any{"tenant": t.Tenant, "key": t.Brief.Structured.SerializationKey, "run_id": t.CurrentRunID})
+			}
+			out = append(out, journalProjection{Namespace: "serialization_run", Key: t.CurrentRunID, Value: raw})
 		}
 
 		ids := map[string]bool{}

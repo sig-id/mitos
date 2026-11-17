@@ -23,6 +23,7 @@ type WorkerCredential struct {
 	Local     bool      `json:"local,omitempty"`
 }
 type workerRegistration struct {
+	Features []string `json:"features,omitempty"`
 	structuredworker.Identity
 	Capabilities []string `json:"capabilities"`
 }
@@ -178,6 +179,12 @@ func (s *Store) workerReplayLocked(key, digest string) (structuredworker.Receipt
 		if r.Digest != digest {
 			return structuredworker.Receipt{}, true, ErrConflict
 		}
+		if r.Response.State == "inputs_not_consumed" {
+			return r.Response, true, ErrInputsNotConsumed
+		}
+		if r.Response.State == "superseded_context" {
+			return r.Response, true, ErrSuperseded
+		}
 		if r.Response.State == "stale_binding" {
 			return r.Response, true, ErrStaleBinding
 		}
@@ -192,8 +199,13 @@ func (s *Store) RegisterWorker(token string, in structuredworker.Register) (stru
 	if err != nil {
 		return structuredworker.Receipt{}, err
 	}
-	if !ValidDeviceID(in.Incarnation) || !validGraphKey(in.RequestID) || len(in.Capabilities) == 0 || len(in.Capabilities) > 128 {
+	if !ValidDeviceID(in.Incarnation) || !validGraphKey(in.RequestID) || len(in.Capabilities) == 0 || len(in.Capabilities) > 128 || len(in.Features) > 16 {
 		return structuredworker.Receipt{}, ErrConflict
+	}
+	for _, feature := range in.Features {
+		if !validGraphKey(feature) {
+			return structuredworker.Receipt{}, ErrConflict
+		}
 	}
 	for _, cap := range in.Capabilities {
 		if !slices.Contains(p.Agents, cap) {
@@ -208,7 +220,7 @@ func (s *Store) RegisterWorker(token string, in structuredworker.Register) (stru
 	if s.workerIncarnations[workerRequestKey(p.ID, in.Incarnation, "")] && s.workerRegistrations[p.ID].Incarnation != in.Incarnation {
 		return structuredworker.Receipt{}, ErrStaleBinding
 	}
-	r := workerRegistration{Identity: structuredworker.Identity{ID: p.ID, Incarnation: in.Incarnation}, Capabilities: slices.Clone(in.Capabilities)}
+	r := workerRegistration{Identity: structuredworker.Identity{ID: p.ID, Incarnation: in.Incarnation}, Capabilities: slices.Clone(in.Capabilities), Features: slices.Clone(in.Features)}
 	response := structuredworker.Receipt{RequestID: in.RequestID, Seq: s.seq + 1, State: "registered", WakeAuthority: s.home.ID}
 	err = s.commit("", "effect", "worker_registered", change{Worker: &workerChange{Registration: &r, Receipt: &workerReceipt{Key: key, Digest: digest, Response: response}}})
 	return response, err
@@ -266,6 +278,29 @@ func (s *Store) WorkerClaim(token string, in structuredworker.Claim) (structured
 		if task == nil || !slices.Contains(p.Pools, task.Scheduling.Pool) || !slices.Contains(reg.Capabilities, r.Brief.Structured.Frozen.ID) {
 			continue
 		}
+		required := []string{}
+		if len(r.Brief.Structured.CheckpointSchema) > 0 {
+			required = append(required, "checkpoint/v1", "wait/v1")
+		}
+		if len(s.taskInputs[r.TaskID]) > 0 {
+			required = append(required, "inputs/v1")
+		}
+		if len(r.Brief.Structured.ConsumedVersions) > 0 {
+			required = append(required, "versions/v1")
+		}
+		if len(r.Brief.Structured.ActionTargets) > 0 {
+			required = append(required, "actions/v1")
+		}
+		compatible := true
+		for _, feature := range required {
+			if !slices.Contains(reg.Features, feature) {
+				compatible = false
+			}
+		}
+		if !compatible {
+			continue
+		}
+
 		if !s.admittedPrincipalAllowedLocked(r.PrincipalID, runTenant(&r)) {
 			continue
 		}
@@ -296,7 +331,11 @@ func (s *Store) WorkerClaim(token string, in structuredworker.Claim) (structured
 		if err != nil {
 			return structuredworker.Receipt{}, err
 		}
-		lease := structuredworker.LeaseRecord{Binding: structuredworker.Binding{InputCursor: inputPage.Next, InputLogDigest: graphDigest(inputPage.Inputs), Identity: reg.Identity, TaskID: r.TaskID, RunID: r.ID, Generation: generation, Epoch: s.authorityEpoch, InputDigest: digestText(string(r.Brief.Structured.Input)), DefinitionDigest: r.Brief.Structured.Digest, SchemaDigest: digestText(string(r.Brief.Structured.ResultSchema)), Acceptance: "exact-schema/current-permissions", LeaseSeconds: 30, BudgetSeconds: budget}, ExpiresAt: time.Now().UTC().Add(30 * time.Second), BudgetEndsAt: time.Now().UTC().Add(time.Duration(budget) * time.Second)}
+		acceptance := "exact-schema/current-permissions"
+		if !s.versionsCurrentLocked(runTenant(&r), r.Brief.Structured.ConsumedVersions) {
+			acceptance = "reconcile-only/current-permissions"
+		}
+		lease := structuredworker.LeaseRecord{Binding: structuredworker.Binding{SerializationDigest: digestText(scopedRequestKey(runTenant(&r), r.Brief.Structured.SerializationKey)), ContextVersionDigest: graphDigest(r.Brief.Structured.ConsumedVersions), InputCursor: inputPage.Next, InputLogDigest: graphDigest(inputPage.Inputs), Identity: reg.Identity, TaskID: r.TaskID, RunID: r.ID, Generation: generation, Epoch: s.authorityEpoch, InputDigest: digestText(string(r.Brief.Structured.Input)), DefinitionDigest: r.Brief.Structured.Digest, SchemaDigest: digestText(string(r.Brief.Structured.ResultSchema)), Acceptance: acceptance, LeaseSeconds: 30, BudgetSeconds: budget}, ExpiresAt: time.Now().UTC().Add(30 * time.Second), BudgetEndsAt: time.Now().UTC().Add(time.Duration(budget) * time.Second)}
 		response := structuredworker.Receipt{RequestID: in.RequestID, Seq: s.seq + 1, State: "claimed", Binding: &lease.Binding}
 		wc := &workerChange{Lease: &lease, Receipt: &workerReceipt{Key: key, Digest: digest, Response: response}}
 		acquired, err := s.scheduleLocked(r.ID, s.workerActiveLocked(), &candidate.Policy, wc)

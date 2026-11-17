@@ -183,6 +183,15 @@ func (s *Store) indexApplicationEvent(e Event, c change) {
 	} else {
 		r = s.runs[e.RunID]
 	}
+	if r == nil && c.Input != nil && c.Input.Record != nil {
+		if s.tenantEvents == nil {
+			s.tenantEvents = map[string][]Event{}
+		}
+		key := scopedRequestKey(c.Input.Record.Tenant, "")
+		s.tenantEvents[key] = append(s.tenantEvents[key], e)
+		return
+	}
+
 	if r == nil || r.Brief.Structured == nil {
 		return
 	}
@@ -194,14 +203,15 @@ func (s *Store) indexApplicationEvent(e Event, c change) {
 }
 
 type ApplicationReceipt struct {
-	Seq          int64  `json:"seq"`
-	TaskID       string `json:"task_id"`
-	RunID        string `json:"run_id"`
-	Key          string `json:"key"`
-	PrincipalID  string `json:"principal_id"`
-	RequestHash  string `json:"request_hash"`
-	State        string `json:"state"`
-	ResultSHA256 string `json:"result_sha256,omitempty"`
+	ConsumedVersions map[string]uint64 `json:"consumed_versions,omitempty"`
+	Seq              int64             `json:"seq"`
+	TaskID           string            `json:"task_id"`
+	RunID            string            `json:"run_id"`
+	Key              string            `json:"key"`
+	PrincipalID      string            `json:"principal_id"`
+	RequestHash      string            `json:"request_hash"`
+	State            string            `json:"state"`
+	ResultSHA256     string            `json:"result_sha256,omitempty"`
 }
 type ReceiptPage struct {
 	Receipts []ApplicationReceipt `json:"receipts"`
@@ -245,7 +255,7 @@ func (v *ScopedStore) Receipts(after int64, limit int) (ReceiptPage, error) {
 		if state == "" {
 			continue
 		}
-		receipt := ApplicationReceipt{Seq: e.Seq, TaskID: r.TaskID, RunID: r.ID, Key: r.Brief.Structured.Key, PrincipalID: r.PrincipalID, RequestHash: r.Brief.Structured.RequestHash, State: state}
+		receipt := ApplicationReceipt{ConsumedVersions: graphClone(r.Brief.Structured.ConsumedVersions), Seq: e.Seq, TaskID: r.TaskID, RunID: r.ID, Key: r.Brief.Structured.Key, PrincipalID: r.PrincipalID, RequestHash: r.Brief.Structured.RequestHash, State: state}
 		if state == "accepted" {
 			for _, a := range r.Artifacts {
 				if a.Name == structuredResultArtifact {

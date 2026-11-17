@@ -20,7 +20,7 @@ func testWorker(t *testing.T, e *Engine, id string) (string, structuredworker.Id
 		t.Fatal(err)
 	}
 	identity := structuredworker.Identity{ID: id, Incarnation: "incarnation-one"}
-	request := structuredworker.Register{RequestID: "register-one", Incarnation: identity.Incarnation, Capabilities: []string{"mitos.generalist"}}
+	request := structuredworker.Register{Features: structuredworker.Features, RequestID: "register-one", Incarnation: identity.Incarnation, Capabilities: []string{"mitos.generalist"}}
 	first, err := e.Store.RegisterWorker(token, request)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestWorkerClaimAcceptanceReplayAndEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err = s.RegisterWorker(token, structuredworker.Register{RequestID: "restored", Incarnation: identity.Incarnation, Capabilities: []string{"mitos.generalist"}}); !errors.Is(err, ErrUnauthenticated) {
+	if _, err = s.RegisterWorker(token, structuredworker.Register{Features: structuredworker.Features, RequestID: "restored", Incarnation: identity.Incarnation, Capabilities: []string{"mitos.generalist"}}); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("restore did not fence worker token", err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, runtimeDatabase))
@@ -171,7 +171,7 @@ func TestWorkerCurrentPermissionAndIncarnationFencing(t *testing.T) {
 	if _, err = e.Store.WorkerMutate(token, result); !errors.Is(err, ErrForbidden) {
 		t.Fatal("revoked acceptance", err)
 	}
-	_, err = e.Store.RegisterWorker(token, structuredworker.Register{RequestID: "register-next", Incarnation: "incarnation-two", Capabilities: []string{"mitos.generalist"}})
+	_, err = e.Store.RegisterWorker(token, structuredworker.Register{Features: structuredworker.Features, RequestID: "register-next", Incarnation: "incarnation-two", Capabilities: []string{"mitos.generalist"}})
 	if err != nil {
 		t.Fatal(err)
 	}

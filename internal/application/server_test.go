@@ -173,3 +173,43 @@ func TestWorkerListenerHasIndependentVersionAndCredential(t *testing.T) {
 		t.Fatal("live worker revocation", code)
 	}
 }
+
+func TestApplicationVersionInputsUseTenantCASAndBoundedFeed(t *testing.T) {
+	store, err := studio.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	create := func(id, tenant string, write bool) string {
+		_, token, err := store.CreateServicePrincipal(studio.ServicePrincipalInput{ID: id, Name: id, Tenant: decision.Tenant{Org: tenant, Project: "app"}, Read: true, Write: write, ExpiresAt: time.Now().Add(time.Hour)}, decision.LocalOperator())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	alpha := create("version-alpha", "alpha", true)
+	beta := create("version-beta", "beta", true)
+	reader := create("version-reader", "alpha", false)
+	server := httptest.NewTLSServer(New(&studio.Engine{Store: store}))
+	defer server.Close()
+	input := map[string]any{"key": "preferences", "data": map[string]string{"marker": "alpha-only-version-data"}, "versions": []map[string]any{{"name": "preferences", "expected": 0, "value": 1}}}
+	raw, status := fixtureCall(t, server.Client(), "POST", server.URL+"/api/inputs", alpha, input)
+	if status != 201 {
+		t.Fatal(status, string(raw))
+	}
+	if _, status = fixtureCall(t, server.Client(), "POST", server.URL+"/api/inputs", reader, input); status != 403 {
+		t.Fatal("read-only version write", status)
+	}
+	input["key"] = "wrong-cas"
+	if _, status = fixtureCall(t, server.Client(), "POST", server.URL+"/api/inputs", alpha, input); status != 409 {
+		t.Fatal("stale version CAS", status)
+	}
+	raw, status = fixtureCall(t, server.Client(), "GET", server.URL+"/api/events?after=0&limit=1", beta, nil)
+	if status != 200 || strings.Contains(string(raw), "alpha-only-version-data") {
+		t.Fatal("global version feed escaped tenant", status, string(raw))
+	}
+	raw, status = fixtureCall(t, server.Client(), "POST", server.URL+"/api/inputs", beta, input)
+	if status != 201 {
+		t.Fatal("tenant versions not independent", status, string(raw))
+	}
+}

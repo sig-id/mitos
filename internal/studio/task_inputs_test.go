@@ -230,7 +230,7 @@ func TestTaskInputWaitContinuationDurableWakeAndFencing(t *testing.T) {
 		t.Fatal("durable input failed to wake", woke, err)
 	}
 	seq := s.seq
-	if again, err := e.Application(p).AppendInput(r.TaskID, second); err != nil || again != woke || seq != s.seq {
+	if again, err := e.Application(p).AppendInput(r.TaskID, second); err != nil || graphDigest(again) != graphDigest(woke) || seq != s.seq {
 		t.Fatal("input retry duplicated wake", again, err)
 	}
 	task, _ = s.Task(r.TaskID)
@@ -377,5 +377,65 @@ func TestWorkerContextSizesInputPageToDefinitionBudget(t *testing.T) {
 	}
 	if total > receipt.Budget {
 		t.Fatalf("assembled context %d exceeds budget %d", total, receipt.Budget)
+	}
+}
+
+// A Task without a checkpoint schema can still page a large input backlog:
+// cursor-only waits are admitted and the context page keeps has_more, so the
+// work stays completable instead of rejecting every publication at cursor 50.
+func TestCursorOnlyWaitsPageInputsWithoutCheckpointSchema(t *testing.T) {
+	e, _ := automaticScriptEngine(t, `print('unused')`)
+	e.stop()
+	e.wg.Wait()
+	p, _ := serviceTestPrincipal(t, e.Store, "plain-app", "tenant", true)
+	token, identity := testWorker(t, e, "plain-worker")
+	brief := structuredBrief("plain-backlog", "agent:mitos.generalist")
+	r, err := e.Application(p).Admit(brief)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 55 {
+		if _, err = e.Application(p).AppendInput(r.TaskID, TaskInputRequest{Key: fmt.Sprintf("note-%02d", i), Data: json.RawMessage(`{"note":"` + fmt.Sprint(i) + `"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binding := testWorkerClaim(t, e, token, identity, r.ID, "claim-plain")
+	assignment, err := e.WorkerContext(token, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assignment.Inputs.HasMore || assignment.Inputs.Next != int64(len(assignment.Inputs.Inputs)) {
+		t.Fatalf("initial page lost pagination state: %+v", assignment.Inputs)
+	}
+	// Cursor-only waits advance through the remaining pages without a
+	// checkpoint; a checkpoint value is refused without a declared schema.
+	cursor := assignment.Inputs.Next
+	for {
+		raw, _ := json.Marshal(structuredworker.WaitRequest{Cursor: cursor})
+		receipt, waitErr := e.Store.WorkerMutate(token, structuredworker.Mutation{Binding: binding, RequestID: fmt.Sprintf("page-%d", cursor), Kind: "wait", Data: raw})
+		if waitErr != nil {
+			t.Fatal(waitErr)
+		}
+		var page structuredworker.InputPage
+		if err = json.Unmarshal(receipt.Result, &page); err != nil {
+			t.Fatal(err)
+		}
+		cursor = page.Next
+		if !page.HasMore {
+			break
+		}
+	}
+	if cursor != 55 {
+		t.Fatalf("cursor did not reach the input head: %d", cursor)
+	}
+	withCheckpoint, _ := json.Marshal(structuredworker.WaitRequest{Cursor: cursor, Checkpoint: json.RawMessage(`{"answer":1,"confidence":"low","tags":[]}`)})
+	if _, err = e.Store.WorkerMutate(token, structuredworker.Mutation{Binding: binding, RequestID: "page-checkpoint", Kind: "wait", Data: withCheckpoint}); err == nil || !strings.Contains(err.Error(), "checkpoint_schema_required") {
+		t.Fatalf("checkpoint accepted without a declared schema: %v", err)
+	}
+	// Publication at the head is accepted.
+	body, _ := json.Marshal(structuredworker.Result{ConsumedCursor: cursor, Value: json.RawMessage(`{"answer":42,"confidence":"high","tags":[]}`)})
+	receipt, err := e.Store.WorkerMutate(token, structuredworker.Mutation{Binding: binding, RequestID: "plain-result", Kind: "result", Data: body})
+	if err != nil || receipt.State != "accepted" {
+		t.Fatal("publication after cursor-only paging", receipt, err)
 	}
 }

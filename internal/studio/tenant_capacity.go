@@ -87,6 +87,7 @@ func (s *Store) tenantAdmissionLocked(p decision.Principal, b Brief, parent stri
 		return nil
 	}
 	limits := s.tenantLimitsLocked(p.Tenant)
+	currentQueueLimit := limits.Queue
 	if parent != "" {
 		r := s.runs[parent]
 		if r == nil {
@@ -108,7 +109,7 @@ func (s *Store) tenantAdmissionLocked(p decision.Principal, b Brief, parent stri
 		if attempts >= limits.Attempts || !time.Now().Before(task.CreatedAt.Add(time.Duration(limits.ElapsedMinutes)*time.Minute)) {
 			return ErrTenantBudget
 		}
-		return nil
+		return s.tenantQueueAdmissionLocked(p.Tenant, currentQueueLimit)
 	}
 	queued := 0
 	for _, r := range s.runs {
@@ -209,4 +210,17 @@ func (s *Store) structuredTaskDeadline(r *Run) time.Time {
 		at = task.CreatedAt
 	}
 	return at.Add(time.Duration(limits.ElapsedMinutes) * time.Minute)
+}
+
+func (s *Store) tenantQueueAdmissionLocked(tenant decision.Tenant, limit int) error {
+	queued := 0
+	for _, r := range s.runs {
+		if runTenant(r) == tenant && r.Brief.Structured != nil && (r.Status == "queued" || r.Status == "blocked") {
+			queued++
+		}
+	}
+	if queued >= limit {
+		return ErrTenantCapacity
+	}
+	return nil
 }

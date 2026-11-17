@@ -22,6 +22,8 @@ import (
 // repository, workspace, Git or PTY, and an exact typed result validated against
 // a declared schema. The definition revision and digest are frozen at admission.
 type StructuredWork struct {
+	SerializationKey string             `json:"serialization_key,omitempty"`
+	ConsumedVersions map[string]uint64  `json:"consumed_versions,omitempty"`
 	ActionTargets    []string           `json:"action_targets,omitempty"`
 	CheckpointSchema json.RawMessage    `json:"checkpoint_schema,omitempty"`
 	Frozen           *agents.Definition `json:"frozen_definition,omitempty"`
@@ -36,6 +38,9 @@ type StructuredWork struct {
 const structuredResultArtifact = "result.json"
 
 func (w *StructuredWork) validate() error {
+	if (w.SerializationKey != "" && !validGraphKey(w.SerializationKey)) || !validConsumedVersions(w.ConsumedVersions) {
+		return errors.New("invalid conversation key or consumed context versions")
+	}
 	if !validGraphKey(w.Key) {
 		return errors.New("structured work needs a request key")
 	}
@@ -117,6 +122,13 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 			Request string
 			Targets []string
 		}{b.Structured.RequestHash, w.ActionTargets})
+	}
+	if w.SerializationKey != "" || len(w.ConsumedVersions) > 0 {
+		b.Structured.RequestHash = graphDigest(struct {
+			Request  string
+			Key      string
+			Versions map[string]uint64
+		}{b.Structured.RequestHash, w.SerializationKey, w.ConsumedVersions})
 	}
 	return b, app.Name, nil
 }
