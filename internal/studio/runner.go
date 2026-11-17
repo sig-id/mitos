@@ -52,7 +52,16 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{provider: &compute.Local{}, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	provider := compute.Provider(&compute.Local{})
+	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
+		confinement, confineErr := compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
+		if confineErr != nil {
+			cancel()
+			return nil, confineErr
+		}
+		provider = &compute.Local{Confinement: confinement}
+	}
+	e := &Engine{provider: provider, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err

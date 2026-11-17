@@ -357,7 +357,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			return &agentPrerequisiteError{summary: "This workflow's frozen settings predate permission enforcement policies, so its agents cannot be admitted. Start the goal again to bind the current project settings; saved results and files remain available."}
 		}
 	}
-	authority, authorityErr := resolveAuthority(b.Definition, b.Runtime, policy, r.Brief.TimeoutMinutes*60)
+	authority, authorityErr := resolveAuthority(b.Definition, b.Runtime, policy, r.Brief.TimeoutMinutes*60, e.providerCapabilities())
 	receipt, _ := json.MarshalIndent(authority, "", "  ")
 	if err = e.Store.SaveArtifact(r.ID, "authority.json", receipt); err != nil {
 		return err
@@ -606,7 +606,12 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if currentGraph.Setup != nil {
 		resources = currentGraph.Setup.Resources.Agent
 	}
-	launch, err := compileWorkflowLaunch(resources)
+	caps := e.providerCapabilities()
+	development := true
+	if caps.WorkspaceConfined {
+		development = false
+	}
+	launch, err := compileWorkflowLaunch(resources, caps, development)
 	if err != nil {
 		return err
 	}

@@ -21,9 +21,20 @@ func compileApplication(app Application) (compute.LaunchSpec, error) {
 
 // Automatic workflows use native local agents, while preserving their frozen
 // per-agent resource request through the same provider admission contract.
-func compileWorkflowLaunch(resources resourcepolicy.Agent) (compute.LaunchSpec, error) {
-	local := &compute.Local{}
-	return compute.Compile(compute.Request{Resources: resources}, map[string]compute.Capabilities{"local": local.Capabilities()}, true)
+func (e *Engine) providerCapabilities() compute.Capabilities { return e.provider.Capabilities() }
+
+// compileWorkflowLaunch keeps the broker/database-free local startup. Under a
+// confining provider the launch admits the container posture the provider can
+// actually enforce instead of the development exception.
+func compileWorkflowLaunch(resources resourcepolicy.Agent, caps compute.Capabilities, development bool) (compute.LaunchSpec, error) {
+	request := compute.Request{Resources: resources}
+	if !development {
+		request.NetMode = compute.NetOff
+		if len(caps.NetModes) == 1 {
+			request.NetMode = caps.NetModes[0]
+		}
+	}
+	return compute.Compile(request, map[string]compute.Capabilities{"local": caps}, development)
 }
 
 func executeProviderCommand(ctx context.Context, provider compute.Provider, launch compute.LaunchSpec, argv []string, dir string, input []byte, monitor *commandObservation, health ...*serviceHealthMonitor) (compute.Session, []byte, error) {
