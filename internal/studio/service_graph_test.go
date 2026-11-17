@@ -322,8 +322,10 @@ prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'))
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
- root=[f for f in ctx['facts'] if f['spec']['kind']=='scope'][0]
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
+ root=next(e for e in latest.values() if e['kind']=='scope')
  assert 'recurring workflow' in prompt
  plan={'explanation':'Checked this occurrence.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:

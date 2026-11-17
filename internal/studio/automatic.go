@@ -809,9 +809,25 @@ func addOrchestratorContext(ca *contextAssembly, raw string) error {
 		return string(out)
 	}
 	ca.add(tierGraph, "agent_library", "available agent definitions", pick("agent_library", "execution_policy"))
-	allowance := pick("remaining_tasks", "remaining_attempts", "remaining_plans")
-	state, _ := json.Marshal(fields)
-	ca.add(tierTask, "graph_state", "graph facts at this planning call", string(state))
+	allowance := pick("remaining_tasks", "remaining_attempts", "remaining_plans", "inbox", "previous_error")
+	var prefix struct {
+		Bytes  int    `json:"bytes"`
+		SHA256 string `json:"sha256"`
+	}
+	if raw, ok := fields["plan_prefix"]; ok {
+		_ = json.Unmarshal(raw, &prefix)
+		delete(fields, "plan_prefix")
+	}
+	if state, ok := fields["graph_state"]; ok {
+		delete(fields, "graph_id")
+		delete(fields, "root_task")
+		// The journal document is byte-stable across consecutive planning calls
+		// up to its newest entry; the receipt records that shared prefix.
+		ca.addShared(tierTask, "graph_state", "append-only graph journal at this planning call", string(state), prefix.SHA256, prefix.Bytes)
+	} else {
+		legacy, _ := json.Marshal(fields)
+		ca.add(tierTask, "graph_state", "graph facts at this planning call", string(legacy))
+	}
 	ca.add(tierAttempt, "remaining_allowance", "remaining graph allowance", allowance)
 	return nil
 }

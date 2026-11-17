@@ -223,7 +223,7 @@ func RunClaude(ctx context.Context, broker Broker, stream io.ReadWriteCloser, ou
 						steps[part.ToolID] = true
 						writeActivityRecord(options.Activity, map[string]any{"kind": "tool", "id": part.ToolID, "status": "completed"})
 						if options.MaxTurns > 0 && len(steps) >= options.MaxTurns {
-							return errors.New("agent model-step limit reached")
+							return &TurnLimitError{Limit: options.MaxTurns}
 						}
 					}
 				}
@@ -235,7 +235,7 @@ func RunClaude(ctx context.Context, broker Broker, stream io.ReadWriteCloser, ou
 					return fmt.Errorf("Claude execution failed: %s %s %s", f.Subtype, f.Result, strings.Join(f.Errors, "; "))
 				}
 				if options.MaxTurns > 0 && len(steps)+1 > options.MaxTurns {
-					return errors.New("agent model-step limit reached")
+					return &TurnLimitError{Limit: options.MaxTurns}
 				}
 				result := f.Result
 				if len(options.OutputSchema) > 0 {

@@ -294,8 +294,13 @@ largest first; each is written in full under the attempt's `context/` directory 
 replaced by a reference to that file and its digest. `summarize_optional` is applied
 the same way, since a generated summary would change the prompt bytes on every
 attempt; `wait` refuses instead. The orchestrator's planning context is split into
-`agent_library`, `graph_state` and `remaining_allowance`; orchestrator revision 4
-budgets 131,072 characters to match the kernel's planning-context bound.
+`agent_library`, `graph_state` and `remaining_allowance`; `graph_state` is an
+append-only journal of immutable task-fact entries in commit order, compacted
+only at a fixed entry boundary, and the context receipt records the byte prefix
+each planning call shares with the previous one. Task detail (full specs,
+criteria, artifact lists) is paged on demand through the `graph_read` handoff
+tool instead of being inlined. The kernel bounds the automatic planning payload
+at 64 KiB, well under the orchestrator definition's context budget.
 
 Goal limits are 64 tasks, 96 attempts, 24 orchestrator calls, two retries per worker and
 a two-hour deadline. Rejected orchestrator proposals get at most two repair calls using

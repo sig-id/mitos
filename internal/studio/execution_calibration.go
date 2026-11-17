@@ -2,6 +2,7 @@ package studio
 
 import (
 	"bytes"
+	"encoding/json"
 	"slices"
 	"sort"
 	"strings"
@@ -77,7 +78,7 @@ func (s *Store) ExecutionCalibration(project string) ([]CalibrationGroup, error)
 				if start := runStarted(r); !start.IsZero() {
 					smp.minutes = r.UpdatedAt.Sub(start).Minutes()
 				}
-				smp.budgeted = strings.Contains(r.Summary, "time limit was reached") || strings.Contains(r.Summary, "model steps")
+				smp.budgeted = budgetExhausted(r)
 				for _, x := range m.Escalations {
 					if x.RunID == id {
 						smp.axis = x.Axis
@@ -114,9 +115,10 @@ func (s *Store) ExecutionCalibration(project string) ([]CalibrationGroup, error)
 			c.IntelligenceEscalation++
 		}
 		minutes[k] = append(minutes[k], smp.minutes)
-		// Turns are model steps: completed tool actions plus the final answer.
+		// Turns are model steps: completed tool actions plus the final answer,
+		// counted once per action with the harness limit's semantics.
 		if activity, err := s.Artifact(smp.run, "activity.jsonl"); err == nil {
-			n := float64(bytes.Count(activity, []byte(`"kind":"tool"`)))
+			n := float64(countCompletedActions(activity))
 			if smp.finished {
 				n++
 			}
@@ -133,6 +135,39 @@ func (s *Store) ExecutionCalibration(project string) ([]CalibrationGroup, error)
 		return strings.Join([]string{a.Requester, a.Nature, a.Size, a.Intelligence, a.Harness, a.Tier}, "\x00") < strings.Join([]string{b.Requester, b.Nature, b.Size, b.Intelligence, b.Harness, b.Tier}, "\x00")
 	})
 	return out, nil
+}
+
+// countCompletedActions counts each completed model action once. Activity
+// records log tool, command and file actions twice — running, then completed —
+// and interactive runtimes also log messages; only completed non-message
+// records count, matching the harness model-step limit's semantics.
+func countCompletedActions(activity []byte) int {
+	n := 0
+	for _, line := range bytes.Split(activity, []byte("\n")) {
+		var record struct {
+			Kind   string `json:"kind"`
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(line, &record) != nil || record.Kind == "" || record.Kind == "message" {
+			continue
+		}
+		if record.Status == "completed" {
+			n++
+		}
+	}
+	return n
+}
+
+// budgetExhausted reports whether an attempt hit its execution allowance.
+// Structured exhaustion evidence is authoritative; summary text is a legacy
+// fallback for attempts recorded before the marker existed.
+func budgetExhausted(r *Run) bool {
+	for _, e := range r.Events {
+		if e.Kind == "execution_budget_exhausted" {
+			return true
+		}
+	}
+	return strings.Contains(r.Summary, "time limit was reached") || strings.Contains(r.Summary, "model steps") || strings.Contains(r.Summary, "model-step limit")
 }
 
 func runStarted(r *Run) time.Time {
