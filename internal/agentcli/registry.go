@@ -181,6 +181,17 @@ func envSlice(env map[string]string) []string {
 	return entries
 }
 
+// AgentProfiles lists the environment profiles registered for one agent.
+func (r *Registry) AgentProfiles(agent string) []Profile {
+	out := []Profile{}
+	for _, p := range r.profiles {
+		if p.AgentID == agent {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (r *Registry) Prepare(request Request) (Launch, error) {
 	return r.prepare(request, "new", "")
 }

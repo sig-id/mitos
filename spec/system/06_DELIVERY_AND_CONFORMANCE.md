@@ -6,7 +6,7 @@ section is descriptive; it does not establish conformance to the full target.
 
 ## Current baseline
 
-As reviewed on 2026-11-11, Mitos is a local Go server with a browser workspace and
+As reviewed on 2026-11-17, Mitos is a local Go server with a browser workspace and
 HTTP-backed CLI. Interactive metadata and batch state now share the canonical
 journal; their execution adapters still have different admission and scheduling paths:
 
@@ -15,8 +15,8 @@ journal; their execution adapters still have different admission and scheduling 
 | Interactive work | Durable assignments, goals, task/attempt/process/session bindings, stable supervision identity and inbox, native PTYs, resume/fork/handover | Reports support explicit human review of frozen text, not independent repository verification. Mailbox application and general orchestrator fencing remain incomplete. |
 | Batch work | Durable Tasks and Run attempts, copied workspaces, harvested artifacts, local acceptance, checkpoints, bounded recovery | Same-user provider; verification material is not inaccessible to a hostile worker. |
 | Scheduling | Two-worker local capacity, pools, dependencies, artifact inputs, service triggers and lifecycle policies | Does not establish distributed placement or general remote resource custody. |
-| Agent library | Eight authored default definitions, JSON authoring schema, provenance and native Markdown instructions | Library registration, compatible runtime binding, automatic goal planning and on-demand specialist admission remain design targets; bundled data is not a running orchestrator. |
-| Adaptive graphs | Local application adapter: atomic graph amendments, shared Task/Run queue, frozen specs, obligation/closure checks, registered orchestrators, fenced candidate decisions, native output evidence | PTY admission, cross-graph imports, graph service templates, autonomous root acceptance, and complete G1–G5 conformance remain. See the [backend contract](../../docs/adaptive-runtime.md). |
+| Agent library | Eight authored default definitions with typed, semantically validated JSON authoring schemas, provenance and native Markdown instructions; the bundled library runs through the local native Codex and Claude Code adapters with explicit execution presets selected through worker defaults, role rules and task overrides, plus automatic goal planning, graph-scoped specialization, per-attempt authority and context receipts, and editable worker revisions | General runtime negotiation, portable knowledge/skill attachment, deprecation/promotion and the complete library profile remain targets; see [agent library](07_AGENT_LIBRARY.md), [typed definitions and receipts](https://github.com/sig-id/mitos/pull/51), [authority receipts](https://github.com/sig-id/mitos/pull/52) and the [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow). |
+| Adaptive graphs | Local application adapter: atomic graph amendments, shared Task/Run queue, frozen specs, obligation/closure checks, registered orchestrators, fenced candidate decisions, native output evidence, and automatic planning with orchestrator-proposed root acceptance for automatic goals | PTY admission, cross-graph imports, graph service templates and complete G1–G5 conformance remain. See the [backend contract](../../docs/adaptive-runtime.md). |
 | Decision inference | Optional System One (Jev/Laya-compatible) and OpenAI Decisions Choice adapters; journaled segment/recovery gates, probability thresholds, bounded calls, cancellation fencing | Batch hooks plus separately journaled graph candidate choices; no predicate/score hooks, model spend enforcement, or automatic replay of unknown inference. |
 | Decisions and devices | Persisted local decisions and receipts; optional scoped HTTPS device API | Not a complete paired remote client or multi-tenant identity system. |
 | Messaging | MQTT 5 via external broker, signed peers and exact grants, journal outbox/inbox receipts, durable notes and atomic service events, local HTTP/CLI; cron/interval/manual services can also subscribe to events through the same queue | Broker/key configuration is explicit; general control leases and automatic bridges remain outside this adapter. |
@@ -32,7 +32,9 @@ checks. Failed persistence restores the published desk state and blocks further
 mutations. This is not a process-host launch receipt or a general mutation protocol.
 
 The browser starts at Projects and provides Work, Services, Resources, Inbox, and
-Connections views. Project work reads are paginated and terminal output streams only
+Connections views. Immediate questions and approvals surface through Notifications
+on every workspace view plus a persistent banner; the Inbox collects reports and
+project summaries and is not the queue for runtime approval cards. Project work reads are paginated and terminal output streams only
 for the opened session. The local server identity is durable; wrong-server mutation
 headers are refused. Independent-server aggregation and pairing are not implemented.
 
@@ -303,8 +305,13 @@ contract rather than overlapping documents that silently disagree.
 ## Sessions, routing and supervision delivery
 
 The six slices in [agent sessions and supervision](08_AGENT_SESSIONS_AND_SUPERVISION.md)
-are required targets. At design adoption, bridge CLI requests and typed batch/graph
-choices exist, but UI bridge launch, project delegated approval settings,
-COOPERATION.md snapshots, request classification, live automatic-worker requests,
-and independent model supervision are not yet integrated. Each implementation PR
-must report its validated capabilities and remaining substrate limitations.
+are integrated in the local adapter: bridge CLI requests with session launch and
+reply delivery, project delegated approval settings with preference/grant separation,
+COOPERATION.md snapshots with the `mitos.cooperation` protocol, request classification
+routing with fallback, live automatic-worker requests, and independent model
+supervision with incidents, holds and stop sweeps. Delivery evidence and remaining
+substrate limitations are recorded in issues [#2](https://github.com/sig-id/mitos/issues/2)
+through [#7](https://github.com/sig-id/mitos/issues/7) and the operational docs
+([agent decisions](../../docs/agent-decisions.md), [independent supervision](../../docs/independent-supervision.md)).
+Each new implementation PR must keep reporting its validated capabilities and
+remaining substrate limitations.

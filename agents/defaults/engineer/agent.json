@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.engineer",
-  "revision": 1,
+  "revision": 3,
   "name": "Engineer",
   "description": "Implement a bounded change and produce evidence that it meets its assignment.",
   "kind": "worker",
@@ -15,6 +15,10 @@
       "Broad unrelated refactors",
       "Publishing or merging without an explicit grant"
     ]
+  },
+  "natures": {
+    "supported": ["implement", "context", "verify"],
+    "default": "implement"
   },
   "instructions": {
     "path": "instructions.md",
@@ -56,7 +60,8 @@
       "command.run",
       "artifact.read",
       "artifact.write",
-      "network.read"
+      "network.read",
+      "work.propose"
     ]
   },
   "limits": {

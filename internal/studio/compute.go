@@ -26,7 +26,9 @@ func (e *Engine) providerCapabilities() compute.Capabilities { return e.provider
 // agentProviderCapabilities reports the posture native agents are admitted
 // against: the confining provider when configured, the plain local provider
 // otherwise.
-func (e *Engine) agentProviderCapabilities() compute.Capabilities { return e.agentProvider.Capabilities() }
+func (e *Engine) agentProviderCapabilities() compute.Capabilities {
+	return e.agentProvider.Capabilities()
+}
 
 // compileWorkflowLaunch keeps the broker/database-free local startup. Under a
 // confining provider the launch admits the container posture the provider can

@@ -41,17 +41,21 @@ type GraphPolicy struct {
 	DecisionApplication     string   `json:"decision_application,omitempty"`
 }
 type GraphSpec struct {
-	ExecutionPreset string          `json:"execution_preset,omitempty"`
-	Agent           *AgentSelection `json:"agent,omitempty"`
-	ID              string          `json:"id"` // proposal-local reference at creation
-	Parent          string          `json:"parent,omitempty"`
-	Kind            string          `json:"kind"` // scope or application
-	Required        bool            `json:"required"`
-	Criteria        string          `json:"criteria"`
-	Acceptance      string          `json:"acceptance"` // operator or application
-	Brief           Brief           `json:"brief"`
-	Arguments       []string        `json:"arguments,omitempty"` // append to registered argv only by policy
-	Context         string          `json:"context,omitempty"`
+	// Traits are the requester's declared requirements (native agent tasks).
+	Traits *TaskTraits `json:"traits,omitempty"`
+	// Harness optionally overrides harness selection, within the permitted
+	// worker harnesses. Models are never named directly.
+	Harness    string          `json:"harness,omitempty"`
+	Agent      *AgentSelection `json:"agent,omitempty"`
+	ID         string          `json:"id"` // proposal-local reference at creation
+	Parent     string          `json:"parent,omitempty"`
+	Kind       string          `json:"kind"` // scope or application
+	Required   bool            `json:"required"`
+	Criteria   string          `json:"criteria"`
+	Acceptance string          `json:"acceptance"` // operator or application
+	Brief      Brief           `json:"brief"`
+	Arguments  []string        `json:"arguments,omitempty"` // append to registered argv only by policy
+	Context    string          `json:"context,omitempty"`
 }
 type GraphExecutor struct {
 	Application Application `json:"application"`
@@ -75,6 +79,72 @@ type GraphMember struct {
 	CancelRequested bool             `json:"cancel_requested"`
 	Replacement     string           `json:"replacement,omitempty"`
 	Accepted        *GraphAcceptance `json:"accepted,omitempty"`
+	// Yield is set while the current attempt waits on its blocking proposals.
+	// The attempt released its slot and claim; it is neither a result under
+	// review nor a failure.
+	Yield *GraphYield `json:"yield,omitempty"`
+	// Yields counts continuations after a yield; they do not consume retries.
+	Yields int `json:"yields,omitempty"`
+	// Proposed counts proposals submitted across all attempts of this task.
+	Proposed int `json:"proposed,omitempty"`
+	// Continuation is consumed by the next attempt, like ContinueFrom.
+	Continuation *GraphContinuation `json:"continuation,omitempty"`
+	// Escalations records each trait raised for a retry, oldest first.
+	Escalations []GraphEscalation `json:"escalations,omitempty"`
+	// Requester is who added the task: operator or orchestrator.
+	Requester string `json:"requester,omitempty"`
+	// ProposedBy links a task admitted for a worker proposal to its record.
+	ProposedBy string `json:"proposed_by,omitempty"`
+}
+
+// GraphEscalation raises one trait of a task for its next attempt.
+type GraphEscalation struct {
+	Axis  string    `json:"axis"` // size or intelligence
+	From  string    `json:"from"`
+	To    string    `json:"to"`
+	RunID string    `json:"run_id"`
+	At    time.Time `json:"at"`
+}
+
+// GraphYield binds a yielded attempt to the blocking proposals it waits on.
+type GraphYield struct {
+	RunID     string   `json:"run_id"`
+	Proposals []string `json:"proposals"`
+}
+
+// GraphContinuation tells a continued attempt why it was resumed and how its
+// proposals were reviewed.
+type GraphContinuation struct {
+	Reason     string            `json:"reason"` // yield or escalation
+	Proposals  []ProposalOutcome `json:"proposals,omitempty"`
+	Escalation *GraphEscalation  `json:"escalation,omitempty"`
+}
+type ProposalOutcome struct {
+	ID        string `json:"id"`
+	Local     string `json:"local"`
+	Outcome   string `json:"outcome"` // accepted or rejected
+	Rationale string `json:"rationale"`
+	// Tasks that fulfilled an accepted proposal and were accepted; their results
+	// are in the dependency-inputs manifest.
+	Completed []string `json:"completed,omitempty"`
+	// Tasks of an accepted proposal that were cancelled or replaced without an
+	// accepted result.
+	Abandoned []string `json:"abandoned,omitempty"`
+}
+
+// GraphProposalRecord is the kernel's record of one worker proposal and its
+// review. The trigger that reported the attempt's outcome links to it.
+type GraphProposalRecord struct {
+	ID        string   `json:"id"`
+	Local     string   `json:"local"`
+	TaskID    string   `json:"task_id"`
+	RunID     string   `json:"run_id"`
+	ResultID  string   `json:"result_id"`
+	Trigger   int64    `json:"trigger"`
+	Blocking  bool     `json:"blocking"`
+	Outcome   string   `json:"outcome,omitempty"` // accepted or rejected
+	Rationale string   `json:"rationale,omitempty"`
+	Tasks     []string `json:"tasks,omitempty"`
 }
 type GraphAcceptance struct {
 	ResultID     string    `json:"result_id,omitempty"`
@@ -107,6 +177,24 @@ type GraphTrigger struct {
 	Kind    string `json:"kind"`
 	Outcome string `json:"outcome,omitempty"`
 }
+
+// GraphFactEntry is one immutable line of the append-only planning journal.
+// Entries are written once when a task's fact revision is first observed and
+// never rewritten, so consecutive planning prompts share their prefix up to
+// the newest entry. Detail stays behind the bounded graph_read tool.
+type GraphFactEntry struct {
+	Task          string           `json:"task"`
+	Kind          string           `json:"kind,omitempty"`
+	Parent        string           `json:"parent,omitempty"`
+	Fact          int64            `json:"fact"`
+	State         string           `json:"state"`
+	RunID         string           `json:"run_id,omitempty"`
+	Accepted      bool             `json:"accepted,omitempty"`
+	Summary       string           `json:"summary,omitempty"`
+	ArtifactCount int              `json:"artifact_count,omitempty"`
+	Compacted     int              `json:"compacted,omitempty"`
+	Facts         map[string]int64 `json:"facts,omitempty"`
+}
 type GraphReceipt struct {
 	Key      string            `json:"key"`
 	Digest   string            `json:"digest"`
@@ -115,35 +203,40 @@ type GraphReceipt struct {
 	At       time.Time         `json:"at"`
 }
 type WorkGraph struct {
-	WorkState              string                     `json:"work_state,omitempty"`
-	ServiceRunID           string                     `json:"service_run_id,omitempty"`
-	Setup                  *FrozenSetup               `json:"setup,omitempty"`
-	Result                 *GraphResult               `json:"result,omitempty"`
-	Profile                string                     `json:"profile"`
-	ID                     string                     `json:"id"`
-	Home                   string                     `json:"home"`
-	ProjectID              string                     `json:"project_id"`
-	Workspace              string                     `json:"workspace"`
-	RootTask               string                     `json:"root_task"`
-	GoalRevision           int64                      `json:"goal_revision"`
-	Revision               int64                      `json:"revision"`
-	PolicyRevision         int64                      `json:"policy_revision"`
-	OrchestratorGeneration int64                      `json:"orchestrator_generation"`
-	Activation             string                     `json:"activation"`
-	Predecessor            string                     `json:"predecessor,omitempty"`
-	Policy                 GraphPolicy                `json:"policy"`
-	Limits                 GraphLimits                `json:"limits"`
-	Members                map[string]*GraphMember    `json:"members"`
-	Expansions             map[string]*GraphExpansion `json:"expansions"`
-	Triggers               []GraphTrigger             `json:"triggers,omitempty"`
-	Cursor                 int64                      `json:"cursor"`
-	Attempts               int                        `json:"attempts"`
-	OrchestratorCalls      int                        `json:"orchestrator_calls"`
-	Receipts               map[string]GraphReceipt    `json:"receipts"`
-	Status                 string                     `json:"status"`
-	CreatedAt              time.Time                  `json:"created_at"`
-	UpdatedAt              time.Time                  `json:"updated_at"`
-	Decisions              map[string]*GraphDecision  `json:"decisions,omitempty"`
+	WorkState              string                          `json:"work_state,omitempty"`
+	ServiceRunID           string                          `json:"service_run_id,omitempty"`
+	Setup                  *FrozenSetup                    `json:"setup,omitempty"`
+	Result                 *GraphResult                    `json:"result,omitempty"`
+	Profile                string                          `json:"profile"`
+	ID                     string                          `json:"id"`
+	Home                   string                          `json:"home"`
+	ProjectID              string                          `json:"project_id"`
+	Workspace              string                          `json:"workspace"`
+	RootTask               string                          `json:"root_task"`
+	GoalRevision           int64                           `json:"goal_revision"`
+	Revision               int64                           `json:"revision"`
+	PolicyRevision         int64                           `json:"policy_revision"`
+	OrchestratorGeneration int64                           `json:"orchestrator_generation"`
+	Activation             string                          `json:"activation"`
+	Predecessor            string                          `json:"predecessor,omitempty"`
+	Policy                 GraphPolicy                     `json:"policy"`
+	Limits                 GraphLimits                     `json:"limits"`
+	Members                map[string]*GraphMember         `json:"members"`
+	Expansions             map[string]*GraphExpansion      `json:"expansions"`
+	Triggers               []GraphTrigger                  `json:"triggers,omitempty"`
+	Cursor                 int64                           `json:"cursor"`
+	Attempts               int                             `json:"attempts"`
+	OrchestratorCalls      int                             `json:"orchestrator_calls"`
+	Receipts               map[string]GraphReceipt         `json:"receipts"`
+	Status                 string                          `json:"status"`
+	CreatedAt              time.Time                       `json:"created_at"`
+	UpdatedAt              time.Time                       `json:"updated_at"`
+	Decisions              map[string]*GraphDecision       `json:"decisions,omitempty"`
+	FactJournal            []GraphFactEntry                `json:"fact_journal,omitempty"`
+	LastPlanState          string                          `json:"last_plan_state,omitempty"`
+	PlanPrefixCharacters   int                             `json:"plan_prefix_characters,omitempty"`
+	PlanPrefixSHA256       string                          `json:"plan_prefix_sha256,omitempty"`
+	Proposals              map[string]*GraphProposalRecord `json:"proposals,omitempty"`
 }
 type CreateGraph struct {
 	serviceRunID string
@@ -175,6 +268,10 @@ type GraphOperation struct {
 	Cursor       int64                 `json:"cursor,omitempty"`
 	Evidence     string                `json:"evidence,omitempty"`
 	Rationale    string                `json:"rationale,omitempty"`
+	Proposal     string                `json:"proposal,omitempty"`
+	// Escalate raises one trait for a retry: size (budget) or intelligence
+	// (model tier within the same harness).
+	Escalate string `json:"escalate,omitempty"`
 }
 type GraphProposal struct {
 	Profile        string               `json:"profile"`
@@ -200,6 +297,7 @@ type GraphAttempt struct {
 	Context        string             `json:"context,omitempty"`
 	Witnesses      []workpool.Witness `json:"witnesses,omitempty"`
 	AdmittedAt     *time.Time         `json:"admitted_at,omitempty"`
+	Continuation   *GraphContinuation `json:"continuation,omitempty"`
 }
 type graphChange struct {
 	Graph        WorkGraph `json:"graph"`
@@ -301,8 +399,9 @@ var graphOperationFields = map[string][]string{
 	"dependencies": {"task", "dependencies", "join"}, "priority": {"task", "priority"},
 	"open_expansion": {"task", "expansion"}, "close_expansion": {"expansion", "rationale"},
 	"classify_trigger": {"trigger", "rationale"}, "seal": {"task", "cursor"}, "reopen": {"task"},
-	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task"},
+	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task", "escalate"},
 	"accept": {"task", "evidence", "rationale"}, "dismiss_decision": {"expansion", "rationale"},
+	"accept_proposal": {"proposal", "dependencies", "rationale"}, "reject_proposal": {"proposal", "rationale"},
 }
 
 func validateGraphOperation(op GraphOperation) error {

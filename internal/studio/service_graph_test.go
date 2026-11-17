@@ -322,12 +322,14 @@ prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'))
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
- root=[f for f in ctx['facts'] if f['spec']['kind']=='scope'][0]
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
+ root=next(e for e in latest.values() if e['kind']=='scope')
  assert 'recurring workflow' in prompt
  plan={'explanation':'Checked this occurrence.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:
-  plan['operations']=[{'kind':'add','spec':{'id':'inspect','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Report current state.','brief':{'title':'Inspect current state','intent':'Report current state without changing files.','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
+  plan['operations']=[{'kind':'add','spec':{'id':'inspect','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Report current state.','brief':{'title':'Inspect current state','intent':'Report current state without changing files.','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  else:
   plan['accept']=[{'task':f['id'],'rationale':'Read the saved report for this occurrence.'} for f in workers]
  plan['result']={'title':'Occurrence result','markdown':'The current state was checked.','source_tasks':[f['id'] for f in workers]} if workers else {'title':'','markdown':'','source_tasks':[]}

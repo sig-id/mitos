@@ -32,9 +32,12 @@ type CodexOptions struct {
 	ToolCall                 func(string, json.RawMessage) (any, error)
 	Plan, KeepOpen, Headless bool
 	Model, Sandbox           string
-	ResumeThread             string
-	ThreadStarted            func(string) error
-	OutputSchema             json.RawMessage
+	// Effort is the reasoning effort. Claude takes it as --effort; Codex
+	// launches pass it as a model_reasoning_effort config override.
+	Effort        string
+	ResumeThread  string
+	ThreadStarted func(string) error
+	OutputSchema  json.RawMessage
 	// MaxTurns bounds model steps, counted as completed tool actions plus the
 	// final answer. Zero means unbounded.
 	MaxTurns int

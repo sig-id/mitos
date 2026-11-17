@@ -39,7 +39,9 @@ claim request-bridge capabilities.
 A session MUST retain its project, task/session identity, original request IDs,
 profile, output, pending requests and resolution receipts. Launch MUST be
 idempotent. Selected executables and environments MUST survive wrapping. Questions
-and approvals MUST be reachable from the session and global Inbox. A reply is not
+and approvals MUST be reachable from the session and the global Notifications
+surface that every workspace view exposes. The Inbox collects reports and project
+summaries; it is not the queue for runtime approval cards. A reply is not
 applied until the source acknowledges it. Unsupported request capabilities MUST
 be visible, never silently interpreted as approval or completion.
 
@@ -77,12 +79,20 @@ Mitos MUST inject a bounded, immutable snapshot into coordinated assignments and
 show its origin/revision in project setup. This filename is a proposed convention,
 not a claim that existing third-party tools discover it automatically.
 
-The `mitos.cooperation/v1` protocol defines structured assignments, help/delegation
+The `mitos.cooperation/v2` protocol defines structured assignments, help/delegation
 requests, questions, approval requests, observations, handoffs and result submissions.
-Each message binds a unique ID, task/session, causal request where applicable,
-revision, kind, payload and timestamp. Requests identify blocking dependencies and
-permitted resolvers. Responses reference the originating request and expire with
-it. Duplicate delivery MUST NOT duplicate effects; conflicts are rejected.
+Each message binds a unique ID, task/session or task/run origin, causal request
+where applicable, revision, kind, payload and timestamp. Requests MUST identify
+explicit permitted resolvers bound to exact current attempts (task, run, revision)
+and MAY declare blocked actions; the implemented subset blocks only the
+originating attempt's acceptance, and cross-task resolvers are supported inside
+one explicit graph scope. Responses reference the originating request and expire
+with it: expired, cancelled, stale-revision, cancelled-task and replaced-attempt
+requests cannot be answered, and no pending request is adopted or rebound to a
+retry. Duplicate delivery MUST NOT duplicate effects; conflicts are rejected.
+Historical v1 records remain readable while new writes reject v1; portable
+cross-runtime routing and hosted transports remain outside the local subset.
+See [cooperation operations](../../docs/cooperation.md) for the shipped contract.
 
 Assignment scope, dependencies and completion criteria MUST be explicit. Results
 reference artifacts/evidence; submission is distinct from acceptance. Shared-file
@@ -105,7 +115,7 @@ Routing is a runtime-owned pipeline, not an implicit orchestrator judgment:
    unauthorized routes are excluded. There is no recursive classifier selection.
 4. `decision` selects from a frozen set of eligible answers; `investigate` asks a
    general LLM agent to gather evidence or generate alternatives; `human` creates
-   or retains an Inbox request. Free-form answers require investigation or a human.
+   or retains a human request in the Notifications surface. Free-form answers require investigation or a human.
 5. Revalidate policy, request lifetime and evidence before applying an answer.
 
 The classifier and answer selector are separate logical decisions even if they
