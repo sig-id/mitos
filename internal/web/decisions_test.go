@@ -24,14 +24,14 @@ func TestDecisionJSONAndConsoleShareOneResolution(t *testing.T) {
 	}
 	path := "/api/runs/" + card.RunID + "/decisions/" + card.ID
 	for _, body := range []string{`{"choice":"cancel","resolver":"forged"}`, `{"choice":"cancel","resolved_at":"2000-01-01"}`, `{"choice":"cancel"} {}`} {
-		req := httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(body))
+		req := versioned(httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(body)))
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
 		if w.Code != 400 {
 			t.Fatalf("client-supplied authority accepted: %d", w.Code)
 		}
 	}
-	req := httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(`{"choice":"cancel","note":"Keep this stopped"}`))
+	req := versioned(httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(`{"choice":"cancel","note":"Keep this stopped"}`)))
 	req.Header.Set("X-Mitos-Client", "cli")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)

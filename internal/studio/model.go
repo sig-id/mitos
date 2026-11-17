@@ -28,7 +28,9 @@ type Brief struct {
 	Workspace      string           `json:"workspace"`
 	AppID          string           `json:"app_id"`
 	TimeoutMinutes int              `json:"timeout_minutes"`
-	ProjectLimits  bool             `json:"project_limits,omitempty"` // Workflow occurrences inherit the current project settings.
+	// Structured work has no workspace; see structured.go.
+	Structured    *StructuredWork `json:"structured,omitempty"`
+	ProjectLimits bool            `json:"project_limits,omitempty"` // Workflow occurrences inherit the current project settings.
 }
 
 func (b *Brief) Validate() error {
@@ -48,7 +50,7 @@ func (b *Brief) Validate() error {
 	if len(b.Intent) > 10000 {
 		return errors.New("keep the brief under 10,000 characters")
 	}
-	if b.Workspace == "" {
+	if b.Workspace == "" && b.Structured == nil {
 		return errors.New("choose a local workspace directory")
 	}
 	if b.ProjectLimits && b.AppID != WorkflowAppID {

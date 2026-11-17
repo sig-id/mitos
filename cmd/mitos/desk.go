@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mitos/internal/apiversion"
 	"net/http"
 	"net/url"
 	"os"
@@ -232,6 +233,7 @@ func deskClient(args []string) error {
 	if err != nil {
 		return err
 	}
+	apiversion.Set(req)
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

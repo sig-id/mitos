@@ -64,7 +64,7 @@ func TestMessagingHTTPQueueConflictBoundsAndOrigin(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	for header, value := range map[string]string{"X-Mitos-Server": "other", "Origin": "https://foreign.example"} {
-		req := httptest.NewRequest("POST", "http://localhost/api/messaging/outbox", strings.NewReader(body))
+		req := versioned(httptest.NewRequest("POST", "http://localhost/api/messaging/outbox", strings.NewReader(body)))
 		req.Header.Set(header, value)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)

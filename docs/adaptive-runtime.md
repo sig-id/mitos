@@ -110,8 +110,40 @@ An edit keeps the prior manifest (runtime requirements, capabilities, context po
 limits, provenance) and changes only those three fields; a new agent derives its manifest
 from `mitos.generalist`. Task-specific specializations are bounded by the base
 definition's `specialization.allow` and `max_instruction_bytes`, which the library
-summary exposes as `max_specialization_bytes`. Authored capabilities and limits are
-recorded, not yet enforced.
+summary exposes as `max_specialization_bytes`.
+
+Before launch, each agent attempt resolves its **authority receipt** (`authority.json`):
+the definition's requested capabilities intersected with what the runtime can provide,
+with each capability marked `enforced` (the runtime bounds the grant or blocks the
+withheld capability), `advisory` (it cannot) or `refused`. Missing runtime features and
+unsupported required capabilities always refuse the attempt as a setup prerequisite.
+The `enforcement` setting (personal defaults, overridable in the project's `mitos`
+settings block) selects what else refuses: `advisory` (default) refuses nothing more,
+`strict_required` refuses advisory required capabilities and `strict` refuses any
+advisory capability. With Codex on local processes, reads are not confined, command
+execution cannot be disabled and granted network access is not read-only, so
+`strict_required` refuses `mitos.engineer` and `mitos.tester`. The receipt drives the
+attempt: `workspace.write` selects the writable sandbox (otherwise read-only),
+`network.read` enables sandbox network access, artifact tools are exposed and accepted
+only when granted, the timeout is the smaller of the definition and attempt limits, and
+`max_turns` bounds model steps (completed tool actions plus the final answer).
+`GET /api/graphs/capabilities` publishes the policies and per-runtime profile.
+
+Each attempt's prompt is assembled under its definition's `context` policy and
+recorded in a **context receipt** (`context.json`): every input's kind, source,
+character count, SHA-256 and whether it was included, omitted or not requested.
+Protocol text and definition instructions come first and are outside the budget;
+inputs follow in stability tiers (graph, then task, then attempt facts such as run
+IDs and deadlines) so consecutive attempts share the longest byte-identical prefix
+for provider prompt caching. Inputs the definition does not declare are excluded.
+Required inputs are never dropped: a missing or over-budget required input refuses
+the attempt as a setup prerequisite. On overflow, optional inputs are omitted
+largest first; each is written in full under the attempt's `context/` directory and
+replaced by a reference to that file and its digest. `summarize_optional` is applied
+the same way, since a generated summary would change the prompt bytes on every
+attempt; `wait` refuses instead. The orchestrator's planning context is split into
+`agent_library`, `graph_state` and `remaining_allowance`; orchestrator revision 4
+budgets 131,072 characters to match the kernel's planning-context bound.
 
 Goal limits are 64 tasks, 96 attempts, 24 orchestrator calls, two retries per worker and
 a two-hour deadline. Rejected orchestrator proposals get at most two repair calls using

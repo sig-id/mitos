@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"mitos/internal/apiversion"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,10 @@ func TestAttentionHookPauseAcknowledgmentAndRelease(t *testing.T) {
 	n := desk.Notice{ID: "notice_test", Body: "Hold Git", Pause: true, Targets: []desk.NoticeTarget{{SessionID: "session_test"}}}
 	var releaseReceipt bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(apiversion.Header) != apiversion.Current {
+			http.Error(w, "unversioned attention request", 400)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == "GET" {
 			json.NewEncoder(w).Encode([]desk.Notice{n})

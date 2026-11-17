@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"mitos/internal/apiversion"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,7 +47,7 @@ func TestTerminalStreamReplayReconnectAndExit(t *testing.T) {
 
 	open := func(offset int64) (*websocket.Conn, *outputDecoder) {
 		t.Helper()
-		conn, res, err := websocket.Dial(ctx, strings.Replace(server.URL, "http:", "ws:", 1)+"/api/sessions/"+session.ID+"/stream?offset="+strconv.FormatInt(offset, 10), nil)
+		conn, res, err := websocket.Dial(ctx, strings.Replace(server.URL, "http:", "ws:", 1)+"/api/sessions/"+session.ID+"/stream?offset="+strconv.FormatInt(offset, 10), &websocket.DialOptions{Subprotocols: []string{apiversion.WebSocketProtocol}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +85,7 @@ func TestTerminalStreamReplayReconnectAndExit(t *testing.T) {
 		t.Fatal("acknowledgment did not release output")
 	}
 	held.CloseNow()
-	rejected, response, err := websocket.Dial(ctx, strings.Replace(server.URL, "http:", "ws:", 1)+"/api/sessions/"+session.ID+"/stream?offset=0", &websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{"https://other.example"}}})
+	rejected, response, err := websocket.Dial(ctx, strings.Replace(server.URL, "http:", "ws:", 1)+"/api/sessions/"+session.ID+"/stream?offset=0", &websocket.DialOptions{Subprotocols: []string{apiversion.WebSocketProtocol}, HTTPHeader: http.Header{"Origin": []string{"https://other.example"}}})
 	if err == nil {
 		rejected.CloseNow()
 		t.Fatal("cross-origin terminal admitted")

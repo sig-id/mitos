@@ -141,6 +141,10 @@ a separately reconstructed result. See [applications](spec/system/05_INTERFACES_
 The [adaptive runtime](docs/adaptive-runtime.md) supports dynamically added
 work, atomic graph amendments, automatic application dispatch, registered orchestrator
 applications, and optional typed decisions. Native worker output stays intact.
+Every `/api` request sends `Mitos-API-Version: 1`; see
+[application API](docs/application-api.md), which also covers headless structured
+work with typed results.
+
 The project **Work** page creates and displays these graphs. `/api/graphs` provides
 the programmatic interface; `/api/graphs/capabilities` reports the implemented
 adapter and remaining integrations. Native PTY sessions and services retain their

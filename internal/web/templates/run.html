@@ -37,7 +37,7 @@
 {{if not .Run.Sample}}<section class="panel padded">
 <p class="eyebrow">Execution details</p>
 {{if .Task.ID}}<p>Task {{.Task.Status}} · <a class="text-link" href="/tasks">{{.Task.Scheduling.Pool}} pool</a></p>{{end}}
-<a class="text-link" href="/api/runs/{{.Run.ID}}/evidence" hx-boost="false">Structured fleet evidence</a>
+<a class="text-link" href="/api/runs/{{.Run.ID}}/evidence" hx-boost="false" download="run-{{.Run.ID}}-evidence.json">Structured fleet evidence</a>
 <dl class="facts">
 <div>
 <dt>Workspace</dt>

@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"mitos/internal/apiversion"
 	"net"
 	"net/http"
 	"sort"
@@ -249,6 +250,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		}
 		writeJSON(w, 200, map[string]string{"run_id": result, "decision_id": r.PathValue("decision")})
 	})
+	s.applicationRoutes(mux)
 	mux.HandleFunc("GET /api/runs", s.apiRuns)
 	mux.HandleFunc("POST /api/runs", s.apiLaunch)
 	mux.HandleFunc("GET /api/runs/{id}", s.apiRun)
@@ -338,6 +340,18 @@ func (s *Server) headers(next http.Handler) http.Handler {
 		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/sessions/") && (strings.HasSuffix(r.URL.Path, "/resume") || strings.HasSuffix(r.URL.Path, "/fork") || strings.HasSuffix(r.URL.Path, "/handover")) {
 			// Two 32 KiB text fields can expand sixfold under JSON escaping.
 			limit = 512 << 10
+		}
+		if r.Method == "POST" && (r.URL.Path == "/api/tasks" || r.URL.Path == "/api/runs") {
+			// Structured input (256 KiB) and result schema (64 KiB) after JSON escaping.
+			limit = 1 << 20
+		}
+		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+			version, stated := apiversion.Requested(r)
+			if !stated || !apiversion.IsSupported(version) {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported_api_version", "detail": "Send the " + apiversion.Header + " header (or the " + apiversion.WebSocketProtocol + " WebSocket subprotocol) with a supported version.", "requested": version, "supported_versions": apiversion.Supported})
+				return
+			}
+			w.Header().Set(apiversion.Header, version)
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
@@ -612,6 +626,10 @@ func (s *Server) apiLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, err := s.engine.Launch(b, "")
+	if errors.Is(err, studio.ErrConflict) {
+		writeJSON(w, 409, map[string]string{"error": "request_key_conflict", "detail": "This request key was already used for a different request."})
+		return
+	}
 	if err != nil {
 		writeJSON(w, 422, map[string]string{"error": err.Error()})
 		return

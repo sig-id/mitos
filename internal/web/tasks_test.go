@@ -35,7 +35,7 @@ func TestTaskAndPoolSurfacesUseDurableScheduling(t *testing.T) {
 		}
 	}
 	configure := func(body string) int {
-		r := httptest.NewRequest("PUT", "http://localhost/api/pools/batch", strings.NewReader(body))
+		r := versioned(httptest.NewRequest("PUT", "http://localhost/api/pools/batch", strings.NewReader(body)))
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
@@ -82,7 +82,7 @@ func TestTaskAndPoolSurfacesUseDurableScheduling(t *testing.T) {
 }
 
 func TestDataSelectionFormPreservesExplicitArtifactNames(t *testing.T) {
-	formRequest := httptest.NewRequest("POST", "http://localhost/runs", strings.NewReader("after_tasks=task_one&dependency_inputs=task_one%3Ainventory.json%0Atask_one%3Areport.md"))
+	formRequest := versioned(httptest.NewRequest("POST", "http://localhost/runs", strings.NewReader("after_tasks=task_one&dependency_inputs=task_one%3Ainventory.json%0Atask_one%3Areport.md")))
 	formRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if err := formRequest.ParseForm(); err != nil {
 		t.Fatal(err)

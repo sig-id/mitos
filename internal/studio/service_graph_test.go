@@ -321,7 +321,7 @@ func TestScheduledWorkflowsExecuteWithoutHoldingWorkerSlots(t *testing.T) {
 prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ ctx=json.loads(section(prompt,'graph_state'))
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  root=[f for f in ctx['facts'] if f['spec']['kind']=='scope'][0]
  assert 'recurring workflow' in prompt

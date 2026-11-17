@@ -59,7 +59,7 @@ func TestCheckpointAPIAndPhoneDecisionUseSharedRecovery(t *testing.T) {
 	if !strings.Contains(page.Body.String(), "RECOVERY POINTS") || !strings.Contains(page.Body.String(), `value="rewind"`) {
 		t.Fatal("recovery was not offered in the run view")
 	}
-	bad := httptest.NewRequest("POST", "http://localhost/api/runs/"+run.ID+"/rewind", strings.NewReader(`{"scope":"step","from_segment":1,"reason_signal":"operator_recovery"}`))
+	bad := versioned(httptest.NewRequest("POST", "http://localhost/api/runs/"+run.ID+"/rewind", strings.NewReader(`{"scope":"step","from_segment":1,"reason_signal":"operator_recovery"}`)))
 	bad.Header.Set("Content-Type", "application/json")
 	rejected := httptest.NewRecorder()
 	server.ServeHTTP(rejected, bad)
@@ -71,7 +71,7 @@ func TestCheckpointAPIAndPhoneDecisionUseSharedRecovery(t *testing.T) {
 		`{"scope":"step","memo":"repair","reason_signal":"operator_recovery","from_segment":1,"applied_at":"2026-09-09T00:00:00Z"}`,
 		`{"scope":"step","memo":"repair","reason_signal":"operator_recovery","from_segment":1} {}`,
 	} {
-		req := httptest.NewRequest("POST", "http://localhost/api/runs/"+run.ID+"/rewind", strings.NewReader(body))
+		req := versioned(httptest.NewRequest("POST", "http://localhost/api/runs/"+run.ID+"/rewind", strings.NewReader(body)))
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusBadRequest {

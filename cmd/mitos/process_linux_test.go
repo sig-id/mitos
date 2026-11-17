@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mitos/internal/apiversion"
 	"net"
 	"net/http"
 	"os"
@@ -170,6 +171,7 @@ func TestStopWithOpenTerminalStream(t *testing.T) {
 		t.Helper()
 		data, _ := json.Marshal(body)
 		req, _ := http.NewRequestWithContext(ctx, "POST", "http://"+addr+path, bytes.NewReader(data))
+		apiversion.Set(req)
 		req.Header.Set("Content-Type", "application/json")
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -187,7 +189,7 @@ func TestStopWithOpenTerminalStream(t *testing.T) {
 	}
 	project := post("/api/projects", map[string]string{"name": "Stream", "directory": server.workspace})
 	session := post("/api/projects/"+project["id"].(string)+"/sessions", map[string]string{"agent_id": "shell"})
-	conn, _, err := websocket.Dial(ctx, "ws://"+addr+"/api/sessions/"+session["id"].(string)+"/stream?offset=0", nil)
+	conn, _, err := websocket.Dial(ctx, "ws://"+addr+"/api/sessions/"+session["id"].(string)+"/stream?offset=0", &websocket.DialOptions{Subprotocols: []string{apiversion.WebSocketProtocol}})
 	if err != nil {
 		t.Fatal(err)
 	}

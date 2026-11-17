@@ -29,7 +29,7 @@ func TestAgentConsoleAcceptsSchemaValidEmptyText(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, _ := engine.Store.Get(view.RunIDs[0])
-	r := httptest.NewRequest(http.MethodPost, "http://localhost/runs/"+run.ID+"/decisions/"+run.Decision.ID, strings.NewReader("choice=answer&value="))
+	r := versioned(httptest.NewRequest(http.MethodPost, "http://localhost/runs/"+run.ID+"/decisions/"+run.Decision.ID, strings.NewReader("choice=answer&value=")))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	local.ServeHTTP(w, r)
@@ -103,7 +103,7 @@ func TestAgentProxyQuestionRoundTripThroughDeviceAPI(t *testing.T) {
 			}
 			command := studio.DeviceCommand{Version: 1, CommandID: "confirm", DecisionID: card.DecisionID, RunID: card.RunID, Revision: card.Revision, Choice: "answer", Value: json.RawMessage(`"Alpha"`)}
 			body, _ := json.Marshal(command)
-			req := httptest.NewRequest("POST", "https://board/api/device/v1/resolutions", strings.NewReader(string(body)))
+			req := versioned(httptest.NewRequest("POST", "https://board/api/device/v1/resolutions", strings.NewReader(string(body))))
 			req.Header.Set("Authorization", "Bearer "+token)
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()

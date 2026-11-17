@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mitos/internal/apiversion"
 	"mitos/internal/desk"
 	"mitos/internal/harness"
 	"net/http"
@@ -43,7 +44,12 @@ func attentionHookIO(input io.Reader, outputWriter io.Writer) error {
 	}
 	httpClient := &http.Client{Timeout: 4 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	base := client.URL + "/api/sessions/" + url.PathEscape(session) + "/inbox"
-	res, err := httpClient.Get(base)
+	get, err := http.NewRequest("GET", base, nil)
+	if err != nil {
+		return err
+	}
+	apiversion.Set(get)
+	res, err := httpClient.Do(get)
 	if err != nil {
 		return errors.New("Mitos attention service unavailable")
 	}
@@ -90,8 +96,13 @@ func attentionHookIO(input io.Reader, outputWriter io.Writer) error {
 	}
 	for _, n := range delivered {
 		payload, _ := json.Marshal(map[string]bool{"release": n.ReleasedAt != nil})
-		r, err := httpClient.Post(base+"/"+url.PathEscape(n.ID)+"/delivered", "application/json", bytes.NewReader(payload))
-		if err == nil {
+		post, err := http.NewRequest("POST", base+"/"+url.PathEscape(n.ID)+"/delivered", bytes.NewReader(payload))
+		if err != nil {
+			continue
+		}
+		post.Header.Set("Content-Type", "application/json")
+		apiversion.Set(post)
+		if r, err := httpClient.Do(post); err == nil {
 			r.Body.Close()
 		}
 	}

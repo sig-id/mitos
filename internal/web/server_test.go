@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"mitos/internal/apiversion"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,12 +36,15 @@ func testServer(t *testing.T) (*Server, *studio.Engine) {
 	return server, e
 }
 func request(s *Server, method, path, body string, hx bool) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body))
+	r := versioned(httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(body)))
 	if method == "POST" {
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if hx {
 		r.Header.Set("HX-Request", "true")
+	}
+	if strings.HasPrefix(path, "/api") {
+		apiversion.Set(r)
 	}
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -116,14 +120,14 @@ func TestLaunchValidationAndReportFlow(t *testing.T) {
 func TestCrossOriginAndHostChecks(t *testing.T) {
 	s, _ := testServer(t)
 	for _, host := range []string{"attacker.example", "192.168.1.4:4646"} {
-		r := httptest.NewRequest("GET", "http://"+host+"/", nil)
+		r := versioned(httptest.NewRequest("GET", "http://"+host+"/", nil))
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
 		if w.Code != 403 {
 			t.Fatalf("host %s accepted", host)
 		}
 	}
-	r := httptest.NewRequest("POST", "http://localhost/runs", strings.NewReader("title=test"))
+	r := versioned(httptest.NewRequest("POST", "http://localhost/runs", strings.NewReader("title=test")))
 	r.Header.Set("Origin", "https://attacker.example")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
@@ -135,7 +139,7 @@ func TestCrossOriginAndHostChecks(t *testing.T) {
 func TestJSONAndFormShareLaunchOperations(t *testing.T) {
 	s, e := testServer(t)
 	b, _ := json.Marshal(studio.Brief{Title: "API launch", Workspace: e.Root, AppID: "workspace-inventory", TimeoutMinutes: 1})
-	r := httptest.NewRequest("POST", "http://localhost/api/runs", strings.NewReader(string(b)))
+	r := versioned(httptest.NewRequest("POST", "http://localhost/api/runs", strings.NewReader(string(b))))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -208,4 +212,26 @@ func TestInterruptAPIUsesCanonicalFold(t *testing.T) {
 	if got.Runs != want.Runs || got.HumanTouches != want.HumanTouches || got.SufficientForCalibration || len(got.Distribution) != 5 {
 		t.Fatalf("incorrect interrupt report: %+v", got)
 	}
+}
+
+// versioned marks a test request with the API version, as every client must.
+func versioned(r *http.Request) *http.Request {
+	apiversion.Set(r)
+	return r
+}
+
+type versionedTransport struct{ next http.RoundTripper }
+
+func (t versionedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	if strings.HasPrefix(r.URL.Path, "/api") {
+		apiversion.Set(r)
+	}
+	return t.next.RoundTrip(r)
+}
+
+func TestMain(m *testing.M) {
+	// Test HTTP clients behave like real clients and state the API version.
+	http.DefaultTransport = versionedTransport{http.DefaultTransport}
+	os.Exit(m.Run())
 }

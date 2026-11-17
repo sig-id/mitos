@@ -90,14 +90,14 @@ func TestCustomEventHTTPValidationLimitsAndForm(t *testing.T) {
 	if response := request(s, "GET", "/api/service-events/0", "", false); response.Code != 404 {
 		t.Fatal("invalid sequence accepted")
 	}
-	r := httptest.NewRequest("POST", "http://localhost/api/service-events", strings.NewReader(`{}`))
+	r := versioned(httptest.NewRequest("POST", "http://localhost/api/service-events", strings.NewReader(`{}`)))
 	r.Header.Set("Content-Type", "text/plain")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
 	if w.Code != 415 {
 		t.Fatal("wrong media accepted")
 	}
-	r = httptest.NewRequest("POST", "http://localhost/api/service-events", strings.NewReader(`{"name":"cross","idempotency_key":"one","payload":{}}`))
+	r = versioned(httptest.NewRequest("POST", "http://localhost/api/service-events", strings.NewReader(`{"name":"cross","idempotency_key":"one","payload":{}}`)))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Origin", "https://other.example")
 	w = httptest.NewRecorder()
@@ -105,7 +105,7 @@ func TestCustomEventHTTPValidationLimitsAndForm(t *testing.T) {
 	if w.Code != 403 {
 		t.Fatal("cross-origin intake allowed")
 	}
-	r = httptest.NewRequest("POST", "http://localhost/services/events", strings.NewReader("name=form.event&idempotency_key=form&payload=%7B%7D"))
+	r = versioned(httptest.NewRequest("POST", "http://localhost/services/events", strings.NewReader("name=form.event&idempotency_key=form&payload=%7B%7D")))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w = httptest.NewRecorder()
 	s.ServeHTTP(w, r)

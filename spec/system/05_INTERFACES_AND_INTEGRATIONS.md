@@ -28,7 +28,9 @@ interaction require separate authorized confirmation before resolution.
 
 ## Application and worker server contract
 
-This is a target contract, not a declaration of existing endpoints. Application and
+This is a target contract, not a declaration of existing endpoints. The local
+`/api` surface requires the `Mitos-API-Version` header and refuses unsupported
+versions; `GET /api/capabilities` publishes the implemented S1 subset. Application and
 worker protocols MUST be independently versioned and capability-negotiated. Clients
 MUST reject unsupported operations. The application interface MUST support idempotent
 work admission, status and result reads, cancellation, durable input/event submission,
