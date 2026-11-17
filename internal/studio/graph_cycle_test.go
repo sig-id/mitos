@@ -51,10 +51,35 @@ func TestGraphRejectsRequiredAncestorDependencyCycle(t *testing.T) {
 	if _, err := e.CreateGraph(parentWait); err == nil || !strings.Contains(err.Error(), "required dependency cycle") {
 		t.Fatalf("parent-wait cycle admitted: %v", err)
 	}
+	// Joins that cannot be satisfied without the ancestor edge are still cycles,
+	// whether the ancestor is the only hard edge of an any join or a required
+	// member of a quorum.
+	anyOnly := req
+	anyOnly.Key = "any-only"
+	lonely := graphWorker("lonely", "goal")
+	lonely.Brief.Scheduling.Deps = []workpool.Dependency{{From: "goal", Guard: "done", Payload: "control"}}
+	lonely.Brief.Scheduling.Join = workpool.Join{Rule: "any"}
+	anyOnly.Tasks = append(append([]GraphSpec{}, req.Tasks...), lonely)
+	if _, err := e.CreateGraph(anyOnly); err == nil || !strings.Contains(err.Error(), "required dependency cycle") {
+		t.Fatalf("any-only cycle admitted: %v", err)
+	}
+	quorum := req
+	quorum.Key = "quorum"
+	first := graphWorker("first", "goal")
+	first.Brief.Scheduling = workpool.Request{}
+	vote := graphWorker("vote", "goal")
+	vote.Brief.Scheduling.Deps = []workpool.Dependency{{From: "goal", Guard: "done", Payload: "control"}, {From: "first", Guard: "done", Payload: "control"}}
+	vote.Brief.Scheduling.Join = workpool.Join{Rule: "k_of_n", K: 2}
+	quorum.Tasks = append(append([]GraphSpec{}, req.Tasks...), first, vote)
+	if _, err := e.CreateGraph(quorum); err == nil || !strings.Contains(err.Error(), "required dependency cycle") {
+		t.Fatalf("quorum cycle admitted: %v", err)
+	}
 }
 
 // Optional work, cross-scope ordering and joins whose semantics do not require
-// the ancestor to be accepted first stay valid.
+// the ancestor to be accepted first stay valid: an any join satisfied by a
+// runnable sibling, a reachable quorum, and soft ancestor hints that never gate
+// readiness.
 func TestGraphKeepsValidOrderingWithoutRequiredCycles(t *testing.T) {
 	e, req := graphEngine(t, false)
 	valid := req
@@ -64,15 +89,24 @@ func TestGraphKeepsValidOrderingWithoutRequiredCycles(t *testing.T) {
 	first.Brief.Scheduling = workpool.Request{}
 	ordered := graphWorker("ordered", "mid")
 	ordered.Brief.Scheduling.Deps = []workpool.Dependency{{From: "first", Guard: "done", Payload: "control"}}
+	// A required task may reference its ancestor in an any join: the runnable
+	// sibling edge satisfies the join without the ancestor's acceptance.
 	joined := graphWorker("joined", "goal")
-	joined.Required = false
 	joined.Brief.Scheduling.Deps = []workpool.Dependency{{From: "goal", Guard: "done", Payload: "control"}, {From: "first", Guard: "done", Payload: "control"}}
 	joined.Brief.Scheduling.Join = workpool.Join{Rule: "any"}
+	// A reachable quorum leaves the ancestor edge unnecessary for readiness.
+	quorum := graphWorker("quorum", "goal")
+	quorum.Brief.Scheduling.Deps = []workpool.Dependency{{From: "goal", Guard: "done", Payload: "control"}, {From: "first", Guard: "done", Payload: "control"}}
+	quorum.Brief.Scheduling.Join = workpool.Join{Rule: "k_of_n", K: 1}
+	// Soft hints never gate readiness, so a soft ancestor wait stays expressible
+	// even with the default all join.
+	hinted := graphWorker("hinted", "goal")
+	hinted.Brief.Scheduling.Deps = []workpool.Dependency{{From: "goal", Guard: "done", Payload: "control", Strength: "soft"}}
 	recoverable := graphWorker("recoverable", "goal")
 	recoverable.Brief.Scheduling.Deps = []workpool.Dependency{{From: "goal", Guard: "cancelled", Payload: "control"}}
-	valid.Tasks = append(append([]GraphSpec{}, req.Tasks...), mid, first, ordered, joined, recoverable)
+	valid.Tasks = append(append([]GraphSpec{}, req.Tasks...), mid, first, ordered, joined, quorum, hinted, recoverable)
 	g := createGraphTest(t, e, valid)
-	if len(g.Members) != 6 {
+	if len(g.Members) != 8 {
 		t.Fatalf("members: %d", len(g.Members))
 	}
 }
