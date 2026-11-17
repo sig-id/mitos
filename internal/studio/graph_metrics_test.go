@@ -37,6 +37,10 @@ func TestAutonomyMetricsProjectSharedGraphEvents(t *testing.T) {
 	if err = e.reconcileGraphs(); err != nil {
 		t.Fatal(err)
 	}
+	// Compare one durable head. reconcileGraphs starts a real worker; without
+	// the writer gate it can append between the live fold and the offline read.
+	s.mu.writer.Lock()
+	defer s.mu.writer.Unlock()
 	live, err := ReportAutonomy(s.List())
 	if err != nil {
 		t.Fatal(err)
