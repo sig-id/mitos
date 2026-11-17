@@ -110,6 +110,22 @@ func (a *ApplicationSession) Admit(b Brief) (Run, error) {
 	return a.engine.launchStructuredAs(a.view.principal, b)
 }
 
+// Resolve answers a pending decision on the application's own work, such as
+// the recovery choice recorded when the server restarted mid-execution. The
+// authenticated principal supplies the tenant identity, so the store's
+// cross-tenant checks stay intact; choosing retry re-admits the frozen brief
+// exactly like the console path.
+func (a *ApplicationSession) Resolve(id, decisionID, choice, note string) (string, error) {
+	s := a.view.store
+	s.mu.RLock()
+	_, err := a.view.runLocked(id, false)
+	s.mu.RUnlock()
+	if err != nil {
+		return "", err
+	}
+	return a.engine.ResolveAs(id, decisionID, choice, note, "api", a.view.principal)
+}
+
 func (a *ApplicationSession) Cancel(id string) error {
 	e, s := a.engine, a.view.store
 	e.actions.Lock()

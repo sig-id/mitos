@@ -78,3 +78,41 @@ func TestApplicationListenerRequiresTLSVersionAndLiveCredential(t *testing.T) {
 		t.Fatal("revocation delayed", code, body)
 	}
 }
+
+// The recovery decision recorded for interrupted work must be answerable over
+// the authenticated application listener itself.
+func TestApplicationListenerRoutesDecisionResolution(t *testing.T) {
+	store, err := studio.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, token, err := store.CreateServicePrincipal(studio.ServicePrincipalInput{ID: "application", Name: "Application", Tenant: decision.Tenant{Org: "tenant", Project: "app"}, Read: true, Write: true, ExpiresAt: time.Now().Add(time.Hour)}, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(&studio.Engine{Store: store})
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+	post := func(path, body string) (int, string) {
+		req, _ := http.NewRequest("POST", server.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		apiversion.Set(req)
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+	if code, body := post("/api/runs/foreign/decision", `{"decision_id":"decision_x","choice":"retry"}`); code != 404 {
+		t.Fatal("foreign run resolution", code, body)
+	}
+	if code, _ := post("/api/runs/foreign/decision", `{"choice":"retry"}`); code != 400 {
+		t.Fatal("resolution without decision id accepted", code)
+	}
+	if code, _ := post("/api/runs/foreign/decision", `{"decision_id":"decision_x","choice":"retry","extra":1}`); code != 400 {
+		t.Fatal("unknown resolution field accepted", code)
+	}
+}

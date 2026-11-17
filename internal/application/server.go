@@ -79,7 +79,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.ApplicationSession) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if r.Method == "GET" && r.URL.Path == "/api/capabilities" {
-		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "hosted": map[string]bool{"service_principal_auth": false, "tenant_isolation": false, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false}})
+		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "operations": map[string]string{"admit": "POST /api/tasks", "status": "GET /api/runs/{id}", "events": "GET /api/runs/{id}/events", "result": "GET /api/runs/{id}/result", "cancel": "POST /api/runs/{id}/cancel", "decision": "POST /api/runs/{id}/decision"}, "hosted": map[string]bool{"service_principal_auth": false, "tenant_isolation": false, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false}})
 		return
 	}
 	if r.Method == "POST" && r.URL.Path == "/api/tasks" {
@@ -163,6 +163,26 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.A
 				return
 			}
 			reply(w, 202, map[string]string{"status": "cancellation_requested"})
+			return
+		}
+		if len(parts) == 4 && parts[3] == "decision" && r.Method == "POST" {
+			var in struct {
+				DecisionID string `json:"decision_id"`
+				Choice     string `json:"choice"`
+				Note       string `json:"note"`
+			}
+			dec := json.NewDecoder(r.Body)
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&in); err != nil || dec.Decode(new(any)) != io.EOF || in.DecisionID == "" || in.Choice == "" {
+				reply(w, 400, map[string]string{"error": "invalid_resolution"})
+				return
+			}
+			result, err := session.Resolve(id, in.DecisionID, in.Choice, in.Note)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			reply(w, 202, map[string]string{"status": "resolution_applied", "run_id": result})
 			return
 		}
 		if len(parts) == 5 && parts[3] == "artifacts" && r.Method == "GET" {

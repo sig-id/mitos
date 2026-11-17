@@ -137,3 +137,57 @@ func TestCachedApplicationViewsRevalidateRotationRevocationAndRestore(t *testing
 		t.Fatal("token survived authority restore", err)
 	}
 }
+
+// A server restart parks executing work with a recovery decision. The owning
+// application must be able to resolve that decision itself: the local operator
+// is outside the run tenant, so only the authenticated principal can answer.
+func TestApplicationSessionResolvesRecoveryForOwnedRuns(t *testing.T) {
+	e, _ := automaticScriptEngine(t, `print('unused')`)
+	e.stop()
+	e.wg.Wait()
+	s := e.Store
+	alpha, _ := serviceTestPrincipal(t, s, "alpha", "a", true)
+	beta, _ := serviceTestPrincipal(t, s, "beta", "b", true)
+	run, err := e.Application(alpha).Admit(structuredBrief("recover-me", "agent:mitos.generalist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Park(run.ID, checkpointOption(run, recoveryDecision())); err != nil {
+		t.Fatal(err)
+	}
+	parked, err := s.Get(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parked.Status != "parked" || parked.Decision == nil {
+		t.Fatalf("run was not parked for recovery: %+v", parked)
+	}
+	// A foreign tenant cannot even see the run, and the local operator tenant
+	// cannot answer a decision owned by another tenant.
+	if _, err = e.Application(beta).Resolve(run.ID, parked.Decision.ID, "retry", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatal("cross-tenant resolution was not scoped", err)
+	}
+	if _, err = e.ResolveAs(run.ID, parked.Decision.ID, "retry", "", "console", decision.LocalOperator()); !errors.Is(err, ErrConflict) {
+		t.Fatal("outside-tenant operator resolved the decision", err)
+	}
+	// The owning application resolves retry; the frozen brief is re-admitted.
+	result, err := e.Application(alpha).Resolve(run.ID, parked.Decision.ID, "retry", "restart after the outage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == run.ID {
+		t.Fatal("retry did not start a replacement attempt")
+	}
+	child, err := s.Get(result)
+	if err != nil || child.ParentID != run.ID || child.Status != "queued" {
+		t.Fatalf("replacement attempt missing: %+v (%v)", child, err)
+	}
+	if child.Tenant != run.Tenant || child.PrincipalID != alpha.ID {
+		t.Fatalf("replacement lost its tenant binding: %+v", child)
+	}
+	// A repeated resolution reports the same child instead of duplicating work.
+	again, err := e.Application(alpha).Resolve(run.ID, parked.Decision.ID, "retry", "")
+	if err != nil || again != child.ID {
+		t.Fatalf("retry was not idempotent: %s (%v)", again, err)
+	}
+}
