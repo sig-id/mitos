@@ -98,6 +98,15 @@ type ArtifactList struct {
 	Cursor int    `json:"cursor"`
 	Limit  int    `json:"limit"`
 }
+
+// GraphTaskRead pages bounded task detail from the caller's graph. The inline
+// planning journal carries states only; specs, criteria and artifact lists are
+// retrieved through this tool by orchestrator attempts.
+type GraphTaskRead struct {
+	Task   string `json:"task"`
+	Cursor int    `json:"cursor"`
+	Limit  int    `json:"limit"`
+}
 type ArtifactRead struct {
 	RunID      string `json:"run_id"`
 	ArtifactID string `json:"artifact_id"`
@@ -155,6 +164,7 @@ func HandoffTools() []harness.DynamicTool {
 		typ               reflect.Type
 	}{
 		{"result_get", "Read a typed result receipt, review state, artifact references, checks, limitations and unresolved requests in bounded pages. Use cursor 0 and limit 1..16. Review all pages before accepting.", reflect.TypeFor[ResultRead]()},
+		{"graph_read", "Read bounded task detail (spec, criteria, brief, scheduling, current run, result, first artifacts) from your graph. Use task for one member, or cursor 0 and limit 1..16 to page. The inline planning journal carries immutable states only.", reflect.TypeFor[GraphTaskRead]()},
 		{"cooperation_submit", "Record a mitos.cooperation/v2 request, answer or cancellation. Resolver IDs bind exact current attempts in this graph. Only acceptance blocking is supported. Approval messages reference canonical decisions and grant no permissions.", reflect.TypeFor[CooperationSubmission]()},
 		{"cooperation_list", "List your requests and requests addressed to your exact attempt. Use cursor 0 and limit 1..16. Re-list from 0 to refresh request states.", reflect.TypeFor[CooperationList]()},
 		{"artifact_register", "Retain a regular workspace file as immutable evidence. Returns its artifact ID. Maximum 64 MiB per file.", reflect.TypeFor[ArtifactRegister]()},
@@ -202,6 +212,12 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 		return e.handoffCooperation(run, raw)
 	case "cooperation_list":
 		return e.handoffRequests(run, raw)
+	case "graph_read":
+		var in GraphTaskRead
+		if err := decodeHandoff(raw, &in); err != nil {
+			return nil, err
+		}
+		return e.Store.graphTaskRead(run, in)
 	case "artifact_register":
 		var in ArtifactRegister
 		if err := decodeHandoff(raw, &in); err != nil {

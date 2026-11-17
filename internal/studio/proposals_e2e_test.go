@@ -26,24 +26,29 @@ def spec(ref,intent,root):
  return {'id':ref,'parent':root,'kind':'application','required':True,'acceptance':'operator','criteria':'Answer','brief':{'title':ref,'intent':intent,'app_id':'agent:mitos.generalist','timeout_minutes':30,'scheduling':{'deps':[]}}}
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'));root=ctx['root_task']
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[e for e in latest.values() if e['kind']=='application']
  plan={'explanation':'Coordinate.','operations':[],'accept':[],'complete':False,'result':{'title':'','markdown':'','source_tasks':[]}}
- pending=[(f,p) for f in workers for p in f.get('proposals',[])]
- lead=[f for f in workers if f['spec']['brief']['title']=='lead']
- helper=[f for f in workers if f['spec']['brief']['title']=='helper']
+ pending=[p for p in ctx['proposals']]
+ # The bounded journal carries no titles: identify the helper by its submitted
+ # answer and the lead as the proposal's proposing task.
+ helper=[e for e in workers if 'sub-answer' in e.get('summary','')]
  if not workers:
   plan['operations']=[{'kind':'add','spec':spec('lead','LEAD fixture-manual-submit',root)}]
  elif pending:
-  f,p=pending[0]
-  assert p['detail']['blocking'] and lead[0]['state']=='yielded',str(pending)
+  p=pending[0]
+  lead=latest[p['task']]
+  assert p['detail']['blocking'] and lead['state']=='yielded',str(pending)+str(workers)
   plan['operations']=[{'kind':'add','spec':spec('helper','HELPER',root)},{'kind':'accept_proposal','proposal':p['id'],'dependencies':[{'from':'helper','guard':'done','payload':'data','artifacts':['report.md']}],'rationale':'A helper can answer that.'}]
- elif helper and not helper[0]['accepted']:
+ elif helper and not helper[0].get('accepted'):
   assert helper[0]['state']=='done',str(helper)
-  plan['accept']=[{'task':helper[0]['id'],'rationale':'Helper answered.'}]
+  plan['accept']=[{'task':helper[0]['task'],'rationale':'Helper answered.'}]
  else:
-  assert lead[0]['state']=='done',str(lead)
-  plan['accept']=[{'task':lead[0]['id'],'rationale':'Lead integrated the answer.'}];plan['complete']=True
-  plan['result']={'title':'Answer','markdown':'The answer is 7.','source_tasks':[lead[0]['id'],helper[0]['id']]}
+  lead=[e for e in workers if e['task']!=helper[0]['task']]
+  assert len(lead)==1 and lead[0]['state']=='done',str(workers)
+  plan['accept']=[{'task':lead[0]['task'],'rationale':'Lead integrated the answer.'}];plan['complete']=True
+  plan['result']={'title':'Answer','markdown':'The answer is 7.','source_tasks':[lead[0]['task'],helper[0]['task']]}
  out.write_text(json.dumps(plan))
 elif 'HELPER' in prompt:
  out.write_text('The sub-answer is 7.')

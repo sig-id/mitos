@@ -33,18 +33,24 @@ type contextSection struct {
 	Kind   string
 	Source string
 	Text   string
+	// Cache-stability evidence for append-only sections: the digest and length
+	// of the prefix shared with the previous attempt's section of the same kind.
+	SharedPrefixSHA256 string
+	SharedPrefixBytes  int
 }
 
 type ContextSectionReceipt struct {
-	Tier       int    `json:"tier"`
-	Kind       string `json:"kind"`
-	Source     string `json:"source"`
-	Required   bool   `json:"required"`
-	Characters int    `json:"characters"`
-	SHA256     string `json:"sha256"`
-	Included   bool   `json:"included"`
-	Reference  string `json:"reference,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Tier               int    `json:"tier"`
+	Kind               string `json:"kind"`
+	Source             string `json:"source"`
+	Required           bool   `json:"required"`
+	Characters         int    `json:"characters"`
+	SHA256             string `json:"sha256"`
+	Included           bool   `json:"included"`
+	Reference          string `json:"reference,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+	SharedPrefixBytes  int    `json:"shared_prefix_bytes,omitempty"`
+	SharedPrefixSHA256 string `json:"shared_prefix_sha256,omitempty"`
 }
 
 // ContextReceipt records exactly what entered an attempt's prompt and what was
@@ -76,6 +82,15 @@ func (a *contextAssembly) add(tier int, kind, source, text string) {
 	}
 }
 
+// addShared records an append-only section together with the digest and length
+// of the byte prefix it shares with the previous attempt's section.
+func (a *contextAssembly) addShared(tier int, kind, source, text, prefixSHA string, prefixBytes int) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	a.inputs = append(a.inputs, contextSection{Tier: tier, Kind: kind, Source: source, Text: text, SharedPrefixSHA256: prefixSHA, SharedPrefixBytes: prefixBytes})
+}
+
 func digestText(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])
@@ -102,7 +117,7 @@ func (a *contextAssembly) assemble(d agents.Definition, spillDir string) (string
 		selected := required || s.Kind == contextAttempt || slices.Contains(policy.Optional, s.Kind)
 		included[i] = selected
 		present[s.Kind] = true
-		receipt := ContextSectionReceipt{Tier: s.Tier, Kind: s.Kind, Source: s.Source, Required: required || s.Kind == contextAttempt, Characters: utf8.RuneCountInString(s.Text), SHA256: digestText(s.Text), Included: selected}
+		receipt := ContextSectionReceipt{Tier: s.Tier, Kind: s.Kind, Source: s.Source, Required: required || s.Kind == contextAttempt, Characters: utf8.RuneCountInString(s.Text), SHA256: digestText(s.Text), Included: selected, SharedPrefixBytes: s.SharedPrefixBytes, SharedPrefixSHA256: s.SharedPrefixSHA256}
 		if !selected {
 			receipt.Reason = "not requested by the agent definition"
 		}
