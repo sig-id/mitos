@@ -63,7 +63,7 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		value, err = s.Engine.Store.RegisterWorker(token, in)
 	case "/worker/v1/claim":
 		var in structuredworker.Claim
-		if decode(&in) != nil {
+		if decode(&in) != nil || in.RunID != "" {
 			send(400, map[string]string{"error": "invalid_request"})
 			return
 		}

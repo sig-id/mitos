@@ -526,4 +526,7 @@ The independently versioned [worker protocol](docs/worker-protocol.md) supports
 replaceable headless workers, pool-only MQTT wake hints and a durable external
 action gateway. The S3 subprocess fault matrix demonstrates worker and authority
 recovery, lost receipt replay, missed notifications and original-operation
-reconciliation. Dormant conversation waits remain gated on S4.
+reconciliation. The [personal/negotiation fixture](examples/conversationfixture/README.md)
+demonstrates durable waits, serialized personal updates, current-context publication
+and private-thread confinement. The [S4 scale report](docs/benchmarks/s4-dormant-scale.md)
+measures 20 tenants, 2,000 dormant responsibilities and 8 active worker identities.

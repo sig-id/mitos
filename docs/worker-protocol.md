@@ -45,7 +45,8 @@ result handlers. Workspace execution continues through its existing scheduler.
 Checkpoints require `structured.checkpoint_schema`, use the same strict object
 schema subset as results, are capped at 64 KiB, and store Task/Run, generation,
 input and definition digests and schema provenance. They contain application
-JSON, never native model sessions. Durable input waits are a subsequent slice.
+JSON, never native model sessions. Durable input waits use these portable
+checkpoints as described below.
 
 Result acceptance rechecks the binding and current application permission. It
 commits registered result/artifact metadata, terminal state, a deduplicated
@@ -57,7 +58,7 @@ Restoring a backup invalidates all pre-restore worker credentials.
 Native execution gets a fresh scratch directory, home and model credential
 store. It does not inherit application/worker/target credentials or operator
 conversation/MCP files. Native approval requests are denied. External effects
-will use the action gateway; the S3 deployment fault matrix is described below.
+use the action gateway; the S3 deployment fault matrix is described below.
 `remote_workers` and `mqtt_work_claims` are true after this conformance gate.
 
 ## Optional MQTT wake hints
@@ -178,9 +179,8 @@ prepared by the server and journaled with their prompt digest.
 `TestTaskWaitAndInputWakeCrashAtomicity` kills processes before/after each commit.
 `TestIndependentWorkerDurableWait` exercises the actual confined native tool,
 releases the worker, restarts the authority while dormant, appends an HTTP input,
-and observes one accepted result on a fresh attempt. Conversation consistency,
-confinement and scale remain the S4 conformance gate before advertising
-`conversation_waits`.
+and observes one accepted result on a fresh attempt. Conversation consistency, confinement and declared scale are demonstrated by
+the final S4 fixture below.
 
 ## Conversation keys and context versions
 
@@ -232,5 +232,22 @@ base structured workers may continue to execute ordinary headless Tasks.
 
 Race tests cover tenant key independence, active/dormant key transfer, version CAS,
 old admission receipt replay, superseded evidence/deduplication, explicit snapshot
-refresh, unread input refusal and safe reconciliation after supersession. The
-`conversation_waits` capability remains gated until S4 fixture and scale evidence.
+refresh, unread input refusal and safe reconciliation after supersession. The S4 fixture and scale evidence below demonstrate `conversation_waits`.
+
+
+## S4 conformance and declared scale
+
+The [independent conversation fixture](../examples/conversationfixture/README.md)
+coordinates private negotiations and a personal thread through HTTP only. Its
+process tests force answer/wait ordering, restart while dormant, coordinator
+replacement and a preference/publication race. Candidate/company canaries cannot
+enter the actual personal prompt, its events/artifacts or MQTT hints. The
+coordinator decodes and re-encodes the declared negotiation outcome before
+personal admission. The worker cannot read the coordinator database outside its
+confined mounts. One outcome and reply are saved transactionally by the application.
+
+The [benchmark report](benchmarks/s4-dormant-scale.md) records replay, Go heap,
+process RSS, durable claim latency and read bounds for 20 tenants, 2,000 dormant
+responsibilities and 8 active worker identities. Dormant population and execution
+capacity are reported separately. These conformance results enable
+`conversation_waits`; PostgreSQL remains deferred.
