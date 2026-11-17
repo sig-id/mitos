@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mitos/internal/apiversion"
 	"net/http"
 	"net/url"
 	"os"
@@ -98,6 +99,7 @@ func messageClient(args []string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Mitos-Client", "cli")
+	apiversion.Set(req)
 	if *server != "" {
 		req.Header.Set("X-Mitos-Server", *server)
 	}

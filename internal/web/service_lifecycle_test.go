@@ -71,7 +71,7 @@ func TestServiceLifecycleHTTPStopHarvestAndResume(t *testing.T) {
 			t.Fatal("malformed operation accepted", w.Code)
 		}
 	}
-	r := httptest.NewRequest("POST", "http://localhost/api/services/group/lifecycle", strings.NewReader(`{"action":"resume","idempotency_key":"cross"}`))
+	r := versioned(httptest.NewRequest("POST", "http://localhost/api/services/group/lifecycle", strings.NewReader(`{"action":"resume","idempotency_key":"cross"}`)))
 	r.Header.Set("Origin", "https://other.example")
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

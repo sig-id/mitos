@@ -62,7 +62,7 @@ var codexProfile = runtimeProfile{
 // keeps within scope and which withheld capabilities are actually blocked.
 func RuntimeCapabilityProfiles() map[string]any {
 	out := map[string]any{}
-	for _, runtime := range []string{"codex"} {
+	for _, runtime := range []string{"codex", "codex-headless"} {
 		p, _ := nativeRuntimeProfile(runtime)
 		caps := map[string]any{}
 		for name, c := range p.Capabilities {
@@ -73,9 +73,22 @@ func RuntimeCapabilityProfiles() map[string]any {
 	return out
 }
 
+// Headless structured work runs Codex read-only in an empty scratch directory
+// without Mitos handoff tools: there is no workspace to read or write and no
+// artifact or graph access.
+var codexHeadlessProfile = runtimeProfile{
+	Features: []string{"native_output", "tool_use"},
+	Capabilities: map[string]capabilitySupport{
+		"command.run": {BoundedGrant: true, BlockedDenial: false, Note: "Commands run inside a read-only sandbox in the scratch directory; command execution cannot be disabled."},
+	},
+}
+
 func nativeRuntimeProfile(runtime string) (runtimeProfile, bool) {
-	if runtime == "codex" {
+	switch runtime {
+	case "codex":
 		return codexProfile, true
+	case "codex-headless":
+		return codexHeadlessProfile, true
 	}
 	return runtimeProfile{}, false
 }

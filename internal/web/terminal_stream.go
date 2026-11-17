@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"mitos/internal/apiversion"
 	"net/http"
 	"strconv"
 	"time"
@@ -34,7 +35,7 @@ func (s *Server) terminalStream(w http.ResponseWriter, r *http.Request) {
 		deskResult(w, nil, err)
 		return
 	}
-	conn, err := websocket.Accept(w, r, nil)
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{apiversion.WebSocketProtocol}})
 	if err != nil {
 		return
 	}

@@ -49,7 +49,7 @@ func TestLocalProjectAndAgentOutsideDefaultWorkspace(t *testing.T) {
 
 func deskRequest(s *Server, method, path string, body any) *httptest.ResponseRecorder {
 	b, _ := json.Marshal(body)
-	r := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(string(b)))
+	r := versioned(httptest.NewRequest(method, "http://localhost"+path, strings.NewReader(string(b))))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -145,14 +145,14 @@ func TestWorkspaceRejectsMalformedInputAndCrossOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, body := range []string{`{"name":"x","role":"shell","unknown":1}`, `{"name":"x","role":"shell"} {}`} {
-		r := httptest.NewRequest("POST", "http://localhost/api/projects/"+p.ID+"/sessions", strings.NewReader(body))
+		r := versioned(httptest.NewRequest("POST", "http://localhost/api/projects/"+p.ID+"/sessions", strings.NewReader(body)))
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
 		if w.Code != 400 {
 			t.Fatal("malformed request admitted")
 		}
 	}
-	r := httptest.NewRequest("POST", "http://localhost/api/projects", strings.NewReader(`{"name":"x","directory":"."}`))
+	r := versioned(httptest.NewRequest("POST", "http://localhost/api/projects", strings.NewReader(`{"name":"x","directory":"."}`)))
 	r.Header.Set("Origin", "https://other.example")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()

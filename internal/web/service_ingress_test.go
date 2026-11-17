@@ -13,7 +13,7 @@ import (
 )
 
 func deliveryRequest(s *Server, path, key, body string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(body))
+	r := versioned(httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(body)))
 	r.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		r.Header.Set("Idempotency-Key", key)
@@ -98,7 +98,7 @@ func TestServiceIngressHTTPPayloadAndReplay(t *testing.T) {
 			t.Fatal(test.path, w.Code, w.Body.String())
 		}
 	}
-	r := httptest.NewRequest("POST", "http://localhost/capabilities/test/runs", strings.NewReader(`{}`))
+	r := versioned(httptest.NewRequest("POST", "http://localhost/capabilities/test/runs", strings.NewReader(`{}`)))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Idempotency-Key", "cross")
 	r.Header.Set("Origin", "https://other.example")

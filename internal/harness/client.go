@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mitos/internal/apiversion"
 	"net"
 	"net/http"
 	"net/url"
@@ -99,6 +100,7 @@ func (c *Client) callJSON(ctx context.Context, method, path string, body []byte,
 	if err != nil {
 		return err
 	}
+	apiversion.Set(req)
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := c.HTTP.Do(req)

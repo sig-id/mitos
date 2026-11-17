@@ -21,23 +21,25 @@ import (
 )
 
 type Engine struct {
-	Messages   *messaging.Service
-	Desk       *desk.Manager
-	provider   compute.Provider
-	Store      *Store
-	Apps       []Application
-	Root       string
-	mu         sync.Mutex
-	cancel     map[string]context.CancelFunc
-	ctx        context.Context
-	stop       context.CancelFunc
-	wg         sync.WaitGroup
-	actions    sync.Mutex
-	libraryMu  sync.Mutex
-	setupMu    sync.Mutex
-	resolving  map[string]bool
-	setupChats map[string]context.CancelFunc
-	liveOutput map[string]*agentOutputPreview
+	Messages  *messaging.Service
+	Desk      *desk.Manager
+	provider  compute.Provider
+	Store     *Store
+	Apps      []Application
+	Root      string
+	mu        sync.Mutex
+	cancel    map[string]context.CancelFunc
+	ctx       context.Context
+	stop      context.CancelFunc
+	wg        sync.WaitGroup
+	actions   sync.Mutex
+	libraryMu sync.Mutex
+	// Serializes idempotent structured-work admission by request key.
+	structuredMu sync.Mutex
+	setupMu      sync.Mutex
+	resolving    map[string]bool
+	setupChats   map[string]context.CancelFunc
+	liveOutput   map[string]*agentOutputPreview
 }
 
 func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
@@ -198,6 +200,12 @@ func (e *Engine) Workspace(path string) (string, error) {
 	return path, nil
 }
 func (e *Engine) Launch(b Brief, parent string) (Run, error) {
+	if b.Structured != nil {
+		if parent != "" {
+			return Run{}, errors.New("structured work cannot be a child run")
+		}
+		return e.LaunchStructured(b)
+	}
 	b, name, err := e.prepareBrief(b)
 	if err != nil {
 		return Run{}, err

@@ -15,7 +15,7 @@ func TestLocalDeviceAdministration(t *testing.T) {
 	in := studio.DevicePairInput{Name: "Handheld", Permissions: studio.DevicePermissions{Read: true, Resolve: true, Voice: true}, ExpiresAt: time.Now().Add(time.Hour), STTDisclosure: "Local STT; no retention"}
 	encoded, _ := json.Marshal(in)
 	send := func(path string, body []byte) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(string(body)))
+		req := versioned(httptest.NewRequest("POST", "http://localhost"+path, strings.NewReader(string(body))))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
@@ -67,7 +67,7 @@ func TestLocalDeviceAdministration(t *testing.T) {
 	if got := send("/api/devices/missing/revoke", nil); got.Code != 404 {
 		t.Fatal(got.Code, got.Body.String())
 	}
-	req := httptest.NewRequest("POST", "http://localhost/api/devices", strings.NewReader(string(encoded)))
+	req := versioned(httptest.NewRequest("POST", "http://localhost/api/devices", strings.NewReader(string(encoded))))
 	req.Header.Set("Origin", "https://attacker.example")
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)

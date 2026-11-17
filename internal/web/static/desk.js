@@ -367,7 +367,7 @@
       if (!alive) return;
       const url=new URL(`/api/sessions/${session}/stream?offset=${offset}`,location.href);
       url.protocol=location.protocol==='https:'?'wss:':'ws:';
-      const socket=new WebSocket(url); outputSocket=socket;
+      const socket=new WebSocket(url,[window.MitosAPI.websocketProtocol]); outputSocket=socket;
       let processing=Promise.resolve(), finished=false;
       const watch=()=>{clearTimeout(outputWatchdog);outputWatchdog=setTimeout(()=>socket.close(),25000);};
       watch();

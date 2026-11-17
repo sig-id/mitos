@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mitos/internal/apiversion"
 	"net"
 	"net/http"
 	"os"
@@ -530,6 +531,7 @@ func client(command string, args []string) error {
 		return err
 	}
 	req.Header.Set("X-Mitos-Client", "cli")
+	apiversion.Set(req)
 	c := http.Client{Timeout: 30 * time.Second}
 	res, err := c.Do(req)
 	if err != nil {

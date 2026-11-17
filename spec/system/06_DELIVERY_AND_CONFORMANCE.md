@@ -229,6 +229,12 @@ policy. Verify independent application/API version negotiation and unsupported-v
 refusal. Keep the existing local startup and engineering workflow usable without a
 database service, broker or remote worker. Publish actual adapter capabilities.
 
+Implemented subset: headless structured work through `POST /api/tasks` with a
+strict result schema, exact validation, request-key idempotency, frozen definition
+binding, and mandatory `/api` version negotiation with unsupported-version refusal;
+see [application API](../../docs/application-api.md). Version negotiation covers the
+local `/api` surface, not an independently deployed application server.
+
 ### S2 – Hosted persistence and application boundary
 
 Implement the PostgreSQL runtime adapter with the same atomic transition, receipt,

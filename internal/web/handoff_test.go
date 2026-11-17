@@ -50,7 +50,7 @@ func TestHandoffHTTPUsesBoundIdentityAndFrontendProjection(t *testing.T) {
 	call := func(method string, input any, secret string) *httptest.ResponseRecorder {
 		t.Helper()
 		raw, _ := json.Marshal(input)
-		r := httptest.NewRequest("POST", "http://localhost/api/agent-sessions/"+session.ID+"/handoff/"+method, strings.NewReader(string(raw)))
+		r := versioned(httptest.NewRequest("POST", "http://localhost/api/agent-sessions/"+session.ID+"/handoff/"+method, strings.NewReader(string(raw))))
 		r.Header.Set("Authorization", "Bearer "+secret)
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, r)
