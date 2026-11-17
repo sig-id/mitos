@@ -107,6 +107,13 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		if r.ExecutionKind == "interactive" {
 			continue
 		}
+		if r.Brief.Structured != nil && !r.Sample && (r.Status == "running" || r.RestartRetry) {
+			if err = e.recoverStructured(r); err != nil {
+				cancel()
+				return nil, err
+			}
+			continue
+		}
 		if r.Status == "stopping" && !r.Sample {
 			if err = s.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "The server restarted after a stop request. Any already harvested evidence is preserved; no command was restarted."); err != nil {
 				cancel()
@@ -437,7 +444,7 @@ func (e *Engine) dispatch() {
 					continue
 				}
 				e.mu.Lock()
-				if len(e.cancel) >= 2 {
+				if len(e.cancel) >= e.Store.RuntimeCapacity() {
 					e.mu.Unlock()
 					break
 				}
@@ -469,6 +476,12 @@ func (e *Engine) dispatch() {
 				deadline := time.Now().Add(time.Duration(r.Brief.TimeoutMinutes) * time.Minute)
 				if current.Execution != nil {
 					deadline = current.Execution.Deadline
+				}
+				e.Store.mu.RLock()
+				taskDeadline := e.Store.structuredTaskDeadline(&current)
+				e.Store.mu.RUnlock()
+				if !taskDeadline.IsZero() && taskDeadline.Before(deadline) {
+					deadline = taskDeadline
 				}
 				if taskDeadline := current.Brief.Scheduling.Deadline; taskDeadline != nil && taskDeadline.Before(deadline) {
 					deadline = *taskDeadline
@@ -546,6 +559,10 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		return
 	}
 	if e.ctx.Err() != nil {
+		if r.Brief.Structured != nil {
+			_ = e.Store.interruptStructured(r.ID, "Server shutdown interrupted effect-free work; a bounded replacement may resume the same Task after restart.")
+			return
+		}
 		_ = e.Store.Park(r.ID, checkpointOption(current, recoveryDecision()))
 		return
 	}

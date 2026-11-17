@@ -33,6 +33,10 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 			out = append(out, journalProjection{Namespace: "run_cursor", Key: id, Value: []byte(strconv.FormatInt(e.Seq, 10))})
 		}
 		if c.Run != nil && c.Run.Brief.Structured != nil && c.Run.ParentID == "" {
+			if d := c.Run.Brief.Structured.Frozen; d != nil {
+				value, _ := json.Marshal(d)
+				out = append(out, journalProjection{Namespace: "agent_revision", Key: c.Run.Brief.Structured.Definition, Value: value})
+			}
 			raw, _ := json.Marshal(map[string]any{"run_id": c.Run.ID, "principal_id": c.Run.PrincipalID, "request_hash": c.Run.Brief.Structured.RequestHash, "seq": e.Seq})
 			out = append(out, journalProjection{Namespace: "request_key", Key: scopedRequestKey(runTenant(c.Run), c.Run.Brief.Structured.Key), Value: raw})
 		}

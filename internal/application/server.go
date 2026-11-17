@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"mitos/internal/apiversion"
@@ -43,6 +44,11 @@ func fail(w http.ResponseWriter, err error) {
 		status, code = 404, "not_found"
 	case errors.Is(err, studio.ErrConflict):
 		status, code = 409, "request_conflict"
+	case errors.Is(err, studio.ErrTenantCapacity):
+		status, code = 429, "tenant_capacity_exceeded"
+		w.Header().Set("Retry-After", "1")
+	case errors.Is(err, studio.ErrTenantBudget):
+		status, code = 422, "tenant_budget_exhausted"
 	case errors.Is(err, studio.ErrRequestKeyExpired):
 		status, code = 410, "request_key_expired"
 	}
@@ -79,7 +85,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.ApplicationSession) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if r.Method == "GET" && r.URL.Path == "/api/capabilities" {
-		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "operations": map[string]string{"admit": "POST /api/tasks", "status": "GET /api/runs/{id}", "events": "GET /api/runs/{id}/events", "result": "GET /api/runs/{id}/result", "cancel": "POST /api/runs/{id}/cancel", "decision": "POST /api/runs/{id}/decision"}, "hosted": map[string]bool{"service_principal_auth": false, "tenant_isolation": false, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false}})
+		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "operations": map[string]string{"admit": "POST /api/tasks", "status": "GET /api/runs/{id}", "events": "GET /api/runs/{id}/events", "result": "GET /api/runs/{id}/result", "cancel": "POST /api/runs/{id}/cancel", "decision": "POST /api/runs/{id}/decision"}, "hosted": map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false}})
 		return
 	}
 	if r.Method == "POST" && r.URL.Path == "/api/tasks" {
@@ -92,7 +98,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.A
 		}
 		run, err := session.Admit(brief)
 		if err != nil {
-			if errors.Is(err, studio.ErrConflict) || errors.Is(err, studio.ErrRequestKeyExpired) || errors.Is(err, studio.ErrUnauthenticated) || errors.Is(err, studio.ErrForbidden) {
+			if errors.Is(err, studio.ErrConflict) || errors.Is(err, studio.ErrRequestKeyExpired) || errors.Is(err, studio.ErrUnauthenticated) || errors.Is(err, studio.ErrForbidden) || errors.Is(err, studio.ErrTenantCapacity) || errors.Is(err, studio.ErrTenantBudget) {
 				fail(w, err)
 			} else {
 				reply(w, 422, map[string]string{"error": "invalid_structured_work", "detail": err.Error()})
@@ -108,13 +114,37 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.A
 		reply(w, 201, task)
 		return
 	}
-	if r.Method == "GET" && r.URL.Path == "/api/runs" {
-		runs, err := session.Runs()
+	if r.Method == "GET" && (r.URL.Path == "/api/runs" || r.URL.Path == "/api/events" || r.URL.Path == "/api/receipts") {
+		after, limit, err := pageParameters(r)
 		if err != nil {
-			fail(w, err)
+			reply(w, 400, map[string]string{"error": "invalid_page"})
 			return
 		}
-		reply(w, 200, runs)
+		if r.URL.Path == "/api/runs" {
+			page, err := session.RunPage(after, r.URL.Query().Get("after_id"), limit)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			pageHeaders(w, page.Next, page.NextID, page.HasMore)
+			reply(w, 200, page.Runs)
+		} else if r.URL.Path == "/api/receipts" {
+			page, err := session.Receipts(after, limit)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			pageHeaders(w, page.Next, "", page.HasMore)
+			reply(w, 200, page.Receipts)
+		} else {
+			page, err := session.Feed(after, limit)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			pageHeaders(w, page.Next, "", page.HasMore)
+			reply(w, 200, page.Events)
+		}
 		return
 	}
 	if len(parts) == 3 && parts[0] == "api" && parts[1] == "tasks" && r.Method == "GET" {
@@ -140,12 +170,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.A
 		if len(parts) == 4 && r.Method == "GET" {
 			switch parts[3] {
 			case "events":
-				events, err := session.Events(id)
+				after, limit, err := pageParameters(r)
+				if err != nil {
+					reply(w, 400, map[string]string{"error": "invalid_page"})
+					return
+				}
+				page, err := session.EventPage(id, after, limit)
 				if err != nil {
 					fail(w, err)
 					return
 				}
-				reply(w, 200, events)
+				pageHeaders(w, page.Next, "", page.HasMore)
+				reply(w, 200, page.Events)
 				return
 			case "result":
 				result, err := session.Result(id)
@@ -197,4 +233,33 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.A
 		}
 	}
 	reply(w, 404, map[string]string{"error": "not_found"})
+}
+
+func pageParameters(r *http.Request) (int64, int, error) {
+	after := int64(0)
+	limit := studio.ReadDefaultLimit
+	var err error
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		after, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return 0, 0, studio.ErrInvalidPage
+		}
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil {
+			return 0, 0, studio.ErrInvalidPage
+		}
+	}
+	if after < 0 || limit < 1 || limit > studio.ReadMaxLimit {
+		return 0, 0, studio.ErrInvalidPage
+	}
+	return after, limit, nil
+}
+func pageHeaders(w http.ResponseWriter, next int64, id string, more bool) {
+	w.Header().Set("Mitos-Next-After", strconv.FormatInt(next, 10))
+	w.Header().Set("Mitos-Has-More", strconv.FormatBool(more))
+	if id != "" {
+		w.Header().Set("Mitos-Next-Run", id)
+	}
 }

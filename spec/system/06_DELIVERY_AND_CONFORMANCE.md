@@ -252,8 +252,15 @@ The principals subset adds a separate TLS application listener, hashed opaque
 service credentials with live rotation/revocation and authority-epoch checks,
 request-scoped principals, structural tenant views and indexed tenant/principal
 request keys. Foreign task/run/artifact/result IDs return 404; operator routes stay
-on loopback. The bounded-read/capacity/fixture gate remains open, so
-`service_principal_auth` and `tenant_isolation` flags remain false until S2 proof.
+on loopback. The application conformance slice adds bounded run/event/receipt cursors, a tenant
+event feed, configurable capacity, weighted unit-cost deficit round-robin and frozen
+per-task tenant attempt/time limits. Effect-free structured work retries after
+restart within its original Task and budget. The separate HTTP-only application
+fixture demonstrates one Task/reply across the four runtime/application crash
+boundaries using confined deterministic workers. `service_principal_auth` and
+`tenant_isolation` are true; production model performance and later S3/S4 gates
+remain separate. Application execution requires the declared confined API-key
+profile; the local operator retains its native-login profile.
 
 Implement the SQLite runtime adapter with the same canonical Event records, hash
 chain, apply and replay, plus atomic journal/projection transactions. Replace

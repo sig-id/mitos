@@ -14,6 +14,7 @@ import (
 func (s *Server) applicationRoutes(mux *http.ServeMux) {
 	s.storageRoutes(mux)
 	s.principalRoutes(mux)
+	s.runtimePolicyRoutes(mux)
 	mux.HandleFunc("GET /api/capabilities", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{
 			"api_versions":       apiversion.Supported,
@@ -29,8 +30,8 @@ func (s *Server) applicationRoutes(mux *http.ServeMux) {
 			"structured_work":    studio.StructuredCapabilities(),
 			"agent_capabilities": studio.RuntimeCapabilityProfiles(),
 			// Hosted delivery gates S2–S4 are not implemented by this build.
-			"storage": map[string]any{"adapter": "sqlite", "wal": true, "synchronous": "FULL", "schema_version": 2, "online_backup": true},
-			"hosted":  map[string]bool{"service_principal_auth": false, "tenant_isolation": false, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false},
+			"storage": map[string]any{"adapter": "sqlite", "wal": true, "synchronous": "FULL", "schema_version": 3, "online_backup": true},
+			"hosted":  map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false},
 			"access":  "loopback only; same-user access is not multi-tenant authorization",
 		})
 	})

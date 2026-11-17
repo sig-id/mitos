@@ -22,8 +22,8 @@ backends. Acegoat is the first design use case and remains a separate product an
 repository. Applications own their users, conversations and domain rules; Mitos owns
 durable work and replaceable execution through versioned APIs. Local use retains
 its lightweight defaults. SQLite is the transactional runtime store. A separate TLS application listener
-supports service principals and tenant-scoped headless work; complete S2 conformance
-and remote worker claims remain delivery targets. A PostgreSQL
+supports service principals and tenant-scoped headless work; S2 application crash conformance is implemented; remote worker claims remain
+a delivery target. A PostgreSQL
 server edition is deferred beyond the SQLite S2–S4 plan.
 See the [server use case and delivery path](spec/README.md#application-server-reading-path).
 
@@ -516,5 +516,7 @@ Use `principal list`, `principal rotate --id my-app` and `principal revoke --id
 my-app` on the local operator API. Rotation, revocation, expiry and restore fencing
 apply to existing connections and cached views. Principals are read-only unless
 `--write` is supplied and default to `mitos.generalist`; repeat `--agent AGENT_ID`
-to permit other worker definitions. Capacity, bounded feeds and end-to-end S2
-conformance remain the next slice; hosted readiness flags stay gated on that proof.
+to permit other worker definitions. Bounded feeds, configurable capacity, tenant limits and the separate application
+crash fixture demonstrate S2 application-boundary conformance. PostgreSQL remains
+deferred. See the [application API](docs/application-api.md) for pagination,
+operator runtime policy, confined application execution prerequisites and the fixture.

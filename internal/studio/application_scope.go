@@ -34,7 +34,7 @@ func (v *ScopedStore) Get(id string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	return cloneRun(r), nil
+	return boundedRun(r), nil
 }
 func (v *ScopedStore) Task(id string) (Task, error) {
 	v.store.mu.RLock()
@@ -66,25 +66,12 @@ func (v *ScopedStore) Result(id string) (json.RawMessage, error) {
 	return v.Artifact(id, structuredResultArtifact)
 }
 func (v *ScopedStore) Events(id string) ([]Event, error) {
-	r, err := v.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	return r.Events, nil
+	page, err := v.EventPage(id, 0, ReadDefaultLimit)
+	return page.Events, err
 }
 func (v *ScopedStore) Runs() ([]Run, error) {
-	v.store.mu.RLock()
-	defer v.store.mu.RUnlock()
-	if err := v.store.authorizeServiceLocked(v.principal, false); err != nil {
-		return nil, err
-	}
-	out := []Run{}
-	for _, r := range v.store.runs {
-		if runTenant(r) == v.principal.Tenant && r.Brief.Structured != nil {
-			out = append(out, cloneRun(r))
-		}
-	}
-	return out, nil
+	page, err := v.RunPage(0, "", ReadDefaultLimit)
+	return page.Runs, err
 }
 
 type ApplicationSession struct {

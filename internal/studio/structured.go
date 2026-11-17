@@ -24,12 +24,13 @@ import (
 // repository, workspace, Git or PTY, and an exact typed result validated against
 // a declared schema. The definition revision and digest are frozen at admission.
 type StructuredWork struct {
-	Key          string          `json:"key"`
-	Input        json.RawMessage `json:"input"`
-	ResultSchema json.RawMessage `json:"result_schema"`
-	Definition   string          `json:"definition,omitempty"` // id@revision, frozen at admission
-	Digest       string          `json:"definition_digest,omitempty"`
-	RequestHash  string          `json:"request_hash,omitempty"`
+	Frozen       *agents.Definition `json:"frozen_definition,omitempty"`
+	Key          string             `json:"key"`
+	Input        json.RawMessage    `json:"input"`
+	ResultSchema json.RawMessage    `json:"result_schema"`
+	Definition   string             `json:"definition,omitempty"` // id@revision, frozen at admission
+	Digest       string             `json:"definition_digest,omitempty"`
+	RequestHash  string             `json:"request_hash,omitempty"`
 }
 
 const structuredResultArtifact = "result.json"
@@ -83,6 +84,8 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 	frozen := *w
 	frozen.Definition = fmt.Sprintf("%s@%d", d.ID, d.Revision)
 	frozen.Digest = d.Digest
+	copy := graphClone(d)
+	frozen.Frozen = &copy
 	frozen.RequestHash = ""
 	b.Structured = &frozen
 	b.Structured.RequestHash = graphDigest(struct {
@@ -169,6 +172,11 @@ func (e *Engine) retryStructured(b Brief, parent string) (Run, error) {
 
 // exactDefinition reads one immutable revision, never the latest of an ID.
 func (e *Engine) exactDefinition(ref, digest string) (agents.Definition, error) {
+	if frozen := e.Store.frozenAgents.Load(); frozen != nil {
+		if d, ok := (*frozen)[ref]; ok && d.Digest == digest {
+			return graphClone(d), nil
+		}
+	}
 	id, revision, _ := strings.Cut(ref, "@")
 	saved, err := e.readLibrary()
 	if err != nil {
@@ -212,7 +220,14 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
-	if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
+	scoped := runTenant(&r) != decision.LocalTenant
+	provider := e.provider
+	if scoped {
+		if !e.confinement.Enabled() || confinementBlocksTransport(e.confinement) {
+			return errors.New("application_execution_unavailable: configure MITOS_AGENT_CONFINEMENT=bwrap and MITOS_AGENT_NETWORK=unrestricted for isolated model transport")
+		}
+		provider = e.agentProvider
+	} else if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
 		return err
 	}
 	authority, authorityErr := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, r.Brief.TimeoutMinutes*60, "", e.providerCapabilities())
@@ -262,24 +277,33 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	}
 	defer e.Store.CloseAgentSession(bridge.ID, token)
 	broker := engineBroker{e: e, id: bridge.ID, token: token}
-	launch, err := compileWorkflowLaunch(resourcepolicy.Agent{}, e.providerCapabilities(), true)
+	launch, err := compileWorkflowLaunch(resourcepolicy.Agent{}, provider.Capabilities(), !scoped)
 	if err != nil {
 		return err
+	}
+	if scoped {
+		launch.Posture.NetMode = compute.NetUnrestricted
 	}
 	launch.RunID = r.ID
 	launch.CapabilityRef = r.Brief.AppID
 	launch.Base = base
 	launch.Workspace.Directory = scratch
 	launch.Posture.Deadline, _ = ctx.Deadline()
-	handle, err := e.provider.Prepare(ctx, launch)
+	handle, err := provider.Prepare(ctx, launch)
 	if err != nil {
 		return err
+	}
+	if scoped {
+		native.Env, err = structuredApplicationEnvironment(base, native.Env)
+		if err != nil {
+			return err
+		}
 	}
 	preview, closePreview := e.beginAgentOutput(r.ID)
 	defer closePreview()
 	var activity bytes.Buffer
 	options.Activity = io.MultiWriter(&activity, preview.activity)
-	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: append([]string{native.Executable}, harness.CodexArguments()...), Directory: scratch, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+	session, err := provider.Start(ctx, handle, compute.Command{Argv: append([]string{native.Executable}, harness.CodexArguments()...), Directory: scratch, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), scratch, prompt, options)
 	}})
 	if err != nil {
@@ -290,7 +314,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	output, runErr := session.Result()
 	stopCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
-	if err = e.provider.Stop(stopCtx, session); err != nil {
+	if err = provider.Stop(stopCtx, session); err != nil {
 		return err
 	}
 	if err = e.Store.SaveArtifacts(r.ID, ArtifactData{Name: "output.txt", Data: output}, ArtifactData{Name: "activity.jsonl", Data: activity.Bytes()}); err != nil {
@@ -333,21 +357,23 @@ func (e *Engine) StructuredResult(id string) (json.RawMessage, error) {
 // StructuredCapabilities publishes what headless structured work actually supports.
 func StructuredCapabilities() map[string]any {
 	return map[string]any{
-		"profile":                   "structured-work/v1",
-		"executor":                  "agent definitions (agent:<id>, worker kind) on the codex-headless runtime profile",
-		"workspace":                 false,
-		"git":                       false,
-		"pty":                       false,
-		"input":                     map[string]any{"type": "JSON object", "max_bytes": maxStructuredInputBytes},
-		"result_schema":             map[string]any{"max_bytes": maxResultSchemaBytes, "keywords": schemaKeywords, "rules": "root object; every object sets additionalProperties false and requires all properties; max depth 16"},
-		"result":                    map[string]any{"max_bytes": maxStructuredResultBytes, "acceptance": "exact validation against the declared schema; a mismatch fails the attempt"},
-		"idempotency":               "structured.key; the same key with a different request conflicts",
-		"enforcement_policy":        EnforcementAdvisory,
-		"definition_binding":        "exact revision and digest frozen at admission",
-		"project_scoped":            false,
-		"requires_database":         true,
-		"requires_database_service": false,
-		"requires_broker":           false,
-		"requires_remote_workers":   false,
+		"profile":                          "structured-work/v1",
+		"executor":                         "agent definitions (agent:<id>, worker kind) on the codex-headless runtime profile",
+		"workspace":                        false,
+		"git":                              false,
+		"pty":                              false,
+		"input":                            map[string]any{"type": "JSON object", "max_bytes": maxStructuredInputBytes},
+		"result_schema":                    map[string]any{"max_bytes": maxResultSchemaBytes, "keywords": schemaKeywords, "rules": "root object; every object sets additionalProperties false and requires all properties; max depth 16"},
+		"result":                           map[string]any{"max_bytes": maxStructuredResultBytes, "acceptance": "exact validation against the declared schema; a mismatch fails the attempt"},
+		"idempotency":                      "structured.key; the same key with a different request conflicts",
+		"enforcement_policy":               EnforcementAdvisory,
+		"definition_binding":               "exact revision and digest frozen at admission",
+		"project_scoped":                   false,
+		"requires_database":                true,
+		"requires_database_service":        false,
+		"application_requires_confinement": true,
+		"application_model_credentials":    "dedicated_api_key",
+		"requires_broker":                  false,
+		"requires_remote_workers":          false,
 	}
 }
