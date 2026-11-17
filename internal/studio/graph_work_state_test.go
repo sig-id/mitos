@@ -99,7 +99,7 @@ func TestGraphWorkStateFilteringBeforePagination(t *testing.T) {
 func TestGraphWorkStatePersistenceFailurePublishesNothing(t *testing.T) {
 	e, req := graphEngine(t, false)
 	g := createGraphTest(t, e, req)
-	e.Store.file = &controlledLog{eventLog: e.Store.file, failure: errors.New("sync failed")}
+	e.Store.journal = &controlledJournal{journal: e.Store.journal, failure: errors.New("sync failed")}
 	if _, err := e.Store.SetGraphWorkState(g.ID, GraphWorkStateEdit{Key: "archive", Revision: g.Revision, State: "archived"}); err == nil {
 		t.Fatal("ignored persistence failure")
 	}

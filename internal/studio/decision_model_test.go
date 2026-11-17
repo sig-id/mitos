@@ -201,7 +201,7 @@ func TestModelPersistenceBarriers(t *testing.T) {
 			r := createRun(t, s)
 			failure := errors.New("model receipt disk failure")
 			var calls atomic.Int32
-			failNextCommit := func() { s.mu.Lock(); s.file = &controlledLog{eventLog: s.file, failure: failure}; s.mu.Unlock() }
+			failNextCommit := func() { s.mu.Lock(); s.journal = &controlledJournal{journal: s.journal, failure: failure}; s.mu.Unlock() }
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				calls.Add(1)
 				if phase == "response" {

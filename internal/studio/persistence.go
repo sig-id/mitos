@@ -1,18 +1,6 @@
 package studio
 
-import (
-	"io"
-	"sync"
-)
-
-type eventLog interface {
-	io.Reader
-	io.Writer
-	io.Seeker
-	Sync() error
-	Truncate(int64) error
-	Close() error
-}
+import "sync"
 
 // Writers serialize before taking the state lock, so a writer waiting behind
 // disk IO cannot block readers. io releases only the state lock; its callback

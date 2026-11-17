@@ -42,19 +42,10 @@ func artifactDescriptor(r *Run, a Artifact) ArtifactDescriptor {
 
 // Open the retained object, never a producer's scratch directory. Hash from the
 // same descriptor used for the range read; reject symlinks, type and size changes.
-func (s *Store) verifiedArtifact(r *Run, a Artifact) (*os.File, error) {
-	root, err := os.OpenRoot(filepath.Join(s.dir, "artifacts"))
+func (s *Store) verifiedArtifact(r *Run, a Artifact) (artifactFile, error) {
+	f, err := s.openArtifact(r.ID, a)
 	if err != nil {
-		return nil, handoffError("unavailable", 0)
-	}
-	defer root.Close()
-	info, err := root.Lstat(r.ID)
-	if err != nil || !info.IsDir() {
-		return nil, handoffError("unsafe_path", 0)
-	}
-	f, err := root.OpenFile(r.ID+"/"+a.Name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, handoffError("unavailable", 0)
+		return nil, err
 	}
 	ok := false
 	defer func() {
@@ -62,10 +53,6 @@ func (s *Store) verifiedArtifact(r *Run, a Artifact) (*os.File, error) {
 			f.Close()
 		}
 	}()
-	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() || st.Size() != a.Bytes {
-		return nil, handoffError("integrity_failure", 0)
-	}
 	h := sha256.New()
 	n, err := io.Copy(h, io.LimitReader(f, a.Bytes+1))
 	if err != nil || n != a.Bytes || hex.EncodeToString(h.Sum(nil)) != a.SHA256 {

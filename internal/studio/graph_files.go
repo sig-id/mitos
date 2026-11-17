@@ -10,8 +10,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"os"
-	"path/filepath"
 
 	workspacefs "mitos/internal/workspace"
 )
@@ -25,7 +23,12 @@ func (s *Store) readRegisteredArtifact(r *Run, name string) ([]byte, error) {
 		if a.Name != name {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(s.dir, "artifacts", r.ID, name))
+		f, err := s.openArtifact(r.ID, a)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, a.Bytes+1))
 		if err != nil {
 			return nil, err
 		}
