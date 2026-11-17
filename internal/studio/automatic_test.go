@@ -543,11 +543,24 @@ print('native execution log')
 	if reviewerID == "" {
 		t.Fatal("reviewer member missing")
 	}
-	if _, _, err = e.AmendGraph(proposal(g, "accept-mutated", GraphOperation{Kind: "accept", Task: reviewerID, Evidence: "mutated evidence", Rationale: "reviewed"})); err == nil {
-		t.Fatal("operator accepted a member with changed dependency inputs")
+	// Acceptance proposals carry the matching read witnesses so the requests
+	// exercise the acceptance guards themselves, not proposal read fencing.
+	memberAccept := proposal(g, "accept-mutated", GraphOperation{Kind: "accept", Task: reviewerID, Evidence: "mutated evidence", Rationale: "reviewed"})
+	if m := g.Members[reviewerID]; m != nil {
+		memberAccept.Reads = map[string]GraphRead{reviewerID: {Specification: m.Revision, Fact: m.FactRevision}}
 	}
-	if _, _, err = e.AmendGraph(proposal(g, "accept-root", GraphOperation{Kind: "accept", Task: g.RootTask, Evidence: "mutated evidence", Rationale: "reviewed"})); err == nil {
-		t.Fatal("root accepted while a required member is unaccepted")
+	if _, _, err = e.AmendGraph(memberAccept); err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("operator accepted a member with changed dependency inputs: %v", err)
+	}
+	rootAccept := proposal(g, "accept-root", GraphOperation{Kind: "accept", Task: g.RootTask, Evidence: "mutated evidence", Rationale: "reviewed"})
+	rootAccept.Reads = map[string]GraphRead{}
+	for tid, m := range g.Members {
+		if tid == g.RootTask || graphDescendant(&g, tid, g.RootTask) {
+			rootAccept.Reads[tid] = GraphRead{Specification: m.Revision, Fact: m.FactRevision}
+		}
+	}
+	if _, _, err = e.AmendGraph(rootAccept); err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("root accepted while a required member is unaccepted: %v", err)
 	}
 }
 
