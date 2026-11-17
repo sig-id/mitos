@@ -474,7 +474,9 @@ prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'))
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[e for e in latest.values() if e['kind']=='application']
  plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':False}
  if not workers:
   for i in range(2):

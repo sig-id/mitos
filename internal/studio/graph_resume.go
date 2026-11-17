@@ -224,7 +224,7 @@ func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, 
 	// The refreshed planning state uses the same append-only journal as new
 	// rounds, so the resumed conversation keeps its cache-stable prefix.
 	appendFactJournal(g, s)
-	state := renderPlanJournal(g)
+	state := renderPlanJournal(g, s)
 	prefixBytes, prefixSHA := sharedStatePrefix(g.LastPlanState, state)
 	g.LastPlanState = state
 	g.PlanPrefixCharacters = prefixBytes

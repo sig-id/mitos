@@ -151,7 +151,7 @@ func TestOrchestratorJournalStaysBoundedOnLargeGraphs(t *testing.T) {
 		}
 		appendFactJournal(graph, s)
 	}
-	state := renderPlanJournal(graph)
+	state := renderPlanJournal(graph, s)
 	if len(state) >= orchestratorPlanLimit {
 		t.Fatalf("journal state %d exceeds the %d planning allowance", len(state), orchestratorPlanLimit)
 	}
@@ -170,11 +170,11 @@ func TestOrchestratorJournalStaysBoundedOnLargeGraphs(t *testing.T) {
 	}
 	// The prefix still stabilizes between compaction boundaries: one more fact
 	// round shares the whole previous journal except the JSON array closers.
-	before := renderPlanJournal(graph)
+	before := renderPlanJournal(graph, s)
 	entries := len(graph.FactJournal)
 	graph.Members[graph.RootTask].FactRevision++
 	appendFactJournal(graph, s)
-	after := renderPlanJournal(graph)
+	after := renderPlanJournal(graph, s)
 	if shared, _ := sharedStatePrefix(before, after); len(graph.FactJournal) > entries && shared < len(before)-96 {
 		t.Fatalf("journal rewrote history outside a compaction boundary: shared %d of %d", shared, len(before))
 	}
@@ -210,7 +210,7 @@ func TestOrchestratorJournalBoundsSerializedSummaries(t *testing.T) {
 		}
 	}
 	appendFactJournal(graph, s)
-	state := renderPlanJournal(graph)
+	state := renderPlanJournal(graph, s)
 	if len(state) >= orchestratorPlanLimit {
 		t.Fatalf("journal state %d exceeds the %d planning allowance before the entry boundary", len(state), orchestratorPlanLimit)
 	}
@@ -227,10 +227,10 @@ func TestOrchestratorJournalBoundsSerializedSummaries(t *testing.T) {
 		t.Fatalf("byte-budget compaction missing: compacted %d entries %d", compacted, len(graph.FactJournal))
 	}
 	// New facts still append after the early compaction without rewriting it.
-	before := renderPlanJournal(graph)
+	before := renderPlanJournal(graph, s)
 	graph.Members[graph.RootTask].FactRevision++
 	appendFactJournal(graph, s)
-	after := renderPlanJournal(graph)
+	after := renderPlanJournal(graph, s)
 	if shared, _ := sharedStatePrefix(before, after); shared < len(before)-96 {
 		t.Fatalf("compaction rewrote history outside its boundary: shared %d of %d", shared, len(before))
 	}

@@ -108,13 +108,16 @@ func appendFactJournal(g *WorkGraph, s *Store) {
 }
 
 // renderPlanJournal renders the inline planning state as an append-only JSON
-// document: a stable header plus the journal in commit order.
-func renderPlanJournal(g *WorkGraph) string {
+// document: a stable header plus the journal in commit order. Unreviewed
+// proposals ride along after the journal array (map keys marshal sorted, so
+// they never disturb the byte prefix shared with the previous render) because
+// reviews change them without appending journal entries.
+func renderPlanJournal(g *WorkGraph, s *Store) string {
 	entries := append([]GraphFactEntry(nil), g.FactJournal...)
 	if entries == nil {
 		entries = []GraphFactEntry{}
 	}
-	raw, _ := json.Marshal(map[string]any{"journal_version": 1, "graph_id": g.ID, "root_task": g.RootTask, "journal": entries})
+	raw, _ := json.Marshal(map[string]any{"journal_version": 1, "graph_id": g.ID, "root_task": g.RootTask, "journal": entries, "proposals": pendingGraphProposals(g, s)})
 	return string(raw)
 }
 
@@ -131,6 +134,39 @@ func sharedStatePrefix(previous, current string) (int, string) {
 	}
 	sum := sha256.Sum256([]byte(current[:n]))
 	return n, hex.EncodeToString(sum[:])
+}
+
+// pendingGraphProposals lists every unreviewed proposal in the graph with its
+// proposing task, so the automatic planner can review them. It is rendered
+// outside the append-only journal: reviews change this list without rewriting
+// frozen entries, keeping the planning prefix cache-stable.
+func pendingGraphProposals(g *WorkGraph, s *Store) []pendingProposal {
+	out := []pendingProposal{}
+	for _, id := range graphIDs(g) {
+		m := g.Members[id]
+		if m == nil || m.OrchestratorFor != "" {
+			continue
+		}
+		r := s.runs[m.CurrentRunID]
+		if r == nil || r.Result == nil {
+			continue
+		}
+		for _, entry := range unreviewedProposals(g, r) {
+			out = append(out, pendingProposal{ID: entry.ID, Task: m.Spec.ID, RunID: r.ID, Detail: entry.Detail})
+			if len(out) >= 64 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// pendingProposal is one unreviewed worker proposal in the planning payload.
+type pendingProposal struct {
+	ID     string         `json:"id"`
+	Task   string         `json:"task"`
+	RunID  string         `json:"run_id"`
+	Detail ResultProposal `json:"detail"`
 }
 
 func (e *Engine) reconcileGraphOrchestrators() error {
@@ -364,7 +400,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 					// frozen once written and only compacted at fixed boundaries, so
 					// consecutive planning prompts share their prefix.
 					appendFactJournal(&g, s)
-					state := renderPlanJournal(&g)
+					state := renderPlanJournal(&g, s)
 					prefixBytes, prefixSHA := sharedStatePrefix(g.LastPlanState, state)
 					g.LastPlanState = state
 					g.PlanPrefixCharacters = prefixBytes
