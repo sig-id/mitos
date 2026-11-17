@@ -1,41 +1,41 @@
 {
   "profile": "agent-library-bundle/v1",
   "id": "mitos.defaults",
-  "revision": 4,
+  "revision": 5,
   "agents": [
     {
       "id": "mitos.generalist",
-      "revision": 2,
+      "revision": 3,
       "path": "generalist/agent.json"
     },
     {
       "id": "mitos.researcher",
-      "revision": 1,
+      "revision": 2,
       "path": "researcher/agent.json"
     },
     {
       "id": "mitos.architect",
-      "revision": 1,
+      "revision": 2,
       "path": "architect/agent.json"
     },
     {
       "id": "mitos.engineer",
-      "revision": 1,
+      "revision": 2,
       "path": "engineer/agent.json"
     },
     {
       "id": "mitos.reviewer",
-      "revision": 1,
+      "revision": 2,
       "path": "reviewer/agent.json"
     },
     {
       "id": "mitos.tester",
-      "revision": 1,
+      "revision": 2,
       "path": "tester/agent.json"
     },
     {
       "id": "mitos.writer",
-      "revision": 1,
+      "revision": 2,
       "path": "writer/agent.json"
     },
     {

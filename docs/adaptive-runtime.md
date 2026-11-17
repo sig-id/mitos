@@ -597,6 +597,62 @@ from durable facts without resetting budgets or restarting existing workers.
 Orchestrator capacity is shared with workers. Planning is serialized per graph; the
 runtime does not hold a process slot merely to supervise children.
 
+### Yield and continuation
+
+Workers cannot spawn native subagents. A worker granted `work.propose` asks for
+work through proposals on its terminal result
+([agent-handoffs.md](agent-handoffs.md#proposals-and-yield)). This keeps two
+agentic layers: as in Erlang/OTP, the worker asks its supervisor to start a child,
+and graph validation is the admission controller.
+
+**Yielded state.** When an attempt finishes with at least one blocking proposal,
+the kernel records the proposals in `proposals` (keyed by kernel ID, with the
+outcome trigger's sequence) in the same journal record as the trigger. It sets the
+member's `yield` (`run_id` and its blocking proposal IDs) and `state: yielded`. The
+run's process outcome is still `done`, so its slot and claim are released as for
+any finished run. The member, however, is not a candidate: it cannot be accepted
+or retried, it is not a failure, and the graph view shows it as waiting.
+Non-blocking proposals are recorded the same way but leave the result reviewable
+as usual.
+
+**Proposal review.** The orchestrator sees unreviewed proposals, with their
+submitted specs, on the worker's fact. It answers each with one of two operations:
+
+- `accept_proposal` `{proposal, dependencies, rationale}`: `dependencies` (1–32)
+  name the worker tasks that fulfil it, usually tasks added in the same amendment.
+  For a blocking proposal, this is the **dependency amendment**: those dependencies
+  are appended to the yielded task's spec (its revision advances), which ordinary
+  `dependencies` amendments refuse once a task has attempts.
+- `reject_proposal` `{proposal, rationale}`.
+
+A trigger cannot be classified while its blocking proposals are unreviewed
+(`proposal_review_required`), unless the proposer was cancelled or replaced. The
+runtime classifies the reviewed triggers of an automatic orchestrator, so the plan
+must review them in the same response. Proposed specs are suggestions; admitted
+tasks pass ordinary validation, task and attempt budgets, and their own retries.
+The proposer's budget is not charged.
+
+**Continuation.** A yielded member continues once every blocking proposal is
+reviewed and each task named by an accepted proposal has settled. A task settles
+when it, or its replacement, is accepted, or when it is cancelled or replaced
+without an accepted result (abandoned). The kernel then:
+
+- drops dependencies on abandoned tasks and rewrites replaced ones to the
+  accepted replacement;
+- sets `continue_from` to the yielded run and records a `continuation` with each
+  proposal's outcome, rationale, and completed and abandoned tasks;
+- counts the cycle in `yields`.
+
+The next attempt resumes the same native thread (`ResumeThread`) in a restored
+copy of the yielded attempt's harvested workspace. Its prompt states the proposal
+outcomes, and accepted results arrive through the dependency-inputs manifest. It
+must submit a new result. Yield cycles do not consume `limits.retries`, which
+counts attempts minus yields; they still count toward the graph's attempt
+allowance.
+
+Not implemented: proposals mid-run without yielding, and a separate
+`explore`-style synchronous read-only delegation.
+
 ## Optional model decisions
 
 `policy.decision_application` names an installed application's existing

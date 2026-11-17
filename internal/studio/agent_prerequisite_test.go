@@ -70,7 +70,7 @@ for line in sys.stdin:
 	}
 	var authority AuthorityReceipt
 	raw, err := e.Store.Artifact(run, "authority.json")
-	if err != nil || json.Unmarshal(raw, &authority) != nil || authority.Policy != EnforcementAdvisory || authority.Definition != "mitos.researcher@1" || authority.Granted("workspace.write") {
+	if err != nil || json.Unmarshal(raw, &authority) != nil || authority.Policy != EnforcementAdvisory || authority.Definition != "mitos.researcher@2" || authority.Granted("workspace.write") {
 		t.Fatalf("attempt authority receipt missing or wrong: %v %s", err, raw)
 	}
 	view, _ = e.Store.GraphView(g.ID, task)

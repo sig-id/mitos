@@ -101,11 +101,85 @@ func (s *Store) submitResult(run string, in ResultSubmission) (ResultReceipt, er
 			return ResultReceipt{}, handoffError("invalid_request_reference", 0)
 		}
 	}
+	if err := s.validateProposals(r, in.Proposals); err != nil {
+		return ResultReceipt{}, err
+	}
 	receipt := ResultReceipt{ID: newID("result"), ProjectID: r.ProjectID, TaskID: r.TaskID, RunID: run, Revision: t.Revision, Seq: s.seq + 1, At: time.Now().UTC(), Digest: digest, Submission: in}
+	for range in.Proposals {
+		receipt.ProposalIDs = append(receipt.ProposalIDs, newID("proposal"))
+	}
 	if err := s.commit(run, "effect", "result_submitted", change{Result: &receipt}); err != nil {
 		return ResultReceipt{}, err
 	}
 	return graphClone(receipt), nil
+}
+
+// validateProposals checks proposal shape, ownership and caps at submission.
+// Admission of the proposed work stays with the orchestrator and normal graph
+// validation; this only refuses what could never be admitted. Caller holds the
+// store lock.
+func (s *Store) validateProposals(r *Run, proposals []ResultProposal) error {
+	if len(proposals) == 0 {
+		return nil
+	}
+	if r.GraphAttempt == nil {
+		return handoffError("proposals_unsupported", 0)
+	}
+	g := s.graphs[r.GraphAttempt.GraphID]
+	if g == nil || g.Status != "active" || g.Policy.Mode == "defined" {
+		return handoffError("proposals_unsupported", 0)
+	}
+	m := g.Members[r.TaskID]
+	if m == nil || m.OrchestratorFor != "" || m.CurrentRunID != r.ID {
+		return handoffError("proposals_unsupported", 0)
+	}
+	if m.Proposed+len(proposals) > HandoffProposalsPerTask {
+		return handoffError("proposal_limit_exceeded", int64(HandoffProposalsPerTask-m.Proposed))
+	}
+	ids := map[string]bool{}
+	tasks, blocking := 0, false
+	for i, p := range proposals {
+		raw, _ := json.Marshal(p)
+		if !validGraphKey(p.ID) || ids[p.ID] || len(p.Rationale) == 0 || len(p.Rationale) > 4000 || !utf8.ValidString(p.Rationale) || len(p.Tasks) == 0 || len(p.Tasks) > HandoffTasksPerProposal || len(p.Artifacts) > 32 || len(raw) > handoffProposalBytes {
+			return handoffError("invalid_proposal", int64(i))
+		}
+		ids[p.ID] = true
+		blocking = blocking || p.Blocking
+		tasks += len(p.Tasks)
+		local := map[string]bool{}
+		for _, spec := range p.Tasks {
+			if !validGraphKey(spec.ID) || local[spec.ID] || spec.Kind != "application" || spec.Brief.AppID == "" || spec.Brief.Title == "" || spec.Criteria == "" {
+				return handoffError("invalid_proposal", int64(i))
+			}
+			local[spec.ID] = true
+		}
+		for _, spec := range p.Tasks {
+			for _, dep := range spec.Brief.Scheduling.Deps {
+				if dep.Inbox != nil || !local[dep.From] && g.Members[dep.From] == nil {
+					return handoffError("invalid_proposal", int64(i))
+				}
+			}
+		}
+		for _, id := range p.Artifacts {
+			found := false
+			for _, a := range r.Artifacts {
+				if artifactID(r.ID, a) == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return handoffError("artifact_missing", int64(i))
+			}
+		}
+	}
+	if blocking && m.Yields >= HandoffYieldsPerTask {
+		return handoffError("yield_limit_exceeded", int64(HandoffYieldsPerTask))
+	}
+	if len(g.Members)+tasks > g.Limits.Tasks {
+		return handoffError("proposal_over_budget", int64(g.Limits.Tasks-len(g.Members)))
+	}
+	return nil
 }
 
 func (s *Store) readResult(consumer string, in ResultRead) (ResultPage, error) {
@@ -135,6 +209,20 @@ func (s *Store) readResult(consumer string, in ResultRead) (ResultPage, error) {
 	for _, text := range sub.UnresolvedRequests {
 		entries = append(entries, ResultEntry{Kind: "request", Text: text})
 	}
+	for i, p := range sub.Proposals {
+		entry := ProposalEntry{Detail: p, Outcome: "pending"}
+		if i < len(receipt.ProposalIDs) {
+			entry.ID = receipt.ProposalIDs[i]
+			if r.GraphAttempt != nil {
+				if g := s.graphs[r.GraphAttempt.GraphID]; g != nil {
+					if rec := g.Proposals[entry.ID]; rec != nil && rec.Outcome != "" {
+						entry.Outcome = rec.Outcome
+					}
+				}
+			}
+		}
+		entries = append(entries, ResultEntry{Kind: "proposal", Proposal: &entry})
+	}
 	if in.Cursor < 0 || in.Cursor > len(entries) || in.Limit < 1 || in.Limit > 16 {
 		return ResultPage{}, handoffError("invalid_page", int64(in.Cursor))
 	}
@@ -146,6 +234,8 @@ func (s *Store) readResult(consumer string, in ResultRead) (ResultPage, error) {
 		if g := s.graphs[r.GraphAttempt.GraphID]; g != nil {
 			if m := g.Members[r.TaskID]; m != nil && m.Accepted != nil && m.Accepted.RunID == r.ID {
 				state = "accepted"
+			} else if m != nil && m.Yield != nil && m.Yield.RunID == r.ID {
+				state = "yielded"
 			}
 		}
 	}

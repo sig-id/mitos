@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.architect",
-  "revision": 1,
+  "revision": 2,
   "name": "Architect",
   "description": "Design boundaries and interfaces from requirements, constraints and existing behavior.",
   "kind": "worker",
@@ -51,7 +51,8 @@
     "optional": [
       "workspace.read",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {
