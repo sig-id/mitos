@@ -75,7 +75,11 @@ func (s *Store) applyWorker(c *workerChange) {
 		if s.workerOutbox == nil {
 			s.workerOutbox = map[string]WorkerOutbox{}
 		}
-		s.workerOutbox[c.Outbox.ID] = *c.Outbox
+		if c.Outbox.Published {
+			delete(s.workerOutbox, c.Outbox.ID)
+		} else {
+			s.workerOutbox[c.Outbox.ID] = *c.Outbox
+		}
 	}
 	if c.Credential != nil {
 		s.workers[c.Credential.ID] = graphClone(*c.Credential)
@@ -191,7 +195,7 @@ func (s *Store) RegisterWorker(token string, in structuredworker.Register) (stru
 		return structuredworker.Receipt{}, ErrStaleBinding
 	}
 	r := workerRegistration{Identity: structuredworker.Identity{ID: p.ID, Incarnation: in.Incarnation}, Capabilities: slices.Clone(in.Capabilities)}
-	response := structuredworker.Receipt{RequestID: in.RequestID, Seq: s.seq + 1, State: "registered"}
+	response := structuredworker.Receipt{RequestID: in.RequestID, Seq: s.seq + 1, State: "registered", WakeAuthority: s.home.ID}
 	err = s.commit("", "effect", "worker_registered", change{Worker: &workerChange{Registration: &r, Receipt: &workerReceipt{Key: key, Digest: digest, Response: response}}})
 	return response, err
 }

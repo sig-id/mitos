@@ -600,6 +600,13 @@ func (s *Store) prepareEvent(id, typ, kind string, c change, seq int64, previous
 			c.TenantScheduler = s.nextTenantScheduler(r)
 		}
 	}
+	if c.Run != nil && c.Run.Brief.Structured != nil && c.Run.Brief.Structured.Frozen != nil && c.Run.Status == "queued" {
+		if c.Worker == nil {
+			c.Worker = &workerChange{}
+		}
+		c.Worker.Outbox = &WorkerOutbox{ID: fmt.Sprintf("wake-%d", seq), Seq: seq, Pool: c.Run.Brief.Scheduling.Pool, Capability: c.Run.Brief.Structured.Frozen.ID}
+	}
+
 	data, err := json.Marshal(c)
 	if c.Graph != nil && len(data) > 8<<20 {
 		return Event{}, errors.New("graph journal record capacity exceeded")

@@ -14,6 +14,7 @@ import (
 	"mitos/internal/harness"
 	"mitos/internal/messaging"
 	"mitos/internal/structuredworker"
+	"mitos/internal/workerwake"
 	workspacefs "mitos/internal/workspace"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 )
 
 type Engine struct {
+	workerWake          *workerwake.Client
 	localWorkerToken    string
 	localWorkerIdentity structuredworker.Identity
 	Messages            *messaging.Service

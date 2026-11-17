@@ -108,6 +108,7 @@ func serve(args []string) error {
 	data := f.String("data", ".mitos", "Durable data directory")
 	root := f.String("workspace-root", ".", "Default workspace and base for relative project paths")
 	appsDir := f.String("apps", "", "Directory containing local application folders")
+	workerWakeConfig := f.String("worker-wake-config", "", "Optional MQTT pool wake configuration JSON")
 	mqttConfig := f.String("mqtt-config", "", "MQTT 5 configuration JSON file (disabled by default)")
 	demo := f.Bool("demo", false, "Seed labelled example history in an empty data directory")
 	if err := f.Parse(args); err != nil {
@@ -198,6 +199,16 @@ func serve(args []string) error {
 			return err
 		}
 	}
+	if *workerWakeConfig != "" {
+		cfg, err := messaging.LoadConfig(*workerWakeConfig)
+		if err != nil {
+			return err
+		}
+		if err = engine.StartWorkerWake(cfg); err != nil {
+			return err
+		}
+	}
+
 	discovery, discoveryCancel := context.WithTimeout(context.Background(), 4*time.Second)
 	engine.Desk.Agents.Refresh(discovery)
 	discoveryCancel()

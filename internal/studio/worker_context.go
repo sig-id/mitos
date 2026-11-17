@@ -2,6 +2,7 @@ package studio
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -95,6 +96,11 @@ func structuredWorkerContext(run Run, b structuredworker.Binding, dir string) (s
 
 // Called with Engine.mu held, before either kind of local execution is started.
 func (e *Engine) localWorkerClaim(r Run) (bool, error) {
+	// Legacy runs whose admitted revision can no longer be resolved carry no
+	// frozen definition body; refuse them instead of panicking the authority.
+	if r.Brief.Structured.Frozen == nil {
+		return false, errors.New("structured definition unavailable: the admitted revision cannot be resolved")
+	}
 	if e.localWorkerToken == "" {
 		agents := []string{}
 		library, err := e.AgentLibrary()

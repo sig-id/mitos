@@ -2,17 +2,18 @@ package structuredworker
 
 import (
 	"context"
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"path/filepath"
 	"time"
 )
 
 func RequestID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := cryptorand.Read(b[:]); err != nil {
 		panic(err)
 	}
 	return hex.EncodeToString(b[:])
@@ -24,14 +25,30 @@ func (c *HTTPClient) Work(ctx context.Context, id string, capabilities []string,
 	if err := c.Call(ctx, "register", Register{RequestID: RequestID(), Incarnation: identity.Incarnation, Capabilities: capabilities}, &registered); err != nil {
 		return err
 	}
+	var wake <-chan struct{}
+	if c.WakeFactory != nil {
+		var close func()
+		var err error
+		wake, close, err = c.WakeFactory(ctx, registered.WakeAuthority)
+		if err != nil {
+			return err
+		}
+		defer close()
+	}
 	for {
 		var claimed Receipt
-		if err := c.Call(ctx, "claim?wait=20", Claim{Identity: identity, RequestID: RequestID()}, &claimed); err != nil {
+		if err := c.Call(ctx, "claim", Claim{Identity: identity, RequestID: RequestID()}, &claimed); err != nil {
 			return err
 		}
 		if claimed.Binding == nil {
-			if ctx.Err() != nil {
+			timer := time.NewTimer(time.Duration(1000+rand.IntN(1001)) * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
 				return ctx.Err()
+			case <-wake:
+				timer.Stop()
+			case <-timer.C:
 			}
 			continue
 		}
@@ -61,6 +78,10 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan struct{})
+	// renewErr carries the renewal failure out of the watch goroutine: a
+	// stale binding (409) must take the existing recovery path and keep the
+	// worker polling, not exit it as a process error.
+	var renewErr error
 	defer func() { cancel(); <-done }()
 	go func() {
 		defer close(done)
@@ -73,6 +94,7 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 			case <-tick.C:
 				var receipt Receipt
 				if err := c.Call(ctx, "renew", Mutation{Binding: b, RequestID: RequestID(), Kind: "renew"}, &receipt); err != nil {
+					renewErr = err
 					cancel()
 					return
 				}
@@ -81,13 +103,20 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 	}()
 	executor.Base = filepath.Join(executor.Base, b.RunID)
 	result, err := executor.Execute(ctx, assignment)
-	if err == nil {
+	if err != nil {
+		// Synchronize with the renewal watcher before reading its failure, so
+		// a stale binding surfaces as its own 409 instead of a process error
+		// that would stop the whole worker.
+		cancel()
+		<-done
+		if renewErr != nil {
+			err = renewErr
+		}
+	} else {
 		var raw []byte
-		raw, err = json.Marshal(result)
-		if err == nil {
+		if raw, err = json.Marshal(result); err == nil {
 			var receipt Receipt
-			err = c.Call(ctx, "result", Mutation{Binding: b, RequestID: RequestID(), Kind: "result", Data: raw}, &receipt)
-			if err == nil && receipt.State != "accepted" {
+			if err = c.Call(ctx, "result", Mutation{Binding: b, RequestID: RequestID(), Kind: "result", Data: raw}, &receipt); err == nil && receipt.State != "accepted" {
 				err = errors.New("result not accepted")
 			}
 		}

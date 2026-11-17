@@ -22,8 +22,10 @@ import (
 
 	"mitos/internal/apiversion"
 	"mitos/internal/compute"
+	"mitos/internal/messaging"
 	"mitos/internal/structuredworker"
 	"mitos/internal/studio"
+	"mitos/internal/workerwake"
 )
 
 func workerClient(args []string) error {
@@ -31,6 +33,8 @@ func workerClient(args []string) error {
 		return workerCredentialClient(args)
 	}
 	f := flag.NewFlagSet("worker", flag.ContinueOnError)
+	wakeConfig := f.String("wake-config", "", "Optional MQTT wake configuration JSON")
+	wakePool := f.String("wake-pool", "interactive", "Shared-subscription wake pool (claims still check all permitted pools)")
 	authority := f.String("url", "", "Application TLS authority URL")
 	id := f.String("id", "", "Operator-issued worker ID")
 	tokenEnv := f.String("token-env", "MITOS_WORKER_TOKEN", "Environment variable holding the worker credential")
@@ -96,6 +100,20 @@ func workerClient(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	executor := structuredworker.Executor{Provider: provider, Executable: executable, Environment: os.Environ(), Base: *data, Scoped: true, EgressEndpoint: "unix://" + egressPath}
+	if *wakeConfig != "" {
+		cfg, err := messaging.LoadConfig(*wakeConfig)
+		if err != nil {
+			return err
+		}
+		client.WakeFactory = func(ctx context.Context, authority string) (<-chan struct{}, func(), error) {
+			wake, err := workerwake.New(ctx, cfg, authority, *wakePool)
+			if err != nil {
+				return nil, nil, err
+			}
+			return wake.Wake, wake.Close, nil
+		}
+	}
+
 	err = client.Work(ctx, *id, strings.Split(*capabilities, ","), executor, *once)
 	if errors.Is(err, context.Canceled) {
 		return nil

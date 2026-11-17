@@ -57,6 +57,29 @@ Restoring a backup invalidates all pre-restore worker credentials.
 Native execution gets a fresh scratch directory, home and model credential
 store. It does not inherit application/worker/target credentials or operator
 conversation/MCP files. Native approval requests are denied. External effects
-will use the action gateway; MQTT wake delivery and the full deployment fault
-matrix are later S3 slices. `remote_workers` and `mqtt_work_claims` therefore
+will use the action gateway; the full deployment fault matrix is a later S3
+slice. `remote_workers` and `mqtt_work_claims` therefore
 remain false until that matrix passes.
+
+## Optional MQTT wake hints
+
+Start the authority with `--worker-wake-config mqtt.json` and the worker with
+`--wake-config mqtt.json --wake-pool interactive`. The JSON uses the existing
+MQTT transport fields (`broker`, `username`, `password_env`, `ca_file`, and
+optional client certificate/key). Remote brokers require TLS; plaintext is
+restricted to literal loopback addresses. Broker credentials must have matching
+publish/subscribe ACLs for the authority's wake namespace.
+
+Admissions and accepted results commit an outbox entry with their canonical
+state. A publisher sends QoS 1, non-retained hints and journals acknowledgement
+only after the broker accepts publication. A lost reply may duplicate a hint;
+an outage leaves pending entries available after restart. Published entries are
+removed from the in-memory pending set, while canonical history retains them.
+
+The topic is `mitos/worker/v1/<home>/pool/<pool>` and the entire payload is
+`{"pool":"interactive","capability":"mitos.generalist"}`. It contains no tenant,
+Task, Run, input or credential. Worker registration supplies the authority home
+namespace. Workers use the shared subscription group `mitos-workers`; any valid
+hint means only “poll now.” A coalescing channel bounds pending hints. Without
+notifications, a jittered scan every 1–2 seconds discovers work. The TLS claim
+handler checks identity, capability, pool, fairness and capacity on every poll.
