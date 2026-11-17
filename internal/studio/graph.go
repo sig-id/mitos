@@ -336,10 +336,14 @@ func validateGraph(g *WorkGraph) error {
 				return graphError("depth limit exceeded")
 			}
 		}
+		hard, blocked, blockedFrom := 0, 0, ""
 		for _, dep := range request.Deps {
 			if dep.Inbox != nil {
 				if dep.Inbox.Project != g.ProjectID {
 					return graphError("inbox source must belong to the graph project")
+				}
+				if dep.Strength == "hard" {
+					hard++
 				}
 				continue
 			}
@@ -354,6 +358,35 @@ func validateGraph(g *WorkGraph) error {
 			}
 			if dep.Guard == "candidate_available" && m.Spec.Acceptance != "application" && !(g.Policy.Automatic && m.Executor != nil && m.Executor.Application.Agent != nil) {
 				return graphError("candidate edges require an application verifier")
+			}
+			if dep.Strength != "hard" {
+				// Soft hints never gate readiness, so they cannot force an ancestor wait.
+				continue
+			}
+			hard++
+			// A required task cannot need an ancestor scope's done or candidate
+			// completion: the scope's own acceptance requires every required
+			// descendant to be accepted first. Guards that an operator can still
+			// break (failed/cancelled) stay expressible.
+			if m.Spec.Required && (dep.Guard == "done" || dep.Guard == "candidate_available") && g.Members[dep.From].Spec.Kind == "scope" && graphDescendant(g, id, dep.From) {
+				blocked++
+				if blockedFrom == "" {
+					blockedFrom = dep.From
+				}
+			}
+		}
+		if blocked != 0 {
+			// Reject only joins that cannot be satisfied without the ancestor edge:
+			// any/k_of_n rules and soft hints keep satisfiable ancestor edges valid.
+			needed := hard
+			if request.Join.Rule == "any" {
+				needed = 1
+			}
+			if request.Join.Rule == "k_of_n" {
+				needed = request.Join.K
+			}
+			if hard-blocked < needed {
+				return graphError("required dependency cycle: %s cannot satisfy its join without ancestor scope %s, which cannot be accepted before %s is accepted", id, blockedFrom, blockedFrom, id)
 			}
 		}
 	}
