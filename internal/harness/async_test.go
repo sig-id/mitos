@@ -128,6 +128,63 @@ func (*rejectedQuestionBroker) Submit(context.Context, json.RawMessage) (Deliver
 	return Delivery{}, &HTTPError{Status: 422}
 }
 
+// A retry that the authority refuses (for example a revoked approval) must
+// surface the refusal instead of writing the saved body to the native process.
+type revokedAnswerBroker struct{ written chan string }
+
+func (b *revokedAnswerBroker) Submit(_ context.Context, raw json.RawMessage) (Delivery, error) {
+	r, err := Normalize("codex", raw)
+	if err != nil {
+		return Delivery{}, err
+	}
+	return Delivery{RequestID: r.Key, State: "accepted", Body: json.RawMessage(`{"id":8,"result":{"decision":"accept"}}`), Digest: "revoked"}, nil
+}
+func (b *revokedAnswerBroker) Get(context.Context, string) (Delivery, error) {
+	return Delivery{}, &HTTPError{Status: 409}
+}
+func (b *revokedAnswerBroker) Deliver(context.Context, string, string, string) error { return nil }
+func (b *revokedAnswerBroker) Invalidate(context.Context, string) error              { return nil }
+
+func TestRevokedAnswerRetryNeverReachesNativeWriter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, server := net.Pipe()
+	defer server.Close()
+	input, writer := io.Pipe()
+	defer input.Close()
+	defer writer.Close()
+	b := &revokedAnswerBroker{}
+	var output bytes.Buffer
+	native := make(chan string, 4)
+	go func() {
+		scan := bufio.NewScanner(server)
+		for scan.Scan() {
+			native <- scan.Text()
+		}
+		close(native)
+	}()
+	done := make(chan error, 1)
+	go func() { done <- ProxyCodex(ctx, b, client, input, &output) }()
+	fmt.Fprintln(server, `{"id":8,"method":"item/commandExecution/requestApproval","params":{"threadId":"t","turnId":"u","itemId":"i","command":"printf reviewed","cwd":"/tmp"}}`)
+	var status *HTTPError
+	if err := <-done; !errors.As(err, &status) || status.Status != 409 {
+		t.Fatalf("lost revocation refusal: %v", err)
+	}
+	for {
+		select {
+		case line, ok := <-native:
+			if !ok {
+				return
+			}
+			if strings.Contains(line, "accept") {
+				t.Fatal("revoked answer reached the native writer")
+			}
+		default:
+			return
+		}
+	}
+}
+
 func TestAsyncRoutingFailureIsNotSilentlyForwarded(t *testing.T) {
 	for _, questions := range []string{
 		`[{"title":"Which route is ready?"}]`,
