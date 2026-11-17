@@ -57,9 +57,8 @@ Restoring a backup invalidates all pre-restore worker credentials.
 Native execution gets a fresh scratch directory, home and model credential
 store. It does not inherit application/worker/target credentials or operator
 conversation/MCP files. Native approval requests are denied. External effects
-will use the action gateway; the full deployment fault matrix is a later S3
-slice. `remote_workers` and `mqtt_work_claims` therefore
-remain false until that matrix passes.
+will use the action gateway; the S3 deployment fault matrix is described below.
+`remote_workers` and `mqtt_work_claims` are true after this conformance gate.
 
 ## Optional MQTT wake hints
 
@@ -119,3 +118,28 @@ and blocks result acceptance. It survives both server restart and replacement
 attempts. Reconciliation queries the original endpoint and credential revision;
 it never repeats an uncertain POST. Only explicit `applied` or `not_applied`
 removes the hold. A restore or worker replacement cannot undo an external effect.
+
+
+## Deployment conformance
+
+Run the root test:
+
+```sh
+go test -race ./internal/application -run '^TestIndependentWorkerFaultMatrix$' -count=1 -timeout=4m
+```
+
+It builds the authority, independent application module and separately deployed
+worker subprocess. Cases cover the four application admission/publication crash
+boundaries, worker death after claim, actual 30-second lease expiry, duplicate
+result delivery, authority death after result commit before reply, authority
+restart, MQTT hints published without a worker subscriber, and an external
+operation whose applied response is lost. The last case invokes the native action
+and reconciliation tools against a real HTTP fixture. Every case verifies one
+logical Task, one accepted result and one durable domain reply; the external case
+observes one POST. Direct protocol tests additionally retain/refuse stale results,
+fence context and renewals, test immediate revocation/restore, and preserve a
+Task-level ambiguous-action hold through worker replacement.
+
+The injected crashes require both failpoint opt-in variables. A deterministic
+native model stand-in follows the actual confined stdio/tool path. This measures
+protocol recovery, rather than production model quality or deployment throughput.

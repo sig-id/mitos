@@ -91,7 +91,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, session *studio.ApplicationSession) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if r.Method == "GET" && r.URL.Path == "/api/capabilities" {
-		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "operations": map[string]string{"admit": "POST /api/tasks", "status": "GET /api/runs/{id}", "events": "GET /api/runs/{id}/events", "result": "GET /api/runs/{id}/result", "cancel": "POST /api/runs/{id}/cancel", "decision": "POST /api/runs/{id}/decision"}, "hosted": map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "postgresql": false, "remote_workers": false, "mqtt_work_claims": false, "conversation_waits": false}})
+		reply(w, 200, map[string]any{"api_versions": apiversion.Supported, "structured_work": studio.StructuredCapabilities(), "access": "authenticated TLS application listener", "operations": map[string]string{"admit": "POST /api/tasks", "status": "GET /api/runs/{id}", "events": "GET /api/runs/{id}/events", "result": "GET /api/runs/{id}/result", "cancel": "POST /api/runs/{id}/cancel", "decision": "POST /api/runs/{id}/decision"}, "hosted": map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "postgresql": false, "remote_workers": true, "mqtt_work_claims": true, "conversation_waits": false}})
 		return
 	}
 	if r.Method == "POST" && r.URL.Path == "/api/tasks" {

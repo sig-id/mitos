@@ -27,3 +27,23 @@ confined provider and checks that it cannot open the runtime database. Failpoint
 require both `MITOS_ENABLE_FAILPOINTS=1` and `MITOS_APPFIXTURE_FAILPOINT` equal to
 `before_admission`, `after_admission`, `before_publication`, or
 `after_publication`. The selected boundary exits 86 without cleanup.
+
+For S3, run the authority with `MITOS_LOCAL_STRUCTURED_WORKERS=off`, issue a
+separate worker credential and launch `mitos worker` as described in the
+[worker protocol](../../docs/worker-protocol.md). The application module still
+communicates only with the application HTTPS API and its own database.
+
+The root `TestIndependentWorkerFaultMatrix` runs the four application crash cases
+through that separate worker, then injects worker death after claim, actual
+30-second lease expiry, duplicate result delivery, authority death after result
+commit but before receipt, authority restart, and MQTT publication without a
+worker subscriber. In the final case the confined native stand-in calls the
+action/reconcile tools against an HTTP target that applies one operation and
+loses its response. `--action-target` admits that configured target and stores the
+exact dispatch request with the application's message transaction.
+
+These are deterministic protocol and process-failure tests. They exercise the
+real TLS, worker library, confinement and durable databases; they do not measure
+production model quality. Every case verifies one logical Task, one accepted
+result and one durable application reply, with one external POST in the action
+case.

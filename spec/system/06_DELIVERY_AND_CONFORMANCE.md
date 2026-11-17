@@ -298,6 +298,15 @@ mutation. Demonstrate enforceable revocation or settlement before conflicting wo
 starts; a timer alone is insufficient. An external-action fixture MUST lose its
 response and reconcile the original operation without blindly repeating it.
 
+Conformance evidence: the independent application through a separate confined
+worker passes worker crash, actual lease expiry, duplicate result, lost receipt,
+authority restart, unconsumed MQTT notification, and lost external response cases
+in `TestIndependentWorkerFaultMatrix`. The external case uses the native action
+and reconcile tools and observes one operation POST. Direct protocol tests also
+exercise stale binding evidence, permission/incarnation/restore fencing and
+Task-level reconciliation holds. The advertised `remote_workers` and
+`mqtt_work_claims` capabilities are true; MQTT itself never owns a Task.
+
 ### S4 – Dormant responsibilities and conversation consistency
 
 Demonstrate a personal-agent responsibility coordinating independent background

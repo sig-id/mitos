@@ -520,3 +520,10 @@ to permit other worker definitions. Bounded feeds, configurable capacity, tenant
 crash fixture demonstrate S2 application-boundary conformance. PostgreSQL remains
 deferred. See the [application API](docs/application-api.md) for pagination,
 operator runtime policy, confined application execution prerequisites and the fixture.
+
+
+The independently versioned [worker protocol](docs/worker-protocol.md) supports
+replaceable headless workers, pool-only MQTT wake hints and a durable external
+action gateway. The S3 subprocess fault matrix demonstrates worker and authority
+recovery, lost receipt replay, missed notifications and original-operation
+reconciliation. Dormant conversation waits remain gated on S4.
