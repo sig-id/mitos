@@ -62,6 +62,9 @@ func (e *Engine) investigateAgentRequest(ctx context.Context, session AgentSessi
 	}
 	if !exists {
 		native, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: "codex"})
+		if err == nil {
+			native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env)
+		}
 		var result InvestigationResult
 		if err == nil {
 			child, cancel := context.WithDeadline(ctx, evaluation.Deadline)
@@ -168,7 +171,7 @@ func (b *denyInvestigator) Get(_ context.Context, key string) (harness.Delivery,
 func (b *denyInvestigator) Deliver(context.Context, string, string, string) error { return nil }
 func (b *denyInvestigator) Invalidate(context.Context, string) error              { return nil }
 func runReadOnlyInvestigator(ctx context.Context, native agentcli.Launch, workspace, prompt string, schema json.RawMessage, result *InvestigationResult) error {
-	cmd := exec.CommandContext(ctx, native.Executable, "app-server")
+	cmd := exec.CommandContext(ctx, native.Executable, harness.CodexArguments()...)
 	cmd.Dir = workspace
 	cmd.Env = native.Env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
