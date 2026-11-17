@@ -9,6 +9,7 @@ import (
 // ExecutionPolicy is the optional, deterministic part of the instructions file.
 // Prose elsewhere in the file never silently changes enforced limits.
 type ExecutionPolicy struct {
+	Execution *AgentExecutionPolicy  `json:"execution,omitempty"`
 	Resources *resourcepolicy.Policy `json:"resources,omitempty"`
 	Runtime   string                 `json:"runtime,omitempty"`
 	Model     string                 `json:"model,omitempty"`
@@ -42,7 +43,7 @@ func documentPolicy(document string) (RuntimePreferences, error) {
 		if err := DecodeGraphJSON([]byte(strings.Join(lines[start:i], "\n")), &v); err != nil {
 			return result, err
 		}
-		result = RuntimePreferences{Resources: v.Resources, Runtime: v.Runtime, Model: v.Model, Enforcement: v.Enforcement, Minutes: v.Minutes, Attempts: v.Attempts}
+		result = RuntimePreferences{Execution: v.Execution, Resources: v.Resources, Runtime: v.Runtime, Model: v.Model, Enforcement: v.Enforcement, Minutes: v.Minutes, Attempts: v.Attempts}
 		if err := validatePreferences(result); err != nil {
 			return result, err
 		}

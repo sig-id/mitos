@@ -56,7 +56,7 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 			name := strings.Split(f.Tag.Get("json"), ",")[0]
 			// Project identity and workspace are runtime bindings, not model choices.
 			// ProjectLimits belongs only to recurring workflow services.
-			if t == reflect.TypeFor[Brief]() && (name == "project_limits" || name == "workspace" || name == "project_id") {
+			if t == reflect.TypeFor[Brief]() && (name == "execution" || name == "project_limits" || name == "workspace" || name == "project_id") {
 				continue
 			}
 			if f.IsExported() && name != "-" && name != "" {

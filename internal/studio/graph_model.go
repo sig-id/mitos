@@ -41,16 +41,17 @@ type GraphPolicy struct {
 	DecisionApplication     string   `json:"decision_application,omitempty"`
 }
 type GraphSpec struct {
-	Agent      *AgentSelection `json:"agent,omitempty"`
-	ID         string          `json:"id"` // proposal-local reference at creation
-	Parent     string          `json:"parent,omitempty"`
-	Kind       string          `json:"kind"` // scope or application
-	Required   bool            `json:"required"`
-	Criteria   string          `json:"criteria"`
-	Acceptance string          `json:"acceptance"` // operator or application
-	Brief      Brief           `json:"brief"`
-	Arguments  []string        `json:"arguments,omitempty"` // append to registered argv only by policy
-	Context    string          `json:"context,omitempty"`
+	ExecutionPreset string          `json:"execution_preset,omitempty"`
+	Agent           *AgentSelection `json:"agent,omitempty"`
+	ID              string          `json:"id"` // proposal-local reference at creation
+	Parent          string          `json:"parent,omitempty"`
+	Kind            string          `json:"kind"` // scope or application
+	Required        bool            `json:"required"`
+	Criteria        string          `json:"criteria"`
+	Acceptance      string          `json:"acceptance"` // operator or application
+	Brief           Brief           `json:"brief"`
+	Arguments       []string        `json:"arguments,omitempty"` // append to registered argv only by policy
+	Context         string          `json:"context,omitempty"`
 }
 type GraphExecutor struct {
 	Application Application `json:"application"`

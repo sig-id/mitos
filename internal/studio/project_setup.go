@@ -26,6 +26,7 @@ type SetupSections struct {
 	Git         string `json:"git"`
 }
 type RuntimePreferences struct {
+	Execution *AgentExecutionPolicy  `json:"execution,omitempty"`
 	Resources *resourcepolicy.Policy `json:"resources,omitempty"`
 	Revision  int                    `json:"revision"`
 	Runtime   string                 `json:"runtime"`
@@ -52,6 +53,7 @@ type ProjectSetup struct {
 	SettingsError    string                   `json:"settings_error,omitempty"`
 }
 type FrozenSetup struct {
+	Execution   *AgentExecutionPolicy `json:"execution,omitempty"`
 	Resources   resourcepolicy.Policy `json:"resources"`
 	Cooperation cooperation.Document  `json:"cooperation"`
 	AgentPolicy agentpolicy.Policy    `json:"agent_policy"`
@@ -155,14 +157,17 @@ func splitSetup(document string) (SetupSections, int, int, error) {
 	return SetupSections{values[0], values[1], values[2]}, start, end + len(setupEnd), nil
 }
 func validatePreferences(v RuntimePreferences) error {
+	if err := v.Execution.validate(); err != nil {
+		return err
+	}
 	if err := validateResourcePreferences(v); err != nil {
 		return err
 	}
 	if v.Enforcement != "" && !validEnforcement(v.Enforcement) {
 		return errors.New("enforcement must be advisory, strict_required or strict")
 	}
-	if v.Runtime != "" && v.Runtime != "codex" {
-		return errors.New("automatic work currently supports Codex only; other installed runtimes can be used where their adapters support the requested action")
+	if v.Runtime != "" && v.Runtime != "codex" && v.Runtime != "claude" {
+		return errors.New("automatic work supports Codex and Claude Code; other installed runtimes can be used where their adapters support the requested action")
 	}
 	if len(v.Model) > 200 || strings.ContainsAny(v.Model, "\x00\r\n") || strings.HasPrefix(v.Model, "-") || v.Minutes < 0 || v.Minutes > 43200 || v.Attempts < 0 || v.Attempts > 2048 || len(v.Guidance) > 16000 || strings.ContainsRune(v.Guidance, 0) {
 		return errors.New("invalid runtime preference or limit")
@@ -250,6 +255,9 @@ func (e *Engine) SavePreferences(project string, v RuntimePreferences) (RuntimeP
 }
 func effectivePreferences(global, project RuntimePreferences) RuntimePreferences {
 	v := global
+	if project.Execution != nil {
+		v.Execution = graphClone(project.Execution)
+	}
 	if project.Runtime != "" {
 		v.Runtime = project.Runtime
 	}
@@ -437,7 +445,7 @@ func (e *Engine) freezeSetup(id string) (*FrozenSetup, error) {
 	if !v.Exists {
 		document = sectionBlock(v.Sections) + "\n"
 	}
-	return &FrozenSetup{Resources: *v.Effective.Resources, Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Enforcement: v.Effective.Enforcement, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
+	return &FrozenSetup{Execution: graphClone(v.Effective.Execution), Resources: *v.Effective.Resources, Cooperation: v.Cooperation, AgentPolicy: v.AgentPolicy, Document: document, FileName: v.FileName, FileHash: setupHash([]byte(document)), Personal: v.Defaults.Guidance, Runtime: v.Effective.Runtime, Model: v.Effective.Model, Enforcement: v.Effective.Enforcement, Minutes: v.Effective.Minutes, Attempts: v.Effective.Attempts}, nil
 }
 
 // constraints renders the frozen project policy without the project document,
@@ -446,5 +454,10 @@ func (s *FrozenSetup) constraints() string {
 	if s == nil {
 		return ""
 	}
-	return s.Cooperation.Prompt() + fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nRuntime: %s; model: %s. Workflow elapsed-time budget: %d minutes, including waits; shared agent-attempt budget: %d, including orchestrators and retries. CPU and memory are per-agent resources; model tokens are a shared workflow budget. Only supported structured caps are enforced. Monetary and qualitative budgets in prose are guidance, not enforced accounting.\n", s.Personal, s.Runtime, s.Model, s.Minutes, s.Attempts)
+	runtime, model := s.Runtime, s.Model
+	if s.Execution != nil {
+		runtime = "selected per role by the frozen execution policy"
+		model = "selected by each execution preset"
+	}
+	return s.Cooperation.Prompt() + fmt.Sprintf("\nAutonomy guidance (not a permission grant): %s\n", s.AgentPolicy.Guidance) + fmt.Sprintf("\nPersonal defaults (project instructions and the current request take precedence):\n%s\nRuntime: %s; model: %s. Workflow elapsed-time budget: %d minutes, including waits; shared agent-attempt budget: %d, including orchestrators and retries. CPU and memory are per-agent resources; model tokens are a shared workflow budget. Only supported structured caps are enforced. Monetary and qualitative budgets in prose are guidance, not enforced accounting.\n", s.Personal, runtime, model, s.Minutes, s.Attempts)
 }

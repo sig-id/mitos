@@ -14,6 +14,7 @@
     "test:pages": "node pages.mjs",
     "test:graphs": "node graphs.mjs",
     "test:picker": "node picker.mjs",
+    "test:coordinated-agents": "node coordinated-agents.mjs",
     "test:agent-picker": "node agent-picker.mjs",
     "test:activity": "node activity.mjs",
     "test:workflow-files": "node workflow-files.mjs",

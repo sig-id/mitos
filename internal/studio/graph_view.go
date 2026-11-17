@@ -65,17 +65,19 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 }
 
 type GraphNodeView struct {
-	BlockedReason     string    `json:"blocked_reason,omitempty"`
-	HumanRequests     int       `json:"human_requests,omitempty"`
-	ReviewingRequests int       `json:"reviewing_requests,omitempty"`
-	DecisionSetup     bool      `json:"decision_setup,omitempty"`
-	Summary           string    `json:"summary,omitempty"`
-	PendingRequests   int       `json:"pending_requests,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	State             string    `json:"state"`
-	Executor          string    `json:"executor,omitempty"`
-	Settled           bool      `json:"settled"`
-	Waiting           []string  `json:"waiting,omitempty"`
+	Execution         *ExecutionPreset `json:"execution,omitempty"`
+	ExecutionSource   string           `json:"execution_source,omitempty"`
+	BlockedReason     string           `json:"blocked_reason,omitempty"`
+	HumanRequests     int              `json:"human_requests,omitempty"`
+	ReviewingRequests int              `json:"reviewing_requests,omitempty"`
+	DecisionSetup     bool             `json:"decision_setup,omitempty"`
+	Summary           string           `json:"summary,omitempty"`
+	PendingRequests   int              `json:"pending_requests,omitempty"`
+	CreatedAt         time.Time        `json:"created_at"`
+	State             string           `json:"state"`
+	Executor          string           `json:"executor,omitempty"`
+	Settled           bool             `json:"settled"`
+	Waiting           []string         `json:"waiting,omitempty"`
 }
 type GraphView struct {
 	Graph      WorkGraph                `json:"graph"`
@@ -214,6 +216,10 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		}
 		if m.Executor != nil {
 			n.Executor = m.Executor.Application.Name
+			if b := m.Executor.Application.Agent; b != nil {
+				n.Execution = graphClone(b.Preset)
+				n.ExecutionSource = b.SelectionSource
+			}
 		}
 		if t := s.tasks[id]; t != nil && m.Spec.Kind != "scope" {
 			n.Waiting = s.graphReadiness(t).Waiting

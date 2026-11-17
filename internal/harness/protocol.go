@@ -156,7 +156,7 @@ func Normalize(adapter string, raw json.RawMessage) (Request, error) {
 			// Only native tools with completely represented inputs have an approval
 			// mapping. Never infer authorization for an arbitrary new tool name.
 			switch p.Tool {
-			case "Bash", "Write", "Edit":
+			case "Bash", "Write", "Edit", "WebSearch", "WebFetch":
 				out.Cards = []decision.Card{approvalCard(raw)}
 			default:
 				return out, ErrUnsupported

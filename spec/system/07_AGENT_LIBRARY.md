@@ -1,11 +1,12 @@
 # 07 – Agent definitions and the library
 
-Status: normative design, `agent-definition/v1`; local Codex workflow implemented as a subset.
+Status: normative design, `agent-definition/v1`; local Codex/Claude workflow implemented as a subset.
 The bundled [default library](../../agents/README.md) now runs through the native
-Codex adapter, with automatic planning, graph-scoped specialization, and editable
-worker revisions. This does not claim full profile conformance: multi-runtime
-negotiation, knowledge/skill attachment, deprecation, and promotion remain future
-work. Typed definition validation, manifest-preserving edits and per-attempt
+Codex and Claude adapters, with automatic planning, graph-scoped specialization, and editable
+worker revisions. Explicit execution presets and role rules select harness, model
+and environment profile independently for the orchestrator and workers. This does
+not claim full profile conformance: general runtime negotiation, knowledge/skill
+attachment, deprecation, and promotion remain future work. Typed definition validation, manifest-preserving edits and per-attempt
 authority receipts (capability intersection, enforcement policy, timeout and turn
 limits) and bounded context assembly receipts are implemented. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow).
 

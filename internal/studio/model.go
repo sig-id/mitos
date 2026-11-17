@@ -20,20 +20,29 @@ var ErrConflict = errors.New("this work has already changed; refresh and try aga
 var ErrNotFound = errors.New("work not found")
 
 type Brief struct {
-	ProjectID      string           `json:"project_id,omitempty"`
-	Scheduling     workpool.Request `json:"scheduling"`
-	Ownership      fleet.Ownership  `json:"ownership,omitempty"`
-	Title          string           `json:"title"`
-	Intent         string           `json:"intent"`
-	Workspace      string           `json:"workspace"`
-	AppID          string           `json:"app_id"`
-	TimeoutMinutes int              `json:"timeout_minutes"`
+	Execution      *AgentExecutionPolicy `json:"execution,omitempty"`
+	ProjectID      string                `json:"project_id,omitempty"`
+	Scheduling     workpool.Request      `json:"scheduling"`
+	Ownership      fleet.Ownership       `json:"ownership,omitempty"`
+	Title          string                `json:"title"`
+	Intent         string                `json:"intent"`
+	Workspace      string                `json:"workspace"`
+	AppID          string                `json:"app_id"`
+	TimeoutMinutes int                   `json:"timeout_minutes"`
 	// Structured work has no workspace; see structured.go.
 	Structured    *StructuredWork `json:"structured,omitempty"`
 	ProjectLimits bool            `json:"project_limits,omitempty"` // Workflow occurrences inherit the current project settings.
 }
 
 func (b *Brief) Validate() error {
+	if b.Execution != nil {
+		if b.AppID != WorkflowAppID {
+			return errors.New("execution policy requires coordinated work")
+		}
+		if err := b.Execution.validate(); err != nil {
+			return err
+		}
+	}
 	b.Scheduling.Normalize()
 	if err := b.Scheduling.Validate(); err != nil {
 		return err

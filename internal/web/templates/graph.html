@@ -5,6 +5,7 @@
   <div class="graph-compose-heading"><div><span class="graph-eyebrow">FROM GOAL TO RESULT</span><h2>What would you like to accomplish?</h2><p>Start with an idea. Watch the work take shape.</p></div><button id="graph-compose-close" aria-label="Close new work" hidden>×</button></div>
   <form id="graph-create-form">
    <label class="sr-only" for="graph-prompt">Your goal</label><textarea id="graph-prompt" name="goal" rows="3" required minlength="3" maxlength="10000" placeholder="Investigate why checkout is slow, fix the bottleneck, and show the improvement…"></textarea>
+   <div id="graph-execution"><p class="muted">Loading agent choices…</p></div>
    <details class="graph-scheduling"><summary>When to run <span class="muted" id="graph-trigger-summary">Once</span></summary>
     <div class="graph-scheduling-content">
      <label>Run this work<select id="graph-trigger" name="trigger"><option value="once">Once</option><option value="cron">On a schedule</option><option value="event">On an external event</option><option value="both">On a schedule and external events</option></select></label>
