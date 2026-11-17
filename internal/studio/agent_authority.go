@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -55,6 +56,7 @@ var codexProfile = runtimeProfile{
 		"graph.read":       {BoundedGrant: true, BlockedDenial: true, Note: "Graph state is supplied by Mitos as context."},
 		"graph.propose":    {BoundedGrant: true, BlockedDenial: true, Note: "Proposals are validated and committed only by the kernel."},
 		"agent.specialize": {BoundedGrant: true, BlockedDenial: true, Note: "Specializations are validated against the base definition by the kernel."},
+		ProposalCapability: {BoundedGrant: true, BlockedDenial: true, Note: "Workers propose work only on their terminal result; the orchestrator admits it through graph validation. Native subagents are disabled."},
 	},
 }
 
@@ -208,9 +210,44 @@ func handoffToolGranted(r AuthorityReceipt, tool string) bool {
 func grantedHandoffTools(r AuthorityReceipt) []harness.DynamicTool {
 	out := []harness.DynamicTool{}
 	for _, tool := range HandoffTools() {
-		if handoffToolGranted(r, tool.Name) {
-			out = append(out, tool)
+		if !handoffToolGranted(r, tool.Name) {
+			continue
 		}
+		if tool.Name == "result_submit" && !r.Granted(ProposalCapability) {
+			tool.InputSchema = withoutProperty(tool.InputSchema, "proposals")
+		}
+		out = append(out, tool)
 	}
 	return out
+}
+
+// withoutProperty removes one property from an object schema so that an
+// ungranted field is not advertised at all.
+func withoutProperty(raw json.RawMessage, name string) json.RawMessage {
+	var schema map[string]any
+	if json.Unmarshal(raw, &schema) != nil {
+		return raw
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		delete(props, name)
+	}
+	if required, ok := schema["required"].([]any); ok {
+		schema["required"] = slices.DeleteFunc(required, func(v any) bool { return v == name })
+	}
+	out, _ := json.Marshal(schema)
+	return out
+}
+
+// runGranted reads the attempt's frozen authority receipt. A run without one
+// (or one that cannot be read) is granted nothing.
+func (s *Store) runGranted(run, capability string) bool {
+	raw, err := s.Artifact(run, "authority.json")
+	if err != nil {
+		return false
+	}
+	var r AuthorityReceipt
+	if json.Unmarshal(raw, &r) != nil {
+		return false
+	}
+	return r.Granted(capability)
 }

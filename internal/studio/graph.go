@@ -734,8 +734,48 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 					x.Error = ""
 				}
 			}
+		case "accept_proposal", "reject_proposal":
+			rec := g.Proposals[op.Proposal]
+			if rec == nil || rec.Outcome != "" || strings.TrimSpace(op.Rationale) == "" {
+				return fail(graphError("proposal review requires an unreviewed proposal and rationale"))
+			}
+			rec.Rationale = op.Rationale
+			if op.Kind == "reject_proposal" {
+				rec.Outcome = "rejected"
+				break
+			}
+			rec.Outcome = "accepted"
+			proposer := g.Members[rec.TaskID]
+			if len(op.Dependencies) == 0 || len(op.Dependencies) > 32 {
+				return fail(graphError("accepting a proposal requires 1-32 dependencies naming the tasks that fulfil it"))
+			}
+			deps := append([]workpool.Dependency(nil), op.Dependencies...)
+			for i := range deps {
+				deps[i].From = resolve(deps[i].From)
+				target := g.Members[deps[i].From]
+				if deps[i].Inbox != nil || target == nil || target.OrchestratorFor != "" || deps[i].From == rec.TaskID || slices.Contains(rec.Tasks, deps[i].From) {
+					return fail(graphError("proposal dependencies must name distinct worker tasks other than the proposer"))
+				}
+				rec.Tasks = append(rec.Tasks, deps[i].From)
+			}
+			if !rec.Blocking {
+				// Follow-up work: the result is final, so nothing waits on it.
+				break
+			}
+			if proposer == nil || proposer.Yield == nil || !slices.Contains(proposer.Yield.Proposals, rec.ID) {
+				return fail(ErrConflict)
+			}
+			// Dependency amendment for a yielded task: the continuation waits on
+			// the accepted work and receives its results as dependency inputs.
+			proposer.History = append(proposer.History, proposer.Spec)
+			proposer.Spec.Brief.Scheduling.Deps = append(proposer.Spec.Brief.Scheduling.Deps, deps...)
+			proposer.Spec.Brief.Scheduling.Normalize()
+			proposer.Revision++
 		case "retry":
-			if m == nil || m.Spec.Kind != "application" || m.Accepted != nil || m.CancelRequested || m.Replacement != "" || len(m.Attempts) == 0 || len(m.Attempts) > g.Limits.Retries {
+			if m != nil && m.Yield != nil {
+				return fail(graphError("a yielded task continues after its proposals are reviewed and settle"))
+			}
+			if m == nil || m.Spec.Kind != "application" || m.Accepted != nil || m.CancelRequested || m.Replacement != "" || len(m.Attempts) == 0 || len(m.Attempts)-m.Yields > g.Limits.Retries {
 				return fail(graphError("task cannot retry or retry allowance exhausted"))
 			}
 			run := e.Store.runs[m.CurrentRunID]
@@ -773,6 +813,20 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 	for _, m := range g.Members {
 		if err := e.Store.normalizeGraphInbox(&g, m.Spec.Brief.Scheduling.Deps); err != nil {
 			return fail(err)
+		}
+	}
+	// A classified outcome is a reviewed outcome: its blocking proposals must
+	// be accepted or rejected in the same review, or the yielded task would
+	// wait forever.
+	for _, tr := range g.Triggers {
+		if tr.Outcome == "" {
+			continue
+		}
+		for _, rec := range g.Proposals {
+			proposer := g.Members[rec.TaskID]
+			if rec.Trigger == tr.Seq && rec.Blocking && rec.Outcome == "" && proposer != nil && !proposer.CancelRequested && proposer.Replacement == "" {
+				return fail(graphError("proposal_review_required: review blocking proposal %s (%s) of task %s with accept_proposal or reject_proposal", rec.ID, rec.Local, rec.TaskID))
+			}
 		}
 	}
 	if err := validateGraph(&g); err != nil {
@@ -849,6 +903,9 @@ func (s *Store) acceptGraphMember(g *WorkGraph, id, evidence, rationale string, 
 			}
 		}
 	} else {
+		if m.Yield != nil {
+			return graphError("task yielded on its proposals; it continues once they settle and is reviewed then")
+		}
 		r := s.runs[m.CurrentRunID]
 		if r == nil || !r.Terminal() || r.Status != "done" || !s.graphSettled(m) {
 			return graphError("candidate execution must finish and settle before acceptance")

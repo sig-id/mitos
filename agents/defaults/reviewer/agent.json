@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.reviewer",
-  "revision": 1,
+  "revision": 2,
   "name": "Reviewer",
   "description": "Independently assess a specific result against requirements and supporting evidence.",
   "kind": "worker",
@@ -52,7 +52,8 @@
       "workspace.read",
       "command.run",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {

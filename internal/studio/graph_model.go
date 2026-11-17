@@ -75,6 +75,56 @@ type GraphMember struct {
 	CancelRequested bool             `json:"cancel_requested"`
 	Replacement     string           `json:"replacement,omitempty"`
 	Accepted        *GraphAcceptance `json:"accepted,omitempty"`
+	// Yield is set while the current attempt waits on its blocking proposals.
+	// The attempt released its slot and claim; it is neither a result under
+	// review nor a failure.
+	Yield *GraphYield `json:"yield,omitempty"`
+	// Yields counts continuations after a yield; they do not consume retries.
+	Yields int `json:"yields,omitempty"`
+	// Proposed counts proposals submitted across all attempts of this task.
+	Proposed int `json:"proposed,omitempty"`
+	// Continuation is consumed by the next attempt, like ContinueFrom.
+	Continuation *GraphContinuation `json:"continuation,omitempty"`
+}
+
+// GraphYield binds a yielded attempt to the blocking proposals it waits on.
+type GraphYield struct {
+	RunID     string   `json:"run_id"`
+	Proposals []string `json:"proposals"`
+}
+
+// GraphContinuation tells a continued attempt why it was resumed and how its
+// proposals were reviewed.
+type GraphContinuation struct {
+	Reason    string            `json:"reason"` // yield
+	Proposals []ProposalOutcome `json:"proposals"`
+}
+type ProposalOutcome struct {
+	ID        string `json:"id"`
+	Local     string `json:"local"`
+	Outcome   string `json:"outcome"` // accepted or rejected
+	Rationale string `json:"rationale"`
+	// Tasks that fulfilled an accepted proposal and were accepted; their results
+	// are in the dependency-inputs manifest.
+	Completed []string `json:"completed,omitempty"`
+	// Tasks of an accepted proposal that were cancelled or replaced without an
+	// accepted result.
+	Abandoned []string `json:"abandoned,omitempty"`
+}
+
+// GraphProposalRecord is the kernel's record of one worker proposal and its
+// review. The trigger that reported the attempt's outcome links to it.
+type GraphProposalRecord struct {
+	ID        string   `json:"id"`
+	Local     string   `json:"local"`
+	TaskID    string   `json:"task_id"`
+	RunID     string   `json:"run_id"`
+	ResultID  string   `json:"result_id"`
+	Trigger   int64    `json:"trigger"`
+	Blocking  bool     `json:"blocking"`
+	Outcome   string   `json:"outcome,omitempty"` // accepted or rejected
+	Rationale string   `json:"rationale,omitempty"`
+	Tasks     []string `json:"tasks,omitempty"`
 }
 type GraphAcceptance struct {
 	ResultID     string    `json:"result_id,omitempty"`
@@ -115,35 +165,36 @@ type GraphReceipt struct {
 	At       time.Time         `json:"at"`
 }
 type WorkGraph struct {
-	WorkState              string                     `json:"work_state,omitempty"`
-	ServiceRunID           string                     `json:"service_run_id,omitempty"`
-	Setup                  *FrozenSetup               `json:"setup,omitempty"`
-	Result                 *GraphResult               `json:"result,omitempty"`
-	Profile                string                     `json:"profile"`
-	ID                     string                     `json:"id"`
-	Home                   string                     `json:"home"`
-	ProjectID              string                     `json:"project_id"`
-	Workspace              string                     `json:"workspace"`
-	RootTask               string                     `json:"root_task"`
-	GoalRevision           int64                      `json:"goal_revision"`
-	Revision               int64                      `json:"revision"`
-	PolicyRevision         int64                      `json:"policy_revision"`
-	OrchestratorGeneration int64                      `json:"orchestrator_generation"`
-	Activation             string                     `json:"activation"`
-	Predecessor            string                     `json:"predecessor,omitempty"`
-	Policy                 GraphPolicy                `json:"policy"`
-	Limits                 GraphLimits                `json:"limits"`
-	Members                map[string]*GraphMember    `json:"members"`
-	Expansions             map[string]*GraphExpansion `json:"expansions"`
-	Triggers               []GraphTrigger             `json:"triggers,omitempty"`
-	Cursor                 int64                      `json:"cursor"`
-	Attempts               int                        `json:"attempts"`
-	OrchestratorCalls      int                        `json:"orchestrator_calls"`
-	Receipts               map[string]GraphReceipt    `json:"receipts"`
-	Status                 string                     `json:"status"`
-	CreatedAt              time.Time                  `json:"created_at"`
-	UpdatedAt              time.Time                  `json:"updated_at"`
-	Decisions              map[string]*GraphDecision  `json:"decisions,omitempty"`
+	WorkState              string                          `json:"work_state,omitempty"`
+	ServiceRunID           string                          `json:"service_run_id,omitempty"`
+	Setup                  *FrozenSetup                    `json:"setup,omitempty"`
+	Result                 *GraphResult                    `json:"result,omitempty"`
+	Profile                string                          `json:"profile"`
+	ID                     string                          `json:"id"`
+	Home                   string                          `json:"home"`
+	ProjectID              string                          `json:"project_id"`
+	Workspace              string                          `json:"workspace"`
+	RootTask               string                          `json:"root_task"`
+	GoalRevision           int64                           `json:"goal_revision"`
+	Revision               int64                           `json:"revision"`
+	PolicyRevision         int64                           `json:"policy_revision"`
+	OrchestratorGeneration int64                           `json:"orchestrator_generation"`
+	Activation             string                          `json:"activation"`
+	Predecessor            string                          `json:"predecessor,omitempty"`
+	Policy                 GraphPolicy                     `json:"policy"`
+	Limits                 GraphLimits                     `json:"limits"`
+	Members                map[string]*GraphMember         `json:"members"`
+	Expansions             map[string]*GraphExpansion      `json:"expansions"`
+	Triggers               []GraphTrigger                  `json:"triggers,omitempty"`
+	Cursor                 int64                           `json:"cursor"`
+	Attempts               int                             `json:"attempts"`
+	OrchestratorCalls      int                             `json:"orchestrator_calls"`
+	Receipts               map[string]GraphReceipt         `json:"receipts"`
+	Status                 string                          `json:"status"`
+	CreatedAt              time.Time                       `json:"created_at"`
+	UpdatedAt              time.Time                       `json:"updated_at"`
+	Decisions              map[string]*GraphDecision       `json:"decisions,omitempty"`
+	Proposals              map[string]*GraphProposalRecord `json:"proposals,omitempty"`
 }
 type CreateGraph struct {
 	serviceRunID string
@@ -175,6 +226,7 @@ type GraphOperation struct {
 	Cursor       int64                 `json:"cursor,omitempty"`
 	Evidence     string                `json:"evidence,omitempty"`
 	Rationale    string                `json:"rationale,omitempty"`
+	Proposal     string                `json:"proposal,omitempty"`
 }
 type GraphProposal struct {
 	Profile        string               `json:"profile"`
@@ -200,6 +252,7 @@ type GraphAttempt struct {
 	Context        string             `json:"context,omitempty"`
 	Witnesses      []workpool.Witness `json:"witnesses,omitempty"`
 	AdmittedAt     *time.Time         `json:"admitted_at,omitempty"`
+	Continuation   *GraphContinuation `json:"continuation,omitempty"`
 }
 type graphChange struct {
 	Graph        WorkGraph `json:"graph"`
@@ -303,6 +356,7 @@ var graphOperationFields = map[string][]string{
 	"classify_trigger": {"trigger", "rationale"}, "seal": {"task", "cursor"}, "reopen": {"task"},
 	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task"},
 	"accept": {"task", "evidence", "rationale"}, "dismiss_decision": {"expansion", "rationale"},
+	"accept_proposal": {"proposal", "dependencies", "rationale"}, "reject_proposal": {"proposal", "rationale"},
 }
 
 func validateGraphOperation(op GraphOperation) error {

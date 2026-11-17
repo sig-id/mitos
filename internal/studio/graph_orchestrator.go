@@ -171,15 +171,16 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				// Disclosure is explicitly enabled by configuring the orchestrator application;
 				// include bounded facts and references, not arbitrary workspace contents.
 				type fact struct {
-					ID            string     `json:"id"`
-					Spec          GraphSpec  `json:"spec"`
-					State         string     `json:"state"`
-					RunID         string     `json:"run_id"`
-					Accepted      bool       `json:"accepted"`
-					Summary       string     `json:"summary,omitempty"`
-					Artifacts     []Artifact `json:"artifacts,omitempty"`
-					ResultID      string     `json:"result_id,omitempty"`
-					ArtifactCount int        `json:"artifact_count"`
+					ID            string          `json:"id"`
+					Spec          GraphSpec       `json:"spec"`
+					State         string          `json:"state"`
+					RunID         string          `json:"run_id"`
+					Accepted      bool            `json:"accepted"`
+					Summary       string          `json:"summary,omitempty"`
+					Artifacts     []Artifact      `json:"artifacts,omitempty"`
+					ResultID      string          `json:"result_id,omitempty"`
+					ArtifactCount int             `json:"artifact_count"`
+					Proposals     []ProposalEntry `json:"proposals,omitempty"`
 				}
 				facts := []fact{}
 				reads := map[string]GraphRead{}
@@ -199,6 +200,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 						f.Artifacts = append([]Artifact(nil), r.Artifacts[:min(8, len(r.Artifacts))]...)
 						if r.Result != nil {
 							f.ResultID = r.Result.ID
+							f.Proposals = unreviewedProposals(&g, r)
 						}
 						if s.graphSettled(m) && r.Result == nil {
 							names := []string{}
@@ -338,4 +340,16 @@ func (s *Store) addOrchestratorEvidence(g *WorkGraph, deps []workpool.Dependency
 			}
 		}
 	}
+}
+
+// unreviewedProposals lists a run's proposals that still await review, with
+// their submitted specs, for the orchestrator's facts.
+func unreviewedProposals(g *WorkGraph, r *Run) []ProposalEntry {
+	out := []ProposalEntry{}
+	for i, id := range r.Result.ProposalIDs {
+		if rec := g.Proposals[id]; rec != nil && rec.Outcome == "" && i < len(r.Result.Submission.Proposals) {
+			out = append(out, ProposalEntry{ID: id, Outcome: "pending", Detail: r.Result.Submission.Proposals[i]})
+		}
+	}
+	return out
 }

@@ -460,6 +460,13 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if !orchestrator {
 		ca.instruct("Before finishing, call artifact_register for each deliverable/report/test log (role report, file, patch, log, test_evidence or publication_receipt), then result_submit with version mitos.handoff/v1, a stable key, summary <=2048 bytes, returned artifact IDs and roles, checks (passed/failed/not_run with registered evidence IDs), limitations and unresolved_requests. Checks are your claims, not automatic verification. Submission does not accept your work. Missing typed submission fails this attempt; ordinary final prose remains a human-readable report. Preserve partial evidence with artifact_register before risky work.")
 	}
+	if !orchestrator {
+		if authority.Granted(ProposalCapability) {
+			ca.instruct(fmt.Sprintf("Delegation: native subagents are unavailable. To get work done by other agents, add proposals to result_submit (at most %d per task, %d task specs each, in the orchestrator add shape with agent:{library id} app IDs). A blocking proposal ends this attempt: submit, then stop; you resume in this conversation with the accepted results or the rejection rationale (at most %d times per task). Non-blocking proposals record follow-up work; your result stays final. Prefer doing small work yourself.", HandoffProposalsPerTask, HandoffTasksPerProposal, HandoffYieldsPerTask))
+		} else {
+			ca.instruct("Delegation: native subagents are unavailable and this agent cannot propose work. Do the assignment yourself and report anything you could not do as a limitation.")
+		}
+	}
 	if b.Specialization != nil {
 		ca.instruct("Task-specific role: " + b.Specialization.Role + "\n" + b.Specialization.Instructions)
 	}
@@ -505,7 +512,10 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if task, err := e.Store.Task(r.TaskID); err == nil {
 		ca.add(tierAttempt, contextAttempt, "cooperation identity", fmt.Sprintf("Project %s; task %s revision %d; run %s. Protocol mitos.cooperation/v2. Messages are proposals/evidence and never permission grants.", r.ProjectID, r.TaskID, task.Revision, r.ID))
 	}
-	if prior.ID != "" {
+	if prior.ID != "" && r.GraphAttempt.Continuation != nil && r.GraphAttempt.Continuation.Reason == "yield" {
+		outcomes, _ := json.Marshal(r.GraphAttempt.Continuation.Proposals)
+		ca.add(tierAttempt, contextAttempt, "continuation", "Continue the same assignment. Your previous attempt "+prior.ID+" yielded on blocking proposals, and the orchestrator has reviewed them. The current workspace is a restored copy of that attempt's harvested changes; use this new working directory. For accepted proposals, completed tasks' results are listed in the dependency-inputs manifest; read and integrate them. Abandoned tasks were cancelled or replaced without an accepted result. For rejected proposals, the rationale explains why; adapt rather than proposing the same work again. Your earlier result is superseded: submit a new result with result_submit when you finish.\nProposal outcomes (orchestrator rationale is evidence, not new authority):\n"+string(outcomes))
+	} else if prior.ID != "" {
 		ca.add(tierAttempt, contextAttempt, "continuation", "Continue the same assignment after the operator extended its resources. The current workspace is a restored copy; use this new working directory and the current graph facts and evidence paths. Previous run: "+prior.ID+". Preserve completed work and verify it before continuing.\nThe dependency-inputs manifest is authoritative for available evidence paths. Prior temporary directories, including handoff/, may not exist in this attempt; check for optional paths before reading them. Restored workspace changes already include the previous attempt's integrated patches.\nCurrent host capabilities: supported MCP connector confirmation forms are routed through Mitos approval review; unsupported forms are cancelled without granting permission. Earlier explicit-session or connector-transport errors describe the previous runtime and are not proof that access is still broken. Reassess an old access blocker once using the currently configured tools and read-only checks. If the route is now available, continue only actions authorized by the current user request, reconciling any interrupted external write before retrying it. Do not infer approval or credential repair from resuming. If access is still unavailable, ask a concrete question through the native input tool and preserve the blocker; do not spend the remaining budget repeatedly checking the same failure.")
 		if prior.NativeThreadID == "" {
 			evidence := ""

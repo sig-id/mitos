@@ -28,6 +28,50 @@ successful candidate. Acceptance additionally checks current revisions, exact
 producer run, integrity and request settlement. Its receipt binds `result_id`.
 An orchestrator still returns the independently validated `OrchestratorPlan`.
 
+## Proposals and yield
+
+Native subagents are disabled in both harnesses. A worker that needs
+other agents asks for them in the `proposals` field of `result_submit`, as part of
+ending its attempt. It never creates tasks, and there is no separate propose tool.
+Each proposal has:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | worker-local key, unique within the result |
+| `rationale` | why the work is needed (1–4000 bytes) |
+| `blocking` | `true`: the attempt yields and waits for the work; `false`: follow-up work, the result is final |
+| `tasks` | 1–8 application task specs in the orchestrator's `add` shape (suggestions; dependencies may only name tasks in the same proposal or existing graph tasks) |
+| `artifacts` | registered artifact IDs of this run, as evidence |
+
+The receipt's `proposal_ids` holds one kernel ID per proposal, in order.
+`result_get` lists each proposal as a `proposal` entry with that ID and its review
+outcome (`pending`, `accepted` or `rejected`); a yielded result's state is
+`yielded`. Idempotency is the result's: an identical retry returns the same
+receipt and IDs.
+
+Proposals are refused with a typed failure when:
+
+- the attempt was not granted `work.propose` (`capability_not_granted`). Without
+  the grant, the field is also absent from the advertised schema.
+- the graph has no review path (`defined` mode), or the caller is an orchestrator
+  (`proposals_unsupported`).
+- a proposal is malformed (`invalid_proposal`, with the proposal index as
+  `position`) or cites an unknown artifact (`artifact_missing`).
+- the task would exceed 4 proposals across its attempts (`proposal_limit_exceeded`),
+  or 2 yields (`yield_limit_exceeded`), or the proposed tasks exceed the graph's
+  remaining task allowance (`proposal_over_budget`).
+
+Unknown fields and other versions are refused like the rest of the submission.
+`GET /api/handoff` publishes these limits under `proposals`.
+
+A proposal is not admitted work. When the attempt finishes, its proposals are
+journaled in the same record as its outcome trigger, so the orchestrator reviews
+them with that trigger. It answers each one with `accept_proposal` or
+`reject_proposal` (see [adaptive-runtime.md](adaptive-runtime.md#yield-and-continuation)),
+and any accepted work passes normal graph validation and budgets. A blocking
+proposal's outcome reaches the proposer when it resumes: accepted work as
+dependency inputs, rejections as the reviewer's rationale.
+
 ## Tools and HTTP
 
 `GET /api/handoff` exposes the version, canonical tool schemas and implemented
@@ -36,7 +80,7 @@ limits. The Codex app-server adapter advertises the same schemas as dynamic tool
 | Tool | Input | Output |
 | --- | --- | --- |
 | `artifact_register` | relative workspace `path`, `role` | immutable descriptor |
-| `result_submit` | typed result submission | durable receipt |
+| `result_submit` | typed result submission, optionally with proposals | durable receipt with `proposal_ids` |
 | `result_get` | `run_id`, `cursor`, `limit` | result metadata, entry page, next cursor |
 | `artifact_list` | `run_id`, `cursor`, `limit` | descriptor page, next cursor |
 | `artifact_read` | `run_id`, `artifact_id`, byte `offset`, byte `limit` | descriptor, base64 `data`, next offset, complete flag |
@@ -84,6 +128,8 @@ Limits are distinct:
 
 - Registered evidence: 64 MiB/file, 128 MiB/attempt; 4,096 total retained objects
   per attempt, including runtime logs/manifests. Storage failure is explicit.
+- Proposals: 4 per task, 8 task specs per proposal, 16 KiB per proposal, 2 yields
+  per task.
 - Result summary: 2 KiB. Lists: at most 32 artifacts or 16 result entries per page,
   reduced further to keep metadata below 48 KiB after JSON escaping.
 - Read data: at most 32 KiB/call. Exact bytes are base64 encoded; UTF-8 split across

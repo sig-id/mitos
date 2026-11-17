@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v1",
   "id": "mitos.researcher",
-  "revision": 1,
+  "revision": 2,
   "name": "Researcher",
   "description": "Investigate questions and assemble traceable findings from available source material.",
   "kind": "worker",
@@ -52,7 +52,8 @@
       "workspace.read",
       "network.read",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {
