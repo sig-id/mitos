@@ -87,10 +87,9 @@ func (e *Engine) agentApplication(id string) (Application, bool) {
 	}
 	for _, d := range library {
 		if orchestratorAgentID(id) == agentAppPrefix+d.ID {
+			// Discovery stays profile-aware so a profile-installed runtime does
+			// not fail application lookup before a preset can be bound.
 			b := &AgentBinding{Definition: d, Runtime: "codex", SelectionSource: "orchestrator library"}
-			if launch, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: "codex"}); err == nil {
-				b.Executable = launch.Executable
-			}
 			if err := e.selectAgentRuntime(b); err != nil {
 				return Application{}, false
 			}

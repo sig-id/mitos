@@ -13,6 +13,9 @@ type RuntimeCandidate struct {
 	Runtime    string `json:"runtime"`
 	Available  bool   `json:"available"`
 	Executable string `json:"executable,omitempty"`
+	// Profile names the environment profile that supplied the executable when
+	// the runtime is installed through a profile override or profile PATH.
+	Profile    string `json:"profile,omitempty"`
 	Compatible bool   `json:"compatible"`
 	Reason     string `json:"reason,omitempty"`
 }
@@ -25,6 +28,31 @@ type RuntimeSelection struct {
 	Runtime    string             `json:"runtime"`
 	Candidates []RuntimeCandidate `json:"candidates"`
 	Rationale  string             `json:"rationale"`
+}
+
+// prepareRuntime finds a launchable installation for one runtime, preferring
+// the binding's own environment profile and then any registered profile, so
+// runtimes installed through a profile executable or profile PATH are not
+// misread as unavailable.
+func (e *Engine) prepareRuntime(runtime, profileID string) (agentcli.Launch, error) {
+	attempts := []agentcli.Request{{AgentID: runtime, ProfileID: profileID}}
+	if profileID != "" {
+		attempts = append(attempts, agentcli.Request{AgentID: runtime})
+	}
+	for _, req := range attempts {
+		if launch, err := e.Desk.Agents.Prepare(req); err == nil {
+			return launch, nil
+		}
+	}
+	for _, p := range e.Desk.Agents.AgentProfiles(runtime) {
+		if p.ID == profileID {
+			continue
+		}
+		if launch, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: runtime, ProfileID: p.ID}); err == nil {
+			return launch, nil
+		}
+	}
+	return agentcli.Launch{}, fmt.Errorf("%s is not installed", runtime)
 }
 
 // selectAgentRuntime validates the definition's runtime requirements against
@@ -41,9 +69,16 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 	candidates := []RuntimeCandidate{}
 	for _, runtime := range []string{"codex", "claude"} {
 		c := RuntimeCandidate{Runtime: runtime}
-		if launch, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: runtime}); err == nil {
+		// The binding's own profile is preferred for its runtime; other runtimes
+		// are discovered through any registered profile.
+		discoverProfile := ""
+		if runtime == b.Runtime {
+			discoverProfile = b.ProfileID
+		}
+		if launch, err := e.prepareRuntime(runtime, discoverProfile); err == nil {
 			c.Available = true
 			c.Executable = launch.Executable
+			c.Profile = launch.ProfileID
 		} else {
 			c.Reason = "not installed"
 		}
@@ -85,17 +120,28 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 		if b.SelectionSource != "" {
 			selection.Rationale += " (" + b.SelectionSource + ")"
 		}
+		// Profile-backed discovery fills the executable for bindings that have
+		// not been prepared by an execution preset yet.
+		if b.Executable == "" {
+			b.Executable = candidates[bound].Executable
+		}
 		b.Selection = &selection
 		return nil
 	}
 	fallback := slices.IndexFunc(candidates, func(c RuntimeCandidate) bool { return c.Available && c.Compatible })
 	if fallback >= 0 && !explicitRuntimePin(b.SelectionSource) {
 		chosen := candidates[fallback]
-		launch, err := e.Desk.Agents.Prepare(agentcli.Request{AgentID: chosen.Runtime})
+		launch, err := e.prepareRuntime(chosen.Runtime, chosen.Profile)
 		if err != nil {
 			return &agentPrerequisiteError{summary: fmt.Sprintf("Runtime %s was selected for %s but is no longer available.", chosen.Runtime, b.Definition.ID)}
 		}
-		b.Runtime, b.Executable, b.Profile, b.ProfileID, b.Preset, b.Model = chosen.Runtime, launch.Executable, nil, "", nil, ""
+		b.Runtime, b.Executable, b.Preset, b.Model = chosen.Runtime, launch.Executable, nil, ""
+		b.ProfileID = launch.ProfileID
+		profile, err := e.executionProfile(chosen.Runtime, launch.ProfileID)
+		if err != nil {
+			return &agentPrerequisiteError{summary: fmt.Sprintf("Runtime %s was selected for %s but its environment profile is unavailable.", chosen.Runtime, b.Definition.ID)}
+		}
+		b.Profile = profile
 		selection.Runtime = chosen.Runtime
 		selection.Rationale = "default runtime was incompatible; fell back to " + chosen.Runtime
 		b.Selection = &selection

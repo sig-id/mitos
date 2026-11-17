@@ -120,3 +120,47 @@ func TestRuntimeSelectionFailsWithoutInstalledRuntimes(t *testing.T) {
 		t.Fatalf("missing runtime accepted: %v", err)
 	}
 }
+
+// A runtime installed only through an environment profile's executable is a
+// valid candidate: discovery must not mark it unavailable, and the bound
+// runtime must keep its profile-backed launch instead of silently switching.
+func TestRuntimeSelectionPreservesProfileBackedInstallations(t *testing.T) {
+	e, _ := graphEngine(t, false)
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 required")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "codex-profiled")
+	if err = os.WriteFile(script, []byte("#!"+python+"\nimport sys\nsys.stdin.read()\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	empty := t.TempDir()
+	t.Setenv("PATH", empty)
+	registry, err := agentcli.New(agentcli.Builtins(), agentcli.Config{Profiles: []agentcli.Profile{{ID: "profiled", Name: "Profiled Codex", AgentID: "codex", Executable: script}}}, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Desk.Agents = registry
+
+	// A binding with the profile already chosen (as an execution preset binds
+	// it) stays on the profile-backed runtime.
+	bound := &AgentBinding{Definition: selectionDefinition(t, []string{"native_output", "tool_use"}, nil), Runtime: "codex", ProfileID: "profiled", Executable: script}
+	if err = e.selectAgentRuntime(bound); err != nil {
+		t.Fatal(err)
+	}
+	codex := bound.Selection.Candidates[0]
+	if bound.Selection.Runtime != "codex" || !codex.Available || !codex.Compatible || codex.Profile != "profiled" || codex.Executable != script {
+		t.Fatalf("profile-backed runtime not discovered: %+v", bound.Selection.Candidates)
+	}
+
+	// A binding without a profile still discovers the installation, so
+	// application lookup and default fallback keep working.
+	lookup := &AgentBinding{Definition: selectionDefinition(t, []string{"native_output", "tool_use"}, nil), Runtime: "codex"}
+	if err = e.selectAgentRuntime(lookup); err != nil {
+		t.Fatal(err)
+	}
+	if lookup.Selection.Runtime != "codex" || lookup.Selection.Candidates[0].Profile != "profiled" || lookup.Executable != script {
+		t.Fatalf("profile discovery lost: %+v", lookup.Selection.Candidates)
+	}
+}
