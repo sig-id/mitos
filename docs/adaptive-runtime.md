@@ -112,53 +112,124 @@ from `mitos.generalist`. Task-specific specializations are bounded by the base
 definition's `specialization.allow` and `max_instruction_bytes`, which the library
 summary exposes as `max_specialization_bytes`.
 
-### Execution presets and role rules
+### Task traits, harnesses and model tiers
 
-**Start coordinated work** shows **Orchestrator** and **Default worker** selectors.
-Expand **Execution presets & permitted workers** to choose each preset's coding
-agent (Codex or Claude Code), model and environment/account profile. Add multiple
-presets for the same harness to use different models or accounts. Expand **Agent
-role rules** to choose, for example, Codex for Engineer and Claude for Architect.
-Custom roles created in Agent library appear here too. **Project setup →
-Coordinated work agents → Save agent rules** saves reusable defaults in the
-project's `mitos` instructions block. Launch edits apply to that work only.
+Where a worker runs depends on four independent things:
+
+- **Role**: which agent definition does the work (Engineer, Architect…). It carries
+  instructions, context policy and authority.
+- **Nature**: what kind of work the task is: `context`, `design`, `implement`,
+  `document`, `review` or `verify`. Each worker definition declares the natures it
+  supports and a default (`natures` in `agent-definition/v2`); a task may choose
+  only a supported nature.
+- **Size**: how much work: `small`, `medium` or `large`. It sets the attempt's time
+  and turn budget.
+- **Intelligence required**: how much reasoning capability the work needs: `low`,
+  `medium` or `high`. It selects the model tier. Size and intelligence vary
+  independently: a mechanical rename across many files is large and low; a subtle
+  ten-line concurrency bug is small and high. Domain knowledge is not intelligence;
+  that belongs to role, skills and knowledge.
+
+Whoever requests a task declares its **traits**: the orchestrator in an `add`
+operation, or a worker in a proposal (same `GraphSpec` shape):
+
+```json
+"traits": {"nature": "", "size": "large", "intelligence": "low"}
+```
+
+`size` and `intelligence` are required for native agent tasks; an empty `nature`
+takes the role's default. Requesters never choose harnesses or models. The task's
+`brief.timeout_minutes` is derived from its size. A task may set `harness` to a
+permitted worker harness as an explicit override; models are never named in tasks.
+
+**Nature narrows authority.** `context` and `review` work runs without
+`workspace.write`, whatever the role may be granted; the authority receipt records
+the nature and the withheld capability. Such tasks may propose follow-up work but
+cannot yield on a blocking proposal.
+
+The execution policy (`agent-execution/v2`) separates the two decisions a former
+preset bundled:
+
+```json
+{
+  "version": "agent-execution/v2",
+  "harnesses": [
+    {"id":"code","name":"Implementation","runtime":"codex","profile_id":"",
+     "tiers":{"low":{"model":"","effort":"low"},"medium":{"model":"","effort":"medium"},"high":{"model":"","effort":"xhigh"}}},
+    {"id":"design","name":"Design","runtime":"claude","profile_id":"",
+     "tiers":{"low":{"model":"haiku","effort":"low"},"medium":{"model":"sonnet","effort":"medium"},"high":{"model":"opus","effort":"high"}}}
+  ],
+  "harness_rules": [
+    {"match":{"role":"mitos.architect"},"harness":"design"},
+    {"match":{"nature":"design"},"harness":"design"},
+    {"match":{"role":"mitos.architect","nature":"review"},"harness":"code"}
+  ],
+  "default_harness": "code",
+  "allowed_harnesses": ["code","design"],
+  "orchestrator": {"harness":"code","tier":"high"},
+  "size_budgets": {"small":{"minutes":15,"max_turns":40},"medium":{"minutes":30,"max_turns":80},"large":{"minutes":60,"max_turns":160}},
+  "context_floor": {"large":"medium"}
+}
+```
+
+1. **Harness** (Codex CLI or Claude Code, with an environment profile). Harnesses
+   that cannot run the task are filtered out first: the definition and nature must be
+   admissible on the runtime under the project's enforcement policy (for example,
+   `strict_required` with a required `workspace.write` excludes Claude, whose
+   restrictions are advisory locally). Among the rest, the most specific matching
+   `harness_rules` entry wins (role and nature beat either alone). Validation
+   refuses equal-specificity rules that overlap without a more specific rule for the
+   overlap, so rule order never decides. Without a match the `default_harness` is
+   used; if nothing eligible remains, the task is refused with the reason.
+2. **Model tier**. Within the chosen harness, `intelligence` selects the tier: a
+   model and a reasoning effort (Codex `model_reasoning_effort`: minimal…xhigh;
+   Claude `--effort`: low…max). A size's `context_floor` may raise the tier for a
+   larger context window, never lower it. An effort the harness cannot honour makes
+   the policy invalid at validation, not at launch.
+
+Size budgets set `brief.timeout_minutes` and cap the definition's `max_turns`; the
+definition's own limits and the graph's allowances still bound them.
 
 The `execution` object is accepted in personal/project runtime preferences, the
 project instructions block, automatic goals and scheduled goals. A project policy
 replaces the inherited policy as a whole; a launch policy replaces the project
-policy as a whole. For example:
+policy as a whole. Role-only preset policies (`presets`, `roles`,
+`allowed_workers`) are refused, not translated: redefine harnesses, tiers and
+rules. **Project setup → Coordinated work agents** edits the policy; **Start
+coordinated work** edits it for one launch.
 
-```json
-{
-  "presets": [
-    {"id":"implementation","name":"Implementation","runtime":"codex","model":"","profile_id":""},
-    {"id":"design","name":"Design","runtime":"claude","model":"sonnet","profile_id":""}
-  ],
-  "orchestrator":"implementation",
-  "worker":"implementation",
-  "roles":{"mitos.architect":"design","mitos.reviewer":"design"},
-  "allowed_workers":["implementation","design"]
-}
-```
+Admission refuses unknown roles, natures and harnesses, unsupported runtimes,
+efforts and unavailable profiles/executables. Model names are checked by the native
+provider at execution. Each graph freezes the policy; each admitted assignment
+freezes a `selection`: harness and the rule (or default/override) that chose it,
+tier and the trait (or floor/escalation) that chose it, the declared traits and the
+budget, plus runtime, model, effort, executable and profile configuration
+(environment **variable names**, never credential values). Assignment details show
+each decision and its reason. A changed executable/profile configuration is
+refused; credentials are resolved anew. Follow-ups inherit the previous graph's
+policy unless explicitly overridden.
 
-Worker selection is explicit task `execution_preset`, then the exact base role's
-rule, then the default worker. A specialization retains its base role's rule.
-Task choices must be in `allowed_workers`; they cannot change the orchestrator
-preset. The planner receives the frozen choices and can select permitted presets
-for individual assignments. To run both Codex and Claude implementers, allow both
-presets and request those separate assignments in the goal. A role rule establishes
-a default; it does not forbid an explicit permitted task override.
+**Escalation on retry.** A `retry` may set `escalate`:
 
-Admission refuses unknown roles/presets, unsupported harnesses and unavailable
-profiles/executables. Model names are checked by the native provider at execution.
-Each graph freezes the policy; each admitted assignment freezes the selected
-preset, selection source, runtime, model, executable and profile configuration
-(environment **variable names**, never credential values). Retrying or resuming
-retains that binding. A changed executable/profile configuration is refused;
-credentials are resolved anew. Follow-ups inherit the previous graph's choices
-unless explicitly overridden. Scheduled work retains its launch policy for each
-occurrence; omitted policies inherit current project defaults. Assignment details
-show the resolved execution choice.
+- `size` when the attempt ran out of its time or turn budget: one size up;
+- `intelligence` when its work fell short on quality: one tier up within the same
+  harness.
+
+The escalated retry continues the previous attempt's native conversation
+(`continue_from`, with an `escalation` continuation) on the larger budget or
+stronger model; conversation continuity is kept because only tier, effort and
+budget change. The harness never changes automatically, since a native
+conversation is tied to it; moving work to another harness is an explicit new
+assignment. Escalations are bounded by the retry allowance, only go up, and are
+recorded on the task.
+
+**Calibration.** `GET /api/projects/{project}/execution-calibration` groups settled
+native worker attempts by requester (`operator`, `orchestrator`, or
+`proposal:<role>` for work admitted for a worker's proposal), nature, size,
+intelligence, harness and tier. Each group reports attempts, finished and accepted
+counts, budget exhaustion, size and intelligence escalations, the budget, and
+median minutes and turns. Use it to see whether planners' estimates are calibrated
+and to tune the policy from evidence.
 
 Claude uses the bidirectional stream-json control protocol and an SDK MCP server
 over the same process pipes for the granted handoff tools. Structured orchestrator
@@ -167,6 +238,22 @@ Mitos contracts. Native delegation tools are disabled: Mitos schedules the worke
 Only Mitos's handoff MCP server is connected in this adapter; other native MCP
 connections are not imported. Codex retains its app-server transport. Pi and other
 session adapters do not yet support coordinated work and are refused here.
+
+Native delegation is removed from the tool surface of both harnesses, not
+discouraged by instructions. Claude workers launch with an explicit `--tools`
+allowlist, `--disallowedTools Agent,Task` and `--setting-sources ""`. Mitos-owned
+Codex launches (workers, structured stages and read-only investigations) pass
+`-c features.multi_agent=false -c features.multi_agent_v2=false` and run under a
+Mitos-owned `CODEX_HOME` at `<store>/native/codex/<hash of source home>/`. The
+operator's `config.toml`, feature flags, skills, plugins, rules and memories do
+not reach that home. Only `auth.json` passes through, as a symlink, so token
+refreshes write back to the operator's file. The home is stable per source home
+(the profile's `CODEX_HOME`, else `~/.codex`) because saved native threads live
+there and continuations resume them. Credentials in the environment
+(`OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENAI_BASE_URL`) pass through unchanged.
+Keyring-stored Codex credentials and custom providers that exist only in the
+operator's `config.toml` are not available to workers. Interactive desk sessions
+keep the operator's own harness settings.
 
 Claude's native tool restrictions do **not** provide OS confinement on the local
 provider. Its workspace, command and network capability receipts are advisory;
@@ -216,8 +303,13 @@ largest first; each is written in full under the attempt's `context/` directory 
 replaced by a reference to that file and its digest. `summarize_optional` is applied
 the same way, since a generated summary would change the prompt bytes on every
 attempt; `wait` refuses instead. The orchestrator's planning context is split into
-`agent_library`, `graph_state` and `remaining_allowance`; orchestrator revision 4
-budgets 131,072 characters to match the kernel's planning-context bound.
+`agent_library`, `graph_state` and `remaining_allowance`; `graph_state` is an
+append-only journal of immutable task-fact entries in commit order, compacted
+only at a fixed entry boundary, and the context receipt records the byte prefix
+each planning call shares with the previous one. Task detail (full specs,
+criteria, artifact lists) is paged on demand through the `graph_read` handoff
+tool instead of being inlined. The kernel bounds the automatic planning payload
+at 64 KiB, well under the orchestrator definition's context budget.
 
 Goal limits are 64 tasks, 96 attempts, 24 orchestrator calls, two retries per worker and
 a two-hour deadline. Rejected orchestrator proposals get at most two repair calls using
@@ -605,6 +697,62 @@ old generation, requests cancellation of superseded orchestrators, and rebuilds 
 from durable facts without resetting budgets or restarting existing workers.
 Orchestrator capacity is shared with workers. Planning is serialized per graph; the
 runtime does not hold a process slot merely to supervise children.
+
+### Yield and continuation
+
+Workers cannot spawn native subagents. A worker granted `work.propose` asks for
+work through proposals on its terminal result
+([agent-handoffs.md](agent-handoffs.md#proposals-and-yield)). This keeps two
+agentic layers: as in Erlang/OTP, the worker asks its supervisor to start a child,
+and graph validation is the admission controller.
+
+**Yielded state.** When an attempt finishes with at least one blocking proposal,
+the kernel records the proposals in `proposals` (keyed by kernel ID, with the
+outcome trigger's sequence) in the same journal record as the trigger. It sets the
+member's `yield` (`run_id` and its blocking proposal IDs) and `state: yielded`. The
+run's process outcome is still `done`, so its slot and claim are released as for
+any finished run. The member, however, is not a candidate: it cannot be accepted
+or retried, it is not a failure, and the graph view shows it as waiting.
+Non-blocking proposals are recorded the same way but leave the result reviewable
+as usual.
+
+**Proposal review.** The orchestrator sees unreviewed proposals, with their
+submitted specs, on the worker's fact. It answers each with one of two operations:
+
+- `accept_proposal` `{proposal, dependencies, rationale}`: `dependencies` (1–32)
+  name the worker tasks that fulfil it, usually tasks added in the same amendment.
+  For a blocking proposal, this is the **dependency amendment**: those dependencies
+  are appended to the yielded task's spec (its revision advances), which ordinary
+  `dependencies` amendments refuse once a task has attempts.
+- `reject_proposal` `{proposal, rationale}`.
+
+A trigger cannot be classified while its blocking proposals are unreviewed
+(`proposal_review_required`), unless the proposer was cancelled or replaced. The
+runtime classifies the reviewed triggers of an automatic orchestrator, so the plan
+must review them in the same response. Proposed specs are suggestions; admitted
+tasks pass ordinary validation, task and attempt budgets, and their own retries.
+The proposer's budget is not charged.
+
+**Continuation.** A yielded member continues once every blocking proposal is
+reviewed and each task named by an accepted proposal has settled. A task settles
+when it, or its replacement, is accepted, or when it is cancelled or replaced
+without an accepted result (abandoned). The kernel then:
+
+- drops dependencies on abandoned tasks and rewrites replaced ones to the
+  accepted replacement;
+- sets `continue_from` to the yielded run and records a `continuation` with each
+  proposal's outcome, rationale, and completed and abandoned tasks;
+- counts the cycle in `yields`.
+
+The next attempt resumes the same native thread (`ResumeThread`) in a restored
+copy of the yielded attempt's harvested workspace. Its prompt states the proposal
+outcomes, and accepted results arrive through the dependency-inputs manifest. It
+must submit a new result. Yield cycles do not consume `limits.retries`, which
+counts attempts minus yields; they still count toward the graph's attempt
+allowance.
+
+Not implemented: proposals mid-run without yielding, and a separate
+`explore`-style synchronous read-only delegation.
 
 ## Optional model decisions
 

@@ -199,11 +199,13 @@ func TestAutomaticOrchestratorWaitsForInboxAndCompletes(t *testing.T) {
 prompt=sys.stdin.read();out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'))
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
  plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Wait for the requested release signal and review its evidence.'}
  if not workers:
-  inbox=dict(ctx['inbox'],sender='remote',kind='event',type='workflow.signal',correlation='release-v1')
-  plan['operations']=[{'kind':'add','spec':{'id':'consumer','parent':ctx['root_task'],'kind':'application','required':True,'criteria':'Report the admitted release signal.','acceptance':'operator','brief':{'title':'Read release signal','intent':'Read the bound message.json and report its release.','app_id':'agent:mitos.generalist','timeout_minutes':1,'scheduling':{'deps':[{'from':'release','inbox':inbox,'guard':'inbox_received','payload':'data'}],'join':{'rule':'all'}}}}}]
+  inbox=dict(json.loads(section(prompt,'remaining_allowance'))['inbox'],sender='remote',kind='event',type='workflow.signal',correlation='release-v1')
+  plan['operations']=[{'kind':'add','spec':{'id':'consumer','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'criteria':'Report the admitted release signal.','acceptance':'operator','brief':{'title':'Read release signal','intent':'Read the bound message.json and report its release.','app_id':'agent:mitos.generalist','timeout_minutes':1,'scheduling':{'deps':[{'from':'release','inbox':inbox,'guard':'inbox_received','payload':'data'}],'join':{'rule':'all'}}}}}]
  else:
   assert workers[0]['state']=='done',workers
   plan['accept']=[{'task':workers[0]['id'],'rationale':'The saved report identifies release v1.'}]

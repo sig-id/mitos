@@ -77,7 +77,7 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 	if isOrchestratorKind(d.Kind) {
 		return Brief{}, "", errors.New("structured work runs worker definitions only")
 	}
-	if _, err := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, b.TimeoutMinutes*60); err != nil {
+	if _, err := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, b.TimeoutMinutes*60, ""); err != nil {
 		return Brief{}, "", err
 	}
 	frozen := *w
@@ -182,7 +182,10 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
-	authority, authorityErr := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, r.Brief.TimeoutMinutes*60)
+	if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
+		return err
+	}
+	authority, authorityErr := resolveAuthority(d, headlessRuntime(app.Agent.Runtime), EnforcementAdvisory, r.Brief.TimeoutMinutes*60, "")
 	receipt, _ := json.MarshalIndent(authority, "", "  ")
 	if err = e.Store.SaveArtifact(r.ID, "authority.json", receipt); err != nil {
 		return err
@@ -241,7 +244,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	defer closePreview()
 	var activity bytes.Buffer
 	options.Activity = io.MultiWriter(&activity, preview.activity)
-	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: []string{native.Executable, "app-server"}, Directory: scratch, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+	session, err := e.provider.Start(ctx, handle, compute.Command{Argv: append([]string{native.Executable}, harness.CodexArguments()...), Directory: scratch, NativeEnv: native.Env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), scratch, prompt, options)
 	}})
 	if err != nil {

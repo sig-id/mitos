@@ -118,7 +118,7 @@ func TestAgentLibraryRejectsUnversionedOrTamperedStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{
-		"unversioned": strings.Replace(string(raw), `"profile": "agent-library-store/v1",`, "", 1),
+		"unversioned": strings.Replace(string(raw), `"profile": "agent-library-store/v2",`, "", 1),
 		"tampered":    strings.Replace(string(raw), "Seed instructions.", "Other instructions.", 1),
 	} {
 		if err = os.WriteFile(file, []byte(content), 0600); err != nil {

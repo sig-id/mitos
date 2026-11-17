@@ -11,6 +11,7 @@ import (
 	"mitos/internal/compute"
 	"mitos/internal/decision"
 	"mitos/internal/desk"
+	"mitos/internal/harness"
 	"mitos/internal/messaging"
 	workspacefs "mitos/internal/workspace"
 	"os"
@@ -544,6 +545,13 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		message = "The time limit was reached. Review the output and try again with a longer limit."
+	}
+	// Budget exhaustion is recorded structurally so calibration never scrapes
+	// adapter-specific summary text.
+	var steps *harness.TurnLimitError
+	if errors.As(err, &steps) {
+		message = steps.Error()
+		_ = e.Store.RecordEvidence(r.ID, "execution_budget_exhausted", "The agent exhausted its model-step allowance.", map[string]int{"limit": steps.Limit})
 	}
 	_ = e.Store.Transition(r.ID, "run_failed", "failed", "Needs a new attempt", message)
 }

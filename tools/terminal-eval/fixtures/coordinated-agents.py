@@ -40,12 +40,15 @@ def execute(prompt, orchestrator):
         context = json.loads(section(prompt, 'graph_state'))
         library = json.loads(section(prompt, 'agent_library'))
         policy = library['execution_policy']
-        assert next(p for p in policy['presets'] if p['id']==policy['roles']['mitos.architect'])['runtime'] == 'claude'
-        workers = [f for f in context['facts'] if f['spec']['kind'] == 'application']
+        rule = next(r for r in policy['harness_rules'] if r['match'].get('role') == 'mitos.architect')
+        assert next(h for h in policy['harnesses'] if h['id'] == rule['harness'])['runtime'] == 'claude'
+        latest = {}
+        for entry in context['journal']: latest[entry['task']] = entry
+        workers = [{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind'] == 'application']
         plan = {'explanation':'Read fixture evidence.','operations':[],'accept':[],'complete':bool(workers),'result':{'title':'','markdown':'','source_tasks':[],'items':[]}}
         if not workers:
             for role in ['engineer','architect']:
-                plan['operations'].append({'kind':'add','spec':{'id':role,'parent':context['root_task'],'kind':'application','required':True,'criteria':'Produce evidence.','acceptance':'operator','brief':{'title':'Fixture '+role,'intent':'Report on the assignment.','app_id':'agent:mitos.'+role,'timeout_minutes':1}}})
+                plan['operations'].append({'kind':'add','spec':{'id':role,'parent':context['root_task'],'kind':'application','required':True,'criteria':'Produce evidence.','acceptance':'operator','traits':{'nature':'','size':'small','intelligence':'low'},'brief':{'title':'Fixture '+role,'intent':'Report on the assignment.','app_id':'agent:mitos.'+role,'timeout_minutes':1}}})
         else:
             assert len(workers) == 2, workers
             for f in workers:

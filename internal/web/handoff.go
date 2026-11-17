@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mitos/agents"
 	"mitos/internal/studio"
 	"net/http"
 )
 
 func (s *Server) handoffRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/handoff", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"version": studio.HandoffVersion, "tools": studio.HandoffTools(), "read_bytes": studio.HandoffReadLimit, "response_bytes": studio.HandoffResponseLimit, "retrieval_bytes_per_attempt": studio.HandoffRetrievalBudget, "token_enforcement": "unsupported", "retention": "until_store_deleted"})
+		writeJSON(w, 200, map[string]any{"version": studio.HandoffVersion, "tools": studio.HandoffTools(), "read_bytes": studio.HandoffReadLimit, "response_bytes": studio.HandoffResponseLimit, "retrieval_bytes_per_attempt": studio.HandoffRetrievalBudget, "token_enforcement": "unsupported", "retention": "until_store_deleted", "proposals": map[string]any{"capability": studio.ProposalCapability, "per_task": studio.HandoffProposalsPerTask, "tasks_per_proposal": studio.HandoffTasksPerProposal, "yields_per_task": studio.HandoffYieldsPerTask, "review_operations": []string{"accept_proposal", "reject_proposal"}, "task_traits": map[string]any{"required": []string{"size", "intelligence"}, "natures": agents.Natures, "sizes": studio.TaskSizes, "intelligence": studio.TaskIntelligences}}})
 	})
 	// Agent requests carry an existing leased session token; producer identity and
 	// workspace come from that binding, not body fields supplied by the model.

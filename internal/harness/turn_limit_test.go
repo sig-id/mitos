@@ -61,3 +61,27 @@ func TestCodexStopsAtModelStepLimit(t *testing.T) {
 		t.Fatalf("zero must mean unbounded: %v", err)
 	}
 }
+
+// Claude reports model-step exhaustion through the same structured marker as
+// Codex so admission records budget exhaustion without scraping summaries.
+func TestClaudeStopsAtModelStepLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, server := net.Pipe()
+	defer server.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- RunClaude(ctx, &claudeTestBroker{}, client, io.Discard, "/work", "Prompt", CodexOptions{MaxTurns: 1})
+	}()
+	scanner := bufio.NewScanner(server)
+	scanner.Scan() // init control request
+	fmt.Fprintln(server, `{"type":"control_response","response":{"request_id":"mitos-init","subtype":"success"}}`)
+	scanner.Scan() // prompt as user message
+	fmt.Fprintln(server, `{"type":"system","subtype":"init","session_id":"thread"}`)
+	fmt.Fprintln(server, `{"type":"assistant","message":{"id":"a","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo hi"}}]}}`)
+	fmt.Fprintln(server, `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"hi"}]}}`)
+	var limit *TurnLimitError
+	if err := <-done; !errors.As(err, &limit) || limit.Limit != 1 {
+		t.Fatalf("claude limit not enforced structurally: %v", err)
+	}
+}

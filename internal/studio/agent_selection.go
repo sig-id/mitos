@@ -117,25 +117,29 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 	if bound >= 0 && candidates[bound].Available && candidates[bound].Compatible {
 		selection.Runtime = b.Runtime
 		selection.Rationale = b.Runtime + " satisfies runtime.requires"
-		if b.SelectionSource != "" {
-			selection.Rationale += " (" + b.SelectionSource + ")"
+		if pinned := runtimePinned(b); pinned {
+			selection.Rationale += " (explicitly bound)"
 		}
 		// Profile-backed discovery fills the executable for bindings that have
 		// not been prepared by an execution preset yet.
 		if b.Executable == "" {
 			b.Executable = candidates[bound].Executable
 		}
-		b.Selection = &selection
+		b.RuntimeSelection = &selection
 		return nil
 	}
 	fallback := slices.IndexFunc(candidates, func(c RuntimeCandidate) bool { return c.Available && c.Compatible })
-	if fallback >= 0 && !explicitRuntimePin(b.SelectionSource) {
+	if fallback >= 0 && !runtimePinned(b) {
 		chosen := candidates[fallback]
 		launch, err := e.prepareRuntime(chosen.Runtime, chosen.Profile)
 		if err != nil {
 			return &agentPrerequisiteError{summary: fmt.Sprintf("Runtime %s was selected for %s but is no longer available.", chosen.Runtime, b.Definition.ID)}
 		}
-		b.Runtime, b.Executable, b.Preset, b.Model = chosen.Runtime, launch.Executable, nil, ""
+		// The frozen harness and tier selection named the old runtime's
+		// harness, so a runtime fallback drops it rather than misreporting the
+		// model and effort actually used.
+		b.Runtime, b.Executable, b.Model, b.Effort = chosen.Runtime, launch.Executable, "", ""
+		b.Selection = nil
 		b.ProfileID = launch.ProfileID
 		profile, err := e.executionProfile(chosen.Runtime, launch.ProfileID)
 		if err != nil {
@@ -144,7 +148,7 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 		b.Profile = profile
 		selection.Runtime = chosen.Runtime
 		selection.Rationale = "default runtime was incompatible; fell back to " + chosen.Runtime
-		b.Selection = &selection
+		b.RuntimeSelection = &selection
 		return nil
 	}
 	if bound >= 0 && !candidates[bound].Compatible {
@@ -156,11 +160,20 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 	return &agentPrerequisiteError{summary: fmt.Sprintf("No installed runtime provides the features %s requires (%s). Install a compatible coding agent.", b.Definition.ID, strings.Join(m.Runtime.Requires, ", "))}
 }
 
-// explicitRuntimePin reports whether the runtime was chosen by an explicit
-// preset, role rule or task selection; implicit defaults may fall back to a
-// compatible installed runtime instead of refusing.
-func explicitRuntimePin(source string) bool {
-	return source == "role rule" || source == "task selection" || source == "orchestrator setting"
+// runtimePinned reports whether the runtime was chosen explicitly — a harness
+// rule, task harness choice or the orchestrator setting — rather than a worker
+// default; implicit defaults may fall back to a compatible installed runtime
+// instead of refusing.
+func runtimePinned(b *AgentBinding) bool {
+	if b.Selection == nil {
+		return false
+	}
+	switch b.Selection.HarnessSource {
+	case "", "worker default":
+		return false
+	default:
+		return true
+	}
 }
 
 func summarizeCandidates(candidates []RuntimeCandidate) string {

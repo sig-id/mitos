@@ -18,6 +18,19 @@ const HandoffResponseLimit = 64 << 10
 const HandoffRetrievalBudget = 2 << 20
 const handoffArtifactLimit = 4096
 
+// Proposal limits. Each review costs an orchestrator call, so one worker cannot
+// starve planning with a stream of proposals or yield cycles.
+const (
+	HandoffProposalsPerTask = 4 // proposals across all attempts of one task
+	HandoffTasksPerProposal = 8 // task specs in one proposal
+	HandoffYieldsPerTask    = 2 // blocking yields (continuations) per task
+	handoffProposalBytes    = 16 << 10
+)
+
+// ProposalCapability gates proposals on result_submit. Without it the field is
+// absent from the advertised schema and a result carrying proposals is refused.
+const ProposalCapability = "work.propose"
+
 type ResultArtifact struct {
 	ArtifactID string `json:"artifact_id"`
 	Role       string `json:"role"`
@@ -35,6 +48,20 @@ type ResultSubmission struct {
 	Checks             []ResultCheck    `json:"checks"`
 	Limitations        []string         `json:"limitations"`
 	UnresolvedRequests []string         `json:"unresolved_requests"`
+	Proposals          []ResultProposal `json:"proposals"`
+}
+
+// ResultProposal asks the orchestrator for new work as part of ending an
+// attempt. Workers never create tasks: the specs use the orchestrator's add
+// shape, and the orchestrator accepts, reshapes or rejects them. A blocking
+// proposal makes the attempt yield: it releases its slot and is continued in
+// the same native conversation once the proposal settles.
+type ResultProposal struct {
+	ID        string      `json:"id"`
+	Rationale string      `json:"rationale"`
+	Blocking  bool        `json:"blocking"`
+	Tasks     []GraphSpec `json:"tasks"`
+	Artifacts []string    `json:"artifacts"`
 }
 type ResultReceipt struct {
 	ID         string           `json:"id"`
@@ -46,6 +73,8 @@ type ResultReceipt struct {
 	At         time.Time        `json:"at"`
 	Digest     string           `json:"digest"`
 	Submission ResultSubmission `json:"submission"`
+	// ProposalIDs are kernel identities, one per submitted proposal in order.
+	ProposalIDs []string `json:"proposal_ids,omitempty"`
 }
 type ArtifactDescriptor struct {
 	ID           string `json:"id"`
@@ -66,6 +95,15 @@ type ArtifactRegister struct {
 }
 type ArtifactList struct {
 	RunID  string `json:"run_id"`
+	Cursor int    `json:"cursor"`
+	Limit  int    `json:"limit"`
+}
+
+// GraphTaskRead pages bounded task detail from the caller's graph. The inline
+// planning journal carries states only; specs, criteria and artifact lists are
+// retrieved through this tool by orchestrator attempts.
+type GraphTaskRead struct {
+	Task   string `json:"task"`
 	Cursor int    `json:"cursor"`
 	Limit  int    `json:"limit"`
 }
@@ -126,13 +164,14 @@ func HandoffTools() []harness.DynamicTool {
 		typ               reflect.Type
 	}{
 		{"result_get", "Read a typed result receipt, review state, artifact references, checks, limitations and unresolved requests in bounded pages. Use cursor 0 and limit 1..16. Review all pages before accepting.", reflect.TypeFor[ResultRead]()},
+		{"graph_read", "Read bounded task detail (spec, criteria, brief, scheduling, current run, result, first artifacts) from your graph. Use task for one member, or cursor 0 and limit 1..16 to page. The inline planning journal carries immutable states only.", reflect.TypeFor[GraphTaskRead]()},
 		{"cooperation_submit", "Record a mitos.cooperation/v2 request, answer or cancellation. Resolver IDs bind exact current attempts in this graph. Only acceptance blocking is supported. Approval messages reference canonical decisions and grant no permissions.", reflect.TypeFor[CooperationSubmission]()},
 		{"cooperation_list", "List your requests and requests addressed to your exact attempt. Use cursor 0 and limit 1..16. Re-list from 0 to refresh request states.", reflect.TypeFor[CooperationList]()},
 		{"artifact_register", "Retain a regular workspace file as immutable evidence. Returns its artifact ID. Maximum 64 MiB per file.", reflect.TypeFor[ArtifactRegister]()},
 		{"artifact_list", "List retained artifacts for your run or an explicitly granted producer run. Use cursor 0 and limit 1..32. Large artifacts remain discoverable.", reflect.TypeFor[ArtifactList]()},
 		{"artifact_read", "Read exact bytes (base64 data), at offset with limit 1..32768. next_offset is null only at EOF. A 2 MiB cumulative retrieval budget applies per attempt; this is not a token budget.", reflect.TypeFor[ArtifactRead]()},
 		{"artifact_search", "Search a literal UTF-8 query (1..256 bytes), returning byte offsets. Use cursor 0 and limit 1..32; follow next_cursor even when no matches are returned.", reflect.TypeFor[ArtifactSearch]()},
-		{"result_submit", "Submit one immutable typed result with version mitos.handoff/v1, an idempotency key, <=2 KiB summary, registered artifact IDs, checks (passed/failed/not_run), limitations and unresolved request IDs. Submission is not acceptance.", reflect.TypeFor[ResultSubmission]()},
+		{"result_submit", "Submit one immutable typed result with version mitos.handoff/v1, an idempotency key, <=2 KiB summary, registered artifact IDs, checks (passed/failed/not_run), limitations and unresolved request IDs. Submission is not acceptance. This ends your attempt's work. Do not spawn subagents: to delegate, add proposals (unique id, rationale, 1-8 application task specs in the orchestrator add shape, optional registered artifact IDs as evidence). A blocking proposal means you yield: stop after submitting; you are resumed in this conversation with the accepted results or the rejection rationale. Non-blocking proposals are follow-up work you noticed; the result is otherwise final. Use an empty list when you need nothing.", reflect.TypeFor[ResultSubmission]()},
 	}
 	out := []harness.DynamicTool{}
 	for _, spec := range specs {
@@ -173,6 +212,12 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 		return e.handoffCooperation(run, raw)
 	case "cooperation_list":
 		return e.handoffRequests(run, raw)
+	case "graph_read":
+		var in GraphTaskRead
+		if err := decodeHandoff(raw, &in); err != nil {
+			return nil, err
+		}
+		return e.Store.graphTaskRead(run, in)
 	case "artifact_register":
 		var in ArtifactRegister
 		if err := decodeHandoff(raw, &in); err != nil {
@@ -184,11 +229,17 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 		if err := decodeHandoff(raw, &in); err != nil {
 			return nil, err
 		}
+		if len(in.Proposals) > 0 && !e.Store.runGranted(run, ProposalCapability) {
+			return nil, &HandoffFailure{Code: "capability_not_granted", Detail: "proposals require the " + ProposalCapability + " capability"}
+		}
+		if err := e.validateProposalExecution(run, in.Proposals); err != nil {
+			return nil, err
+		}
 		receipt, err := e.Store.submitResult(run, in)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"id": receipt.ID, "run_id": receipt.RunID, "revision": receipt.Revision, "seq": receipt.Seq, "at": receipt.At, "digest": receipt.Digest}, nil
+		return map[string]any{"id": receipt.ID, "run_id": receipt.RunID, "revision": receipt.Revision, "seq": receipt.Seq, "at": receipt.At, "digest": receipt.Digest, "proposal_ids": receipt.ProposalIDs}, nil
 	case "artifact_list":
 		var in ArtifactList
 		if err := decodeHandoff(raw, &in); err != nil {
@@ -336,6 +387,14 @@ type ResultEntry struct {
 	Artifact *ResultArtifact `json:"artifact,omitempty"`
 	Check    *ResultCheck    `json:"check,omitempty"`
 	Text     string          `json:"text,omitempty"`
+	Proposal *ProposalEntry  `json:"proposal,omitempty"`
+}
+
+// ProposalEntry is a submitted proposal with its kernel identity and review.
+type ProposalEntry struct {
+	ID      string         `json:"id"`
+	Outcome string         `json:"outcome"`
+	Detail  ResultProposal `json:"detail"`
 }
 type ResultPage struct {
 	ID       string        `json:"id"`

@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.tester",
-  "revision": 1,
+  "revision": 3,
   "name": "Tester",
   "description": "Design or execute focused checks for the assigned behavior and report reproducible evidence.",
   "kind": "worker",
@@ -15,6 +15,10 @@
       "Treating an unrun test as success",
       "Changing acceptance criteria to make a failure disappear"
     ]
+  },
+  "natures": {
+    "supported": ["verify", "context"],
+    "default": "verify"
   },
   "instructions": {
     "path": "instructions.md",
@@ -55,7 +59,8 @@
     "optional": [
       "workspace.write",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {

@@ -91,7 +91,7 @@ else:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Brief.Workspace != "" || r.Brief.Structured.Definition != "mitos.generalist@2" || r.Brief.Structured.Digest == "" {
+	if r.Brief.Workspace != "" || r.Brief.Structured.Definition != "mitos.generalist@4" || r.Brief.Structured.Digest == "" {
 		t.Fatalf("admission did not freeze a headless binding: %+v", r.Brief)
 	}
 	replay, err := e.Launch(structuredBrief("s1-answer", "agent:mitos.generalist"), "")

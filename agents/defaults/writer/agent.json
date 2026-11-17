@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.writer",
-  "revision": 1,
+  "revision": 3,
   "name": "Writer",
   "description": "Create clear, accurate documentation or synthesis for the requested audience.",
   "kind": "worker",
@@ -15,6 +15,10 @@
       "Presenting planned features as shipped",
       "Publishing to an external audience without authorization"
     ]
+  },
+  "natures": {
+    "supported": ["document", "context"],
+    "default": "document"
   },
   "instructions": {
     "path": "instructions.md",
@@ -52,7 +56,8 @@
       "workspace.read",
       "workspace.write",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {

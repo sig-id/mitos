@@ -24,11 +24,13 @@ prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'))
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
  plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:
   for i in range(2):
-   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
+   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
  else:
   inputs=json.loads(section(prompt,'selected_artifacts','[]'))
   assert len(inputs)==0,inputs
@@ -421,9 +423,11 @@ func TestAutomaticRepairsFailedWorker(t *testing.T) {
 	e, req := automaticScriptEngine(t, `import sys,json,pathlib
 prompt=sys.stdin.read();out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(section(prompt,'graph_state'));workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ ctx=json.loads(section(prompt,'graph_state'));latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
  p={'explanation':'Inspect evidence and repair the failed attempt.','operations':[],'accept':[],'complete':False}
- if not workers:p['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Report 42','brief':{'title':'Produce answer','intent':'Produce an answer','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
+ if not workers:p['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Report 42','brief':{'title':'Produce answer','intent':'Produce an answer','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  elif workers[0]['state']=='failed':p['operations']=[{'kind':'retry','task':workers[0]['id']}]
  else:p['accept']=[{'task':workers[0]['id'],'rationale':'The saved report contains 42.'}];p['complete']=True
  if p['complete']:p['result']={'title':'Answer','markdown':'The answer is 42.','source_tasks':[workers[0]['id']]}
@@ -458,6 +462,111 @@ else:
 				t.Fatal("prior failure lost")
 			}
 		}
+	}
+}
+
+// A native reviewer that rewrites its bound, read-only dependency copy after
+// reading it must park with a durable integrity reason, keep its evidence, and
+// block every acceptance path for the graph.
+func TestAutomaticRejectsMutatedNativeDependencyCopies(t *testing.T) {
+	e, req := automaticScriptEngine(t, `import json,pathlib,sys,os
+prompt=sys.stdin.read()
+out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
+if '--output-schema' in sys.argv:
+ ctx=json.loads(section(prompt,'graph_state'))
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[e for e in latest.values() if e['kind']=='application']
+ plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':False}
+ if not workers:
+  for i in range(2):
+   plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
+ out.write_text(json.dumps(plan))
+else:
+ if 'Check upstream patch and evidence.' in prompt:
+  inputs=json.loads(section(prompt,'selected_artifacts','[]'))
+  assert len(inputs)==1,inputs
+  bound=pathlib.Path(inputs[0]['directory'],'report.md')
+  assert 'Result' in bound.read_text()
+  os.chmod(bound,0o644)
+  bound.write_text('AUDIT: mutated dependency after materialization')
+ else:
+  pathlib.Path('answer.txt').write_text('42\n')
+ out.write_text('# Result\n\nThe answer is **42**.\n\nEvidence checked.')
+print('native execution log')
+`)
+	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "mutated-dependency", ProjectID: req.ProjectID, Goal: "Produce and review the answer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unified := time.Now().Add(90 * time.Second)
+	var reviewer Run
+	for time.Now().Before(unified) {
+		g, _ = e.Store.Graph(g.ID)
+		for _, m := range g.Members {
+			if m.OrchestratorFor != "" || m.Spec.Kind != "application" || m.Spec.Brief.Title != "Review change" || m.CurrentRunID == "" {
+				continue
+			}
+			r, _ := e.Store.Get(m.CurrentRunID)
+			if r.Status == "parked" {
+				reviewer = r
+			}
+		}
+		if reviewer.ID != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if reviewer.ID == "" {
+		t.Fatal("mutated dependency copy was accepted or lost")
+	}
+	if reviewer.Decision == nil || reviewer.Decision.ReasonSignal != "dependency_inputs_changed" {
+		t.Fatalf("integrity reason missing: %+v", reviewer.Decision)
+	}
+	for _, name := range []string{"output.txt", "report.md", "changes.patch", "workspace.tar.gz", "dependency-inputs.json"} {
+		if _, err := e.Store.Artifact(reviewer.ID, name); err != nil {
+			t.Fatalf("evidence %s not retained: %v", name, err)
+		}
+	}
+	bound, err := filepath.Glob(filepath.Join(e.Store.Dir(), "workspaces", reviewer.ID, "inputs", "*", "report.md"))
+	if err != nil || len(bound) != 1 {
+		t.Fatalf("bound input copy not found: %v %v", bound, err)
+	}
+	mutated, err := os.ReadFile(bound[0])
+	if err != nil || string(mutated) != "AUDIT: mutated dependency after materialization" {
+		t.Fatalf("mutated copy not inspectable: %q %v", mutated, err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	if g.Status == "accepted" {
+		t.Fatal("graph accepted a member with changed dependency inputs")
+	}
+	var reviewerID string
+	for id, m := range g.Members {
+		if m.OrchestratorFor == "" && m.Spec.Kind == "application" && m.Spec.Brief.Title == "Review change" {
+			reviewerID = id
+		}
+	}
+	if reviewerID == "" {
+		t.Fatal("reviewer member missing")
+	}
+	// Acceptance proposals carry the matching read witnesses so the requests
+	// exercise the acceptance guards themselves, not proposal read fencing.
+	memberAccept := proposal(g, "accept-mutated", GraphOperation{Kind: "accept", Task: reviewerID, Evidence: "mutated evidence", Rationale: "reviewed"})
+	if m := g.Members[reviewerID]; m != nil {
+		memberAccept.Reads = map[string]GraphRead{reviewerID: {Specification: m.Revision, Fact: m.FactRevision}}
+	}
+	if _, _, err = e.AmendGraph(memberAccept); err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("operator accepted a member with changed dependency inputs: %v", err)
+	}
+	rootAccept := proposal(g, "accept-root", GraphOperation{Kind: "accept", Task: g.RootTask, Evidence: "mutated evidence", Rationale: "reviewed"})
+	rootAccept.Reads = map[string]GraphRead{}
+	for tid, m := range g.Members {
+		if tid == g.RootTask || graphDescendant(&g, tid, g.RootTask) {
+			rootAccept.Reads[tid] = GraphRead{Specification: m.Revision, Fact: m.FactRevision}
+		}
+	}
+	if _, _, err = e.AmendGraph(rootAccept); err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("root accepted while a required member is unaccepted: %v", err)
 	}
 }
 
@@ -521,10 +630,12 @@ prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
  ctx=json.loads(section(prompt,'graph_state'))
- workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ latest={}
+ for e in ctx['journal']:latest[e['task']]=e
+ workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
  plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Read retained report through bounded tools.','result':{'title':'','markdown':'','source_tasks':[],'items':[]}}
  if not workers:
-  plan['operations']=[{'kind':'add','spec':{'id':'audit','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce an independently readable large report.','brief':{'title':'Audit evidence','intent':'fixture-manual-submit: produce report','app_id':'agent:mitos.engineer','timeout_minutes':1}}}]
+  plan['operations']=[{'kind':'add','spec':{'id':'audit','parent':ctx['root_task'],'kind':'application','traits':{'nature':'','size':'small','intelligence':'low'},'required':True,'acceptance':'operator','criteria':'Produce an independently readable large report.','brief':{'title':'Audit evidence','intent':'fixture-manual-submit: produce report','app_id':'agent:mitos.engineer','timeout_minutes':1}}}]
  else:
   assert len(workers)==1,workers
   worker=workers[0]

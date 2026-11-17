@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.researcher",
-  "revision": 1,
+  "revision": 3,
   "name": "Researcher",
   "description": "Investigate questions and assemble traceable findings from available source material.",
   "kind": "worker",
@@ -15,6 +15,10 @@
       "Making unrequested implementation changes",
       "Treating an opinion as verified domain knowledge"
     ]
+  },
+  "natures": {
+    "supported": ["context", "review"],
+    "default": "context"
   },
   "instructions": {
     "path": "instructions.md",
@@ -52,7 +56,8 @@
       "workspace.read",
       "network.read",
       "artifact.read",
-      "artifact.write"
+      "artifact.write",
+      "work.propose"
     ]
   },
   "limits": {
