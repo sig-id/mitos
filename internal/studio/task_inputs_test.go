@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,5 +328,54 @@ func TestTaskInputRacesWaitRegistrationWithoutLostWake(t *testing.T) {
 		if err = e.Application(p).Cancel(task.CurrentRunID); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// A resumed attempt whose Task accumulated many valid inputs must still fit the
+// agent's context budget: the page is trimmed from the tail with HasMore kept,
+// so assembly succeeds and the worker consumes the backlog incrementally.
+func TestWorkerContextSizesInputPageToDefinitionBudget(t *testing.T) {
+	e, _ := automaticScriptEngine(t, `print('unused')`)
+	e.stop()
+	e.wg.Wait()
+	p, _ := serviceTestPrincipal(t, e.Store, "backlog-app", "tenant", true)
+	token, identity := testWorker(t, e, "backlog-wait-worker")
+	r, err := e.Application(p).Admit(waitingBrief("backlog"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := strings.Repeat("x", 2048)
+	for i := range 48 {
+		if _, err = e.Application(p).AppendInput(r.TaskID, TaskInputRequest{Key: fmt.Sprintf("input-%02d", i), Data: json.RawMessage(`{"note":"` + big + `"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binding := testWorkerClaim(t, e, token, identity, r.ID, "claim-backlog")
+	assignment, err := e.WorkerContext(token, binding)
+	if err != nil {
+		t.Fatalf("large input backlog failed context assembly: %v", err)
+	}
+	if len(assignment.Inputs.Inputs) == 0 || len(assignment.Inputs.Inputs) >= 48 {
+		t.Fatalf("input page was not sized to the budget: %d inputs", len(assignment.Inputs.Inputs))
+	}
+	if !assignment.Inputs.HasMore {
+		t.Fatal("has_more lost: the worker cannot consume the backlog incrementally")
+	}
+	if assignment.Inputs.Next <= 0 || assignment.Inputs.Next >= int64(len(assignment.Inputs.Inputs))+1 {
+		t.Fatalf("cursor regressed incorrectly: next=%d inputs=%d", assignment.Inputs.Next, len(assignment.Inputs.Inputs))
+	}
+	// The rendered prompt stays inside the definition's declared budget.
+	var receipt ContextReceipt
+	if err = json.Unmarshal(assignment.Artifacts["context.json"], &receipt); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, section := range receipt.Sections {
+		if section.Included {
+			total += section.Characters
+		}
+	}
+	if total > receipt.Budget {
+		t.Fatalf("assembled context %d exceeds budget %d", total, receipt.Budget)
 	}
 }
