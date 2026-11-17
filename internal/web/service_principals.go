@@ -9,6 +9,28 @@ import (
 )
 
 func (s *Server) principalRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/workers", func(w http.ResponseWriter, r *http.Request) {
+		var in studio.WorkerCredential
+		if deskJSON(r, &in) != nil {
+			writeJSON(w, 400, map[string]string{"error": "invalid_worker"})
+			return
+		}
+		in.Local = false
+		p, token, err := s.engine.Store.CreateWorkerCredential(in, decision.LocalOperator())
+		if err != nil {
+			writeJSON(w, 422, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 201, map[string]any{"worker": p, "token": token})
+	})
+	mux.HandleFunc("DELETE /api/workers/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.engine.Store.RevokeWorker(r.PathValue("id"), decision.LocalOperator()); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "not_found"})
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"revoked": true})
+	})
+
 	mux.HandleFunc("GET /api/service-principals", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, s.engine.Store.ServicePrincipals(decision.LocalOperator()))
 	})

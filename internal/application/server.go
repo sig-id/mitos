@@ -14,16 +14,18 @@ import (
 	"mitos/internal/apiversion"
 	"mitos/internal/decision"
 	"mitos/internal/studio"
+	"mitos/internal/workerapi"
 )
 
 type Server struct {
+	worker       http.Handler
 	authenticate func(string) (decision.Principal, error)
 	as           func(decision.Principal) *studio.ApplicationSession
 }
 type principalKey struct{}
 
 func New(engine *studio.Engine) *Server {
-	return &Server{authenticate: engine.Store.AuthenticateServicePrincipal, as: engine.Application}
+	return &Server{worker: workerapi.Server{Engine: engine}, authenticate: engine.Store.AuthenticateServicePrincipal, as: engine.Application}
 }
 func Principal(ctx context.Context) (decision.Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(decision.Principal)
@@ -55,6 +57,10 @@ func fail(w http.ResponseWriter, err error) {
 	reply(w, status, map[string]string{"error": code})
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/worker/") {
+		s.worker.ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

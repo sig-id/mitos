@@ -14,6 +14,7 @@ import (
 	"mitos/internal/fleet"
 	"mitos/internal/messaging"
 	"mitos/internal/service"
+	"mitos/internal/structuredworker"
 	"mitos/internal/workpool"
 	"os"
 	"path/filepath"
@@ -23,6 +24,14 @@ import (
 )
 
 type Store struct {
+	workerIncarnations     map[string]bool
+	structuredCheckpoints  map[string]StructuredCheckpoint
+	workerOutbox           map[string]WorkerOutbox
+	workers                map[string]WorkerCredential
+	workerRegistrations    map[string]workerRegistration
+	workerLeases           map[string]structuredworker.LeaseRecord
+	workerGenerations      map[string]uint64
+	workerReceipts         map[string]workerReceipt
 	frozenAgents           atomic.Pointer[map[string]agents.Definition]
 	runtimePolicy          *RuntimePolicy
 	tenantScheduler        TenantScheduler
@@ -144,6 +153,12 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.Worker != nil {
+		s.applyWorker(c.Worker)
+		if e.RunID == "" {
+			return nil
+		}
 	}
 	if c.RuntimePolicy != nil {
 		copy := graphClone(*c.RuntimePolicy)
@@ -315,6 +330,24 @@ func (s *Store) apply(e Event) error {
 			s.pools = s.configuredPools()
 		}
 		s.pools[c.Pool.ID] = *c.Pool
+		return nil
+	}
+	if c.StructuredDefinition != nil {
+		r := s.runs[e.RunID]
+		if r == nil || r.Brief.Structured == nil {
+			return errors.New("structured definition hydration target missing")
+		}
+		if r.Brief.Structured.Frozen != nil {
+			return errors.New("structured definition already frozen")
+		}
+		d := graphClone(*c.StructuredDefinition)
+		if ref := fmt.Sprintf("%s@%d", d.ID, d.Revision); ref != r.Brief.Structured.Definition || d.Digest != r.Brief.Structured.Digest {
+			return errors.New("hydrated structured agent does not match admission")
+		}
+		r.Brief.Structured.Frozen = &d
+		if err := s.freezeStructuredAgent(r); err != nil {
+			return err
+		}
 		return nil
 	}
 	if c.Run != nil {

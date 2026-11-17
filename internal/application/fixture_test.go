@@ -89,6 +89,12 @@ func fixtureCall(t *testing.T, client *http.Client, method, url, token string, b
 // Both backends run as independent subprocesses. Each fault kills the app at a
 // real durability boundary and then kills the runtime without clean shutdown.
 func TestIndependentApplicationCrashMatrix(t *testing.T) {
+	runIndependentApplicationCrashMatrix(t, false, []string{"before_admission", "after_admission", "before_publication", "after_publication"})
+}
+func TestIndependentWorkerApplicationSmoke(t *testing.T) {
+	runIndependentApplicationCrashMatrix(t, true, []string{"after_publication"})
+}
+func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, points []string) {
 	if testing.Short() {
 		t.Skip("subprocess fixture")
 	}
@@ -109,7 +115,7 @@ func TestIndependentApplicationCrashMatrix(t *testing.T) {
 			t.Fatalf("build fixture: %v\n%s", err, raw)
 		}
 	}
-	for _, point := range []string{"before_admission", "after_admission", "before_publication", "after_publication"} {
+	for _, point := range points {
 		t.Run(point, func(t *testing.T) {
 			dir := t.TempDir()
 			data := filepath.Join(dir, "runtime")
@@ -141,7 +147,7 @@ func TestIndependentApplicationCrashMatrix(t *testing.T) {
 					t.Fatal(err)
 				}
 				cmd := exec.Command(serverBinary, "serve", "--data", data, "--workspace-root", workspace, "--addr", operator, "--application-addr", remote, "--application-cert", cert, "--application-key", key)
-				cmd.Env = fixtureEnv(map[string]string{"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), "MITOS_AGENT_CONFINEMENT": "bwrap", "MITOS_AGENT_NETWORK": "unrestricted", "OPENAI_API_KEY": "fixture-model-key", "MITOS_ENABLE_FAILPOINTS": "0"})
+				cmd.Env = fixtureEnv(map[string]string{"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), "MITOS_AGENT_CONFINEMENT": "bwrap", "MITOS_AGENT_NETWORK": "unrestricted", "OPENAI_API_KEY": "fixture-model-key", "MITOS_ENABLE_FAILPOINTS": "0", "MITOS_LOCAL_STRUCTURED_WORKERS": map[bool]string{true: "off", false: "on"}[remoteWorker]})
 				cmd.Stdout = log
 				cmd.Stderr = log
 				if err = cmd.Start(); err != nil {
@@ -174,6 +180,29 @@ func TestIndependentApplicationCrashMatrix(t *testing.T) {
 			if status != 201 || json.Unmarshal(raw, &principal) != nil || principal.Token == "" {
 				t.Fatal("principal", status, string(raw))
 			}
+			if remoteWorker {
+				raw, status := fixtureCall(t, client, "POST", "http://"+operator+"/api/workers", "", map[string]any{"id": "separate-worker", "pools": []string{"interactive"}, "agents": []string{"mitos.generalist"}, "expires_at": time.Now().Add(time.Hour)})
+				var credential struct {
+					Token string `json:"token"`
+				}
+				if status != 201 || json.Unmarshal(raw, &credential) != nil || credential.Token == "" {
+					t.Fatal("worker credential", status, string(raw))
+				}
+				workerLog, err := os.CreateTemp(dir, "worker-*.log")
+				if err != nil {
+					t.Fatal(err)
+				}
+				workerCmd := exec.Command(serverBinary, "worker", "--url", "https://"+remote, "--id", "separate-worker", "--data", filepath.Join(dir, "worker"), "--ca-file", cert, "--codex", filepath.Join(bin, "codex"))
+				workerCmd.Env = fixtureEnv(map[string]string{"MITOS_WORKER_TOKEN": credential.Token, "OPENAI_API_KEY": "fixture-worker-model-key"})
+				workerCmd.Stdout = workerLog
+				workerCmd.Stderr = workerLog
+				if err = workerCmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				worker := &fixtureProcess{cmd: workerCmd, log: workerLog}
+				defer worker.stop()
+			}
+
 			applicationDB := filepath.Join(dir, "application.db")
 			invoke := func(failpoint string) ([]byte, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

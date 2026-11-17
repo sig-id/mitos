@@ -1,0 +1,138 @@
+package structuredworker
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"mitos/internal/compute"
+	"mitos/internal/harness"
+	"mitos/internal/resourcepolicy"
+)
+
+type Executor struct {
+	Provider    compute.Provider
+	Executable  string
+	Environment []string
+	Base        string
+	Scoped      bool
+	// EgressEndpoint is the mediated model-transport socket (unix:// path)
+	// for scoped workers. When set, the sandbox runs in an isolated network
+	// namespace whose only egress is the allowlisted relay.
+	EgressEndpoint string
+	Preview        io.Writer
+	Activity       io.Writer
+}
+
+// Execute is the only native structured execution loop, shared by the local
+// adapter and mitos worker. It never receives application or action credentials.
+func (e Executor) Execute(ctx context.Context, assignment Context) (Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(assignment.BudgetSeconds)*time.Second)
+	defer cancel()
+	scratch := filepath.Join(e.Base, "workspace")
+	if err := os.MkdirAll(scratch, 0700); err != nil {
+		return Result{}, err
+	}
+	env := e.Environment
+	var err error
+	if e.Scoped {
+		env, err = ApplicationEnvironment(e.Base, env)
+		if err != nil {
+			return Result{}, err
+		}
+		// Route the runtime's own HTTPS through the in-sandbox loop forwarder;
+		// the host relay admits only the model endpoints on its allowlist.
+		if e.EgressEndpoint != "" {
+			env = append(env,
+				"HTTPS_PROXY=http://"+compute.EgressLoopAddr,
+				"HTTP_PROXY=http://"+compute.EgressLoopAddr,
+				"ALL_PROXY=http://"+compute.EgressLoopAddr,
+				"NO_PROXY=localhost,127.0.0.1",
+			)
+		}
+	}
+	caps := e.Provider.Capabilities()
+	if e.Scoped && (!caps.WorkspaceConfined || caps.Egress != "unrestricted") {
+		return Result{}, errors.New("application_execution_unavailable: confined unrestricted model transport required")
+	}
+	request := compute.Request{Resources: resourcepolicy.Agent{}}
+	if e.Scoped {
+		request.NetMode = compute.NetOff
+	}
+	launch, err := compute.Compile(request, map[string]compute.Capabilities{"local": caps}, !e.Scoped)
+	if err != nil {
+		return Result{}, err
+	}
+	if e.Scoped {
+		launch.Posture.NetMode = compute.NetUnrestricted
+		if e.EgressEndpoint != "" {
+			launch.Posture.BrokerEndpoint = e.EgressEndpoint
+		}
+	}
+	launch.RunID = assignment.RunID
+	launch.CapabilityRef = assignment.Definition.ID
+	launch.Base = e.Base
+	launch.Workspace.Directory = scratch
+	launch.Posture.Deadline, _ = ctx.Deadline()
+	handle, err := e.Provider.Prepare(ctx, launch)
+	if err != nil {
+		return Result{}, err
+	}
+	var activity bytes.Buffer
+	preview := e.Preview
+	if preview == nil {
+		preview = io.Discard
+	}
+	activityPreview := e.Activity
+	if activityPreview == nil {
+		activityPreview = io.Discard
+	}
+	final := ""
+	options := harness.CodexOptions{Headless: true, Model: assignment.Model, Sandbox: "read-only", MaxTurns: assignment.MaxTurns, OutputSchema: assignment.ResultSchema, Result: func(text string) error { final = text; return nil }, Activity: io.MultiWriter(&activity, activityPreview)}
+	session, err := e.Provider.Start(ctx, handle, compute.Command{Argv: append([]string{e.Executable}, harness.CodexArguments()...), Directory: scratch, NativeEnv: env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+		return harness.RunCodex(ctx, deniedBroker{}, stream, strings.NewReader(""), io.MultiWriter(output, preview), scratch, assignment.Prompt, options)
+	}})
+	if err != nil {
+		return Result{}, err
+	}
+	<-session.Done()
+	output, runErr := session.Result()
+	stopCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	if err = e.Provider.Stop(stopCtx, session); err != nil {
+		return Result{}, err
+	}
+	// Captured output and activity stay available even when the attempt fails:
+	// they are the evidence needed to diagnose timeouts and crashes.
+	evidence := []Artifact{{Name: "output.txt", Data: output}, {Name: "activity.jsonl", Data: activity.Bytes()}}
+	if runErr != nil {
+		return Result{Artifacts: evidence}, fmt.Errorf("Codex stopped: %w", runErr)
+	}
+	result := Result{Value: json.RawMessage(final), Artifacts: evidence}
+	for _, name := range []string{"authority.json", "context.json"} {
+		if raw := assignment.Artifacts[name]; raw != nil {
+			result.Artifacts = append(result.Artifacts, Artifact{Name: name, Data: raw})
+		}
+	}
+	return result, nil
+}
+
+type deniedBroker struct{}
+
+func (deniedBroker) Submit(context.Context, json.RawMessage) (harness.Delivery, error) {
+	return harness.Delivery{}, errors.New("headless_external_action_requires_gateway")
+}
+func (deniedBroker) Get(context.Context, string) (harness.Delivery, error) {
+	return harness.Delivery{}, errors.New("headless_external_action_requires_gateway")
+}
+func (deniedBroker) Deliver(context.Context, string, string, string) error {
+	return errors.New("headless_external_action_requires_gateway")
+}
+func (deniedBroker) Invalidate(context.Context, string) error { return nil }
