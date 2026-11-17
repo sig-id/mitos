@@ -39,7 +39,9 @@ claim request-bridge capabilities.
 A session MUST retain its project, task/session identity, original request IDs,
 profile, output, pending requests and resolution receipts. Launch MUST be
 idempotent. Selected executables and environments MUST survive wrapping. Questions
-and approvals MUST be reachable from the session and global Inbox. A reply is not
+and approvals MUST be reachable from the session and the global Notifications
+surface that every workspace view exposes. The Inbox collects reports and project
+summaries; it is not the queue for runtime approval cards. A reply is not
 applied until the source acknowledges it. Unsupported request capabilities MUST
 be visible, never silently interpreted as approval or completion.
 
@@ -105,7 +107,7 @@ Routing is a runtime-owned pipeline, not an implicit orchestrator judgment:
    unauthorized routes are excluded. There is no recursive classifier selection.
 4. `decision` selects from a frozen set of eligible answers; `investigate` asks a
    general LLM agent to gather evidence or generate alternatives; `human` creates
-   or retains an Inbox request. Free-form answers require investigation or a human.
+   or retains a human request in the Notifications surface. Free-form answers require investigation or a human.
 5. Revalidate policy, request lifetime and evidence before applying an answer.
 
 The classifier and answer selector are separate logical decisions even if they

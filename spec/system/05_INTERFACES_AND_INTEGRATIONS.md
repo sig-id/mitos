@@ -372,8 +372,11 @@ than silently truncated.
 
 Endpoints MUST use HTTPS, except HTTP to a literal loopback IP for local inference.
 Userinfo, query strings, and fragments are refused. Credentials are resolved only
-at call time and sent as Bearer authorization; only their environment variable name
-is persisted. Redirects and automatic retries are disabled. `X-Client-Request-Id`
+at call time and sent as Bearer authorization, except `gemini_decisions`, which
+sends its credential in the `x-goog-api-key` header. Persisted credential forms are
+the environment variable name or an opaque saved reference bound to its endpoint
+(see the connection settings above); inline secrets never appear in logs, plans,
+or API responses. Redirects and automatic retries are disabled. `X-Client-Request-Id`
 carries the durable local request ID for correlation; it does not assert that a
 provider deduplicates requests. Configuring an endpoint is a trusted local application
 operation, not a worker-selected destination. This profile is not a credential broker
@@ -381,9 +384,12 @@ or a guarantee of remote data retention.
 
 Inspect the frozen policy and `model_decisions` through the existing Run JSON API
 (`GET /api/runs/{id}`) or `mitos status RUN_ID`. The journal records
-`model_decision_requested` and `model_decision_completed`. Human review continues to
-use the existing decision inbox and resolution API. There is no model-settings UI
-or automatic model resolution of human cards.
+`model_decision_requested` and `model_decision_completed`. System Configuration and
+project settings provide the model-settings UI for decision providers and agent
+policy, and automatic resolution classifies and answers eligible routine requests
+under the frozen policy (see [agent decisions](../../docs/agent-decisions.md)).
+Requests without a configured provider, and ambiguous or unauthorized routes, stay
+with human review through the Notifications surface.
 
 ## Connectors and sinks
 
