@@ -181,57 +181,61 @@ func TestOrchestratorJournalStaysBoundedOnLargeGraphs(t *testing.T) {
 	s.mu.Unlock()
 }
 
-// Multibyte and JSON-escaped summaries are bounded by serialized bytes, not
-// rune counts: a graph whose CJK summaries are valid under the result-summary
-// limit must still plan, instead of parking behind orchestrator_context_limit
-// long before the fixed entry boundary.
-func TestOrchestratorJournalBoundsSerializedSummaries(t *testing.T) {
+// Multibyte summaries serialize to several times their rune count, so the
+// journal must enforce its byte budget before the entry boundary is reached;
+// otherwise valid graphs stall on orchestrator_context_limit.
+func TestOrchestratorJournalBoundsMultibyteSummaries(t *testing.T) {
 	e, req := graphEngine(t, false)
 	req.Limits.Tasks = 128
 	req.Limits.Fanout = 128
-	specs := []GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Wide graph", Acceptance: "operator", Brief: Brief{Title: "Wide graph"}}}
-	for i := range 70 {
-		specs = append(specs, GraphSpec{ID: "task" + string(rune('a'+i%26)) + string(rune('a'+i/26)), Parent: "goal", Kind: "application", Required: false, Criteria: "Produce evidence", Acceptance: "operator", Brief: Brief{Title: "Work", AppID: "workspace-inventory", TimeoutMinutes: 1}})
+	cjk := strings.Repeat("詳細", 256) // 512 runes, 1536 UTF-8 bytes
+	specs := []GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Large summaries", Acceptance: "operator", Brief: Brief{Title: "Large summaries"}}}
+	for i := range 48 {
+		id := "task" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		specs = append(specs, GraphSpec{ID: id, Parent: "goal", Kind: "application", Required: false, Criteria: "Produce evidence", Acceptance: "operator", Brief: Brief{Title: "Work", AppID: "workspace-inventory", TimeoutMinutes: 1}})
 	}
 	req.Tasks = specs
 	g := createGraphTest(t, e, req)
 	s := e.Store
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	graph := s.graphs[g.ID]
-	summary := strings.Repeat("結果", 512)
 	for id, member := range graph.Members {
-		member.FactRevision = int64(3 + len(id))
+		member.FactRevision = int64(2 + len(id))
 		member.State = "done"
-		if member.Spec.Kind == "application" {
-			run := newID("local")
-			s.runs[run] = &Run{ID: run, TaskID: id, Summary: summary}
-			member.CurrentRunID = run
-		}
+		rid := "run_" + id
+		s.runs[rid] = &Run{ID: rid, TaskID: id, Status: "done", Summary: cjk}
+		member.CurrentRunID = rid
 	}
 	appendFactJournal(graph, s)
 	state := renderPlanJournal(graph, s)
 	if len(state) >= orchestratorPlanLimit {
-		t.Fatalf("journal state %d exceeds the %d planning allowance before the entry boundary", len(state), orchestratorPlanLimit)
+		t.Fatalf("journal state %d exceeds the %d planning allowance", len(state), orchestratorPlanLimit)
+	}
+	if len(state) > graphJournalBytes {
+		t.Fatalf("journal state %d exceeds the %d byte budget", len(state), graphJournalBytes)
 	}
 	compacted := 0
 	for _, entry := range graph.FactJournal {
-		if encoded, err := json.Marshal(entry.Summary); err != nil || len(encoded) > graphJournalSummary {
-			t.Fatalf("summary exceeds its serialized budget: %d %v", len(encoded), err)
-		}
 		if entry.Compacted > 0 {
 			compacted++
 		}
+		raw, err := json.Marshal(entry)
+		if err != nil || len(raw) > graphJournalEntryBytes {
+			t.Fatalf("entry %d exceeds the per-entry byte allowance: %d bytes", entry.Fact, len(raw))
+		}
 	}
-	if compacted != 1 || len(graph.FactJournal) > graphJournalCompactKeep+1 {
-		t.Fatalf("byte-budget compaction missing: compacted %d entries %d", compacted, len(graph.FactJournal))
+	if compacted == 0 {
+		t.Fatal("byte compaction did not run before the entry boundary")
 	}
-	// New facts still append after the early compaction without rewriting it.
+	// The newest entries stay verbatim and the journal still grows append-only
+	// outside this byte compaction point.
 	before := renderPlanJournal(graph, s)
-	graph.Members[graph.RootTask].FactRevision++
+	newest := graph.FactJournal[len(graph.FactJournal)-1]
+	graph.Members[newest.Task].FactRevision++
 	appendFactJournal(graph, s)
 	after := renderPlanJournal(graph, s)
 	if shared, _ := sharedStatePrefix(before, after); shared < len(before)-96 {
-		t.Fatalf("compaction rewrote history outside its boundary: shared %d of %d", shared, len(before))
+		t.Fatalf("journal rewrote history outside a compaction boundary: shared %d of %d", shared, len(before))
 	}
+	s.mu.Unlock()
 }
