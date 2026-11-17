@@ -22,6 +22,9 @@ import (
 )
 
 type Store struct {
+	servicePrincipals      map[string]ServicePrincipal
+	serviceTokens          map[string]string
+	structuredKeys         map[string]string
 	agentLibrary           atomic.Pointer[savedLibrary]
 	authorityEpoch         string
 	expiredRequestKeys     map[string]bool
@@ -137,6 +140,10 @@ func (s *Store) apply(e Event) error {
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
 	}
+	if c.ServicePrincipal != nil {
+		s.applyServicePrincipal(*c.ServicePrincipal)
+		return nil
+	}
 	if c.AgentLibrary != nil {
 		if err := validateSavedLibrary(*c.AgentLibrary); err != nil {
 			return err
@@ -154,7 +161,7 @@ func (s *Store) apply(e Event) error {
 			s.expiredRequestKeys = map[string]bool{}
 		}
 		for _, key := range c.ExpiredRequestKeys {
-			s.expiredRequestKeys[key] = true
+			s.expiredRequestKeys[legacyOrScopedKey(key)] = true
 		}
 		return nil
 	}
@@ -299,6 +306,16 @@ func (s *Store) apply(e Event) error {
 	if c.Run != nil {
 		if s.runs[e.RunID] != nil {
 			return errors.New("duplicate run creation")
+		}
+		if c.Run.Brief.Structured != nil && c.Run.ParentID == "" {
+			if s.structuredKeys == nil {
+				s.structuredKeys = map[string]string{}
+			}
+			key := scopedRequestKey(runTenant(c.Run), c.Run.Brief.Structured.Key)
+			if prior := s.structuredKeys[key]; prior != "" && prior != c.Run.ID {
+				return errors.New("duplicate tenant request key")
+			}
+			s.structuredKeys[key] = c.Run.ID
 		}
 		s.runs[e.RunID] = c.Run
 	}
@@ -607,6 +624,27 @@ func (s *Store) createWithRetryLocked(b Brief, appName, parentID string, sample 
 	return s.createWithEventLocked(b, appName, parentID, sample, call, retry, nil)
 }
 func (s *Store) createWithEventLocked(b Brief, appName, parentID string, sample bool, call *ServiceCall, retry *ServiceRetryPlan, delivery *ServiceEventDelivery) (Run, error) {
+	p := decision.LocalOperator()
+	if parent := s.runs[parentID]; parent != nil && parent.PrincipalID != "" {
+		p.ID = parent.PrincipalID
+		p.Tenant = runTenant(parent)
+	}
+	return s.createWithPrincipalLocked(b, appName, parentID, sample, call, retry, delivery, p)
+}
+
+func (s *Store) createWithPrincipalLocked(b Brief, appName, parentID string, sample bool, call *ServiceCall, retry *ServiceRetryPlan, delivery *ServiceEventDelivery, p decision.Principal) (Run, error) {
+	if !s.admittedPrincipalAllowedLocked(p.ID, p.Tenant) {
+		return Run{}, ErrForbidden
+	}
+	if b.Structured != nil && parentID == "" {
+		key := scopedRequestKey(p.Tenant, b.Structured.Key)
+		if s.expiredRequestKeys[key] {
+			return Run{}, ErrRequestKeyExpired
+		}
+		if s.structuredKeys[key] != "" {
+			return Run{}, ErrConflict
+		}
+	}
 	if call != nil && s.serviceLifecycleHeld(call.ServiceID) && !s.relaunchCallAllowed(call) {
 		return Run{}, errors.New("service lifecycle is stopped")
 	}
@@ -669,7 +707,7 @@ func (s *Store) createWithEventLocked(b Brief, appName, parentID string, sample 
 			call.Queue = s.serviceQueueBinding(call.ServiceID, call.Revision)
 		}
 	}
-	r := Run{Tenant: decision.LocalTenant, ID: newID("local"), TaskID: taskID, ParentID: parentID, Brief: b, AppName: appName, Status: "queued", Stage: "Ready to start", Summary: "The brief is saved. Waiting for an execution slot.", CreatedAt: time.Now().UTC(), Sample: sample}
+	r := Run{Tenant: p.Tenant, PrincipalID: p.ID, ID: newID("local"), TaskID: taskID, ParentID: parentID, Brief: b, AppName: appName, Status: "queued", Stage: "Ready to start", Summary: "The brief is saved. Waiting for an execution slot.", CreatedAt: time.Now().UTC(), Sample: sample}
 	if retry != nil {
 		copy := *retry
 		copy.ChildRunID = r.ID
@@ -726,6 +764,9 @@ func (s *Store) Complete(id, summary string, verified bool) error {
 	}
 	if r.Status == "stopping" {
 		return ErrConflict
+	}
+	if r.Brief.Structured != nil && !s.admittedPrincipalAllowedLocked(r.PrincipalID, runTenant(r)) {
+		return ErrForbidden
 	}
 	if requiresHandoff(r) {
 		if err := s.resultIntegrity(r); err != nil {

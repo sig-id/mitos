@@ -32,6 +32,14 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 		for id := range ids {
 			out = append(out, journalProjection{Namespace: "run_cursor", Key: id, Value: []byte(strconv.FormatInt(e.Seq, 10))})
 		}
+		if c.Run != nil && c.Run.Brief.Structured != nil && c.Run.ParentID == "" {
+			raw, _ := json.Marshal(map[string]any{"run_id": c.Run.ID, "principal_id": c.Run.PrincipalID, "request_hash": c.Run.Brief.Structured.RequestHash, "seq": e.Seq})
+			out = append(out, journalProjection{Namespace: "request_key", Key: scopedRequestKey(runTenant(c.Run), c.Run.Brief.Structured.Key), Value: raw})
+		}
+		if c.ServicePrincipal != nil {
+			raw, _ := json.Marshal(c.ServicePrincipal)
+			out = append(out, journalProjection{Namespace: "service_principal", Key: c.ServicePrincipal.ID, Value: raw})
+		}
 		if c.Artifact != nil {
 			value, _ := json.Marshal(c.Artifact)
 			out = append(out, journalProjection{Namespace: "artifact", Key: e.RunID + "/" + c.Artifact.Name, Value: value})
@@ -45,7 +53,7 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 			}
 		}
 		for _, key := range c.ExpiredRequestKeys {
-			out = append(out, journalProjection{Namespace: "request_tombstone", Key: key, Value: []byte("expired")})
+			out = append(out, journalProjection{Namespace: "request_tombstone", Key: legacyOrScopedKey(key), Value: []byte("expired")})
 		}
 	}
 	return out, nil

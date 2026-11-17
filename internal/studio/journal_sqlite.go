@@ -22,7 +22,7 @@ var journalMigrations embed.FS
 
 const runtimeDatabase = "runtime.db"
 const runtimeLock = "runtime.lock"
-const journalSchemaVersion = 1
+const journalSchemaVersion = 2
 
 type sqliteJournal struct {
 	db     *sql.DB
@@ -277,7 +277,7 @@ func openReadJournal(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if version != journalSchemaVersion {
+	if version < 1 || version > journalSchemaVersion {
 		db.Close()
 		return nil, fmt.Errorf("unsupported runtime schema %d", version)
 	}

@@ -248,6 +248,13 @@ backup and verified restore include saved library revisions and artifacts; resto
 advances the authority epoch. Expired request keys retain rejection tombstones.
 This storage subset does not complete the application boundary or S2.
 
+The principals subset adds a separate TLS application listener, hashed opaque
+service credentials with live rotation/revocation and authority-epoch checks,
+request-scoped principals, structural tenant views and indexed tenant/principal
+request keys. Foreign task/run/artifact/result IDs return 404; operator routes stay
+on loopback. The bounded-read/capacity/fixture gate remains open, so
+`service_principal_auth` and `tenant_isolation` flags remain false until S2 proof.
+
 Implement the SQLite runtime adapter with the same canonical Event records, hash
 chain, apply and replay, plus atomic journal/projection transactions. Replace
 `events.jsonl` with a verified one-time import, preserving it as backup; remove the
