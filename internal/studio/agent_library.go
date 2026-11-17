@@ -41,12 +41,13 @@ func emptySavedLibrary() savedLibrary {
 }
 
 func (e *Engine) readLibrary() (savedLibrary, error) {
-	e.Store.mu.RLock()
-	defer e.Store.mu.RUnlock()
-	if e.Store.agentLibrary == nil {
+	// Immutable snapshots may be read while an orchestrator holds Store.mu.
+	// Never acquire the writer/state lock recursively or invert the edit lock.
+	saved := e.Store.agentLibrary.Load()
+	if saved == nil {
 		return emptySavedLibrary(), nil
 	}
-	return graphClone(*e.Store.agentLibrary), nil
+	return graphClone(*saved), nil
 }
 
 func validateSavedLibrary(saved savedLibrary) error {
@@ -126,8 +127,6 @@ func libraryDefinitions(saved savedLibrary) ([]agents.Definition, error) {
 	return library, nil
 }
 func (e *Engine) AgentLibrary() ([]agents.Definition, error) {
-	e.libraryMu.Lock()
-	defer e.libraryMu.Unlock()
 	saved, err := e.readLibrary()
 	if err != nil {
 		return nil, err
@@ -138,8 +137,8 @@ func (e *Engine) AgentLibrary() ([]agents.Definition, error) {
 // All edits create immutable revisions. Running attempts retain their own frozen
 // definition, so editing an agent cannot change an admitted assignment.
 func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
-	e.libraryMu.Lock()
-	defer e.libraryMu.Unlock()
+	e.Store.mu.Lock()
+	defer e.Store.mu.Unlock()
 	if !validGraphKey(req.Key) || len(strings.TrimSpace(req.Name)) < 2 || len(req.Name) > 100 || len(strings.TrimSpace(req.Description)) < 3 || len(req.Description) > 2000 || len(strings.TrimSpace(req.Instructions)) < 3 || len(req.Instructions) > 32000 {
 		return agents.Definition{}, errors.New("provide a name, description and instructions within the field limits")
 	}
@@ -191,8 +190,6 @@ func (e *Engine) SaveAgent(req AgentEdit) (agents.Definition, error) {
 	if len(raw) > 8<<20 {
 		return agents.Definition{}, errors.New("agent library capacity reached")
 	}
-	e.Store.mu.Lock()
-	defer e.Store.mu.Unlock()
 	if err = e.Store.commit("", "effect", "agent_library_changed", change{AgentLibrary: &saved}); err != nil {
 		return agents.Definition{}, err
 	}

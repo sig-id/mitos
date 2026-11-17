@@ -21,19 +21,18 @@ import (
 )
 
 type Engine struct {
-	Messages  *messaging.Service
-	Desk      *desk.Manager
-	provider  compute.Provider
-	Store     *Store
-	Apps      []Application
-	Root      string
-	mu        sync.Mutex
-	cancel    map[string]context.CancelFunc
-	ctx       context.Context
-	stop      context.CancelFunc
-	wg        sync.WaitGroup
-	actions   sync.Mutex
-	libraryMu sync.Mutex
+	Messages *messaging.Service
+	Desk     *desk.Manager
+	provider compute.Provider
+	Store    *Store
+	Apps     []Application
+	Root     string
+	mu       sync.Mutex
+	cancel   map[string]context.CancelFunc
+	ctx      context.Context
+	stop     context.CancelFunc
+	wg       sync.WaitGroup
+	actions  sync.Mutex
 	// Serializes idempotent structured-work admission by request key.
 	structuredMu sync.Mutex
 	setupMu      sync.Mutex

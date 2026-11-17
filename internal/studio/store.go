@@ -17,11 +17,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 )
 
 type Store struct {
-	agentLibrary           *savedLibrary
+	agentLibrary           atomic.Pointer[savedLibrary]
 	authorityEpoch         string
 	expiredRequestKeys     map[string]bool
 	systemConfiguration    SystemConfiguration
@@ -141,7 +142,7 @@ func (s *Store) apply(e Event) error {
 			return err
 		}
 		copy := graphClone(*c.AgentLibrary)
-		s.agentLibrary = &copy
+		s.agentLibrary.Store(&copy)
 		return nil
 	}
 	if c.AuthorityEpoch != "" {

@@ -147,9 +147,7 @@ func (e *Engine) retryStructured(b Brief, parent string) (Run, error) {
 // exactDefinition reads one immutable revision, never the latest of an ID.
 func (e *Engine) exactDefinition(ref, digest string) (agents.Definition, error) {
 	id, revision, _ := strings.Cut(ref, "@")
-	e.libraryMu.Lock()
 	saved, err := e.readLibrary()
-	e.libraryMu.Unlock()
 	if err != nil {
 		return agents.Definition{}, err
 	}
