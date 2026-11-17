@@ -198,7 +198,7 @@ func TestAutomaticOrchestratorWaitsForInboxAndCompletes(t *testing.T) {
 	e, req := automaticScriptEngine(t, `import json,pathlib,sys
 prompt=sys.stdin.read();out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ ctx=json.loads(section(prompt,'graph_state'))
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Wait for the requested release signal and review its evidence.'}
  if not workers:
@@ -210,7 +210,7 @@ if '--output-schema' in sys.argv:
   plan['result']={'title':'Release received','markdown':'Received release v1.','source_tasks':[workers[0]['id']]}
  out.write_text(json.dumps(plan))
 else:
- inputs=json.loads(prompt.split('\nSaved upstream evidence (read these files):\n')[1].split('\nWork only')[0])
+ inputs=json.loads(section(prompt,'selected_artifacts','[]'))
  assert len(inputs)==1,inputs
  message=json.loads(pathlib.Path(inputs[0]['directory'],'message.json').read_text())
  assert message['payload']['release']=='v1',message

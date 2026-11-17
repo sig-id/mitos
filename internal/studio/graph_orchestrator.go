@@ -236,7 +236,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				raw, _ := json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "inbox": graphInboxAddress(&g, s.seq), "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json using the shared OrchestratorPlan: operations, accept, complete, result and explanation. Use the same scheduling dependencies and joins as the graph API. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."})
 				if g.Policy.Automatic {
 					library := e.AutomaticAgents()["agents"]
-					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "facts": facts, "agent_library": library, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "instruction": orchestratorInstructions, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError})
+					raw, _ = json.Marshal(map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "facts": facts, "agent_library": library, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError})
 				}
 				if len(raw) > graphContextLimit(&g) {
 					x.Error = "orchestrator_context_limit"

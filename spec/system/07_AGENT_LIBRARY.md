@@ -5,8 +5,9 @@ The bundled [default library](../../agents/README.md) now runs through the nativ
 Codex adapter, with automatic planning, graph-scoped specialization, and editable
 worker revisions. This does not claim full profile conformance: multi-runtime
 negotiation, knowledge/skill attachment, deprecation, and promotion remain future
-work. Typed definition validation and manifest-preserving edits are implemented;
-capability, limit and context enforcement is not yet. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow).
+work. Typed definition validation, manifest-preserving edits and per-attempt
+authority receipts (capability intersection, enforcement policy, timeout and turn
+limits) and bounded context assembly receipts are implemented. See [implemented workflow](../../docs/adaptive-runtime.md#automatic-workflow).
 
 ## Purpose and ownership
 

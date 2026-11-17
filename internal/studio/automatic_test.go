@@ -23,14 +23,14 @@ func TestAutomaticGoalEndToEnd(t *testing.T) {
 prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ ctx=json.loads(section(prompt,'graph_state'))
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  plan={'explanation':'Evidence meets the goal.','operations':[],'accept':[],'complete':bool(workers)}
  if not workers:
   for i in range(2):
    plan['operations'].append({'kind':'add','spec':{'id':'work'+str(i),'parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence for the answer.','brief':{'title':['Implement change','Review change'][i],'intent':['Create answer.txt with 42.','Check upstream patch and evidence.'][i],'app_id':'agent:'+ (['mitos.engineer','mitos.reviewer'][i]),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in (['work0'] if i else [])]}},'agent':({'role':'Answer specialist' if i else '','instructions':'Check the answer carefully.' if i else ''} if ('Answer specialist' if i else '') else None)}})
  else:
-  inputs=json.loads(prompt.split('\nSaved upstream evidence (read these files):\n')[1].split('\nWork only')[0])
+  inputs=json.loads(section(prompt,'selected_artifacts','[]'))
   assert len(inputs)==0,inputs
   for f in workers:
    page=tool('artifact_list',{'run_id':f['run_id'],'cursor':0,'limit':32})
@@ -45,7 +45,7 @@ if '--output-schema' in sys.argv:
  out.write_text(json.dumps(plan))
 else:
  if 'Check upstream patch and evidence.' in prompt:
-  inputs=json.loads(prompt.split('\nSaved upstream evidence (read these files):\n')[1].split('\nWork only')[0])
+  inputs=json.loads(section(prompt,'selected_artifacts','[]'))
   assert len(inputs)==1, inputs
   assert '42' in pathlib.Path(inputs[0]['directory'],'changes.patch').read_text()
   assert pathlib.Path('answer.txt').read_text().strip()=='42'
@@ -421,7 +421,7 @@ func TestAutomaticRepairsFailedWorker(t *testing.T) {
 	e, req := automaticScriptEngine(t, `import sys,json,pathlib
 prompt=sys.stdin.read();out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0]);workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
+ ctx=json.loads(section(prompt,'graph_state'));workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  p={'explanation':'Inspect evidence and repair the failed attempt.','operations':[],'accept':[],'complete':False}
  if not workers:p['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Report 42','brief':{'title':'Produce answer','intent':'Produce an answer','app_id':'agent:'+ ('mitos.generalist'),'timeout_minutes':30,'scheduling':{'deps':[{'from':ref,'guard':'candidate_available','payload':'data','artifacts':['report.md','changes.patch']} for ref in ([])]}},'agent':({'role':'','instructions':''} if ('') else None)}}]
  elif workers[0]['state']=='failed':p['operations']=[{'kind':'retry','task':workers[0]['id']}]
@@ -479,6 +479,13 @@ def tool(name,arguments):
  return json.loads(reply['contentItems'][0]['text'])
 def send(value):
  outwire.write(json.dumps(value)+'\n');outwire.flush()
+def section(prompt,kind,default=None):
+ # Context sections render as '## <kind> (<source>)' followed by their text.
+ for block in prompt.split('\n## ')[1:]:
+  head,_,body=block.partition('\n')
+  if head.split(' (')[0]==kind:return body.split('\n## ')[0].rstrip('\n')
+ if default is None:raise KeyError(kind)
+ return default
 for line in wire:
  req=json.loads(line);method=req.get('method','')
  if method=='initialize':send({'id':req['id'],'result':{}})
@@ -493,7 +500,7 @@ for line in wire:
    if 'outputSchema' in params:sys.argv+=['--output-schema','fixture-schema']
    sys.stdin=io.StringIO(prompt)
    try:
-    with contextlib.redirect_stdout(sys.stderr):exec(compile(script,__file__,'exec'),{'__file__':__file__,'tool':tool})
+    with contextlib.redirect_stdout(sys.stderr):exec(compile(script,__file__,'exec'),{'__file__':__file__,'tool':tool,'section':section})
    finally:sys.argv=oldargv;sys.stdin=oldin
    if result.exists():
     text=result.read_text()
@@ -513,7 +520,7 @@ func TestAutomaticLargeEvidenceUsesBoundedTools(t *testing.T) {
 prompt=sys.stdin.read()
 out=pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1])
 if '--output-schema' in sys.argv:
- ctx=json.loads(prompt.split('\nGraph context:\n')[1].split('\nSaved upstream evidence')[0])
+ ctx=json.loads(section(prompt,'graph_state'))
  workers=[f for f in ctx['facts'] if f['spec']['kind']=='application']
  plan={'operations':[],'accept':[],'complete':bool(workers),'explanation':'Read retained report through bounded tools.','result':{'title':'','markdown':'','source_tasks':[],'items':[]}}
  if not workers:
