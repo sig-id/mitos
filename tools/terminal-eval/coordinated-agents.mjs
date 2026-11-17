@@ -54,12 +54,36 @@ try{
  await settings.locator('[data-preset=claude]').getByLabel('Environment profile',{exact:true}).selectOption('claude-work');
  await settings.locator('[data-preset=default]').getByLabel('Model',{exact:true}).fill('codex-test');
  await settings.getByText('Agent role rules',{exact:true}).click();await settings.getByRole('combobox',{name:'Architect',exact:true}).selectOption('claude');
+ // Saving prose in the same page updates the rules' hash without discarding draft choices.
+ const instructionEditor=page.locator('.setup-file .setup-edit-surface mitos-markdown').first();
+ await instructionEditor.getByRole('button',{name:'Edit',exact:true}).click();
+ await instructionEditor.locator('textarea').fill('# Mixed agents\n\nKeep independent agent role assignments.\n');
+ await page.getByRole('button',{name:'Save AGENTS.md',exact:true}).click();
+ await page.getByText('AGENTS.md saved. New work will use these instructions.',{exact:true}).waitFor();
+ assert.equal(await settings.getByRole('combobox',{name:'Orchestrator',exact:true}).inputValue(),'claude');
  await settings.getByRole('button',{name:'Save agent rules',exact:true}).click();
  await settings.getByText('Agent rules saved. New coordinated work will use these choices.',{exact:true}).waitFor();
  await page.locator('#new-work').click();
  await wait(async()=>await editor.getByRole('combobox',{name:'Orchestrator',exact:true}).inputValue()==='claude');
  await page.reload();await page.locator('#new-work').click();
  await wait(async()=>await editor.getByRole('combobox',{name:'Orchestrator',exact:true}).inputValue()==='claude');
+ // Applying an assistant proposal refreshes both the saved policy and its revision.
+ const beforeProposal=await api('/api/projects/'+project.id+'/setup');
+ const proposedPolicy=structuredClone(beforeProposal.effective.execution);proposedPolicy.roles['mitos.engineer']='claude';
+ const proposedDocument=await page.evaluate(({document,policy})=>MitosExecutionPolicy.documentWithPolicy(document,policy),{document:beforeProposal.document,policy:proposedPolicy});
+ const conversationURL='**/api/projects/'+project.id+'/setup/conversation?target=project';
+ await page.route(conversationURL,route=>route.fulfill({json:{status:'done',key:'fixture-proposal',messages:[],file_hash:beforeProposal.file_hash,suggestion:{document:proposedDocument}}}));
+ await page.reload();await page.locator('[data-view=resources]').click();
+ await page.getByRole('button',{name:'Apply to AGENTS.md',exact:true}).click();
+ await page.getByText('AGENTS.md saved. New work will use these instructions.',{exact:true}).waitFor();
+ await settings.getByText('Agent role rules',{exact:true}).click();
+ assert.equal(await settings.getByRole('combobox',{name:'Engineer',exact:true}).inputValue(),'claude');
+ const rulesSaved=page.waitForResponse(r=>r.url().endsWith('/instructions')&&r.request().method()==='PUT');
+ await settings.getByRole('button',{name:'Save agent rules',exact:true}).click();
+ assert.equal((await rulesSaved).status(),200);
+ await settings.getByText('Agent rules saved. New coordinated work will use these choices.',{exact:true}).waitFor();
+ assert.equal((await api('/api/projects/'+project.id+'/setup')).effective.execution.roles['mitos.engineer'],'claude');
+ await page.unroute(conversationURL);await page.locator('#new-work').click();
  // The same selection survives recurring-work serialization.
  await page.locator('#graph-prompt').fill('Repeat mixed execution');
  await page.getByText('When to run',{exact:false}).first().click();
@@ -71,5 +95,31 @@ try{
  await page.setViewportSize({width:390,height:844});await page.goto(base+'/projects/'+project.id);await page.locator('#new-work').click();
  await editor.getByRole('combobox',{name:'Orchestrator',exact:true}).waitFor();assert.ok(await editor.evaluate(e=>e.scrollWidth<=e.clientWidth+1));
  await editor.scrollIntoViewIfNeeded();await page.screenshot({path:'/tmp/mitos-coordinated-agents-mobile.png'});
- assert.deepEqual(errors,[]);console.log('PASS: mixed runtime execution, role rules, model/profile bindings, saved defaults, recurring work and mobile launch');
+ // A Claude-only inventory must not leave an unavailable generated Codex preset.
+ const onlyWorkspace=path.join(temporary,'claude-only');await mkdir(onlyWorkspace);await writeFile(path.join(onlyWorkspace,'README.md'),'# Claude only\n');
+ const onlyProject=await api('/api/projects',{name:'Claude only',directory:onlyWorkspace});
+ const inventory=await api('/api/agents?project='+onlyProject.id);
+ const claudeOnly=inventory.map(r=>r.id==='codex'?{...r,installed:false,profiles:[]}:r);
+ await page.route('**/api/agents?project='+onlyProject.id,route=>route.fulfill({json:claudeOnly}));
+ await page.goto(base+'/projects/'+onlyProject.id);await page.locator('#new-work').click();
+ await editor.getByRole('combobox',{name:'Orchestrator',exact:true}).waitFor();
+ const initialChecks=await page.evaluate(({inventory})=>{
+  const initial=MitosExecutionPolicy.initial({runtime:'codex',model:'codex-only-model'},inventory);
+  const saved={...initial,presets:[{id:'pinned',name:'Unavailable saved choice',runtime:'codex'}]};
+  const profileOnly=MitosExecutionPolicy.initial({},[{kind:'agent',id:'claude',name:'Claude',installed:false,profiles:[{id:'private',executable:'/configured/claude'}]}]);
+  return {initial,savedPreserved:JSON.stringify(MitosExecutionPolicy.initial({execution:saved},inventory))===JSON.stringify(saved),profileOnly};
+ },{inventory:claudeOnly});
+ assert.ok(initialChecks.initial.presets.every(p=>p.runtime==='claude'&&p.model===''));
+ assert.equal(initialChecks.savedPreserved,true);assert.equal(initialChecks.profileOnly.presets[0].profile_id,'private');
+ await editor.getByText('Execution presets & permitted workers',{exact:true}).click();
+ assert.equal(await editor.locator('fieldset').count(),1);
+ await editor.locator('[data-preset=default]').getByLabel('Model',{exact:true}).fill('claude-test');
+ await editor.locator('[data-preset=default]').getByLabel('Environment profile',{exact:true}).selectOption('claude-work');
+ await editor.getByText('Agent role rules',{exact:true}).click();await editor.getByRole('combobox',{name:'Architect',exact:true}).selectOption('default');
+ await page.locator('#graph-prompt').fill('Use the installed Claude agent for every role');await page.locator('#graph-create').click();
+ await wait(async()=>new URL(page.url()).searchParams.has('graph'));
+ const onlyGraphID=new URL(page.url()).searchParams.get('graph');
+ await wait(async()=>(await api('/api/graphs/'+onlyGraphID)).status==='accepted');
+ assert.ok((await api('/api/graphs/'+onlyGraphID)).setup.execution.presets.every(p=>p.runtime==='claude'));
+ assert.deepEqual(errors,[]);console.log('PASS: mixed runtime execution, role rules, model/profile bindings, saved defaults, same-page instruction/proposal saves, Claude-only launch, recurring work and mobile launch');
 }finally{await browser?.close();if(server.exitCode===null){server.kill('SIGTERM');await exited}await rm(temporary,{recursive:true,force:true})}

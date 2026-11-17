@@ -260,3 +260,89 @@ func TestClaudeNativeCancellationInvalidatesApproval(t *testing.T) {
 		t.Fatal("cancelled approval remained deliverable")
 	}
 }
+
+func TestClaudeNetworkPermissions(t *testing.T) {
+	for _, tool := range []string{"WebSearch", "WebFetch"} {
+		for _, choice := range []string{"approve", "deny"} {
+			t.Run(tool+"/"+choice, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				client, server := net.Pipe()
+				defer server.Close()
+				broker := &claudeTestBroker{choice: choice}
+				done := make(chan error, 1)
+				go func() { done <- RunClaude(ctx, broker, client, io.Discard, "/work", "Research", CodexOptions{}) }()
+				scanner := bufio.NewScanner(server)
+				read := func() map[string]any {
+					t.Helper()
+					if !scanner.Scan() {
+						t.Fatal("missing frame", scanner.Err())
+					}
+					var frame map[string]any
+					if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
+						t.Fatal(err)
+					}
+					return frame
+				}
+				send := func(frame any) {
+					t.Helper()
+					raw, err := json.Marshal(frame)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err = fmt.Fprintln(server, string(raw)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				init := read()["request"].(map[string]any)
+				for _, event := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"} {
+					matcher := init["hooks"].(map[string]any)[event].([]any)[0].(map[string]any)["matcher"].(string)
+					if !strings.Contains(matcher, tool) {
+						t.Fatalf("%s missing from %s hooks", tool, event)
+					}
+				}
+				send(map[string]any{"type": "control_response", "response": map[string]any{"request_id": "mitos-init", "subtype": "success"}})
+				read()
+				send(map[string]any{"type": "system", "subtype": "init", "session_id": "thread"})
+				input := map[string]any{"query": "Mitos documentation", "allowed_domains": []string{"example.com"}}
+				if tool == "WebFetch" {
+					input = map[string]any{"url": "https://example.com/docs", "prompt": "Summarize this documentation"}
+				}
+				send(map[string]any{"type": "control_request", "request_id": "network", "request": map[string]any{"subtype": "can_use_tool", "tool_use_id": "network-tool", "tool_name": tool, "input": input}})
+				response := read()["response"].(map[string]any)
+				if response["subtype"] != "success" {
+					t.Fatal(response)
+				}
+				permission := response["response"].(map[string]any)
+				want := "deny"
+				if choice == "approve" {
+					want = "allow"
+				}
+				if permission["behavior"] != want {
+					t.Fatal(permission)
+				}
+				if broker.applied {
+					t.Fatal("permission acknowledged before execution")
+				}
+				if choice == "approve" {
+					actual, _ := json.Marshal(permission["updatedInput"])
+					expected, _ := json.Marshal(input)
+					if !bytes.Equal(actual, expected) {
+						t.Fatalf("tool input changed: %s", actual)
+					}
+					send(map[string]any{"type": "control_request", "request_id": "completed", "request": map[string]any{"subtype": "hook_callback", "callback_id": "PostToolUse", "input": map[string]any{"session_id": "thread", "tool_use_id": "network-tool", "hook_event_name": "PostToolUse", "tool_name": tool, "tool_input": input}}})
+					if reply := read()["response"].(map[string]any); reply["subtype"] != "success" {
+						t.Fatal(reply)
+					}
+				}
+				send(map[string]any{"type": "result", "subtype": "success", "session_id": "thread", "result": "Research finished"})
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+				if broker.applied != (choice == "approve") {
+					t.Fatal("wrong completion acknowledgement")
+				}
+			})
+		}
+	}
+}

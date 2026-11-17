@@ -22,7 +22,7 @@
   let setup;let installations;
   try{[setup,installations]=await Promise.all([api(base+'/setup'),api('/api/agents?project='+encodeURIComponent(project))])}catch(e){container.replaceChildren(el('p',e.message,'form-error'));return}
   if(token!==generation)return;
-  let projectDocumentChanged=()=>{};
+  let projectDocumentChanged=()=>{},executionSetupChanged=()=>{};
   async function surface(root,target){
    const personal=target==='defaults',name=personal?'My defaults':setup.file_name;
    const heading=el('header',undefined,'setup-file-heading'),titles=el('div');titles.append(el('h2',name),el('p',personal?'Personal preferences · saved in this Mitos server’s preferences.json, outside your repositories.':snapshot.project.directory+'/'+setup.file_name,'muted'));heading.append(titles);
@@ -56,7 +56,7 @@
    const supported=[...runtime.options].filter(o=>!o.disabled);if(supported.length)runtime.value=supported.find(o=>o.value==='codex')?.value||supported[0].value;
    const model=el('input');model.placeholder='Use this runtime’s configured model';model.maxLength=200;model.setAttribute('aria-label','Setup assistant model');const label=el('label','Runtime');label.append(runtime);const ml=el('label','Model');ml.append(model);options.append(label,ml,el('p','This selects the agent helping edit setup. It does not change the runtime used to execute tasks.','muted'));
    const installed=el('details',undefined,'setup-runtime-inventory');installed.append(el('summary','Installed runtimes'));
-   for(const r of installations.filter(r=>r.kind==='agent'&&r.installed))installed.append(el('p',r.name+' · '+(r.capabilities.project_context?'Setup assistant available. ':'Setup assistant adapter unavailable. ')+(r.id==='codex'?'Automatic tasks available.':'Automatic task adapter not implemented.')));
+   for(const r of installations.filter(r=>r.kind==='agent'&&r.installed))installed.append(el('p',r.name+' · '+(r.capabilities.project_context?'Setup assistant available. ':'Setup assistant adapter unavailable. ')+(['codex','claude'].includes(r.id)?'Automatic tasks available.':'Automatic task adapter not implemented.')));
    options.append(installed);
    const send=el('button','Send','primary');send.type='submit';const stop=button('Stop reply',async()=>{try{await api(base+'/setup/conversation/stop',{target});stop.disabled=true}catch(e){showError(e)}});stop.hidden=true;
    const fresh=button('New conversation',()=>{reset=true;conversation={status:'idle',messages:[]};proposal=null;drawConversation();drawDocument();prompt.focus()});
@@ -65,7 +65,7 @@
    const summary=el('details',undefined,'setup-execution-summary');if(!personal){file.append(summary);executionSummary()}
    function executionSummary(){const p=setup.effective;summary.replaceChildren(el('summary','Runtime & resource limits'),el('p',setup.settings_error||`${p.runtime} · ${p.model||'configured model'}`,'setup-effective'),MitosResourcePolicy.summary(p,setup.resource_controls),el('p','Used for new work. Ask the agent to change these values in '+name+', or change My defaults for all projects.','muted'),button('Change with agent',()=>{prompt.value='Update the runtime and limits in '+name+': ';prompt.focus();prompt.scrollIntoView({block:'center',behavior:'smooth'})}));if(Object.entries(setup.project).some(([k,v])=>['runtime','model','enforcement','minutes','attempts','resources'].includes(k)&&v))summary.append(el('p','Earlier local project overrides apply where this file does not specify a value.','muted'))}
    function showError(e){feedback.textContent=e.message;feedback.classList.add('error')}
-   async function reloadSetup(){setup=await api(base+'/setup');if(editor)editor.set(seed(setup));if(fields){const next=runtimeFields(setup.defaults,{},true,installations,setup.resource_controls);fields.box.replaceWith(next.box);fields=next;guidance.set(setup.defaults.guidance||'')}if(!personal)executionSummary()}
+   async function reloadSetup(){setup=await api(base+'/setup');if(editor)editor.set(seed(setup));if(fields){const next=runtimeFields(setup.defaults,{},true,installations,setup.resource_controls);fields.box.replaceWith(next.box);fields=next;guidance.set(setup.defaults.guidance||'')}if(!personal)executionSummary();executionSetupChanged()}
    function drawDocument(){
     const changed=personal?!!proposal?.preferences:typeof proposal?.document==='string',key=changed?'proposal:'+conversation.key+':'+(personal?JSON.stringify(proposal.preferences):proposal.document):'saved:'+(personal?setup.defaults.revision:setup.file_hash);
     if(key!==loadedKey&&!dirty()){
@@ -97,9 +97,16 @@
   await surface(container,'project');
   const executionSection=el('section',undefined,'panel');executionSection.append(el('h2','Coordinated work agents'),el('p','Choose the orchestrator, worker defaults and role rules for new work.'));
   const library=await api('/api/graphs/agents');
-  let executionHash=setup.file_hash;
-  const executionFields=MitosExecutionPolicy.editor(MitosExecutionPolicy.initial(setup.effective,installations),installations,library.agents),executionStatus=el('p');executionStatus.setAttribute('role','status');
-  executionSection.append(executionFields.box,button('Save agent rules',async()=>{try{const document=MitosExecutionPolicy.documentWithPolicy(setup.document,executionFields.value());setup=await api(base+'/instructions',{file_hash:executionHash,document},'PUT');executionHash=setup.file_hash;projectDocumentChanged();window.document.dispatchEvent(new Event('mitos-execution-changed'));executionStatus.textContent='Agent rules saved. New coordinated work will use these choices.'}catch(e){executionStatus.textContent=e.message}}),executionStatus);container.append(executionSection);
+  let executionHash=setup.file_hash,executionSaved=JSON.stringify(MitosExecutionPolicy.initial(setup.effective,installations));
+  let executionFields=MitosExecutionPolicy.editor(JSON.parse(executionSaved),installations,library.agents);
+  const executionStatus=el('p');executionStatus.setAttribute('role','status');
+  executionSetupChanged=()=>{
+   const saved=JSON.stringify(MitosExecutionPolicy.initial(setup.effective,installations));
+   // Keep draft rules when only prose changes; changed saved rules replace the old policy and hash together.
+   if(saved!==executionSaved){const next=MitosExecutionPolicy.editor(JSON.parse(saved),installations,library.agents);executionFields.box.replaceWith(next.box);executionFields=next;executionStatus.textContent='Agent rules refreshed from saved instructions.'}
+   executionSaved=saved;executionHash=setup.file_hash;window.document.dispatchEvent(new Event('mitos-execution-changed'));
+  };
+  executionSection.append(executionFields.box,button('Save agent rules',async()=>{try{const document=MitosExecutionPolicy.documentWithPolicy(setup.document,executionFields.value());setup=await api(base+'/instructions',{file_hash:executionHash,document},'PUT');executionSetupChanged();projectDocumentChanged();executionStatus.textContent='Agent rules saved. New coordinated work will use these choices.'}catch(e){executionStatus.textContent=e.message}}),executionStatus);container.append(executionSection);
   window.MitosAgentPolicy.render(container,setup.agent_policy,base,api);
   const coop=el('details');coop.append(el('summary','COOPERATION.md'),el('p','Optional project conventions for delegation, shared work, handoffs and escalation. Link this file from AGENTS.md for other tools. Changes apply to new coordinated work.','muted'));
   let coopDoc=setup.cooperation;const coopEditor=sourceEditor('COOPERATION.md',coopDoc.text||''),coopStatus=el('p');coopStatus.setAttribute('role','status');

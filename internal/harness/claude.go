@@ -75,7 +75,7 @@ func RunClaude(ctx context.Context, broker Broker, stream io.ReadWriteCloser, ou
 	}
 	hooks := map[string]any{}
 	for _, event := range []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"} {
-		hooks[event] = []any{map[string]any{"matcher": "Bash|Write|Edit|AskUserQuestion", "hookCallbackIds": []string{event}, "timeout": 3600}}
+		hooks[event] = []any{map[string]any{"matcher": "Bash|Write|Edit|AskUserQuestion|WebSearch|WebFetch", "hookCallbackIds": []string{event}, "timeout": 3600}}
 	}
 	if err := send(map[string]any{"type": "control_request", "request_id": "mitos-init", "request": map[string]any{"subtype": "initialize", "hooks": hooks}}); err != nil {
 		return err

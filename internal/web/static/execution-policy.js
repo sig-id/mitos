@@ -5,8 +5,11 @@
  const action=(label,fn)=>{const b=el('button',label);b.type='button';b.onclick=fn;return b};
  function initial(preferences,installations){
   if(preferences.execution)return structuredClone(preferences.execution);
-  const runtime=preferences.runtime||'codex',presets=[{id:'default',name:'Project default',runtime,model:preferences.model||'',profile_id:''}];
-  for(const r of installations.filter(r=>r.kind==='agent'&&['codex','claude'].includes(r.id)&&(r.installed||r.profiles?.length))){if(r.id!==runtime)presets.push({id:r.id,name:r.name,runtime:r.id,model:'',profile_id:''})}
+  const available=installations.filter(r=>r.kind==='agent'&&['codex','claude'].includes(r.id)&&(r.installed||r.profiles?.some(p=>p.executable)));
+  const requested=preferences.runtime||'codex',selected=available.find(r=>r.id===requested)||available.find(r=>r.installed)||available[0],runtime=selected?.id||requested;
+  const profile=r=>r?.installed?'':r?.profiles?.find(p=>p.executable)?.id||'';
+  const presets=[{id:'default',name:'Project default',runtime,model:runtime===requested?preferences.model||'':'',profile_id:profile(selected)}];
+  for(const r of available){if(r.id!==runtime)presets.push({id:r.id,name:r.name,runtime:r.id,model:'',profile_id:profile(r)})}
   return {presets,orchestrator:'default',worker:'default',roles:{},allowed_workers:presets.map(p=>p.id)};
  }
  function editor(value,installations,roles){
