@@ -33,7 +33,7 @@ func (e *Engine) agentContinuation(ctx context.Context, r Run) (Run, workspacefs
 	if err != nil {
 		return prior, workspacefs.Snapshot{}, workspacefs.Snapshot{}, err
 	}
-	if !prior.Terminal() || prior.TaskID != r.TaskID || prior.ProjectID != r.ProjectID || prior.GraphAttempt == nil || prior.GraphAttempt.GraphID != r.GraphAttempt.GraphID || prior.GraphAttempt.Executor.Digest != r.GraphAttempt.Executor.Digest || prior.Claim != nil && prior.Claim.ReleasedAt == nil {
+	if !prior.Terminal() || prior.TaskID != r.TaskID || prior.ProjectID != r.ProjectID || prior.GraphAttempt == nil || prior.GraphAttempt.GraphID != r.GraphAttempt.GraphID || executorContinuity(prior.GraphAttempt.Executor) != executorContinuity(r.GraphAttempt.Executor) || prior.Claim != nil && prior.Claim.ReleasedAt == nil {
 		return prior, workspacefs.Snapshot{}, workspacefs.Snapshot{}, ErrConflict
 	}
 	started := prior.NativeThreadID != ""

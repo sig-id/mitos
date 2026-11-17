@@ -66,11 +66,18 @@ func TestManifestRejectsInvalidDefinitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string][]byte{
-		"duplicate key":   []byte(strings.Replace(string(raw), `"kind": "worker",`, `"kind": "worker", "kind": "orchestrator",`, 1)),
-		"unknown field":   mutate(t, raw, func(d map[string]any) { d["shell"] = "rm -rf /" }),
-		"missing field":   mutate(t, raw, func(d map[string]any) { delete(d, "limits") }),
-		"null list":       mutate(t, raw, func(d map[string]any) { d["skills"] = nil }),
-		"wrong profile":   mutate(t, raw, func(d map[string]any) { d["profile"] = "agent-definition/v2" }),
+		"duplicate key": []byte(strings.Replace(string(raw), `"kind": "worker",`, `"kind": "worker", "kind": "orchestrator",`, 1)),
+		"unknown field": mutate(t, raw, func(d map[string]any) { d["shell"] = "rm -rf /" }),
+		"missing field": mutate(t, raw, func(d map[string]any) { delete(d, "limits") }),
+		"null list":     mutate(t, raw, func(d map[string]any) { d["skills"] = nil }),
+		"wrong profile": mutate(t, raw, func(d map[string]any) { d["profile"] = "agent-definition/v1" }),
+		"no natures":    mutate(t, raw, func(d map[string]any) { delete(d, "natures") }),
+		"unknown nature": mutate(t, raw, func(d map[string]any) {
+			d["natures"] = map[string]any{"supported": []any{"deploy"}, "default": "deploy"}
+		}),
+		"default outside": mutate(t, raw, func(d map[string]any) {
+			d["natures"] = map[string]any{"supported": []any{"context"}, "default": "design"}
+		}),
 		"bad id":          mutate(t, raw, func(d map[string]any) { d["id"] = "Engineer" }),
 		"overlap":         mutate(t, raw, func(d map[string]any) { d["capabilities"].(map[string]any)["optional"] = []any{"workspace.read"} }),
 		"unbounded turns": mutate(t, raw, func(d map[string]any) { d["limits"].(map[string]any)["max_turns"] = 0 }),
@@ -116,7 +123,7 @@ func TestDefinitionBindsInstructionsAndCanonicalDigest(t *testing.T) {
 func TestBundleRejectsEscapesAndMismatches(t *testing.T) {
 	raw, body := bundled(t, "mitos.writer")
 	index := func(path string, revision int) []byte {
-		return []byte(`{"profile":"agent-library-bundle/v1","id":"t","revision":1,"agents":[{"id":"mitos.writer","revision":` + map[bool]string{true: "2", false: "3"}[revision == 1] + `,"path":"` + path + `"}]}`)
+		return []byte(`{"profile":"agent-library-bundle/v1","id":"t","revision":1,"agents":[{"id":"mitos.writer","revision":` + map[bool]string{true: "3", false: "4"}[revision == 1] + `,"path":"` + path + `"}]}`)
 	}
 	good := fstest.MapFS{"b/library.json": {Data: index("writer/agent.json", 1)}, "b/writer/agent.json": {Data: raw}, "b/writer/instructions.md": {Data: body}}
 	if _, err := loadBundle(good, "b"); err != nil {

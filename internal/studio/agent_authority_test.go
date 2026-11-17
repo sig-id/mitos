@@ -22,7 +22,7 @@ func TestAuthorityPoliciesForBundledAgents(t *testing.T) {
 	for policy, want := range refused {
 		var got []string
 		for _, d := range library {
-			_, err := resolveAuthority(d, "codex", policy, 0)
+			_, err := resolveAuthority(d, "codex", policy, 0, "")
 			var prerequisite *agentPrerequisiteError
 			if err != nil {
 				if !errors.As(err, &prerequisite) {
@@ -36,14 +36,14 @@ func TestAuthorityPoliciesForBundledAgents(t *testing.T) {
 		}
 	}
 	for _, d := range library {
-		if _, err := resolveAuthority(d, "codex", EnforcementStrict, 0); err == nil {
+		if _, err := resolveAuthority(d, "codex", EnforcementStrict, 0, ""); err == nil {
 			t.Fatalf("strict accepted %s although reads and commands cannot be confined", d.ID)
 		}
 	}
-	if _, err := resolveAuthority(library[0], "codex", "", 0); err == nil {
+	if _, err := resolveAuthority(library[0], "codex", "", 0, ""); err == nil {
 		t.Fatal("missing policy accepted")
 	}
-	if _, err := resolveAuthority(library[0], "unsupported", EnforcementAdvisory, 0); err == nil {
+	if _, err := resolveAuthority(library[0], "unsupported", EnforcementAdvisory, 0, ""); err == nil {
 		t.Fatal("runtime without a profile accepted")
 	}
 }
@@ -59,7 +59,7 @@ func TestAuthorityReceiptStatesAndLimits(t *testing.T) {
 			architect = d
 		}
 	}
-	r, err := resolveAuthority(engineer, "codex", EnforcementAdvisory, 600)
+	r, err := resolveAuthority(engineer, "codex", EnforcementAdvisory, 600, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestAuthorityReceiptStatesAndLimits(t *testing.T) {
 	if r.TimeoutSeconds != 600 || r.MaxTurns != engineer.Manifest.Limits.MaxTurns || r.Digest != engineer.Digest {
 		t.Fatalf("limits: %+v", r)
 	}
-	if r, _ = resolveAuthority(engineer, "codex", EnforcementAdvisory, 0); r.TimeoutSeconds != engineer.Manifest.Limits.TimeoutSeconds {
+	if r, _ = resolveAuthority(engineer, "codex", EnforcementAdvisory, 0, ""); r.TimeoutSeconds != engineer.Manifest.Limits.TimeoutSeconds {
 		t.Fatal("definition timeout not applied")
 	}
 
@@ -87,12 +87,12 @@ func TestAuthorityReceiptStatesAndLimits(t *testing.T) {
 	m := architect.Manifest
 	m.Capabilities.Required = []string{"gpu.use"}
 	m.Capabilities.Optional = []string{"workspace.read"}
-	if _, err = resolveAuthority(agents.Definition{ID: m.ID, Manifest: m}, "codex", EnforcementAdvisory, 0); err == nil {
+	if _, err = resolveAuthority(agents.Definition{ID: m.ID, Manifest: m}, "codex", EnforcementAdvisory, 0, ""); err == nil {
 		t.Fatal("unsupported required capability accepted")
 	}
 	m = architect.Manifest
 	m.Runtime.Requires = []string{"native_output", "vision"}
-	if _, err = resolveAuthority(agents.Definition{ID: m.ID, Manifest: m}, "codex", EnforcementAdvisory, 0); err == nil {
+	if _, err = resolveAuthority(agents.Definition{ID: m.ID, Manifest: m}, "codex", EnforcementAdvisory, 0, ""); err == nil {
 		t.Fatal("missing runtime feature accepted")
 	}
 }
@@ -103,7 +103,7 @@ func TestHandoffToolsFollowArtifactGrants(t *testing.T) {
 		if d.ID != "mitos.orchestrator" {
 			continue
 		}
-		r, err := resolveAuthority(d, "codex", EnforcementAdvisory, 0)
+		r, err := resolveAuthority(d, "codex", EnforcementAdvisory, 0, "")
 		if err != nil {
 			t.Fatal(err)
 		}

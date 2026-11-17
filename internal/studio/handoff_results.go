@@ -173,6 +173,9 @@ func (s *Store) validateProposals(r *Run, proposals []ResultProposal) error {
 			}
 		}
 	}
+	if blocking && m.Spec.Traits != nil && len(natureCeilings[m.Spec.Traits.Nature]) > 0 {
+		return &HandoffFailure{Code: "proposal_blocking_not_permitted", Detail: m.Spec.Traits.Nature + " tasks may propose follow-up work but cannot yield on it"}
+	}
 	if blocking && m.Yields >= HandoffYieldsPerTask {
 		return handoffError("yield_limit_exceeded", int64(HandoffYieldsPerTask))
 	}
@@ -258,4 +261,47 @@ func (s *Store) readResult(consumer string, in ResultRead) (ResultPage, error) {
 
 func requiresHandoff(r *Run) bool {
 	return r.HandoffProtocol != ""
+}
+
+// validateProposalExecution applies the task trait contract to proposed specs
+// at submission, so a worker learns that its proposal could never be routed
+// before the orchestrator tries to admit it.
+func (e *Engine) validateProposalExecution(run string, proposals []ResultProposal) error {
+	if len(proposals) == 0 {
+		return nil
+	}
+	r, err := e.Store.Get(run)
+	if err != nil || r.GraphAttempt == nil {
+		return handoffError("proposals_unsupported", 0)
+	}
+	g, err := e.Store.Graph(r.GraphAttempt.GraphID)
+	if err != nil {
+		return handoffError("proposals_unsupported", 0)
+	}
+	p := graphExecution(&g)
+	for i, proposal := range proposals {
+		for _, spec := range proposal.Tasks {
+			app, ok := e.App(spec.Brief.AppID)
+			if !ok {
+				return &HandoffFailure{Code: "invalid_proposal", Position: int64(i), Detail: "unknown application " + spec.Brief.AppID}
+			}
+			if app.Agent == nil {
+				if spec.Traits != nil || spec.Harness != "" {
+					return &HandoffFailure{Code: "invalid_proposal", Position: int64(i), Detail: "traits and harness apply to native agent tasks"}
+				}
+				continue
+			}
+			if isOrchestratorKind(app.Agent.Definition.Kind) {
+				return &HandoffFailure{Code: "invalid_proposal", Position: int64(i), Detail: "workers cannot propose orchestrators"}
+			}
+			traits, err := resolveTraits(app.Agent.Definition, spec.Traits)
+			if err != nil {
+				return &HandoffFailure{Code: "invalid_proposal_traits", Position: int64(i), Detail: err.Error()}
+			}
+			if _, _, err = selectHarness(p, app.Agent.Definition, traits.Nature, spec.Harness, graphEnforcement(&g)); err != nil {
+				return &HandoffFailure{Code: "proposal_unroutable", Position: int64(i), Detail: err.Error()}
+			}
+		}
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package studio
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -51,8 +52,8 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 		return spec, nil, graphError("execution policy belongs to the work, not a generated brief")
 	}
 	if spec.Kind == "scope" {
-		if spec.ExecutionPreset != "" {
-			return spec, nil, graphError("scope cannot select an executor")
+		if spec.Harness != "" || spec.Traits != nil {
+			return spec, nil, graphError("scope cannot select an executor or declare traits")
 		}
 		if spec.Acceptance != "operator" || spec.Brief.AppID != "" || len(spec.Arguments) > 0 || len(spec.Brief.Scheduling.Deps) > 0 {
 			return spec, nil, graphError("scope is a logical obligation, not an executor")
@@ -76,6 +77,13 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 			return spec, nil, graphError("invalid invocation argument")
 		}
 	}
+	// A native worker's attempt time comes from its declared size, not from the
+	// requester's brief.
+	if app, ok := e.App(spec.Brief.AppID); ok && app.Agent != nil && !isOrchestratorKind(app.Agent.Definition.Kind) && spec.Traits != nil {
+		if budget, ok := graphExecution(g).SizeBudgets[spec.Traits.Size]; ok {
+			spec.Brief.TimeoutMinutes = budget.Minutes
+		}
+	}
 	spec.Brief.ProjectID = g.ProjectID
 	spec.Brief.Scheduling.Deadline = &g.Limits.Deadline
 	b := spec.Brief
@@ -90,8 +98,8 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	if !ok {
 		return spec, nil, graphError("application is no longer registered")
 	}
-	if app.Agent == nil && spec.ExecutionPreset != "" {
-		return spec, nil, graphError("execution presets require a native agent assignment")
+	if app.Agent == nil && (spec.Harness != "" || spec.Traits != nil) {
+		return spec, nil, graphError("traits and harness overrides apply to native agent assignments")
 	}
 	if app.Agent != nil {
 		if !g.Policy.Automatic || len(spec.Arguments) != 0 {
@@ -99,6 +107,10 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 		}
 		if err := e.bindExecution(g, spec, app.Agent); err != nil {
 			return spec, nil, err
+		}
+		if s := app.Agent.Selection; s != nil && s.Traits.Size != "" {
+			traits := s.Traits
+			spec.Traits = &traits
 		}
 		if err := specializeAgent(app.Agent, spec.Agent, g.ID); err != nil {
 			return spec, nil, err
@@ -241,7 +253,7 @@ func (e *Engine) createGraph(req CreateGraph, digest string) (WorkGraph, error) 
 		if err != nil {
 			return WorkGraph{}, err
 		}
-		g.Members[spec.ID] = &GraphMember{Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued", Sealed: req.Seal}
+		g.Members[spec.ID] = &GraphMember{Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued", Sealed: req.Seal, Requester: "operator"}
 	}
 	if req.Policy.Mode != "defined" && !req.Seal {
 		g.Expansions["initial"] = &GraphExpansion{ID: "initial", Scope: g.RootTask, Generation: 1, Deadline: g.Limits.Deadline}
@@ -595,7 +607,11 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			if err != nil {
 				return fail(err)
 			}
-			g.Members[spec.ID] = &GraphMember{Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued"}
+			requester := "orchestrator"
+			if operator {
+				requester = "operator"
+			}
+			g.Members[spec.ID] = &GraphMember{Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued", Requester: requester}
 		case "amend":
 			if err := pending(id); err != nil {
 				return fail(err)
@@ -757,6 +773,9 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 					return fail(graphError("proposal dependencies must name distinct worker tasks other than the proposer"))
 				}
 				rec.Tasks = append(rec.Tasks, deps[i].From)
+				if slices.Contains(slices.Collect(maps.Values(refs)), deps[i].From) && target.ProposedBy == "" {
+					target.ProposedBy = rec.ID
+				}
 			}
 			if !rec.Blocking {
 				// Follow-up work: the result is final, so nothing waits on it.
@@ -781,6 +800,11 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			run := e.Store.runs[m.CurrentRunID]
 			if run == nil || !run.Terminal() || run.Claim != nil && run.Claim.ReleasedAt == nil {
 				return fail(graphError("retry requires settled prior execution"))
+			}
+			if op.Escalate != "" {
+				if err := e.escalateMember(&g, m, op.Escalate, run.ID, now); err != nil {
+					return fail(err)
+				}
 			}
 			m.CurrentRunID = ""
 			m.State = "queued"

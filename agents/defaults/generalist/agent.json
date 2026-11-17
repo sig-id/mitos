@@ -1,7 +1,7 @@
 {
-  "profile": "agent-definition/v1",
+  "profile": "agent-definition/v2",
   "id": "mitos.generalist",
-  "revision": 3,
+  "revision": 4,
   "name": "Generalist",
   "description": "Solve bounded tasks across domains and provide a base for newly generated specialists.",
   "kind": "worker",
@@ -14,6 +14,10 @@
     "avoid_for": [
       "Claiming specialist credentials without supporting knowledge"
     ]
+  },
+  "natures": {
+    "supported": ["implement", "context", "design", "document", "review", "verify"],
+    "default": "implement"
   },
   "instructions": {
     "path": "instructions.md",

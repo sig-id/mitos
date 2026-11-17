@@ -34,7 +34,7 @@ if '--output-schema' in sys.argv:
  workers=[{'id':e['task'],'kind':e['kind'],'state':e['state'],'run_id':e['run_id']} for e in latest.values() if e['kind']=='application']
  plan={'explanation':'Plan then review.','operations':[],'accept':[],'complete':False}
  if not workers:
-  plan['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence.','brief':{'title':'Produce','intent':'Produce the answer','app_id':'agent:mitos.generalist','timeout_minutes':30,'scheduling':{'deps':[]}}}}]
+  plan['operations']=[{'kind':'add','spec':{'id':'worker','parent':ctx['root_task'],'kind':'application','required':True,'acceptance':'operator','criteria':'Produce evidence.','traits':{'nature':'','size':'small','intelligence':'low'},'brief':{'title':'Produce','intent':'Produce the answer','app_id':'agent:mitos.generalist','timeout_minutes':30,'scheduling':{'deps':[]}}}}]
  else:
   plan['accept']=[{'task':workers[0]['id'],'rationale':'Reviewed the saved report.'}]
   plan['complete']=True

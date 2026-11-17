@@ -61,7 +61,7 @@ an explicit proposal interface; the runtime still owns authority and completion.
 ## Validate authored packages
 
 `go test ./agents` validates every bundled package with the same typed loader the
-runtime uses: strict `agent-definition/v1` decoding (unknown fields, duplicate keys
+runtime uses: strict `agent-definition/v2` decoding (unknown fields, duplicate keys
 and missing members are refused), semantic checks (bounded unique lists, disjoint
 required/optional sets, finite limits, provenance rules), unique index entries,
 package-path containment and exact instruction digests. Skill and knowledge
@@ -72,5 +72,5 @@ This does not verify native authentication or runtime compatibility.
 Edits in the local library create a new immutable revision from the prior manifest,
 changing only name, description and instructions. New local agents derive from
 `mitos.generalist` and record it as their base. The local store
-(`agent-library.json`, profile `agent-library-store/v1`) is verified on every read;
+(`agent-library.json`, profile `agent-library-store/v2`) is verified on every read;
 stores without that profile are refused rather than migrated.
