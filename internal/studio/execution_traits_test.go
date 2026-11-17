@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"mitos/agents"
+	"mitos/internal/compute"
 )
 
 func libraryAgent(t *testing.T, id string) agents.Definition {
@@ -98,7 +99,7 @@ func TestAmbiguousHarnessRulesAreRejected(t *testing.T) {
 
 func TestNatureNarrowsAuthority(t *testing.T) {
 	engineer := libraryAgent(t, "mitos.engineer")
-	r, err := resolveAuthority(engineer, "codex", EnforcementAdvisory, 0, "context")
+	r, err := resolveAuthority(engineer, "codex", EnforcementAdvisory, 0, "context", (&compute.Local{}).Capabilities())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,11 +111,11 @@ func TestNatureNarrowsAuthority(t *testing.T) {
 			t.Fatal("withheld capability not recorded as enforced by nature", c)
 		}
 	}
-	if r, _ = resolveAuthority(engineer, "codex", EnforcementAdvisory, 0, "implement"); !r.Granted("workspace.write") {
+	if r, _ = resolveAuthority(engineer, "codex", EnforcementAdvisory, 0, "implement", (&compute.Local{}).Capabilities()); !r.Granted("workspace.write") {
 		t.Fatal("nature removed a grant it does not withhold")
 	}
 	// Claude cannot block writes, so strict policy refuses withheld-by-nature work there.
-	if _, err = resolveAuthority(engineer, "claude", EnforcementStrict, 0, "context"); err == nil {
+	if _, err = resolveAuthority(engineer, "claude", EnforcementStrict, 0, "context", (&compute.Local{}).Capabilities()); err == nil {
 		t.Fatal("strict policy accepted an unenforceable withholding")
 	}
 }

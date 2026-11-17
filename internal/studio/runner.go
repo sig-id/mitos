@@ -22,19 +22,24 @@ import (
 )
 
 type Engine struct {
-	Messages  *messaging.Service
-	Desk      *desk.Manager
-	provider  compute.Provider
-	Store     *Store
-	Apps      []Application
-	Root      string
-	mu        sync.Mutex
-	cancel    map[string]context.CancelFunc
-	ctx       context.Context
-	stop      context.CancelFunc
-	wg        sync.WaitGroup
-	actions   sync.Mutex
-	libraryMu sync.Mutex
+	Messages *messaging.Service
+	Desk     *desk.Manager
+	provider compute.Provider
+	// agentProvider is the provider for native agent execution only; OS
+	// confinement is scoped here so other launch paths keep the plain local
+	// posture they were admitted against.
+	agentProvider compute.Provider
+	confinement   compute.Confinement
+	Store         *Store
+	Apps          []Application
+	Root          string
+	mu            sync.Mutex
+	cancel        map[string]context.CancelFunc
+	ctx           context.Context
+	stop          context.CancelFunc
+	wg            sync.WaitGroup
+	actions       sync.Mutex
+	libraryMu     sync.Mutex
 	// Serializes idempotent structured-work admission by request key.
 	structuredMu sync.Mutex
 	setupMu      sync.Mutex
@@ -53,7 +58,19 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{provider: &compute.Local{}, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	provider := compute.Provider(&compute.Local{})
+	agentProvider := provider
+	var confinement compute.Confinement
+	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
+		var confineErr error
+		confinement, confineErr = compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
+		if confineErr != nil {
+			cancel()
+			return nil, confineErr
+		}
+		agentProvider = &compute.Local{Confinement: confinement}
+	}
+	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err

@@ -7,6 +7,7 @@ import (
 
 	"mitos/agents"
 	"mitos/internal/agentcli"
+	"mitos/internal/compute"
 )
 
 // ExecutionPolicyVersion is the only accepted execution policy contract.
@@ -328,7 +329,7 @@ func graphEnforcement(g *WorkGraph) string {
 // eligible matches, the task is refused with the reason.
 func selectHarness(p *AgentExecutionPolicy, d agents.Definition, nature, override, enforcement string) (ExecutionHarness, string, error) {
 	eligible := func(h ExecutionHarness) error {
-		_, err := resolveAuthority(d, h.Runtime, enforcement, 0, nature)
+		_, err := resolveAuthority(d, h.Runtime, enforcement, 0, nature, (&compute.Local{}).Capabilities())
 		return err
 	}
 	if override != "" {

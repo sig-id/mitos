@@ -3,6 +3,7 @@ package studio
 import (
 	"encoding/json"
 	"errors"
+	"mitos/internal/compute"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -284,7 +285,7 @@ func TestClaudeAuthorityDoesNotClaimConfinement(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, d := range library {
-		receipt, err := resolveAuthority(d, "claude", EnforcementAdvisory, 60, "")
+		receipt, err := resolveAuthority(d, "claude", EnforcementAdvisory, 60, "", compute.Capabilities{Isolation: "process", Egress: "unrestricted", NetModes: []string{"unrestricted"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -295,7 +296,7 @@ func TestClaudeAuthorityDoesNotClaimConfinement(t *testing.T) {
 				}
 			}
 		}
-		if _, err = resolveAuthority(d, "claude", EnforcementStrict, 60, ""); err == nil {
+		if _, err = resolveAuthority(d, "claude", EnforcementStrict, 60, "", compute.Capabilities{Isolation: "process", Egress: "unrestricted", NetModes: []string{"unrestricted"}}); err == nil {
 			t.Fatalf("strict policy admitted %s on an advisory runtime", d.ID)
 		}
 	}
