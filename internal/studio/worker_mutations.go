@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -79,22 +80,30 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 		if prior, ok := s.structuredCheckpoints[r.TaskID]; ok && wait.Cursor < prior.Cursor {
 			return response, ErrConflict
 		}
-		if len(r.Brief.Structured.CheckpointSchema) == 0 {
+		// A Task without a checkpoint schema still supports cursor-only waits:
+		// its input backlog can be paged without portable checkpoints. A
+		// declared schema keeps requiring a conforming checkpoint value.
+		hasSchema := len(r.Brief.Structured.CheckpointSchema) > 0
+		if !hasSchema && len(bytes.TrimSpace(wait.Checkpoint)) > 0 && string(bytes.TrimSpace(wait.Checkpoint)) != "null" {
 			return response, fmt.Errorf("checkpoint_schema_required")
 		}
-		if len(wait.Checkpoint) > 64<<10 {
-			return response, fmt.Errorf("checkpoint_too_large")
+		if hasSchema {
+			if len(wait.Checkpoint) > 64<<10 {
+				return response, fmt.Errorf("checkpoint_too_large")
+			}
+			schema, err := compileResultSchema(r.Brief.Structured.CheckpointSchema)
+			if err != nil {
+				return response, err
+			}
+			value, err := validateResult(schema, wait.Checkpoint)
+			if err != nil {
+				return response, err
+			}
+			canonical, _ := json.Marshal(value)
+			checkpoint = &StructuredCheckpoint{TaskID: r.TaskID, RunID: r.ID, Generation: in.Generation, InputDigest: in.InputDigest, DefinitionDigest: in.DefinitionDigest, SchemaDigest: digestText(string(r.Brief.Structured.CheckpointSchema)), Cursor: wait.Cursor, Value: canonical}
+		} else {
+			checkpoint = &StructuredCheckpoint{TaskID: r.TaskID, RunID: r.ID, Generation: in.Generation, InputDigest: in.InputDigest, DefinitionDigest: in.DefinitionDigest, Cursor: wait.Cursor}
 		}
-		schema, err := compileResultSchema(r.Brief.Structured.CheckpointSchema)
-		if err != nil {
-			return response, err
-		}
-		value, err := validateResult(schema, wait.Checkpoint)
-		if err != nil {
-			return response, err
-		}
-		canonical, _ := json.Marshal(value)
-		checkpoint = &StructuredCheckpoint{TaskID: r.TaskID, RunID: r.ID, Generation: in.Generation, InputDigest: in.InputDigest, DefinitionDigest: in.DefinitionDigest, SchemaDigest: digestText(string(r.Brief.Structured.CheckpointSchema)), Cursor: wait.Cursor, Value: canonical}
 		dormant := wait.Cursor == int64(len(s.taskInputs[r.TaskID]))
 		c.Input = &taskInputChange{Wait: &taskWait{TaskID: r.TaskID, RunID: r.ID, Cursor: wait.Cursor, Dormant: dormant}}
 		if dormant {
@@ -125,10 +134,34 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 				return response, ErrReconciliationRequired
 			}
 		}
+		if !s.versionsCurrentLocked(runTenant(r), r.Brief.Structured.ConsumedVersions) {
+			lease.Closed = true
+			response.State = "superseded_context"
+			response.Seq = s.seq + 1
+			rejection := change{Status: "failed", Stage: "Context superseded", Summary: "Consumed preference/profile versions changed before result publication.", Worker: &workerChange{Lease: &lease, Evidence: in.Data, Receipt: &workerReceipt{Key: key, Digest: digest, Response: response}}}
+			if err := s.commit(r.ID, "effect", "superseded_worker_result", rejection); err != nil {
+				return response, err
+			}
+			return response, ErrSuperseded
+		}
+
 		var result structuredworker.Result
 		if json.Unmarshal(in.Data, &result) != nil || len(result.Artifacts) > 8 {
 			return response, ErrConflict
 		}
+		required := int64(len(s.taskInputs[r.TaskID]))
+		if result.ConsumedCursor < required || result.ConsumedCursor > required {
+			lease.Closed = true
+			response.State = "inputs_not_consumed"
+			response.Seq = s.seq + 1
+			pending := true
+			rejection := change{Status: "failed", Stage: "New input available", Summary: "A newer input arrived before publication; a bounded fresh attempt must consume it.", StructuredRetryPending: &pending, Worker: &workerChange{Lease: &lease, Evidence: in.Data, Receipt: &workerReceipt{Key: key, Digest: digest, Response: response}}}
+			if err := s.commit(r.ID, "effect", "unconsumed_input_result", rejection); err != nil {
+				return response, err
+			}
+			return response, ErrInputsNotConsumed
+		}
+
 		schema, err := compileResultSchema(r.Brief.Structured.ResultSchema)
 		if err != nil {
 			return response, err

@@ -214,3 +214,10 @@ through the real confined worker path, not a production-model benchmark.
 The same TLS listener also hosts the independently authenticated and versioned
 [structured worker protocol](worker-protocol.md). Application credentials have
 no access to its claims or context.
+
+Structured Tasks may declare a tenant-scoped `serialization_key` and
+`consumed_versions`. Use `POST /api/inputs` for idempotent version compare-and-set
+advances, and `POST /api/tasks/<id>/inputs` for durable messages or explicit fresh
+versioned snapshots. See [conversation consistency](worker-protocol.md#conversation-keys-and-context-versions)
+for current-snapshot admission, dormant key release and publication refusal after
+preferences change.

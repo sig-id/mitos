@@ -138,6 +138,10 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status, code = 403, "forbidden"
 		case errors.Is(err, studio.ErrStaleBinding):
 			status, code = 409, "stale_binding"
+		case errors.Is(err, studio.ErrInputsNotConsumed):
+			status, code = 409, "inputs_not_consumed"
+		case errors.Is(err, studio.ErrSuperseded):
+			status, code = 409, "superseded_context"
 		case errors.Is(err, studio.ErrReconciliationRequired):
 			status, code = 409, "reconciliation_required"
 		case errors.Is(err, studio.ErrConflict):

@@ -88,6 +88,10 @@ func (e *Engine) WorkerAction(ctx context.Context, token string, in structuredwo
 		s.mu.Unlock()
 		return structuredworker.Receipt{}, err
 	}
+	if in.Kind == "action" && !s.versionsCurrentLocked(runTenant(r), r.Brief.Structured.ConsumedVersions) {
+		s.mu.Unlock()
+		return structuredworker.Receipt{}, ErrSuperseded
+	}
 	var request structuredworker.ActionRequest
 	d := json.NewDecoder(bytes.NewReader(in.Data))
 	d.DisallowUnknownFields()

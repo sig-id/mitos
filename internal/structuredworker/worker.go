@@ -23,7 +23,7 @@ func RequestID() string {
 func (c *HTTPClient) Work(ctx context.Context, id string, capabilities []string, executor Executor, once bool) error {
 	identity := Identity{ID: id, Incarnation: RequestID()}
 	var registered Receipt
-	if err := c.Call(ctx, "register", Register{RequestID: RequestID(), Incarnation: identity.Incarnation, Capabilities: capabilities}, &registered); err != nil {
+	if err := c.Call(ctx, "register", Register{Features: Features, RequestID: RequestID(), Incarnation: identity.Incarnation, Capabilities: capabilities}, &registered); err != nil {
 		return err
 	}
 	var wake <-chan struct{}

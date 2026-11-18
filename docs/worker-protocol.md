@@ -181,3 +181,56 @@ releases the worker, restarts the authority while dormant, appends an HTTP input
 and observes one accepted result on a fresh attempt. Conversation consistency,
 confinement and scale remain the S4 conformance gate before advertising
 `conversation_waits`.
+
+## Conversation keys and context versions
+
+Structured admission accepts `serialization_key` and `consumed_versions`. A key
+is scoped to the tenant and held only while an attempt is active. Conflicting
+Tasks may queue, but both readiness and atomic claim admission prevent concurrent
+holders. Waiting releases the key; a woken attempt queues behind any newer active
+holder. Independent tenants may use the same key.
+
+Version registers begin at zero. Applications advance them with
+`POST /api/inputs`, for example:
+
+```json
+{"key":"preferences-1","versions":[{"name":"preferences","expected":0,"value":1}]}
+```
+
+Advances are monotonic compare-and-set operations, scoped to the authenticated
+tenant. The input key binds its writer and entire request; a lost reply can be
+retried without applying an advance twice. Global version inputs also appear in
+the bounded tenant event feed. Admission rejects a newly requested stale snapshot;
+replaying an existing admission key still returns its original receipt.
+
+An input to a dormant Task can include fresh data and
+`consumed_versions: {"preferences":1}` without advancing the register again.
+Task-local advances implicitly bind their data to the new versions. The register,
+input and wake are committed together when applicable. A global advance alone
+does not relabel an old checkpoint or old input as current: wake stays withheld
+until the application provides an explicit current snapshot. Context receipts
+identify the declared versions and the bounded input page used by the worker.
+
+Publication compares every consumed version under the writer lock. A superseded
+candidate is preserved as evidence, its grant closes, and `409 superseded_context`
+refuses publication. The application can submit a new request with current data.
+A candidate must also report a consumed input cursor equal to the current Task
+log head. An input arriving first therefore refuses the older candidate and
+creates a bounded reconsideration attempt; a result committing first makes a
+later input fail visibly against the terminal Task. No acknowledged input can be
+silently passed over by an accepted result.
+
+An unresolved external operation may get a replacement grant limited to
+reconciliation after its context is superseded. It can query the original effect
+but cannot dispatch a new one or publish a stale result. Conversation keys release
+on these rejected attempts too.
+
+Worker registration advertises optional protocol features. Wait/checkpoint,
+input-log, context-version and action Tasks are offered only to compatible
+workers. Current local and standalone workers advertise all implemented features;
+base structured workers may continue to execute ordinary headless Tasks.
+
+Race tests cover tenant key independence, active/dormant key transfer, version CAS,
+old admission receipt replay, superseded evidence/deduplication, explicit snapshot
+refresh, unread input refusal and safe reconciliation after supersession. The
+`conversation_waits` capability remains gated until S4 fixture and scale evidence.

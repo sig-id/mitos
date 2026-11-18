@@ -347,6 +347,15 @@ func (s *Store) readyRunsLocked(activeIDs []string) ([]ReadyRun, error) {
 			}
 		}
 
+		if !s.serializationAvailableLocked(r, activeIDs) {
+			continue
+		}
+		if r.Brief.Structured != nil && !s.versionsCurrentLocked(runTenant(r), r.Brief.Structured.ConsumedVersions) && !s.taskHasActionHoldLocked(r.TaskID) {
+			if err := s.commit(r.ID, "effect", "superseded_before_claim", change{Status: "failed", Stage: "Context superseded", Summary: "Consumed preference/profile versions changed before admission."}); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if deadline := s.structuredTaskDeadline(r); !deadline.IsZero() && !time.Now().Before(deadline) {
 			if err := s.commit(r.ID, "effect", "tenant_budget_exhausted", change{Status: "failed", Stage: "Budget exhausted", Summary: "The tenant's elapsed task budget includes queued and waiting time."}); err != nil {
 				return nil, err
@@ -467,6 +476,9 @@ func (s *Store) scheduleLocked(id string, activeIDs []string, expected *workpool
 		return false, nil
 	}
 	if task.GraphID != "" && !s.graphCanDispatch(task) {
+		return false, nil
+	}
+	if !s.serializationAvailableLocked(r, activeIDs) {
 		return false, nil
 	}
 	ready := s.readiness(task, s.taskStates())

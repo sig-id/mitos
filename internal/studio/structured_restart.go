@@ -32,7 +32,10 @@ func (e *Engine) recoverStructured(r Run) error {
 	if err == nil {
 		return nil
 	}
-	if !errors.Is(err, ErrTenantBudget) && !errors.Is(err, ErrForbidden) {
+	if errors.Is(err, ErrTenantCapacity) {
+		return nil
+	}
+	if !errors.Is(err, ErrTenantBudget) && !errors.Is(err, ErrForbidden) && !errors.Is(err, ErrSuperseded) {
 		return err
 	}
 	s.mu.Lock()

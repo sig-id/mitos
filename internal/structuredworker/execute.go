@@ -106,15 +106,36 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 		reconcileSchema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["target","key"],"properties":{"target":{"type":"string"},"key":{"type":"string"}}}`)
 		targets, _ := json.Marshal(assignment.Actions)
 		options.Tools = []harness.DynamicTool{{Type: "function", Name: "mitos_action", Description: "Request an external operation only on an admitted target. Schemas: " + string(targets) + ". A prepared or unknown outcome requires mitos_reconcile with the same target and key. Never invent a different key while reconciliation is required.", InputSchema: schema}, {Type: "function", Name: "mitos_reconcile", Description: "Query the original external operation identity; never dispatch an ambiguous action again.", InputSchema: reconcileSchema}}
+		if assignment.Acceptance == "reconcile-only/current-permissions" {
+			options.Tools = options.Tools[1:]
+		}
 	}
 	var dormant atomic.Bool
-	if len(assignment.CheckpointSchema) > 0 && e.Wait != nil {
-		schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"cursor", "checkpoint"}, "properties": map[string]any{"cursor": map[string]string{"type": "integer"}, "checkpoint": assignment.CheckpointSchema}})
-		options.Tools = append(options.Tools, harness.DynamicTool{Type: "function", Name: "mitos_wait", Description: "Save a portable checkpoint and consumed per-Task input cursor. If inputs already exist after the cursor, process the returned bounded page and continue; otherwise release this attempt and resume on a later input. Never put model/session/framework state in the checkpoint.", InputSchema: schema})
+	var consumedCursor atomic.Int64
+	consumedCursor.Store(assignment.Inputs.Next)
+	if (len(assignment.CheckpointSchema) > 0 || assignment.Inputs.HasMore) && e.Wait != nil {
+		// The wait tool doubles as the input pager: Tasks without a checkpoint
+		// schema still page their backlog with cursor-only waits.
+		properties := map[string]any{"cursor": map[string]string{"type": "integer"}}
+		required := []string{"cursor"}
+		description := "Advance the consumed per-Task input cursor. If inputs already exist after the cursor, process the returned bounded page and continue; otherwise release this attempt and resume on a later input."
+		if len(assignment.CheckpointSchema) > 0 {
+			properties["checkpoint"] = assignment.CheckpointSchema
+			required = append(required, "checkpoint")
+			description += " Save only the declared portable checkpoint; never put model/session/framework state in it."
+		}
+		schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": properties})
+		options.Tools = append(options.Tools, harness.DynamicTool{Type: "function", Name: "mitos_wait", Description: description, InputSchema: schema})
 	}
 	options.ToolCall = func(name string, raw json.RawMessage) (any, error) {
 		if name == "mitos_wait" && e.Wait != nil {
 			receipt, err := e.Wait(ctx, raw)
+			if err == nil && receipt.State == "continue" {
+				var page InputPage
+				if json.Unmarshal(receipt.Result, &page) == nil {
+					consumedCursor.Store(max(consumedCursor.Load(), page.Next))
+				}
+			}
 			if err == nil && receipt.State == "dormant" {
 				dormant.Store(true)
 				cancel()
@@ -155,7 +176,7 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 	if runErr != nil {
 		return Result{Artifacts: evidence}, fmt.Errorf("Codex stopped: %w", runErr)
 	}
-	result := Result{Value: json.RawMessage(final), Artifacts: evidence}
+	result := Result{ConsumedCursor: consumedCursor.Load(), Value: json.RawMessage(final), Artifacts: evidence}
 	for _, name := range []string{"authority.json", "context.json"} {
 		if raw := assignment.Artifacts[name]; raw != nil {
 			result.Artifacts = append(result.Artifacts, Artifact{Name: name, Data: raw})

@@ -9,6 +9,9 @@ import (
 )
 
 const Version = "1"
+
+var Features = []string{"checkpoint/v1", "inputs/v1", "wait/v1", "versions/v1", "actions/v1"}
+
 const VersionHeader = "Mitos-Worker-Version"
 
 type Identity struct {
@@ -16,6 +19,7 @@ type Identity struct {
 	Incarnation string `json:"incarnation"`
 }
 type Register struct {
+	Features     []string `json:"features,omitempty"`
 	RequestID    string   `json:"request_id"`
 	Incarnation  string   `json:"incarnation"`
 	Capabilities []string `json:"capabilities"`
@@ -26,8 +30,10 @@ type Claim struct {
 	RunID     string `json:"run_id,omitempty"`
 }
 type Binding struct {
-	InputCursor    int64  `json:"input_cursor"`
-	InputLogDigest string `json:"input_log_digest"`
+	SerializationDigest  string `json:"serialization_digest,omitempty"`
+	ContextVersionDigest string `json:"context_version_digest,omitempty"`
+	InputCursor          int64  `json:"input_cursor"`
+	InputLogDigest       string `json:"input_log_digest"`
 	Identity
 	TaskID           string `json:"task_id"`
 	RunID            string `json:"run_id"`
@@ -58,6 +64,7 @@ type Receipt struct {
 	Binding       *Binding        `json:"binding,omitempty"`
 }
 type Context struct {
+	ConsumedVersions map[string]uint64          `json:"consumed_versions,omitempty"`
 	CheckpointSchema json.RawMessage            `json:"checkpoint_schema,omitempty"`
 	Checkpoint       json.RawMessage            `json:"checkpoint,omitempty"`
 	Inputs           InputPage                  `json:"inputs"`
@@ -85,8 +92,9 @@ type Artifact struct {
 	Data []byte `json:"data"`
 }
 type Result struct {
-	Value     json.RawMessage `json:"value"`
-	Artifacts []Artifact      `json:"artifacts,omitempty"`
+	ConsumedCursor int64           `json:"consumed_cursor,omitempty"`
+	Value          json.RawMessage `json:"value"`
+	Artifacts      []Artifact      `json:"artifacts,omitempty"`
 }
 
 // LeaseRecord is server state. Deadlines never cross the worker boundary.
