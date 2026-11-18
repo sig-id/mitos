@@ -22,7 +22,7 @@ var journalMigrations embed.FS
 
 const runtimeDatabase = "runtime.db"
 const runtimeLock = "runtime.lock"
-const journalSchemaVersion = 5
+const journalSchemaVersion = 6
 
 type sqliteJournal struct {
 	db     *sql.DB

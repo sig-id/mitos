@@ -232,6 +232,8 @@ func (s *Store) taskChange(id, kind string, c change, at time.Time, seq int64) (
 		task.Status = "running"
 	case "stopping":
 		task.Status = "running"
+	case "waiting":
+		task.Status = "dormant"
 	case "parked", "done", "failed", "cancelled":
 		task.Status = status
 	}

@@ -107,6 +107,9 @@ func TestIndependentApplicationCrashMatrix(t *testing.T) {
 func TestIndependentWorkerFaultMatrix(t *testing.T) {
 	runIndependentApplicationCrashMatrix(t, true, []string{"before_admission", "after_admission", "before_publication", "after_publication", "worker:crash", "worker:lease_expiry", "worker:duplicate_result", "worker:lost_receipt", "worker:server_restart", "worker:missed_mqtt", "worker:external_lost_response"})
 }
+func TestIndependentWorkerDurableWait(t *testing.T) {
+	runIndependentApplicationCrashMatrix(t, true, []string{"worker:wait_wake", "worker:wait_restart"})
+}
 func TestIndependentWorkerApplicationSmoke(t *testing.T) {
 	runIndependentApplicationCrashMatrix(t, true, []string{"after_publication"})
 }
@@ -149,6 +152,9 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 			// it reports EXPOSED if the runtime database is readable or the
 			// operator listener is reachable from the sandbox.
 			modelFlags := "-X main.forbiddenPath=" + filepath.Join(data, "runtime.db") + " -X main.forbiddenDial=" + operator
+			if strings.HasPrefix(point, "worker:wait_") {
+				modelFlags += " -X main.waitForInput=1"
+			}
 			if point == "worker:external_lost_response" {
 				modelFlags += " -X main.actionTarget=fixture-action"
 			}
@@ -320,6 +326,9 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 				if actionTarget != "" {
 					cmd.Args = append(cmd.Args, "--action-target", actionTarget)
 				}
+				if strings.HasPrefix(point, "worker:wait_") {
+					cmd.Args = append(cmd.Args, "--wait-for-input")
+				}
 				cmd.Env = fixtureEnv(map[string]string{"MITOS_APPLICATION_TOKEN": principal.Token, "MITOS_ENABLE_FAILPOINTS": "1", "MITOS_APPFIXTURE_FAILPOINT": failpoint})
 				return cmd.CombinedOutput()
 			}
@@ -363,6 +372,47 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 					}
 					currentWorker = startWorker("")
 				}
+				if strings.HasPrefix(point, "worker:wait_") {
+					taskID := ""
+					deadline := time.Now().Add(20 * time.Second)
+					for time.Now().Before(deadline) {
+						raw, status := fixtureCall(t, client, "GET", "https://"+remote+"/api/runs?limit=200", principal.Token, nil)
+						var attempts []struct {
+							TaskID string `json:"task_id"`
+							Status string `json:"status"`
+						}
+						if status == 200 && json.Unmarshal(raw, &attempts) == nil {
+							for _, run := range attempts {
+								if run.Status == "waiting" {
+									taskID = run.TaskID
+								}
+							}
+						}
+						if taskID != "" {
+							break
+						}
+						time.Sleep(100 * time.Millisecond)
+					}
+					if taskID == "" {
+						for _, worker := range workerProcesses {
+							raw, _ := os.ReadFile(worker.log.Name())
+							t.Log("worker:", string(raw))
+						}
+						t.Fatal("native wait did not release its attempt")
+					}
+					if point == "worker:wait_restart" {
+						runtime.stop()
+						runtime = start()
+					}
+					raw, status := fixtureCall(t, client, "POST", "https://"+remote+"/api/tasks/"+taskID+"/inputs", principal.Token, map[string]any{"key": "answer", "data": map[string]bool{"resume": true}})
+					var receipt struct {
+						State string `json:"state"`
+					}
+					if status != 201 || json.Unmarshal(raw, &receipt) != nil || receipt.State != "woke" {
+						t.Fatal("native wait wake", status, string(raw))
+					}
+				}
+
 				if point == "worker:lost_receipt" {
 					ended := make(chan error, 1)
 					go func() { ended <- runtime.cmd.Wait() }()

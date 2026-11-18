@@ -143,3 +143,41 @@ Task-level ambiguous-action hold through worker replacement.
 The injected crashes require both failpoint opt-in variables. A deterministic
 native model stand-in follows the actual confined stdio/tool path. This measures
 protocol recovery, rather than production model quality or deployment throughput.
+
+## Durable Task inputs and waits
+
+Applications append `POST /api/tasks/<task>/inputs` with `{key,data}`. Inputs are
+bounded JSON objects and receive a per-Task sequence and stable receipt; the key
+also binds the original writer and payload. `GET` on that path uses `after` and
+`limit` to read the bounded log. These cursors are per-Task input sequences; the
+application event feed continues to use global journal sequences. Foreign Task
+IDs return 404, and read-only principals cannot append.
+
+A worker with `structured.checkpoint_schema` may call `/worker/v1/wait` with its
+binding, stable request ID, and data `{cursor,checkpoint}`. The native library
+exposes the same operation as `mitos_wait`. The single writer validates and
+commits the schema-declared checkpoint, provenance and consumed cursor together.
+If input already exists after that cursor, the receipt says `continue` and
+returns a bounded input page. The grant remains active. Otherwise the receipt
+says `dormant`, the attempt becomes `waiting`, its Task becomes `dormant`, and the
+grant closes in the same transaction. The native executor stops and returns to
+claiming work; no human decision or model/session snapshot is involved.
+
+An arriving input and its fresh queued attempt commit together. The wake reserves
+a new authority generation, retains Task/request identity and the exact agent
+body, and never reopens the old grant. Claim admission still checks current pool,
+tenant, principal and target policy. Existing task attempt and elapsed-time
+budgets include waits; a denied or exhausted wake still saves the input and
+returns `wake_withheld`. Pending inputs are reconsidered when current policy and
+queue space permit; denied responsibilities do not prevent other wakes. A resumed
+context contains only its portable checkpoint
+and the next bounded page of its own Task's input log. Context receipts are
+prepared by the server and journaled with their prompt digest.
+
+`TestTaskInputRacesWaitRegistrationWithoutLostWake` races both operations.
+`TestTaskWaitAndInputWakeCrashAtomicity` kills processes before/after each commit.
+`TestIndependentWorkerDurableWait` exercises the actual confined native tool,
+releases the worker, restarts the authority while dormant, appends an HTTP input,
+and observes one accepted result on a fresh attempt. Conversation consistency,
+confinement and scale remain the S4 conformance gate before advertising
+`conversation_waits`.

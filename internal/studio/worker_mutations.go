@@ -70,7 +70,48 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 			return response, err
 		}
 		canonical, _ := json.Marshal(value)
-		checkpoint = &StructuredCheckpoint{TaskID: r.TaskID, RunID: r.ID, Generation: in.Generation, InputDigest: in.InputDigest, DefinitionDigest: in.DefinitionDigest, SchemaDigest: digestText(string(r.Brief.Structured.CheckpointSchema)), Value: canonical}
+		checkpoint = &StructuredCheckpoint{Cursor: s.structuredCheckpoints[r.TaskID].Cursor, TaskID: r.TaskID, RunID: r.ID, Generation: in.Generation, InputDigest: in.InputDigest, DefinitionDigest: in.DefinitionDigest, SchemaDigest: digestText(string(r.Brief.Structured.CheckpointSchema)), Value: canonical}
+	case "wait":
+		var wait structuredworker.WaitRequest
+		if json.Unmarshal(in.Data, &wait) != nil || wait.Cursor < 0 || wait.Cursor > int64(len(s.taskInputs[r.TaskID])) {
+			return response, ErrConflict
+		}
+		if prior, ok := s.structuredCheckpoints[r.TaskID]; ok && wait.Cursor < prior.Cursor {
+			return response, ErrConflict
+		}
+		if len(r.Brief.Structured.CheckpointSchema) == 0 {
+			return response, fmt.Errorf("checkpoint_schema_required")
+		}
+		if len(wait.Checkpoint) > 64<<10 {
+			return response, fmt.Errorf("checkpoint_too_large")
+		}
+		schema, err := compileResultSchema(r.Brief.Structured.CheckpointSchema)
+		if err != nil {
+			return response, err
+		}
+		value, err := validateResult(schema, wait.Checkpoint)
+		if err != nil {
+			return response, err
+		}
+		canonical, _ := json.Marshal(value)
+		checkpoint = &StructuredCheckpoint{TaskID: r.TaskID, RunID: r.ID, Generation: in.Generation, InputDigest: in.InputDigest, DefinitionDigest: in.DefinitionDigest, SchemaDigest: digestText(string(r.Brief.Structured.CheckpointSchema)), Cursor: wait.Cursor, Value: canonical}
+		dormant := wait.Cursor == int64(len(s.taskInputs[r.TaskID]))
+		c.Input = &taskInputChange{Wait: &taskWait{TaskID: r.TaskID, RunID: r.ID, Cursor: wait.Cursor, Dormant: dormant}}
+		if dormant {
+			lease.Closed = true
+			response.State = "dormant"
+			c.Status = "waiting"
+			c.Stage = "Waiting for input"
+			c.Summary = "The checkpoint and consumed input cursor are durable; no execution capacity is held."
+		} else {
+			response.State = "continue"
+			page, err := s.taskInputPageLocked(r.TaskID, wait.Cursor, ReadDefaultLimit)
+			if err != nil {
+				return response, err
+			}
+			response.Result, _ = json.Marshal(page)
+		}
+
 	case "release":
 		lease.Closed = true
 		pending := true
@@ -109,6 +150,9 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 		context, err := structuredWorkerContext(boundedRun(r), in.Binding, s.Dir())
 		if err != nil {
 			return response, err
+		}
+		if recorded, ok := s.workerContexts[r.ID]; ok && recorded.Generation == in.Generation {
+			context.Artifacts = recorded.Artifacts
 		}
 		for _, name := range []string{"authority.json", "context.json"} {
 			artifacts = append(artifacts, ArtifactData{Name: name, Data: context.Artifacts[name]})

@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
 var forbiddenPath string
 var forbiddenDial string
 var actionTarget string
+var waitForInput string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
@@ -56,6 +58,11 @@ func main() {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params struct {
+				Input []struct {
+					Text string `json:"text"`
+				} `json:"input"`
+			} `json:"params"`
 			Result struct {
 				Success      bool `json:"success"`
 				ContentItems []struct {
@@ -73,12 +80,27 @@ func main() {
 			send(map[string]any{"id": request.ID, "result": map[string]any{"thread": map[string]string{"id": "fixture-thread"}, "model": "fixture"}})
 		case "turn/start":
 			send(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]string{"id": "fixture-turn"}}})
-			if actionTarget != "" {
+			if waitForInput != "" {
+				resumed := false
+				for _, input := range request.Params.Input {
+					if strings.Contains(input.Text, `"resume":true`) {
+						resumed = true
+					}
+				}
+				if resumed {
+					finish("ack")
+				} else {
+					send(map[string]any{"id": "wait-call", "method": "item/tool/call", "params": map[string]any{"threadId": "fixture-thread", "turnId": "fixture-turn", "tool": "mitos_wait", "arguments": map[string]any{"cursor": 0, "checkpoint": map[string]string{"state": "waiting"}}}})
+				}
+			} else if actionTarget != "" {
 				tool("action-call", "mitos_action", true)
 			} else {
 				finish("ack")
 			}
 		default:
+			if string(request.ID) == `"wait-call"` && request.Result.Success {
+				finish("ack")
+			}
 			if string(request.ID) == `"action-call"` {
 				tool("reconcile-call", "mitos_reconcile", false)
 			}

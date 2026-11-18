@@ -24,6 +24,11 @@ import (
 )
 
 type Store struct {
+	pendingInputWakes      map[string]bool
+	workerContexts         map[string]workerContextRecord
+	taskInputs             map[string][]TaskInput
+	taskInputKeys          map[string]TaskInput
+	taskWaits              map[string]taskWait
 	actionTargets          map[string]ActionTarget
 	externalOperations     map[string]ExternalOperation
 	operationKeys          map[string]string
@@ -157,6 +162,9 @@ func (s *Store) apply(e Event) error {
 	var c change
 	if err := json.Unmarshal(e.Data, &c); err != nil {
 		return err
+	}
+	if c.Input != nil {
+		s.applyTaskInput(c.Input)
 	}
 	if c.Action != nil {
 		s.applyAction(c.Action)
@@ -615,6 +623,15 @@ func (s *Store) prepareEvent(id, typ, kind string, c change, seq int64, previous
 			c.Worker = &workerChange{}
 		}
 		c.Worker.Outbox = &WorkerOutbox{ID: fmt.Sprintf("wake-%d", seq), Seq: seq, Pool: c.Run.Brief.Scheduling.Pool, Capability: c.Run.Brief.Structured.Frozen.ID}
+	}
+
+	if c.Input == nil && (c.Status == "cancelled" || c.Status == "failed" || c.Status == "done") {
+		if r := s.runs[id]; r != nil {
+			if wait, ok := s.taskWaits[r.TaskID]; ok && wait.Dormant && wait.RunID == id {
+				wait.Dormant = false
+				c.Input = &taskInputChange{Wait: &wait}
+			}
+		}
 	}
 
 	data, err := json.Marshal(c)
