@@ -11,17 +11,22 @@
 <nav class="project-tabs" aria-label="Work views"><button data-view="overview">Overview</button><button data-view="work">Conversation</button><button data-view="workflow">Workflow</button><button data-view="result">Result</button><button data-view="changes">Changes</button><span class="project-tools"><button data-view="services">Automations</button><button data-view="resources">Project setup</button></span></nav>
 <section class="content" id="overview-view" aria-label="Project overview" hidden>
 <svg class="project-work-symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-<symbol id="work-icon-task" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="1" fill="currentColor"/></symbol>
-<symbol id="work-icon-graph" viewBox="0 0 16 16"><circle cx="3.5" cy="3" r="1.6"/><circle cx="3.5" cy="13" r="1.6"/><path d="M3.5 4.6v6.8M12.5 11.4V7a4 4 0 0 0-4-4H8m2-2L8 3l2 2"/><circle cx="12.5" cy="13" r="1.6"/></symbol>
+<symbol id="work-icon-task" viewBox="0 0 28 28"><rect width="28" height="28" rx="7" fill="#273c46"/><g stroke="#a6d9e6" stroke-width="1.5" stroke-linejoin="round"><path d="M6 18 15 7l7-1-2 7-11 9-3-4Z" fill="#4a717c"/><path d="m11 17 6-7M7 22l-2 2" fill="none"/></g></symbol>
+<symbol id="work-icon-graph" viewBox="0 0 28 28"><rect width="28" height="28" rx="7" fill="#393347"/><g fill="none" stroke-linecap="round" stroke-width="2"><path d="m7 18 9-12m-5 15L21 8m-6 14 7-9" stroke="#ac93c7"/><path d="m6 11 11 9m-9-13 13 10m-8-11 9 7" stroke="#e5c9ed"/></g></symbol>
 </svg>
 <div class="project-work-controls">
-<label class="project-work-search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.5"/><path d="m10 10 4 4"/></svg><input id="project-work-search" type="search" placeholder="Search by title or ID…" aria-label="Search project work"></label>
+<label class="project-work-search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.5"/><path d="m10 10 4 4"/></svg><input id="project-work-search" type="search" placeholder="Search work, branches, or labels…" aria-label="Search project work"></label>
 <select id="project-work-kind" aria-label="Work type"><option value="">All work types</option><option value="graph">Coordinated work</option><option value="task">Native assignments</option></select>
 </div>
 <section class="project-work-panel" aria-label="Project work">
-<div class="project-work-toolbar"><nav id="project-work-filters" aria-label="Work status">
+<div class="project-work-toolbar"><input id="work-select-page" class="work-check" type="checkbox" aria-label="Select all work on this page" disabled><nav id="project-work-filters" aria-label="Work status">
 <button data-work-state="open" aria-current="page">Open <span></span></button><button data-work-state="closed">Closed <span></span></button><button data-work-state="archived">Archived <span></span></button>
 </nav><div class="project-work-sort"><label for="project-work-sort">Sort</label><select id="project-work-sort"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="updated">Recently updated</option></select></div></div>
+<div id="work-bulk" class="work-bulk" hidden>
+<strong id="work-selected-count"></strong>
+<form id="work-label-form"><input id="work-label" aria-label="Label name" list="work-known-labels" placeholder="Label name" maxlength="64" required><datalist id="work-known-labels"></datalist><button type="submit" value="add">Add label</button><button type="submit" value="remove">Remove label</button></form>
+<div id="work-state-actions"><button data-bulk-state="closed">Close</button><button data-bulk-state="open">Reopen</button><button data-bulk-state="archived">Archive</button></div>
+</div><p id="work-bulk-message" role="status"></p>
 <div id="project-work-list" aria-live="polite"><p class="empty">Loading work…</p></div>
 <div id="project-work-pagination" class="project-work-pagination"></div>
 </section>

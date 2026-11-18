@@ -8,6 +8,8 @@ import (
 
 // Summary reads never clone transcripts, graph receipts or executor configuration.
 type GraphSummary struct {
+	Workspace    string         `json:"workspace,omitempty"`
+	AttemptMS    int64          `json:"attempt_ms"`
 	Agents       int            `json:"agents"`
 	ActiveAgents int            `json:"active_agents"`
 	Predecessor  string         `json:"predecessor,omitempty"`
@@ -48,7 +50,13 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 		g := s.graphs[id]
 		counts := map[string]int{}
 		agents, activeAgents := 0, 0
+		var duration time.Duration
 		for _, m := range g.Members {
+			for _, runID := range m.Attempts {
+				if run := s.runs[runID]; run != nil {
+					duration += run.Duration()
+				}
+			}
 			if m.Spec.Kind == "application" && m.Replacement == "" {
 				agents++
 				if run := s.runs[m.CurrentRunID]; run != nil && (run.Status == "running" || run.Status == "stopping" || run.Status == "parked") {
@@ -59,7 +67,7 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 				counts[s.graphDisplayState(g, m)]++
 			}
 		}
-		out = append(out, GraphSummary{Agents: agents, ActiveAgents: activeAgents, ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, WorkState: g.WorkStateValue(), Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
+		out = append(out, GraphSummary{Workspace: g.Workspace, AttemptMS: duration.Milliseconds(), Agents: agents, ActiveAgents: activeAgents, ID: id, Predecessor: g.Predecessor, ProjectID: g.ProjectID, RootTask: g.RootTask, Title: g.Members[g.RootTask].Spec.Brief.Title, Status: g.Status, WorkState: g.WorkStateValue(), Revision: g.Revision, Members: len(g.Members), Counts: counts, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
 	}
 	return out, next
 }

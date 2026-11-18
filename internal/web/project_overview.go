@@ -2,15 +2,23 @@ package web
 
 import (
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"mitos/internal/desk"
 	"mitos/internal/studio"
 )
 
 type projectWorkRow struct {
+	Revision     int64     `json:"revision"`
+	Workspace    string    `json:"workspace"`
+	Branch       string    `json:"branch,omitempty"`
+	Labels       []string  `json:"labels,omitempty"`
+	AttemptMS    *int64    `json:"attempt_ms"`
+	CostUSD      *float64  `json:"cost_usd"` // Supplied by billing when a work total is available.
 	ID           string    `json:"id"`
 	Kind         string    `json:"kind"`
 	Title        string    `json:"title"`
@@ -23,13 +31,12 @@ type projectWorkRow struct {
 }
 
 type projectWorkStats struct {
-	Open         int `json:"open"`
-	Closed       int `json:"closed"`
-	Archived     int `json:"archived"`
-	Underway     int `json:"underway"`
-	ActiveAgents int `json:"active_agents"`
-	// No billing totals are recorded by the current execution providers.
-	CostUSD *float64 `json:"cost_usd"`
+	Open         int      `json:"open"`
+	Closed       int      `json:"closed"`
+	Archived     int      `json:"archived"`
+	Underway     int      `json:"underway"`
+	ActiveAgents int      `json:"active_agents"`
+	CostUSD      *float64 `json:"cost_usd"`
 }
 
 func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
@@ -65,21 +72,46 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	p, err := s.engine.Desk.Project(project)
+	if err != nil {
+		deskResult(w, nil, err)
+		return
+	}
+	now := time.Now().UTC()
+	branch := desk.CheckoutBranch(r.Context(), p.Directory)
 	rows := []projectWorkRow{}
 	stats := projectWorkStats{}
 	// Aggregate before filtering and pagination so totals always cover the project.
 	graphs, _ := s.engine.Store.GraphSummaries(project, "", int(^uint(0)>>1))
 	for _, g := range graphs {
-		rows = append(rows, projectWorkRow{ID: g.ID, Kind: "graph", Title: g.Title, State: g.WorkState, Status: projectGraphStatus(g), Agents: g.Agents, ActiveAgents: g.ActiveAgents, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
+		rows = append(rows, projectWorkRow{
+			ID: g.ID, Kind: "graph", Title: g.Title, Revision: g.Revision,
+			State: g.WorkState, Status: projectGraphStatus(g), Workspace: g.Workspace,
+			Agents: g.Agents, ActiveAgents: g.ActiveAgents, AttemptMS: &g.AttemptMS,
+			CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt,
+		})
 		stats.ActiveAgents += g.ActiveAgents
 	}
 	sessions := map[string]int{}
+	byID := map[string]desk.Session{}
+	sessionTime := map[string]time.Duration{}
+	unknownTime := map[string]bool{}
 	for _, session := range work.Sessions {
-		// Native sessions are separate from coordinated graph executions.
-		if session.Status == "starting" || session.Status == "running" || session.Status == "stopping" {
+		byID[session.ID] = session
+		active := session.Status == "starting" || session.Status == "running" || session.Status == "stopping"
+		if active {
 			stats.ActiveAgents++
 			sessions[session.TaskID]++
 		}
+		end := session.EndedAt
+		if end == nil && active {
+			end = &now
+		}
+		if end == nil || session.CreatedAt.IsZero() {
+			unknownTime[session.TaskID] = true
+			continue
+		}
+		sessionTime[session.TaskID] += max(0, end.Sub(session.CreatedAt))
 	}
 	for _, task := range work.Tasks {
 		state := "open"
@@ -90,12 +122,30 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 		if task.CurrentSessionID != "" {
 			agents = 1
 		}
-		rows = append(rows, projectWorkRow{ID: task.ID, Kind: "task", Title: task.Title, State: state, Status: task.Status, Agents: agents, ActiveAgents: sessions[task.ID], CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt})
+		session := byID[task.CurrentSessionID]
+		var attemptMS *int64
+		if !unknownTime[task.ID] {
+			ms := sessionTime[task.ID].Milliseconds()
+			attemptMS = &ms
+		}
+		rows = append(rows, projectWorkRow{
+			ID: task.ID, Kind: "task", Title: task.Title, Revision: int64(task.Revision),
+			State: state, Status: task.Status, Workspace: session.Workspace, Branch: session.WorktreeBranch,
+			Agents: agents, ActiveAgents: sessions[task.ID], AttemptMS: attemptMS,
+			CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
+		})
 	}
 	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	idQuery := strings.TrimPrefix(query, "#")
 	filtered := []projectWorkRow{}
 	for _, row := range rows {
+		if row.Workspace == "" {
+			row.Workspace = p.Directory
+		}
+		if row.Branch == "" && row.Workspace == p.Directory {
+			row.Branch = branch
+		}
+		row.Labels = work.Labels[row.ID]
 		switch row.State {
 		case "open":
 			stats.Open++
@@ -112,7 +162,9 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		_, suffix, _ := strings.Cut(row.ID, "_")
 		matchesID := idQuery != "" && (strings.HasPrefix(row.ID, idQuery) || strings.HasPrefix(suffix, idQuery))
-		if strings.Contains(strings.ToLower(row.Title), query) || matchesID {
+		matchesCheckout := strings.Contains(strings.ToLower(row.Branch), query) || strings.Contains(strings.ToLower(filepath.Base(row.Workspace)), query)
+		matchesLabel := slices.ContainsFunc(row.Labels, func(name string) bool { return strings.Contains(strings.ToLower(name), query) })
+		if strings.Contains(strings.ToLower(row.Title), query) || matchesID || matchesCheckout || matchesLabel {
 			filtered = append(filtered, row)
 		}
 	}
@@ -132,7 +184,18 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 	total := len(filtered)
 	offset = min(offset, total)
 	end := min(offset+50, total)
-	writeJSON(w, 200, map[string]any{"server": s.engine.Store.Home(), "observed_at": time.Now().UTC(), "stats": stats, "work": filtered[offset:end], "total": total, "offset": offset, "next_offset": end})
+	labelSet := map[string]bool{}
+	for _, names := range work.Labels {
+		for _, name := range names {
+			labelSet[name] = true
+		}
+	}
+	names := make([]string, 0, len(labelSet))
+	for name := range labelSet {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	writeJSON(w, 200, map[string]any{"labels": names, "server": s.engine.Store.Home(), "observed_at": now, "stats": stats, "work": filtered[offset:end], "total": total, "offset": offset, "next_offset": end})
 }
 
 func projectGraphStatus(g studio.GraphSummary) string {
@@ -148,4 +211,41 @@ func projectGraphStatus(g studio.GraphSummary) string {
 		}
 	}
 	return "idle"
+}
+
+func (s *Server) editOverviewLabels(w http.ResponseWriter, r *http.Request) {
+	var edit struct {
+		IDs    []string `json:"ids"`
+		Action string   `json:"action"`
+		Label  string   `json:"label"`
+	}
+	if err := deskJSON(r, &edit); err != nil {
+		deskResult(w, nil, err)
+		return
+	}
+	if len(edit.IDs) == 0 || len(edit.IDs) > 50 {
+		writeJSON(w, 400, map[string]string{"error": "select 1–50 work items"})
+		return
+	}
+	project := r.PathValue("project")
+	work, err := s.engine.Desk.Work(project)
+	if err != nil {
+		deskResult(w, nil, err)
+		return
+	}
+	owned := map[string]bool{}
+	graphs, _ := s.engine.Store.GraphSummaries(project, "", int(^uint(0)>>1))
+	for _, g := range graphs {
+		owned[g.ID] = true
+	}
+	for _, t := range work.Tasks {
+		owned[t.ID] = true
+	}
+	for _, id := range edit.IDs {
+		if !owned[id] {
+			deskResult(w, nil, desk.ErrNotFound)
+			return
+		}
+	}
+	deskResult(w, map[string]bool{"saved": true}, s.engine.Desk.EditWorkLabels(project, edit.IDs, edit.Action, edit.Label))
 }
