@@ -41,3 +41,12 @@ func TestCoordinatedPrintArguments(t *testing.T) {
 		t.Fatal("shell accepted")
 	}
 }
+
+func TestEditApprovalModes(t *testing.T) {
+	for runtime, mode := range map[string]string{"gemini": "auto_edit", "qwen": "auto-edit"} {
+		args, err := PrintArguments(runtime, "", "", func(capability string) bool { return capability == "workspace.write" })
+		if err != nil || !slices.Equal(args, []string{"--output-format", "text", "--approval-mode", mode}) {
+			t.Fatalf("%s: %v %v", runtime, args, err)
+		}
+	}
+}

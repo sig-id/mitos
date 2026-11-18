@@ -34,7 +34,11 @@ func PrintArguments(id, model, effort string, granted func(string) bool) ([]stri
 	case "gemini", "qwen":
 		args = []string{"--output-format", "text"}
 		if granted("workspace.write") {
-			args = append(args, "--approval-mode", "auto_edit")
+			mode := "auto_edit"
+			if id == "qwen" {
+				mode = "auto-edit"
+			}
+			args = append(args, "--approval-mode", mode)
 		}
 	case "copilot":
 		args = []string{"-s", "--no-ask-user", "--excluded-tools=task"}
