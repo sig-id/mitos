@@ -15,6 +15,33 @@ func projectJournalEvents(events []Event) ([]journalProjection, error) {
 		if err := json.Unmarshal(e.Data, &c); err != nil {
 			return nil, err
 		}
+		if c.Worker != nil {
+			wc := c.Worker
+			add := func(namespace, key string, value any) {
+				raw, _ := json.Marshal(value)
+				out = append(out, journalProjection{Namespace: namespace, Key: key, Value: raw})
+			}
+			if wc.Checkpoint != nil {
+				add("structured_checkpoint", wc.Checkpoint.TaskID, wc.Checkpoint)
+			}
+			if wc.Credential != nil {
+				add("worker_credential", wc.Credential.ID, wc.Credential)
+			}
+			if wc.Registration != nil {
+				add("worker_registration", wc.Registration.ID, wc.Registration)
+			}
+			if wc.Lease != nil {
+				add("worker_lease", wc.Lease.RunID, wc.Lease)
+				add("task_generation", wc.Lease.TaskID, wc.Lease.Generation)
+			}
+			if wc.Receipt != nil {
+				add("worker_receipt", wc.Receipt.Key, wc.Receipt)
+			}
+			if wc.Outbox != nil {
+				add("worker_outbox", wc.Outbox.ID, wc.Outbox)
+			}
+		}
+
 		ids := map[string]bool{}
 		if e.RunID != "" {
 			ids[e.RunID] = true

@@ -305,6 +305,10 @@ type ReadyRun struct {
 func (s *Store) ReadyRuns(activeIDs []string) ([]ReadyRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.readyRunsLocked(activeIDs)
+}
+func (s *Store) readyRunsLocked(activeIDs []string) ([]ReadyRun, error) {
+	activeIDs = s.includeWorkerActiveLocked(activeIDs)
 	states := s.taskStates()
 	active := s.activePools(activeIDs)
 	activeRuns := map[string]bool{}
@@ -427,6 +431,10 @@ func (s *Store) ScheduleSelected(id string, activeIDs []string, policy workpool.
 func (s *Store) schedule(id string, activeIDs []string, expected *workpool.Pool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.scheduleLocked(id, activeIDs, expected, nil)
+}
+func (s *Store) scheduleLocked(id string, activeIDs []string, expected *workpool.Pool, worker *workerChange) (bool, error) {
+	activeIDs = s.includeWorkerActiveLocked(activeIDs)
 	r := s.runs[id]
 	if r == nil {
 		return false, ErrNotFound
@@ -455,5 +463,5 @@ func (s *Store) schedule(id string, activeIDs []string, expected *workpool.Pool)
 		}
 		ready.Matched = bound
 	}
-	return s.acquireClaims(id, ready.Matched)
+	return s.acquireClaims(id, ready.Matched, worker)
 }

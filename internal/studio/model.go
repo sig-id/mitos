@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mitos/agents"
 	"mitos/internal/acceptance"
 	"mitos/internal/autonomy"
 	"mitos/internal/decision"
@@ -183,8 +184,10 @@ type Event struct {
 }
 
 type change struct {
+	Worker                 *workerChange              `json:"worker,omitempty"`
 	StructuredRetryPending *bool                      `json:"structured_retry_pending,omitempty"`
 	RuntimePolicy          *RuntimePolicy             `json:"runtime_policy,omitempty"`
+	StructuredDefinition   *agents.Definition         `json:"structured_definition,omitempty"`
 	TenantScheduler        *TenantScheduler           `json:"tenant_scheduler,omitempty"`
 	ServicePrincipal       *ServicePrincipal          `json:"service_principal,omitempty"`
 	AgentLibrary           *savedLibrary              `json:"agent_library,omitempty"`

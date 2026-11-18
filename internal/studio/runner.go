@@ -13,6 +13,7 @@ import (
 	"mitos/internal/desk"
 	"mitos/internal/harness"
 	"mitos/internal/messaging"
+	"mitos/internal/structuredworker"
 	workspacefs "mitos/internal/workspace"
 	"os"
 	"path/filepath"
@@ -22,9 +23,11 @@ import (
 )
 
 type Engine struct {
-	Messages *messaging.Service
-	Desk     *desk.Manager
-	provider compute.Provider
+	localWorkerToken    string
+	localWorkerIdentity structuredworker.Identity
+	Messages            *messaging.Service
+	Desk                *desk.Manager
+	provider            compute.Provider
 	// agentProvider is the provider for native agent execution only; OS
 	// confinement is scoped here so other launch paths keep the plain local
 	// posture they were admitted against.
@@ -153,6 +156,12 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 				return nil, err
 			}
 		}
+	}
+	// Pre-upgrade structured runs recorded no frozen definition body; resolve
+	// and persist the exact admitted revision before anything can claim them.
+	if err = e.hydrateStructuredDefinitions(); err != nil {
+		cancel()
+		return nil, err
 	}
 	for _, run := range s.List() {
 		if err = s.interruptServiceCondition(run.ID); err != nil {
@@ -427,6 +436,9 @@ func (e *Engine) dispatch() {
 		case <-e.ctx.Done():
 			return
 		case <-tick.C:
+			if err := e.reconcileWorkerLeases(); err != nil {
+				continue
+			}
 			if err := e.Store.expireAgentSessions(); err != nil {
 				continue
 			}
@@ -474,6 +486,15 @@ func (e *Engine) dispatch() {
 				if r.Status != "queued" || r.Sample || r.ExecutionKind == "interactive" {
 					continue
 				}
+				if r.Brief.Structured != nil {
+					if os.Getenv("MITOS_LOCAL_STRUCTURED_WORKERS") == "off" {
+						continue
+					}
+					if _, ok := e.agentApplication(r.Brief.AppID); !ok {
+						continue
+					}
+				}
+
 				e.mu.Lock()
 				if len(e.cancel) >= e.Store.RuntimeCapacity() {
 					e.mu.Unlock()
@@ -492,7 +513,13 @@ func (e *Engine) dispatch() {
 				for id := range e.cancel {
 					active = append(active, id)
 				}
-				acquired, claimErr := e.Store.ScheduleSelected(r.ID, active, candidate.Policy)
+				var acquired bool
+				var claimErr error
+				if r.Brief.Structured != nil {
+					acquired, claimErr = e.localWorkerClaim(r)
+				} else {
+					acquired, claimErr = e.Store.ScheduleSelected(r.ID, active, candidate.Policy)
+				}
 				if claimErr != nil || !acquired {
 					e.mu.Unlock()
 					continue

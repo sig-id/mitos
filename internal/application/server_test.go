@@ -10,6 +10,7 @@ import (
 
 	"mitos/internal/apiversion"
 	"mitos/internal/decision"
+	"mitos/internal/structuredworker"
 	"mitos/internal/studio"
 )
 
@@ -114,5 +115,61 @@ func TestApplicationListenerRoutesDecisionResolution(t *testing.T) {
 	}
 	if code, _ := post("/api/runs/foreign/decision", `{"decision_id":"decision_x","choice":"retry","extra":1}`); code != 400 {
 		t.Fatal("unknown resolution field accepted", code)
+	}
+}
+
+func TestWorkerListenerHasIndependentVersionAndCredential(t *testing.T) {
+	store, err := studio.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, appToken, err := store.CreateServicePrincipal(studio.ServicePrincipalInput{ID: "app", Name: "App", Tenant: decision.Tenant{Org: "tenant", Project: "app"}, Read: true, Write: true, ExpiresAt: time.Now().Add(time.Hour)}, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, workerToken, err := store.CreateWorkerCredential(studio.WorkerCredential{ID: "worker", Pools: []string{"interactive"}, Agents: []string{"mitos.generalist"}, ExpiresAt: time.Now().Add(time.Hour)}, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(New(&studio.Engine{Store: store}))
+	defer server.Close()
+	call := func(token, version string) int {
+		req, _ := http.NewRequest("POST", server.URL+"/worker/v1/register", strings.NewReader(`{"request_id":"register","incarnation":"incarnation","capabilities":["mitos.generalist"]}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set(structuredworker.VersionHeader, version)
+		apiversion.Set(req)
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := call(workerToken, ""); code != 400 {
+		t.Fatal("application version admitted worker", code)
+	}
+	if code := call(appToken, "1"); code != 401 {
+		t.Fatal("application token admitted worker", code)
+	}
+	if code := call(workerToken, "1"); code != 200 {
+		t.Fatal("worker registration", code)
+	}
+	req, _ := http.NewRequest("GET", server.URL+"/api/capabilities", nil)
+	apiversion.Set(req)
+	req.Header.Set("Authorization", "Bearer "+workerToken)
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatal("worker token admitted application", resp.StatusCode)
+	}
+	if err = store.RevokeWorker("worker", decision.LocalOperator()); err != nil {
+		t.Fatal(err)
+	}
+	if code := call(workerToken, "1"); code != 401 {
+		t.Fatal("live worker revocation", code)
 	}
 }

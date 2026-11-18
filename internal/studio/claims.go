@@ -17,7 +17,7 @@ func (s *Store) AcquireClaims(id string) (bool, error) {
 	defer s.mu.Unlock()
 	return s.acquireClaims(id, nil)
 }
-func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, error) {
+func (s *Store) acquireClaims(id string, witnesses []workpool.Witness, worker ...*workerChange) (bool, error) {
 	r := s.runs[id]
 	if r == nil {
 		return false, ErrNotFound
@@ -63,6 +63,9 @@ func (s *Store) acquireClaims(id string, witnesses []workpool.Witness) (bool, er
 	}
 	kind := "task_scheduled"
 	c := change{Status: "running", Stage: "Preparing execution", Summary: "The task was scheduled within its pool's capacity."}
+	if len(worker) != 0 {
+		c.Worker = worker[0]
+	}
 	if len(ownership.Paths) > 0 || len(ownership.Leases) > 0 {
 		claim := fleet.Claim{ID: newID("claim"), RunID: id, Workspace: claimWorkspace, Ownership: ownership, AcquiredAt: time.Now().UTC()}
 		kind = "claims_acquired"

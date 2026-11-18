@@ -209,3 +209,7 @@ kills both application and runtime at before/after admission and before/after
 publication. Run it with `go test -race ./internal/application -run
 TestIndependentApplicationCrashMatrix`; it uses a deterministic model stand-in
 through the real confined worker path, not a production-model benchmark.
+
+The same TLS listener also hosts the independently authenticated and versioned
+[structured worker protocol](worker-protocol.md). Application credentials have
+no access to its claims or context.
