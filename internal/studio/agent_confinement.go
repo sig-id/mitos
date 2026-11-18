@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mitos/internal/agentcli"
 	"mitos/internal/compute"
 )
 
@@ -39,6 +40,9 @@ func confinementBlocksTransport(c compute.Confinement) bool {
 // home are visible.
 func stageConfinementHome(base, runtime string, env []string) ([]string, error) {
 	conf, stageLogin := agentConfinementEnv[runtime]
+	if !stageLogin && !agentcli.PrintRuntime(runtime) {
+		return env, nil
+	}
 	home := filepath.Join(base, "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, err

@@ -3,6 +3,7 @@ package studio
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,8 +76,13 @@ func TestStageConfinementHomeStagesAuthentication(t *testing.T) {
 	if !strings.Contains(joined, "HOME="+home) || !strings.Contains(joined, "CODEX_HOME="+staged) || strings.Contains(joined, "HOME="+host) {
 		t.Fatalf("environment not rewritten to the sandbox home: %v", out)
 	}
-	// A runtime without a registered config directory keeps its environment.
-	same, err := stageConfinementHome(base, "pi", env)
+	// Print adapters use their isolated home and retain profile variables.
+	printEnv, err := stageConfinementHome(base, "pi", env)
+	if err != nil || !slices.Contains(printEnv, "HOME="+home) || slices.Contains(printEnv, "HOME="+host) || !slices.Contains(printEnv, "OTHER=1") {
+		t.Fatalf("unexpected print adapter environment: %v %v", printEnv, err)
+	}
+	// Unrelated runtimes keep their environment.
+	same, err := stageConfinementHome(base, "custom", env)
 	if err != nil || strings.Join(same, "\n") != strings.Join(env, "\n") {
 		t.Fatalf("unrelated runtime environment rewritten: %v %v", same, err)
 	}
