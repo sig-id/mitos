@@ -10,15 +10,59 @@
  const field=(box,label,input)=>{const n=el('label',label);n.append(input);box.append(n);return input};
  const action=(label,fn)=>{const b=el('button',label);b.type='button';b.onclick=fn;return b};
  const select=(label,options,value,onchange)=>{const s=el('select');s.setAttribute('aria-label',label);for(const [v,t]of options)s.append(new Option(t,v));s.value=value;s.onchange=()=>onchange(s.value);return s};
- const tiers=(model)=>Object.fromEntries(TIERS.map(t=>[t,{model:model||'',effort:t}]));
+ const environments=r=>r?.harness_environments||[];
+ function suggestedTiers(runtime,environment,configuredModel){
+  const models=environment?.models||[];
+  return Object.fromEntries(TIERS.map(t=>{
+   const compatible=models.filter(m=>!m.efforts||m.efforts.includes(t));
+   const alias={low:'haiku',medium:'sonnet',high:'opus'}[t];
+   const preferred=(runtime==='claude'&&compatible.find(m=>m.id===alias))||
+    compatible.find(m=>m.default)||compatible[0]||models.find(m=>m.default)||models[0];
+   const model=configuredModel||preferred?.id||'';
+   const efforts=models.find(m=>m.id===model)?.efforts;
+   return [t,{model,effort:efforts&&!efforts.includes(t)?'':t}];
+  }));
+ }
  function initial(preferences,installations){
   if(preferences.execution?.version===VERSION)return structuredClone(preferences.execution);
-  const available=installations.filter(r=>r.kind==='agent'&&['codex','claude'].includes(r.id)&&(r.installed||r.profiles?.some(p=>p.executable)));
-  const requested=preferences.runtime||'codex',selected=available.find(r=>r.id===requested)||available.find(r=>r.installed)||available[0],runtime=selected?.id||requested;
-  const profile=r=>r?.installed?'':r?.profiles?.find(p=>p.executable)?.id||'';
-  const harnesses=[{id:'default',name:'Project default',runtime,profile_id:profile(selected),tiers:tiers(runtime===requested?preferences.model:'')}];
-  for(const r of available){if(r.id!==runtime)harnesses.push({id:r.id,name:r.name,runtime:r.id,profile_id:profile(r),tiers:tiers('')})}
+  const available=installations.filter(r=>environments(r).length);
+  const requested=preferences.runtime||'codex',selected=available.find(r=>r.id===requested)||available.find(r=>r.installed)||available[0];
+  const runtime=selected?.id||requested,environment=environments(selected)[0];
+  const harnesses=[{id:'default',name:'Project default',runtime,profile_id:environment?.profile_id||'',tiers:suggestedTiers(runtime,environment,runtime===requested&&preferences.model)}];
+  for(const r of available){
+   if(r===selected)continue;
+   const env=environments(r)[0];
+   harnesses.push({id:r.id,name:r.name,runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r.id,env)});
+  }
   return {version:VERSION,harnesses,harness_rules:[],default_harness:'default',allowed_harnesses:harnesses.map(h=>h.id),orchestrator:{harness:'default',tier:'high'},size_budgets:{small:{minutes:15,max_turns:40},medium:{minutes:30,max_turns:80},large:{minutes:60,max_turns:160}}};
+ }
+ function tierFields(h,t,models){
+  const tier=h.tiers[t]||(h.tiers[t]={model:'',effort:''});
+  const tierRow=el('div');tierRow.className='execution-tier';
+  const label=t[0].toUpperCase()+t.slice(1)+' tier';
+  const options=[['','Agent default'],...models.map(m=>[m.id,m.name?m.name+' ('+m.id+')':m.id]),[':custom','Custom model…']];
+  const known=()=>models.find(m=>m.id===tier.model);
+  const choice=tier.model&&!known()?':custom':(tier.model||'');
+  const custom=el('input');custom.maxLength=200;custom.placeholder='Model ID';custom.setAttribute('aria-label',label+' custom model');
+  custom.value=choice===':custom'?tier.model:'';custom.hidden=choice!==':custom';
+  custom.oninput=()=>{tier.model=custom.value.trim()};
+  const picker=select(label+' model',options,choice,v=>{
+   custom.hidden=v!==':custom';tier.model=custom.hidden?v:custom.value.trim();
+   if(!custom.hidden)custom.focus();
+   renderEffort(true);
+  });
+  const modelField=el('div');modelField.className='execution-tier-model';tierRow.append(modelField);
+  field(modelField,label+' model',picker);modelField.append(custom);
+  const effort=el('select');field(tierRow,label+' effort',effort);effort.setAttribute('aria-label',label+' effort');
+  function renderEffort(changed){
+   const supported=known()?.efforts,choices=EFFORTS[h.runtime].filter(e=>!supported||supported.includes(e));
+   if(changed&&tier.effort&&!choices.includes(tier.effort))tier.effort=choices.includes(t)?t:'';
+   effort.replaceChildren(new Option('Default effort',''));
+   for(const e of new Set([...choices,...(tier.effort?[tier.effort]:[])]))effort.append(new Option(e,e));
+   effort.value=tier.effort||'';
+  }
+  renderEffort(false);effort.onchange=()=>{tier.effort=effort.value};
+  return tierRow;
  }
  function editor(value,installations,roles){
   const policy=structuredClone(value),box=el('div');box.className='execution-policy';
@@ -36,7 +80,12 @@
   const harnesses=el('details');harnesses.append(el('summary','Harnesses, model tiers & permitted workers'));box.append(harnesses);
   harnesses.append(el('p','Each harness is a coding agent with a model and reasoning effort per intelligence tier. Declared intelligence (low, medium, high) picks the tier within the chosen harness.'));
   const harnessRows=el('div');harnesses.append(harnessRows);
-  harnesses.append(action('Add harness',()=>{const runtime=installations.find(r=>r.installed&&['codex','claude'].includes(r.id))?.id||'codex';policy.harnesses.push({id:crypto.randomUUID(),name:'New harness',runtime,profile_id:'',tiers:tiers('')});draw()}));
+  const available=installations.filter(r=>environments(r).length);
+  const add=action('Add harness',()=>{
+   const r=available.find(r=>r.id===policy.harnesses[0]?.runtime)||available[0],env=environments(r)[0];
+   policy.harnesses.push({id:crypto.randomUUID(),name:'New harness',runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r.id,env)});draw();
+  });
+  add.disabled=!available.length;harnesses.append(add);
   const note=el('p','Codex and Claude Code support coordinated work. Other detected agents remain available in Start agent session.');note.className='muted';harnesses.append(note);
   function draw(){
    top.replaceChildren();
@@ -64,18 +113,29 @@
     const row=el('fieldset');row.dataset.harness=h.id;row.append(el('legend',h.name));
     const name=el('input');name.value=h.name;name.required=true;name.maxLength=100;field(row,'Harness name',name);name.onchange=()=>{h.name=name.value;draw()};
     const runtime=el('select');runtime.setAttribute('aria-label','Coding agent');field(row,'Coding agent',runtime);
-    for(const id of ['codex','claude']){const r=installations.find(r=>r.id===id);const o=new Option((r?.name||id)+(!r?.installed&&!r?.profiles?.length?' — not installed':''),id);o.disabled=!r?.installed&&!r?.profiles?.length;runtime.append(o)}runtime.value=h.runtime;
-    runtime.onchange=()=>{h.runtime=runtime.value;h.profile_id='';h.tiers=tiers('');draw()};
-    const profile=el('select');profile.setAttribute('aria-label','Environment profile');field(row,'Environment profile',profile);
-    profile.append(new Option('Native environment',''));for(const p of installations.find(r=>r.id===h.runtime)?.profiles||[])profile.append(new Option(p.name||p.id,p.id));
-    if(h.profile_id&&![...profile.options].some(o=>o.value===h.profile_id)){const o=new Option(h.profile_id+' — unavailable',h.profile_id);o.disabled=true;profile.append(o)}
-    profile.value=h.profile_id||'';profile.onchange=()=>{h.profile_id=profile.value};
-    for(const t of TIERS){
-     const tier=h.tiers[t]||(h.tiers[t]={model:'',effort:''});
-     const model=el('input');model.value=tier.model||'';model.maxLength=200;model.placeholder='Agent’s default model';field(row,`${t} tier model`,model);model.oninput=()=>{tier.model=model.value.trim()};
-     field(row,`${t} tier effort`,select(`${t} tier effort`,[['','Default effort'],...(EFFORTS[h.runtime]||[]).map(e=>[e,e])],tier.effort||'',v=>{tier.effort=v}));
+    for(const r of installations.filter(r=>['codex','claude'].includes(r.id))){
+     const installed=environments(r).length>0,option=new Option(r.name+(installed?'':' – unavailable'),r.id);
+     option.disabled=!installed;runtime.append(option);
     }
-    const allowed=el('input');allowed.type='checkbox';allowed.checked=policy.allowed_harnesses.includes(h.id);field(row,'Allow workers to use this harness',allowed);
+    runtime.value=h.runtime;
+    const agent=installations.find(r=>r.id===h.runtime),envs=environments(agent);
+    const env=envs.find(p=>p.profile_id===(h.profile_id||''));
+    runtime.onchange=()=>{
+     h.runtime=runtime.value;
+     const first=environments(available.find(r=>r.id===h.runtime))[0];
+     h.profile_id=first.profile_id;h.tiers=suggestedTiers(h.runtime,first);draw();
+    };
+    const profile=el('select');profile.setAttribute('aria-label','Environment profile');field(row,'Environment profile',profile);
+    for(const p of envs)profile.append(new Option(agent.profiles?.find(x=>x.id===p.profile_id)?.name||p.profile_id||'Native environment',p.profile_id));
+    if(!env){const option=new Option((h.profile_id||'Native environment')+' – unavailable',h.profile_id||'');option.disabled=true;profile.append(option)}
+    profile.value=h.profile_id||'';profile.onchange=()=>{
+     h.profile_id=profile.value;h.tiers=suggestedTiers(h.runtime,envs.find(p=>p.profile_id===profile.value));draw();
+    };
+    const modelRows=el('div');modelRows.className='execution-tier-list';row.append(modelRows);
+    if(env&&!env.models?.length)modelRows.append(el('small','Model list unavailable. Use the agent default or enter a model ID.'));
+    for(const t of TIERS)modelRows.append(tierFields(h,t,env?.models||[]));
+    const allowed=el('input');allowed.type='checkbox';allowed.checked=policy.allowed_harnesses.includes(h.id);
+    const workerLabel=el('label');workerLabel.className='execution-worker-toggle';workerLabel.append(allowed,'Allow workers to use this harness');row.append(workerLabel);
     allowed.onchange=()=>{policy.allowed_harnesses=allowed.checked?[...policy.allowed_harnesses,h.id]:policy.allowed_harnesses.filter(id=>id!==h.id);draw()};
     const remove=action('Remove harness',()=>{policy.harnesses=policy.harnesses.filter(x=>x.id!==h.id);policy.allowed_harnesses=policy.allowed_harnesses.filter(id=>id!==h.id);const first=policy.harnesses[0]?.id||'';if(policy.orchestrator.harness===h.id)policy.orchestrator.harness=first;if(policy.default_harness===h.id)policy.default_harness=policy.allowed_harnesses[0]||first;policy.harness_rules=policy.harness_rules.filter(r=>r.harness!==h.id);draw()});
     remove.disabled=policy.harnesses.length===1;row.append(remove);harnessRows.append(row);
