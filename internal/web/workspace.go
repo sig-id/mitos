@@ -42,6 +42,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/directories", s.directories)
 	mux.HandleFunc("GET /projects/{project}", s.operatingPage)
 	mux.HandleFunc("GET /api/projects/{project}/overview", s.projectOverview)
+	mux.HandleFunc("POST /api/projects/{project}/overview/labels", s.editOverviewLabels)
 	mux.HandleFunc("GET /inbox", s.operatingPage)
 	mux.HandleFunc("GET /connections", s.operatingPage)
 	mux.HandleFunc("GET /devices", s.operatingPage)

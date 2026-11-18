@@ -1,7 +1,7 @@
 import './api-version.mjs';
 import {chromium} from 'playwright';
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {execFileSync,spawn} from 'node:child_process';
 import {mkdtemp,mkdir,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {createServer} from 'node:net';
@@ -17,6 +17,7 @@ async function api(url,body){const r=await fetch(base+url,{method:body?'POST':'G
 try{
  start();await wait(async()=>(await fetch(base+'/healthz')).ok);home=await api('/api/server');
  for(const name of ['mitos','sigid'])await mkdir(path.join(temporary,name));
+ execFileSync('git',['init','-q','-b','design/overview',path.join(temporary,'mitos')]);
  const project=await api('/api/projects',{name:'mitos',directory:path.join(temporary,'mitos')});
  const other=await api('/api/projects',{name:'sigid',directory:path.join(temporary,'sigid')});
  const limits={tasks:32,amendments:64,attempts:32,retries:2,expansions:16,orchestrator_calls:8,depth:8,fanout:16,deadline:new Date(Date.now()+3600000).toISOString()};
@@ -50,8 +51,22 @@ try{
  assert.equal(await page.getByLabel('Work type',{exact:true}).inputValue(),'task');
  assert.equal(await page.getByLabel('Sort',{exact:true}).inputValue(),'oldest');
  await page.getByLabel('Work type',{exact:true}).selectOption('graph');
- const shortID=await page.locator('#project-work-list code').first().textContent();
- await page.locator('#project-work-search').fill(shortID);
+ const checks=page.locator('#project-work-list .work-check');
+ const selectPage=page.getByLabel('Select all work on this page');
+ await page.locator('#project-work-search').fill('design/overview');
+ await wait(async()=>await titles.count()===2);
+ assert.equal(await page.locator('#project-work-list code').first().textContent(),'design/overview');
+ assert.match(await page.locator('.project-work-meta').first().textContent(),/Attempt time · 0sCost · Unreported/);
+ await checks.first().check();assert.ok(await selectPage.evaluate(input=>input.indeterminate));
+ await selectPage.check();
+ await page.getByLabel('Label name').fill('UX');
+ await page.getByRole('button',{name:'Add label',exact:true}).click();
+ await wait(async()=>await page.locator('.work-label-chip').count()===2);
+ await page.locator('#project-work-search').fill('ux');
+ await page.reload();await wait(async()=>await titles.count()===2);
+ await checks.last().check();
+ await page.getByLabel('Label name').fill('UX');
+ await page.getByRole('button',{name:'Remove label',exact:true}).click();
  await wait(async()=>await titles.count()===1);
  assert.equal(await titles.first().textContent(),'First work');
  await page.locator('#project-work-list a').filter({hasText:'First work'}).click();await page.locator('#graph-current').waitFor({state:'visible'});
@@ -132,9 +147,25 @@ try{
  assert.match(await row(second.id).locator('.work-tree-goal').getAttribute('aria-label'),/Review ready/);assert.match(await row(third.id).locator('.work-tree-goal').getAttribute('title'),/Needs attention/);
  assert.equal(await row(second.id).locator('.work-tree-goal').textContent(),'Second work');assert.equal(await row(third.id).locator('.work-tree-goal').textContent(),'Third work');
  await page.unroute('**/api/graphs?**');
+ await page.goto(base+'/projects/'+other.id);
+ await create('Extra work',other.id);
+ await wait(async()=>await titles.count()===2);
+ await selectPage.check();
+ page.once('dialog',d=>d.accept());
+ await page.getByRole('button',{name:'Archive',exact:true}).click();
+ await wait(async()=>await titles.count()===0);
+ await page.locator('[data-work-state=archived]').click();
+ await wait(async()=>await titles.count()===2);
+ await selectPage.check();
+ await page.getByRole('button',{name:'Restore to closed',exact:true}).click();
+ await wait(async()=>await titles.count()===0);
+ await page.locator('[data-work-state=closed]').click();
+ await wait(async()=>await titles.count()===2);
  // Saved archive is recovered after restarting the actual server.
  const current=await api('/api/graphs/'+second.id);await api('/api/graphs/'+second.id+'/work-state',{key:crypto.randomUUID(),revision:current.revision,state:'archived'});
  server.kill('SIGTERM');await exited;start();await wait(async()=>(await fetch(base+'/healthz')).ok);
  assert.equal((await api('/api/graphs?project_id='+project.id+'&state=archived')).graphs[0].id,second.id);
+ const savedLabels=await api('/api/projects/'+project.id+'/overview?state=closed&q=ux');
+ assert.deepEqual(savedLabels.work.map(item=>item.labels),[['UX']]);
  assert.deepEqual(errors,[]);console.log('Work navigation passed: grouping, independent expansion, selection, filtering, archive/restore/reopen, mobile, restart.');
 }catch(error){console.error(error);if(browser){for(const context of browser.contexts())for(const page of context.pages()){console.error((await page.locator('#work-tree').textContent().catch(()=>'')));await page.screenshot({path:'/tmp/mitos-work-navigation-failure.png'}).catch(()=>{})}}throw error}finally{await browser?.close();if(server?.exitCode===null){server.kill('SIGTERM');await exited}await rm(temporary,{recursive:true,force:true})}

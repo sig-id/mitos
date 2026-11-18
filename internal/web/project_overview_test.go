@@ -102,6 +102,33 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 			}
 		}
 	}
+	labelsURL := "/api/projects/" + project.ID + "/overview/labels"
+	edit := func(action string, ids ...string) int {
+		body, _ := json.Marshal(map[string]any{"action": action, "ids": ids, "label": "Design"})
+		return request(s, "POST", labelsURL, string(body), false).Code
+	}
+	foreign, err := e.Desk.Work(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := edit("add", first.Work[0].ID, foreign.Tasks[0].ID); got != 404 || read("?q=design").Total != 0 {
+		t.Fatal("cross-project edit must reject the entire selection", got)
+	}
+	for range 2 {
+		if got := edit("add", first.Work[0].ID, second.Work[0].ID); got != 200 {
+			t.Fatal("add", got)
+		}
+	}
+	matches := read("?q=design")
+	if matches.Total != 2 || len(matches.Work[0].Labels) != 1 || matches.Work[0].Labels[0] != "Design" || matches.Stats != first.Stats {
+		t.Fatal("bulk label search", matches)
+	}
+	if got := edit("remove", first.Work[0].ID); got != 200 || read("?q=design").Total != 1 {
+		t.Fatal("remove", got)
+	}
+	if row := first.Work[0]; row.AttemptMS == nil || *row.AttemptMS != 0 || row.CostUSD != nil || row.Workspace != project.Directory {
+		t.Fatal("unstarted assignment metadata", row)
+	}
 	if out := read("?q=Other"); out.Total != 0 {
 		t.Fatal("other project leaked")
 	}

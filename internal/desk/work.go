@@ -74,10 +74,11 @@ type WorkReceipt struct {
 	SessionID string `json:"session_id"`
 }
 type WorkView struct {
-	Tasks            []WorkAssignment `json:"tasks"`
-	Goals            []Goal           `json:"goals"`
-	Responsibilities []Responsibility `json:"responsibilities"`
-	Sessions         []Session        `json:"sessions"`
+	Labels           map[string][]string `json:"labels,omitempty"`
+	Tasks            []WorkAssignment    `json:"tasks"`
+	Goals            []Goal              `json:"goals"`
+	Responsibilities []Responsibility    `json:"responsibilities"`
+	Sessions         []Session           `json:"sessions"`
 }
 
 func (m *Manager) Work(project string) (WorkView, error) {
@@ -86,7 +87,7 @@ func (m *Manager) Work(project string) (WorkView, error) {
 	if _, err := m.projectLocked(project); err != nil {
 		return WorkView{}, err
 	}
-	v := WorkView{Tasks: []WorkAssignment{}, Goals: []Goal{}, Responsibilities: []Responsibility{}, Sessions: []Session{}}
+	v := WorkView{Labels: m.state.WorkLabels[project], Tasks: []WorkAssignment{}, Goals: []Goal{}, Responsibilities: []Responsibility{}, Sessions: []Session{}}
 	for _, t := range m.state.Work {
 		if t.ProjectID == project {
 			v.Tasks = append(v.Tasks, t)

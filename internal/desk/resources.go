@@ -198,6 +198,20 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// CheckoutBranch returns the current local branch. Detached and non-Git
+// workspaces have no branch and are identified by their directory.
+func CheckoutBranch(ctx context.Context, directory string) string {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	ref := strings.TrimSpace(gitView(ctx, directory, "symbolic-ref", "--quiet", "HEAD"))
+	branch, ok := strings.CutPrefix(ref, "refs/heads/")
+	if !ok || strings.ContainsAny(branch, "\r\n") {
+		return ""
+	}
+	return branch
+}
+
 func gitView(ctx context.Context, dir string, args ...string) string {
 	text, _ := gitViewBounded(ctx, dir, args...)
 	return text

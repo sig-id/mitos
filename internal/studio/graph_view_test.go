@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGraphViewKeepsStatusesWithoutExecutionHistory(t *testing.T) {
@@ -91,9 +92,14 @@ func TestGraphSummaryCountsActiveExecutorsNotScopesOrQueuedAttempts(t *testing.T
 		members[state] = &GraphMember{Spec: GraphSpec{ID: state, Kind: "application"}, State: state, CurrentRunID: state}
 		s.runs[state] = &Run{ID: state, Status: state}
 	}
+	// Both the original attempt and its retry contribute to the work's time.
+	start := time.Unix(100, 0)
+	s.runs["done"].CreatedAt, s.runs["done"].FinishedAt = start, start.Add(3*time.Second)
+	s.runs["initial"] = &Run{CreatedAt: start, FinishedAt: start.Add(time.Second), Status: "failed"}
+	members["done"].Attempts = []string{"initial", "done"}
 	s.graphs["graph"] = &WorkGraph{ID: "graph", ProjectID: "project", RootTask: "root", Status: "active", Members: members}
 	rows, _ := s.GraphSummaries("project", "", 10)
-	if len(rows) != 1 || rows[0].Agents != 7 || rows[0].ActiveAgents != 3 {
+	if len(rows) != 1 || rows[0].Agents != 7 || rows[0].ActiveAgents != 3 || rows[0].AttemptMS != 4000 {
 		t.Fatalf("agents: %+v", rows)
 	}
 	rows, _ = s.GraphSummaries("other", "", 10)
