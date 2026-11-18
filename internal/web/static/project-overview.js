@@ -74,7 +74,9 @@
   }
   const duration = el('span', 'Attempt time · ' + (work.attempt_ms == null ? 'Unreported' : formatDuration(work.attempt_ms)));
   duration.title = 'Total time across attempts or sessions, including overlapping work';
-  meta.append(duration, el('span', 'Cost · ' + (work.cost_usd == null ? 'Unreported' : currency.format(work.cost_usd))));
+  const cost = el('span', 'Cost · ' + formatCost(work.cost_usd, work.unpriced_runs, 'Unreported'));
+  cost.title = 'Estimated model spend from journaled harness token usage at published list prices' + (work.unpriced_runs ? '; a lower bound while ' + work.unpriced_runs + (work.unpriced_runs === 1 ? ' attempt lacks' : ' attempts lack') + ' a matching price' : '');
+  meta.append(duration, cost);
   copy.append(heading, meta);
   link.append(svg, copy, el('span', labels[work.status] || work.status, 'project-work-status ' + work.status));
   row.append(check, link);
@@ -150,8 +152,13 @@
  };
  for (const btn of bulk.querySelectorAll('[data-bulk-state]')) btn.onclick = () => applyBulk(btn.dataset.bulkState);
 
+ function formatCost(value, unpriced, empty) {
+  if (value == null) return empty;
+  return (unpriced ? '≥ ' : '') + currency.format(value);
+ }
+
  function render(data) {
-  const cost = data.stats.cost_usd === null ? 'Not available' : new Intl.NumberFormat(undefined, {style:'currency', currency:'USD'}).format(data.stats.cost_usd);
+  const cost = formatCost(data.stats.cost_usd, data.stats.unpriced_runs, 'Not available');
   $('project-statistics').replaceChildren(el('span', data.stats.underway + ' underway'), el('span', data.stats.active_agents + (data.stats.active_agents === 1 ? ' active agent' : ' active agents')), el('span', 'Cost · ' + cost));
   for (const filter of filters) {
    filter.querySelector('span').textContent = data.stats[filter.dataset.workState];

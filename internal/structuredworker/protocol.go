@@ -5,6 +5,7 @@ package structuredworker
 import (
 	"encoding/json"
 	"mitos/agents"
+	"mitos/internal/harness"
 	"time"
 )
 
@@ -95,6 +96,18 @@ type Result struct {
 	ConsumedCursor int64           `json:"consumed_cursor,omitempty"`
 	Value          json.RawMessage `json:"value"`
 	Artifacts      []Artifact      `json:"artifacts,omitempty"`
+	// Usage reports the harness's normalized token totals for the attempt,
+	// including the cache hit/write split. Absent means the harness reported
+	// no usage, not zero usage. It is telemetry for cost statistics; the
+	// server journals it as evidence and never treats it as a spend limit.
+	Usage *harness.Usage `json:"usage,omitempty"`
+}
+
+// Release is the optional payload a worker attaches when it gives up an
+// attempt. It carries the settled usage so a failed remote attempt still
+// lands in the server's cost statistics instead of vanishing with its error.
+type Release struct {
+	Usage *harness.Usage `json:"usage,omitempty"`
 }
 
 // LeaseRecord is server state. Deadlines never cross the worker boundary.

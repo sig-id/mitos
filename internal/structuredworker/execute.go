@@ -100,7 +100,8 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 		activityPreview = io.Discard
 	}
 	final := ""
-	options := harness.CodexOptions{Headless: true, Model: assignment.Model, Sandbox: "read-only", MaxTurns: assignment.MaxTurns, OutputSchema: assignment.ResultSchema, Result: func(text string) error { final = text; return nil }, Activity: io.MultiWriter(&activity, activityPreview)}
+	usage := harness.NewUsageTracker(assignment.Model)
+	options := harness.CodexOptions{Headless: true, Model: assignment.Model, Sandbox: "read-only", MaxTurns: assignment.MaxTurns, OutputSchema: assignment.ResultSchema, Result: func(text string) error { final = text; return nil }, Activity: io.MultiWriter(&activity, activityPreview), Usage: usage.Observe}
 	if len(assignment.Actions) > 0 && e.Action != nil {
 		schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["target","key","payload"],"properties":{"target":{"type":"string"},"key":{"type":"string"},"payload":{"type":"object","additionalProperties":true}}}`)
 		reconcileSchema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["target","key"],"properties":{"target":{"type":"string"},"key":{"type":"string"}}}`)
@@ -173,10 +174,16 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 	// Captured output and activity stay available even when the attempt fails:
 	// they are the evidence needed to diagnose timeouts and crashes.
 	evidence := []Artifact{{Name: "output.txt", Data: output}, {Name: "activity.jsonl", Data: activity.Bytes()}}
-	if runErr != nil {
-		return Result{Artifacts: evidence}, fmt.Errorf("Codex stopped: %w", runErr)
+	var reported *harness.Usage
+	if model, totals, ok := usage.Snapshot(); ok {
+		totals.Model = model
+		totals.Cumulative = false // the result carries settled totals, not a report kind
+		reported = &totals
 	}
-	result := Result{ConsumedCursor: consumedCursor.Load(), Value: json.RawMessage(final), Artifacts: evidence}
+	if runErr != nil {
+		return Result{Artifacts: evidence, Usage: reported}, fmt.Errorf("Codex stopped: %w", runErr)
+	}
+	result := Result{ConsumedCursor: consumedCursor.Load(), Value: json.RawMessage(final), Artifacts: evidence, Usage: reported}
 	for _, name := range []string{"authority.json", "context.json"} {
 		if raw := assignment.Artifacts[name]; raw != nil {
 			result.Artifacts = append(result.Artifacts, Artifact{Name: name, Data: raw})

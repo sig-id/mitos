@@ -577,6 +577,17 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		}
 	}
 	options := harness.CodexOptions{Headless: true, ResumeThread: prior.NativeThreadID, ThreadStarted: func(thread string) error { return e.Store.recordNativeThread(r.ID, thread) }, Model: b.Model, Effort: b.Effort, Sandbox: "read-only", MaxTurns: authority.MaxTurns, Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
+	// Cost statistics are best-effort telemetry: the tracker observes usage
+	// reports as they arrive and the evidence is journaled once the attempt
+	// settles, on both success and failure paths.
+	usage := harness.NewUsageTracker(b.Model)
+	if prior.NativeThreadID != "" {
+		// A resumed native conversation reports lifetime token totals; seed
+		// what earlier attempts on it already recorded so this attempt bills
+		// only its new consumption.
+		usage.Baseline(e.Store.NativeThreadUsage(prior.NativeThreadID))
+	}
+	options.Usage = usage.Observe
 	if authority.Granted("workspace.write") {
 		options.Sandbox = "workspace-write"
 	}
@@ -745,6 +756,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	if err = e.Store.SaveArtifacts(r.ID, ArtifactData{Name: "output.txt", Data: output}, ArtifactData{Name: "activity.jsonl", Data: activity.Bytes()}); err != nil {
 		return err
+	}
+	if record, ok := newAgentUsageRecord(b.Definition.ID, b.Definition.Name, b.Runtime, usage); ok {
+		if err = e.Store.RecordEvidence(r.ID, "agent_usage_recorded", record.summary(), record); err != nil {
+			return err
+		}
 	}
 	report, readErr := readAgentResult(base, "agent-result.txt")
 	if readErr == nil {

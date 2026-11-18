@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"mitos/internal/desk"
+	"mitos/internal/harness"
 	"mitos/internal/studio"
 )
 
@@ -134,6 +135,34 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 	}
 	if out := read("?offset=9999"); len(out.Work) != 0 {
 		t.Fatal("offset was not bounded")
+	}
+	// Journaled usage evidence supplies the project cost total: a priced run
+	// makes stats.cost_usd available, and unpriced usage is counted separately.
+	usageRun, err := e.Store.Create(studio.Brief{Title: "Priced attempt", Intent: "Work", Workspace: e.Root, AppID: "workspace-inventory", ProjectID: project.ID, TimeoutMinutes: 1}, "Inventory", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := harness.NewUsageTracker("gpt-6.2-sol")
+	tracker.Observe(harness.Usage{InputTokens: 1_000_000, OutputTokens: 250_000})
+	if err = e.Store.RecordAgentUsage(usageRun.ID, "mitos.engineer", "Engineer", "codex", tracker); err != nil {
+		t.Fatal(err)
+	}
+	withCost := read("")
+	if withCost.Stats.CostUSD == nil || *withCost.Stats.CostUSD != 4.50 || withCost.Stats.UnpricedRuns != 0 {
+		t.Fatalf("project cost total missing: %+v", withCost.Stats)
+	}
+	unpricedRun, err := e.Store.Create(studio.Brief{Title: "Unpriced attempt", Intent: "Work", Workspace: e.Root, AppID: "workspace-inventory", ProjectID: project.ID, TimeoutMinutes: 1}, "Inventory", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := harness.NewUsageTracker("unpriced-model")
+	unknown.Observe(harness.Usage{InputTokens: 10, OutputTokens: 10})
+	if err = e.Store.RecordAgentUsage(unpricedRun.ID, "mitos.engineer", "Engineer", "codex", unknown); err != nil {
+		t.Fatal(err)
+	}
+	mixed := read("")
+	if mixed.Stats.CostUSD == nil || *mixed.Stats.CostUSD != 4.50 || mixed.Stats.UnpricedRuns != 1 {
+		t.Fatalf("unpriced usage must not inflate the total: %+v", mixed.Stats)
 	}
 	for _, query := range []string{"?sort=random", "?kind=unknown", "?state=unknown", "?offset=-1", "?offset=nope"} {
 		if got := request(s, "GET", "/api/projects/"+project.ID+"/overview"+query, "", false); got.Code != 400 {

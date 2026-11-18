@@ -145,13 +145,24 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 			if err == nil && receipt.State != "accepted" {
 				err = errors.New("result not accepted")
 			}
+			// An accepted result already journaled its usage atomically; only
+			// unaccepted attempts may still forward it with their release.
+			if err == nil {
+				result = Result{}
+			}
 		}
 	}
 	if err != nil {
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
+		// Failed attempts still forward their settled usage: the server
+		// journals it with the release so consumed tokens are not lost.
 		var receipt Receipt
-		_ = c.Call(releaseCtx, "release", Mutation{Binding: b, RequestID: RequestID(), Kind: "release"}, &receipt)
+		var data json.RawMessage
+		if result.Usage != nil {
+			data, _ = json.Marshal(Release{Usage: result.Usage})
+		}
+		_ = c.Call(releaseCtx, "release", Mutation{Binding: b, RequestID: RequestID(), Kind: "release", Data: data}, &receipt)
 	}
 	return err
 }

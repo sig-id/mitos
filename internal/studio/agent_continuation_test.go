@@ -193,6 +193,24 @@ else:
 		if resumed.ParentID != source || resumed.GraphAttempt.ContinueFrom != source || resumed.NativeThreadID != "fixture-thread" {
 			t.Fatal("agent identity or conversation lost")
 		}
+		// The fixture reports the same lifetime totals on every turn, so a
+		// resumed conversation must journal only its zero delta over what the
+		// earlier attempts on that thread already recorded, not the totals again.
+		for _, event := range resumed.Events {
+			if event.Kind != "agent_usage_recorded" || event.Type != "effect" {
+				continue
+			}
+			var payload struct {
+				Evidence AgentUsageRecord `json:"evidence"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			record := payload.Evidence
+			if record.InputTokens != 0 || record.CachedInputTokens != 0 || record.CacheWriteTokens != 0 || record.OutputTokens != 0 {
+				t.Fatalf("resumed %s re-billed earlier consumption: %+v", id, record)
+			}
+		}
 	}
 	wire, err := os.ReadFile(wireLog)
 	if err != nil {

@@ -54,6 +54,7 @@ type page struct {
 	Task                                                   studio.Task
 	Pools                                                  []workpool.Pool
 	Metrics                                                *studio.AutonomyReport
+	Costs                                                  *studio.AgentCostReport
 	Title, Section, View, Error, Query, Filter, Date, Root string
 	Runs, Active, Finished, Attention                      []studio.Run
 	Run                                                    studio.Run
@@ -89,6 +90,12 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		},
 
 		"recent": func(r []studio.Run) []studio.Run { return r[:min(5, len(r))] }, "icon": icon, "status": status, "duration": duration, "when": func(t time.Time) string { return t.Local().Format("Jan 2 · 15:04") },
+		"usd": func(value float64) string {
+			if value < 1 && value > 0 {
+				return fmt.Sprintf("$%.4f", value)
+			}
+			return fmt.Sprintf("$%.2f", value)
+		},
 		"short": func(s string) string {
 			if len(s) > 15 {
 				return s[len(s)-8:]
@@ -155,6 +162,13 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 		page.Metrics = &report
 		s.render(w, r, page, 200)
 	})
+	mux.HandleFunc("GET /costs", func(w http.ResponseWriter, r *http.Request) {
+		report := studio.ReportAgentCosts(s.engine.Store.List())
+		page := s.base("costs", "Agent cost statistics", "overview")
+		page.Live = false
+		page.Costs = &report
+		s.render(w, r, page, 200)
+	})
 	mux.HandleFunc("GET /work", s.work)
 	mux.HandleFunc("GET /tasks", s.tasks)
 	mux.HandleFunc("GET /services", s.services)
@@ -201,6 +215,9 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 			return
 		}
 		writeJSON(w, 200, report)
+	})
+	mux.HandleFunc("GET /api/agent-costs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, studio.ReportAgentCosts(s.engine.Store.List()))
 	})
 	mux.HandleFunc("GET /api/fleet", s.apiFleet)
 	mux.HandleFunc("GET /api/runs/{id}/evidence", s.apiEvidence)
@@ -369,7 +386,7 @@ func (s *Server) base(view, title, section string) page {
 	p := page{Navigation: s.navigation(section, ""), View: view, Title: title, Section: section, Apps: s.engine.Apps, Root: s.engine.Root, Date: time.Now().Format("Monday, 2 January"), Demo: s.demo}
 	p.Navigation.View = view
 	switch view {
-	case "services", "service-lifecycle", "custom-event", "tasks", "overview", "autonomy":
+	case "services", "service-lifecycle", "custom-event", "tasks", "overview", "autonomy", "costs":
 		p.Navigation.Section = "system"
 	case "decisions":
 		p.Navigation.Section = "inbox"

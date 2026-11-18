@@ -119,6 +119,28 @@ print('native execution log')
 			if err != nil || !strings.Contains(string(activity), `"kind":"message"`) {
 				t.Fatalf("public activity not saved: %s, %v", activity, err)
 			}
+			usageEvidence := false
+			for _, event := range r.Events {
+				if event.Kind != "agent_usage_recorded" || event.Type != "effect" {
+					continue
+				}
+				usageEvidence = true
+				var payload struct {
+					Evidence AgentUsageRecord `json:"evidence"`
+				}
+				if err := json.Unmarshal(event.Data, &payload); err != nil {
+					t.Fatal(err)
+				}
+				record := payload.Evidence
+				// The fixture thread reports model 'fixture', which has no
+				// published price: tokens are journaled without a cost estimate.
+				if record.Runtime != "codex" || record.Model != "fixture" || record.InputTokens != 10000 || record.CachedInputTokens != 30000 || record.OutputTokens != 28000 || record.Priced {
+					t.Fatalf("bad usage evidence: %+v", record)
+				}
+			}
+			if !usageEvidence {
+				t.Fatal("codex attempt journaled no usage cost evidence")
+			}
 			raw, _ := e.Store.Artifact(r.ID, "output.txt")
 			if strings.Contains(string(raw), `"mitos_activity":1`) {
 				t.Fatal("host records leaked into raw log")
@@ -620,6 +642,7 @@ for line in wire:
      tool('result_submit',{'version':'mitos.handoff/v1','key':'fixture-result','summary':text[:400],'artifacts':[{'artifact_id':ref['id'],'role':'report'}],'checks':[],'limitations':[],'unresolved_requests':[]})
     send({'method':'item/agentMessage/delta','params':{'delta':text}})
     send({'method':'item/completed','params':{'threadId':'fixture-thread','turnId':'fixture-turn','item':{'id':'final','type':'agentMessage','phase':'final_answer','text':text}}})
+  send({'method':'thread/tokenUsage/updated','params':{'threadId':'fixture-thread','turnId':'fixture-turn','tokenUsage':{'total':{'totalTokens':68000,'inputTokens':40000,'cachedInputTokens':30000,'cacheWriteInputTokens':0,'outputTokens':28000,'reasoningOutputTokens':8000},'last':{'totalTokens':68000,'inputTokens':40000,'cachedInputTokens':30000,'cacheWriteInputTokens':0,'outputTokens':28000,'reasoningOutputTokens':8000}}}})
   send({'method':'turn/completed','params':{'threadId':'fixture-thread','turn':{'id':'fixture-turn','status':'completed'}}})
 `
 }

@@ -235,6 +235,7 @@ The CLI connects to the running server:
 ./bin/mitos checkpoints local_RUN_ID
 ./bin/mitos autonomy
 ./bin/mitos interrupts
+./bin/mitos costs
 ```
 
 Work and interactive metadata are reconstructed from the hash-chained journal in
@@ -251,6 +252,21 @@ The local provider runs as the operator and can access the host. Batch environme
 hygiene and a separate verification directory do not establish confinement. Strict
 unsupported compute requirements are refused. Interactive agents use their native
 credentials and configuration; free-text project rules are instructions.
+
+## Cost statistics
+
+Codex and Claude Code attempts report their token usage, including the split
+between uncached input, cache hits and cache writes, and Mitos journals it as
+`agent_usage_recorded` evidence next to the attempt. Each recorded attempt is
+priced against published provider list prices (OpenAI, Anthropic and Google,
+embedded with their retrieval date in `internal/modelcost`) and reported in two
+places: per agent through `/costs`, `/api/agent-costs`, or `mitos costs`, and
+per work item plus project total through the project overview's `cost_usd`
+fields, where unpriced attempts keep a row's total an explicit lower bound.
+Estimates use the cheaper cached-input rate for cache hits and the provider's
+write premium for cache writes; they are telemetry about spending, not
+invoices, reservations or enforced budgets, and attempts or models without
+usage or a published price are reported as unpriced rather than free.
 
 The main server binds to loopback and rejects foreign Host headers and cross-origin
 mutations. The optional HTTPS device API has restricted snapshot and decision scope;
@@ -453,6 +469,7 @@ for bounds and remaining capabilities.
 | `internal/compute/`, `internal/workpool/` | Providers, admission, scheduling, and dependencies |
 | `internal/workspace/`, `internal/acceptance/` | Snapshots, artifacts, and verification |
 | `internal/observation/`, `internal/autonomy/`, `internal/decision/` | Observation, recovery, and human decisions |
+| `internal/modelcost/` | Published model list prices and usage-based cost estimates |
 | `internal/web/` | Server-rendered browser interface and vendored assets |
 | `examples/` | Runnable applications |
 | `spec/` | Product, six system specifications, and ADRs |
