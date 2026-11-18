@@ -18,7 +18,7 @@ import (
 )
 
 // Each environment has passed the same executable and environment checks as a
-// coordinated launch. An empty catalog still permits a runtime or custom model.
+// native launch. Coordinated adapters can additionally advertise tier models.
 type HarnessEnvironment struct {
 	ProfileID string         `json:"profile_id"`
 	Models    []HarnessModel `json:"models,omitempty"`
@@ -44,7 +44,7 @@ func (r *Registry) ListWithModels(ctx context.Context, workspace string) []Insta
 	var wg sync.WaitGroup
 	for i := range list {
 		agent := &list[i]
-		if agent.ID != "codex" && agent.ID != "claude" {
+		if agent.Kind != "agent" {
 			continue
 		}
 		profiles := []string{""}
@@ -58,7 +58,9 @@ func (r *Registry) ListWithModels(ctx context.Context, workspace string) []Insta
 			}
 			env := &HarnessEnvironment{ProfileID: profile}
 			agent.HarnessEnvironments = append(agent.HarnessEnvironments, env)
-			wg.Go(func() { env.Models = r.catalog(ctx, launch) })
+			if agent.Capabilities.CoordinatedWork {
+				wg.Go(func() { env.Models = r.catalog(ctx, launch) })
+			}
 		}
 	}
 	wg.Wait()
