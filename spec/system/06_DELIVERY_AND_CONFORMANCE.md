@@ -258,8 +258,8 @@ per-task tenant attempt/time limits. Effect-free structured work retries after
 restart within its original Task and budget. The separate HTTP-only application
 fixture demonstrates one Task/reply across the four runtime/application crash
 boundaries using confined deterministic workers. `service_principal_auth` and
-`tenant_isolation` are true; production model performance and later S3/S4 gates
-remain separate. Application execution requires the declared confined API-key
+`tenant_isolation` are true. The subsequent S3/S4 sections identify their separate
+conformance evidence; production model performance is measured separately. Application execution requires the declared confined API-key
 profile; the local operator retains its native-login profile.
 
 Implement the SQLite runtime adapter with the same canonical Event records, hash
@@ -322,6 +322,20 @@ tenants, dormant responsibilities and active workers. Large numbers of dormant
 records MUST NOT be advertised as equivalent concurrent execution capacity. These
 fixtures establish reusable runtime behavior; Acegoat owns its domain acceptance tests
 and integration release independently.
+
+Conformance evidence: `TestPersonalNegotiationConfinementAndConsistency` runs the
+independent HTTP-only coordinator, authority and native worker in subprocesses.
+It forces an answer before wait registration, restart while dormant, coordinator
+replacement and a superseded personal-result race. Only the typed outcome crosses
+from private negotiation to personal context. Canaries are absent from the actual
+personal prompt, its events/artifacts and MQTT hints. The application publishes
+one outcome/reply. `BenchmarkDormantResponsibilities` declares 20 tenants, 2,000
+dormant Tasks and 8 active worker identities, with replay, memory, durable claim
+latency and read bounds recorded in the
+[declared scale report](../../docs/benchmarks/s4-dormant-scale.md).
+`hosted.conversation_waits` is true. These counts describe control-plane state and
+admitted capacity; model execution is measured separately.
+
 
 ## Product acceptance
 

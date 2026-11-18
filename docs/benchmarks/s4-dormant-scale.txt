@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: mitos/internal/studio
+cpu: Intel(R) Core(TM) Ultra 7 265K
+BenchmarkDormantResponsibilities-20    	       1	 146116095 ns/op	         8.000 active_workers	     18261 claim_mean_us	     24363 claim_p95_us	      2000 dormant_tasks	     24270 event_bytes	         3.000 event_items	        84.36 heap_live_MiB	    242122 read_bytes	        50.00 read_items	        81.98 replay_heap_MiB	      1614 replay_ms	       128.2 rss_MiB	        20.00 tenants
+--- BENCH: BenchmarkDormantResponsibilities-20
+    dormant_scale_test.go:128: control plane: go1.26.11 linux/amd64 GOMAXPROCS=20; budgets replay<=15s live Go heap<=512MiB RSS<=768MiB claim p95<=250ms; 20 tenants, 2000 dormant Tasks, 8 active worker identities
+PASS
+ok  	mitos/internal/studio	52.445s

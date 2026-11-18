@@ -1,8 +1,31 @@
 package studio
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestReadPageByteBoundIncludesArrayEncoding(t *testing.T) {
+	sample := Event{Seq: 1, Data: json.RawMessage(`""`)}
+	base, _ := json.Marshal(sample)
+	padding := ReadPageBytes/2 - len(base)
+	sample.Data = json.RawMessage(`"` + strings.Repeat("x", padding) + `"`)
+	second := sample
+	second.Seq = 2
+	page, err := eventPage([]Event{sample, second}, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(page.Events)
+	if len(raw)+1 > ReadPageBytes || len(page.Events) != 1 || !page.HasMore || page.Next != 1 {
+		t.Fatal("encoded response exceeded byte bound", len(raw), len(page.Events), page.HasMore, page.Next)
+	}
+	next, err := eventPage([]Event{sample, second}, page.Next, 2)
+	if err != nil || len(next.Events) != 1 || next.Next != 2 || next.HasMore {
+		t.Fatal("byte boundary lost cursor progress", next.Next, err)
+	}
+}
 
 func TestBoundedReadsKeepSeqCursorsAndTenantFeedAcrossReplay(t *testing.T) {
 	e, _ := automaticScriptEngine(t, `print('unused')`)

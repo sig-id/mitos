@@ -328,7 +328,7 @@ func (s *Store) taskInputPageLocked(task string, after int64, limit int) (struct
 	for i := int(after); i < len(items) && len(page.Inputs) < limit; i++ {
 		item := items[i].Input
 		raw, _ := json.Marshal(item)
-		if size+len(raw) > ReadPageBytes {
+		if size+len(raw) > readItemBudget {
 			break
 		}
 		page.Inputs = append(page.Inputs, graphClone(item))

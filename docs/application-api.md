@@ -85,10 +85,10 @@ Admit with `POST /api/tasks` (or `/api/runs`):
 Structured work is not project-scoped and uses the `advisory` enforcement policy.
 It needs no external database service, broker or remote worker.
 
-## Not provided
+## Application and worker boundaries
 
-Checkpointed conversation waits remain gated on S4. The
-operator API remains loopback-only. Remote structured workers use the separate
+Durable conversation waits, serialization and current-version publication are
+demonstrated by the S4 fixture described below. The operator API remains loopback-only. Remote structured workers use the separate
 worker protocol described below; MQTT carries hints, while HTTP claims own work. Authenticated application access uses the
 separate TLS listener described below.
 
@@ -159,8 +159,8 @@ local execution and before acceptance.
 S2 application-boundary conformance is demonstrated by the independent application
 fixture and its four runtime/application crash cases. `service_principal_auth` and
 `tenant_isolation` are true. The separate S3 subprocess fault matrix demonstrates
-`remote_workers` and `mqtt_work_claims`; PostgreSQL and dormant waits retain their
-separate gates.
+`remote_workers` and `mqtt_work_claims`. The S4 conversation fixture demonstrates
+`conversation_waits`; PostgreSQL remains deferred.
 
 
 ## Bounded reads, capacity and restart recovery
@@ -221,3 +221,9 @@ advances, and `POST /api/tasks/<id>/inputs` for durable messages or explicit fre
 versioned snapshots. See [conversation consistency](worker-protocol.md#conversation-keys-and-context-versions)
 for current-snapshot admission, dormant key release and publication refusal after
 preferences change.
+
+
+The [independent personal/negotiation fixture](../examples/conversationfixture/README.md)
+checks wait/restart/replacement races, current-preference publication and canary
+confinement. Its [declared scale report](benchmarks/s4-dormant-scale.md) distinguishes
+2,000 dormant Tasks from 8 admitted execution slots.

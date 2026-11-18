@@ -155,6 +155,17 @@ func TestWorkerListenerHasIndependentVersionAndCredential(t *testing.T) {
 	if code := call(workerToken, "1"); code != 200 {
 		t.Fatal("worker registration", code)
 	}
+	selector, _ := http.NewRequest("POST", server.URL+"/worker/v1/claim", strings.NewReader(`{"id":"worker","incarnation":"incarnation","request_id":"choose-run","run_id":"chosen-run"}`))
+	selector.Header.Set("Authorization", "Bearer "+workerToken)
+	selector.Header.Set(structuredworker.VersionHeader, "1")
+	selected, err := server.Client().Do(selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected.Body.Close()
+	if selected.StatusCode != 400 {
+		t.Fatal("remote selector bypasses scheduler fairness", selected.StatusCode)
+	}
 	req, _ := http.NewRequest("GET", server.URL+"/api/capabilities", nil)
 	apiversion.Set(req)
 	req.Header.Set("Authorization", "Bearer "+workerToken)

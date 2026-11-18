@@ -15,6 +15,7 @@ var forbiddenPath string
 var forbiddenDial string
 var actionTarget string
 var waitForInput string
+var conversationMode, waitGate, personalGate string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
@@ -30,23 +31,36 @@ func main() {
 		}
 	}
 
-	finish := func(reply string) {
+	finishValue := func(value any) {
 		if forbiddenPath != "" {
 			if file, err := os.Open(forbiddenPath); err == nil {
 				file.Close()
-				reply = "EXPOSED"
+				value = map[string]string{"reply": "EXPOSED"}
 			}
 		}
 		if forbiddenDial != "" {
 			if conn, err := net.DialTimeout("tcp", forbiddenDial, 1500*time.Millisecond); err == nil {
 				conn.Close()
-				reply = "EXPOSED"
+				value = map[string]string{"reply": "EXPOSED"}
 			}
 		}
-		result, _ := json.Marshal(map[string]string{"reply": reply})
+		result, _ := json.Marshal(value)
 		send(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "fixture-thread", "turnId": "fixture-turn", "item": map[string]string{"id": "final", "type": "agentMessage", "phase": "final_answer", "text": string(result)}}})
 		send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "fixture-thread", "turn": map[string]string{"id": "fixture-turn", "status": "completed"}}})
 	}
+	finish := func(reply string) { finishValue(map[string]string{"reply": reply}) }
+	gate := func(marker, allow string) {
+		if err := os.WriteFile(marker, []byte("ready"), 0600); err != nil {
+			os.Exit(1)
+		}
+		for {
+			if _, err := os.Stat(allow); err == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
 	tool := func(id, name string, payload bool) {
 		arguments := map[string]any{"target": actionTarget, "key": "fixture-effect"}
 		if payload {
@@ -80,7 +94,32 @@ func main() {
 			send(map[string]any{"id": request.ID, "result": map[string]any{"thread": map[string]string{"id": "fixture-thread"}, "model": "fixture"}})
 		case "turn/start":
 			send(map[string]any{"id": request.ID, "result": map[string]any{"turn": map[string]string{"id": "fixture-turn"}}})
-			if waitForInput != "" {
+			if conversationMode != "" {
+				prompt := ""
+				for _, input := range request.Params.Input {
+					prompt += input.Text
+				}
+				if strings.Contains(prompt, `"kind":"personal"`) {
+					if strings.Contains(prompt, "candidate-canary-") || strings.Contains(prompt, "company-canary-") {
+						finish("EXPOSED")
+					} else {
+						if personalGate != "" && strings.Contains(prompt, `"preferences":0`) {
+							gate("personal-started", "allow-personal-result")
+						}
+						finish("Negotiation accepted.")
+					}
+				}
+				if strings.Contains(prompt, `"kind":"negotiation"`) {
+					if strings.Contains(prompt, `"resume":true`) {
+						finishValue(map[string]string{"outcome": "accepted"})
+					} else {
+						if waitGate != "" {
+							gate("wait-started", "allow-wait-registration")
+						}
+						send(map[string]any{"id": "negotiation-wait", "method": "item/tool/call", "params": map[string]any{"threadId": "fixture-thread", "turnId": "fixture-turn", "tool": "mitos_wait", "arguments": map[string]any{"cursor": 0, "checkpoint": map[string]string{"state": "waiting"}}}})
+					}
+				}
+			} else if waitForInput != "" {
 				resumed := false
 				for _, input := range request.Params.Input {
 					if strings.Contains(input.Text, `"resume":true`) {
@@ -98,6 +137,9 @@ func main() {
 				finish("ack")
 			}
 		default:
+			if string(request.ID) == `"negotiation-wait"` && request.Result.Success {
+				finishValue(map[string]string{"outcome": "accepted"})
+			}
 			if string(request.ID) == `"wait-call"` && request.Result.Success {
 				finish("ack")
 			}

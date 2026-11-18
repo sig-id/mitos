@@ -422,5 +422,10 @@ func StructuredCapabilities() map[string]any {
 		"application_model_credentials":    "dedicated_api_key",
 		"requires_broker":                  false,
 		"requires_remote_workers":          false,
+		"inputs":                           map[string]any{"durable": true, "cursor": "per-task sequence", "max_bytes": maxStructuredInputBytes, "max_page_items": ReadMaxLimit},
+		"checkpoint":                       map[string]any{"schema_declared": true, "max_bytes": 64 << 10, "portable_json": true},
+		"wait":                             "atomic input-cursor check and portable checkpoint; dormant attempts hold no execution capacity",
+		"serialization_key":                "one active attempt per tenant/key; released while dormant",
+		"consumed_versions":                "tenant CAS registers revalidated at admission and result publication",
 	}
 }

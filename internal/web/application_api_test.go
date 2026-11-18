@@ -47,7 +47,7 @@ func TestApplicationCapabilitiesAndStructuredAdmission(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &caps) != nil || caps.Versions[0] != "1" || caps.Structured["workspace"] != false {
 		t.Fatalf("capabilities: %d %s", w.Code, w.Body.String())
 	}
-	for name, want := range map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "remote_workers": true, "mqtt_work_claims": true, "conversation_waits": false, "postgresql": false} {
+	for name, want := range map[string]bool{"service_principal_auth": true, "tenant_isolation": true, "remote_workers": true, "mqtt_work_claims": true, "conversation_waits": true, "postgresql": false} {
 		if caps.Hosted[name] != want {
 			t.Fatalf("hosted capability %s: got %v want %v", name, caps.Hosted[name], want)
 		}

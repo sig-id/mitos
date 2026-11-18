@@ -9,13 +9,28 @@ var ErrRequestKeyExpired = errors.New("request_key_expired: original request key
 
 // ExpireStructuredKeys retains rejection tombstones indefinitely. Callers can
 // discard receipt bodies elsewhere without ever turning an old retry into new
-// work. Only terminal, originally admitted requests older than before qualify.
+// work. Only settled logical Tasks whose latest terminal attempt completed
+// before the cutoff qualify; retries and dormant history retain their root key.
 func (s *Store) ExpireStructuredKeys(before time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keys := []string{}
 	for _, r := range s.runs {
-		if r.ParentID == "" && r.Brief.Structured != nil && r.Terminal() && r.UpdatedAt.Before(before) && !s.expiredRequestKeys[scopedRequestKey(runTenant(r), r.Brief.Structured.Key)] {
+		if r.ParentID != "" || r.Brief.Structured == nil {
+			continue
+		}
+		terminal := r
+		if task := s.tasks[r.TaskID]; task != nil {
+			terminal = s.runs[task.CurrentRunID]
+		}
+		if terminal == nil || !terminal.Terminal() || terminal.RestartRetry || s.taskHasActionHoldLocked(r.TaskID) {
+			continue
+		}
+		completed := terminal.FinishedAt
+		if completed.IsZero() {
+			completed = terminal.UpdatedAt
+		}
+		if completed.Before(before) && !s.expiredRequestKeys[scopedRequestKey(runTenant(r), r.Brief.Structured.Key)] {
 			keys = append(keys, scopedRequestKey(runTenant(r), r.Brief.Structured.Key))
 		}
 	}

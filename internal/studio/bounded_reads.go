@@ -10,6 +10,9 @@ const ReadDefaultLimit = 50
 const ReadMaxLimit = 200
 const ReadPageBytes = 16 << 20
 
+// Leave room for array separators, cursor envelopes and encoder newlines.
+const readItemBudget = ReadPageBytes - 1024
+
 var ErrInvalidPage = errors.New("invalid_page: after must be nonnegative and limit must be 1..200")
 var ErrReadItemTooLarge = errors.New("read_item_too_large: inspect retained evidence offline")
 
@@ -86,10 +89,10 @@ func (s *Store) runPageLocked(view *ScopedStore, after int64, afterID string, li
 		if err != nil {
 			return RunPage{}, err
 		}
-		if len(raw) > ReadPageBytes {
+		if len(raw) > readItemBudget {
 			return RunPage{}, ErrReadItemTooLarge
 		}
-		if bytes+len(raw) > ReadPageBytes {
+		if bytes+len(raw) > readItemBudget {
 			page.HasMore = true
 			break
 		}
@@ -130,10 +133,10 @@ func eventPage(events []Event, after int64, limit int) (EventPage, error) {
 		if err != nil {
 			return EventPage{}, err
 		}
-		if len(raw) > ReadPageBytes {
+		if len(raw) > readItemBudget {
 			return EventPage{}, ErrReadItemTooLarge
 		}
-		if bytes+len(raw) > ReadPageBytes {
+		if bytes+len(raw) > readItemBudget {
 			page.HasMore = true
 			break
 		}
