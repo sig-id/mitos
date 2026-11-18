@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,15 +21,14 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var firstTask desk.WorkAssignment
 	for i := 0; i < 52; i++ {
 		task, err := e.Desk.CreateWork(project.ID, desk.NewWork{Key: fmt.Sprint(i), Title: fmt.Sprintf("Assignment %02d", i), Intent: "Do work", Criteria: "Review result", Role: "agent"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			if _, err = e.Desk.UpdateWork(project.ID, task.ID, "cancel", desk.WorkAction{Revision: task.Revision}); err != nil {
-				t.Fatal(err)
-			}
+			firstTask = task
 		}
 	}
 	if _, err = e.Desk.CreateWork(other.ID, desk.NewWork{Key: "other", Title: "Other assignment", Intent: "Do work", Criteria: "Review result", Role: "agent"}); err != nil {
@@ -45,6 +45,10 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 		if _, err = e.Store.SetGraphWorkState(g.ID, studio.GraphWorkStateEdit{Key: state, Revision: g.Revision, State: state}); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Close the oldest task last so the two descending sort orders differ.
+	if _, err = e.Desk.UpdateWork(project.ID, firstTask.ID, "cancel", desk.WorkAction{Revision: firstTask.Revision}); err != nil {
+		t.Fatal(err)
 	}
 	type result struct {
 		Stats projectWorkStats `json:"stats"`
@@ -73,6 +77,20 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 	if filtered.Total != 1 || filtered.Work[0].Title != "Assignment 51" || filtered.Stats != first.Stats {
 		t.Fatalf("search: %+v", filtered)
 	}
+	oldest := read("?sort=oldest&kind=task")
+	if oldest.Stats != first.Stats || oldest.Total != 51 || oldest.Work[0].ID != second.Work[0].ID {
+		t.Fatal("oldest sort must apply before pagination", oldest)
+	}
+	_, shortID, _ := strings.Cut(oldest.Work[0].ID, "_")
+	if match := read("?q=%23" + shortID[:7]); match.Total != 1 || match.Work[0].ID != oldest.Work[0].ID {
+		t.Fatal("short ID lookup", match)
+	}
+	if updated := read("?state=closed&sort=updated"); updated.Work[0].ID != firstTask.ID || read("?state=closed").Work[0].Kind != "graph" {
+		t.Fatal("recently updated must use the last edit time", updated)
+	}
+	if graphs := read("?state=closed&kind=graph"); graphs.Total != 1 || graphs.Work[0].Kind != "graph" || graphs.Stats != first.Stats {
+		t.Fatal("closed graph filter", graphs)
+	}
 	for _, state := range []string{"closed", "archived"} {
 		out := read("?state=" + state)
 		if out.Stats != first.Stats {
@@ -90,7 +108,7 @@ func TestProjectOverviewFiltersAndCountsBeforePagination(t *testing.T) {
 	if out := read("?offset=9999"); len(out.Work) != 0 {
 		t.Fatal("offset was not bounded")
 	}
-	for _, query := range []string{"?state=unknown", "?offset=-1", "?offset=nope"} {
+	for _, query := range []string{"?sort=random", "?kind=unknown", "?state=unknown", "?offset=-1", "?offset=nope"} {
 		if got := request(s, "GET", "/api/projects/"+project.ID+"/overview"+query, "", false); got.Code != 400 {
 			t.Fatal(query, got.Code)
 		}

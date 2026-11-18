@@ -47,6 +47,16 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "state must be open, closed or archived"})
 		return
 	}
+	kind := r.URL.Query().Get("kind")
+	if kind != "" && kind != "graph" && kind != "task" {
+		writeJSON(w, 400, map[string]string{"error": "kind must be graph or task"})
+		return
+	}
+	order := r.URL.Query().Get("sort")
+	if order != "" && order != "newest" && order != "oldest" && order != "updated" {
+		writeJSON(w, 400, map[string]string{"error": "sort must be newest, oldest or updated"})
+		return
+	}
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
 		offset, err = strconv.Atoi(raw)
@@ -57,7 +67,7 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	rows := []projectWorkRow{}
 	stats := projectWorkStats{}
-	// Aggregate before filtering and pagination so cards always cover the project.
+	// Aggregate before filtering and pagination so totals always cover the project.
 	graphs, _ := s.engine.Store.GraphSummaries(project, "", int(^uint(0)>>1))
 	for _, g := range graphs {
 		rows = append(rows, projectWorkRow{ID: g.ID, Kind: "graph", Title: g.Title, State: g.WorkState, Status: projectGraphStatus(g), Agents: g.Agents, ActiveAgents: g.ActiveAgents, CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt})
@@ -83,6 +93,7 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, projectWorkRow{ID: task.ID, Kind: "task", Title: task.Title, State: state, Status: task.Status, Agents: agents, ActiveAgents: sessions[task.ID], CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt})
 	}
 	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	idQuery := strings.TrimPrefix(query, "#")
 	filtered := []projectWorkRow{}
 	for _, row := range rows {
 		switch row.State {
@@ -96,12 +107,24 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 		if row.ActiveAgents > 0 {
 			stats.Underway++
 		}
-		if row.State == state && strings.Contains(strings.ToLower(row.Title), query) {
+		if row.State != state || (kind != "" && row.Kind != kind) {
+			continue
+		}
+		_, suffix, _ := strings.Cut(row.ID, "_")
+		matchesID := idQuery != "" && (strings.HasPrefix(row.ID, idQuery) || strings.HasPrefix(suffix, idQuery))
+		if strings.Contains(strings.ToLower(row.Title), query) || matchesID {
 			filtered = append(filtered, row)
 		}
 	}
 	slices.SortFunc(filtered, func(a, b projectWorkRow) int {
-		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
+		c := b.CreatedAt.Compare(a.CreatedAt)
+		switch order {
+		case "oldest":
+			c = -c
+		case "updated":
+			c = b.UpdatedAt.Compare(a.UpdatedAt)
+		}
+		if c != 0 {
 			return c
 		}
 		return strings.Compare(a.ID, b.ID)
