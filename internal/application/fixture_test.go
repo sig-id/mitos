@@ -11,21 +11,30 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	mqtt "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/hooks/auth"
+	"github.com/mochi-mqtt/server/v2/listeners"
+	"github.com/mochi-mqtt/server/v2/packets"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 type fixtureProcess struct {
-	cmd *exec.Cmd
-	log *os.File
+	cmd  *exec.Cmd
+	log  *os.File
+	done chan error
 }
 
 func (p *fixtureProcess) stop() {
@@ -33,7 +42,11 @@ func (p *fixtureProcess) stop() {
 		return
 	}
 	_ = p.cmd.Process.Kill()
-	_ = p.cmd.Wait()
+	if p.done != nil {
+		<-p.done
+	} else {
+		_ = p.cmd.Wait()
+	}
 	_ = p.log.Close()
 }
 func fixtureAddress(t *testing.T) string {
@@ -91,6 +104,9 @@ func fixtureCall(t *testing.T, client *http.Client, method, url, token string, b
 func TestIndependentApplicationCrashMatrix(t *testing.T) {
 	runIndependentApplicationCrashMatrix(t, false, []string{"before_admission", "after_admission", "before_publication", "after_publication"})
 }
+func TestIndependentWorkerFaultMatrix(t *testing.T) {
+	runIndependentApplicationCrashMatrix(t, true, []string{"before_admission", "after_admission", "before_publication", "after_publication", "worker:crash", "worker:lease_expiry", "worker:duplicate_result", "worker:lost_receipt", "worker:server_restart", "worker:missed_mqtt", "worker:external_lost_response"})
+}
 func TestIndependentWorkerApplicationSmoke(t *testing.T) {
 	runIndependentApplicationCrashMatrix(t, true, []string{"after_publication"})
 }
@@ -132,7 +148,11 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 			// The stand-in proves confinement from inside the real worker path:
 			// it reports EXPOSED if the runtime database is readable or the
 			// operator listener is reachable from the sandbox.
-			modelBuild := exec.Command("go", "build", "-buildvcs=false", "-ldflags", "-X main.forbiddenPath="+filepath.Join(data, "runtime.db")+" -X main.forbiddenDial="+operator, "-o", filepath.Join(bin, "codex"), "./testdata/codex.go")
+			modelFlags := "-X main.forbiddenPath=" + filepath.Join(data, "runtime.db") + " -X main.forbiddenDial=" + operator
+			if point == "worker:external_lost_response" {
+				modelFlags += " -X main.actionTarget=fixture-action"
+			}
+			modelBuild := exec.Command("go", "build", "-buildvcs=false", "-ldflags", modelFlags, "-o", filepath.Join(bin, "codex"), "./testdata/codex.go")
 			modelBuild.Dir = filepath.Join(root, "examples", "appfixture")
 			if raw, err := modelBuild.CombinedOutput(); err != nil {
 				t.Fatalf("build confined model stand-in: %v\n%s", err, raw)
@@ -141,13 +161,45 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 			pemBytes, _ := os.ReadFile(cert)
 			roots.AppendCertsFromPEM(pemBytes)
 			client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}, Timeout: 2 * time.Second}
+			wakeConfig := ""
+			var wakePublishes atomic.Int64
+			if point == "worker:missed_mqtt" {
+				broker := mqtt.New(&mqtt.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+				if err = broker.AddHook(new(auth.AllowHook), nil); err != nil {
+					t.Fatal(err)
+				}
+				if err = broker.AddHook(&fixtureWakeHook{count: &wakePublishes}, nil); err != nil {
+					t.Fatal(err)
+				}
+				listener := listeners.NewTCP(listeners.Config{ID: "wake", Address: "127.0.0.1:0"})
+				if err = broker.AddListener(listener); err != nil {
+					t.Fatal(err)
+				}
+				if err = broker.Serve(); err != nil {
+					t.Fatal(err)
+				}
+				defer broker.Close()
+				wakeConfig = filepath.Join(dir, "wake.json")
+				raw, _ := json.Marshal(map[string]string{"broker": "mqtt://" + listener.Address()})
+				if err = os.WriteFile(wakeConfig, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			serverFailpoint := ""
+			if point == "worker:lost_receipt" {
+				serverFailpoint = "worker.result.before_reply"
+			}
 			start := func() *fixtureProcess {
 				log, err := os.CreateTemp(dir, "server-*.log")
 				if err != nil {
 					t.Fatal(err)
 				}
 				cmd := exec.Command(serverBinary, "serve", "--data", data, "--workspace-root", workspace, "--addr", operator, "--application-addr", remote, "--application-cert", cert, "--application-key", key)
-				cmd.Env = fixtureEnv(map[string]string{"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), "MITOS_AGENT_CONFINEMENT": "bwrap", "MITOS_AGENT_NETWORK": "unrestricted", "OPENAI_API_KEY": "fixture-model-key", "MITOS_ENABLE_FAILPOINTS": "0", "MITOS_LOCAL_STRUCTURED_WORKERS": map[bool]string{true: "off", false: "on"}[remoteWorker]})
+				if wakeConfig != "" {
+					cmd.Args = append(cmd.Args, "--worker-wake-config", wakeConfig)
+				}
+				cmd.Env = fixtureEnv(map[string]string{"PATH": bin + string(os.PathListSeparator) + os.Getenv("PATH"), "MITOS_AGENT_CONFINEMENT": "bwrap", "MITOS_AGENT_NETWORK": "unrestricted", "OPENAI_API_KEY": "fixture-model-key", "MITOS_ENABLE_FAILPOINTS": "1", "MITOS_FAILPOINT": serverFailpoint, "MITOS_LOCAL_STRUCTURED_WORKERS": map[bool]string{true: "off", false: "on"}[remoteWorker]})
 				cmd.Stdout = log
 				cmd.Stderr = log
 				if err = cmd.Start(); err != nil {
@@ -180,6 +232,14 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 			if status != 201 || json.Unmarshal(raw, &principal) != nil || principal.Token == "" {
 				t.Fatal("principal", status, string(raw))
 			}
+			var startWorker func(string) *fixtureProcess
+			var currentWorker *fixtureProcess
+			var workerProcesses []*fixtureProcess
+			defer func() {
+				for _, worker := range workerProcesses {
+					worker.stop()
+				}
+			}()
 			if remoteWorker {
 				raw, status := fixtureCall(t, client, "POST", "http://"+operator+"/api/workers", "", map[string]any{"id": "separate-worker", "pools": []string{"interactive"}, "agents": []string{"mitos.generalist"}, "expires_at": time.Now().Add(time.Hour)})
 				var credential struct {
@@ -188,19 +248,68 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 				if status != 201 || json.Unmarshal(raw, &credential) != nil || credential.Token == "" {
 					t.Fatal("worker credential", status, string(raw))
 				}
-				workerLog, err := os.CreateTemp(dir, "worker-*.log")
-				if err != nil {
-					t.Fatal(err)
+				startWorker = func(failpoint string) *fixtureProcess {
+					workerLog, err := os.CreateTemp(dir, "worker-*.log")
+					if err != nil {
+						t.Fatal(err)
+					}
+					cmd := exec.Command(serverBinary, "worker", "--url", "https://"+remote, "--id", "separate-worker", "--data", filepath.Join(dir, "worker"), "--ca-file", cert, "--codex", filepath.Join(bin, "codex"))
+					cmd.Env = fixtureEnv(map[string]string{"MITOS_WORKER_TOKEN": credential.Token, "OPENAI_API_KEY": "fixture-worker-model-key", "MITOS_ENABLE_FAILPOINTS": "1", "MITOS_FAILPOINT": failpoint})
+					cmd.Stdout = workerLog
+					cmd.Stderr = workerLog
+					if err = cmd.Start(); err != nil {
+						t.Fatal(err)
+					}
+					worker := &fixtureProcess{cmd: cmd, log: workerLog, done: make(chan error, 1)}
+					go func() { worker.done <- cmd.Wait(); close(worker.done) }()
+					workerProcesses = append(workerProcesses, worker)
+					return worker
 				}
-				workerCmd := exec.Command(serverBinary, "worker", "--url", "https://"+remote, "--id", "separate-worker", "--data", filepath.Join(dir, "worker"), "--ca-file", cert, "--codex", filepath.Join(bin, "codex"))
-				workerCmd.Env = fixtureEnv(map[string]string{"MITOS_WORKER_TOKEN": credential.Token, "OPENAI_API_KEY": "fixture-worker-model-key"})
-				workerCmd.Stdout = workerLog
-				workerCmd.Stderr = workerLog
-				if err = workerCmd.Start(); err != nil {
-					t.Fatal(err)
+				fault := ""
+				if point == "worker:crash" || point == "worker:lease_expiry" || point == "worker:server_restart" {
+					fault = "worker.after_claim"
 				}
-				worker := &fixtureProcess{cmd: workerCmd, log: workerLog}
-				defer worker.stop()
+				if point == "worker:duplicate_result" {
+					fault = "worker.duplicate_result"
+				}
+				currentWorker = startWorker(fault)
+			}
+			actionTarget := ""
+			var externalPosts atomic.Int64
+			if point == "worker:external_lost_response" {
+				actionTarget = "fixture-action"
+				var mu sync.Mutex
+				key := ""
+				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					mu.Lock()
+					defer mu.Unlock()
+					if r.Header.Get("Authorization") != "Bearer private-fixture-target" {
+						w.WriteHeader(401)
+						return
+					}
+					if r.Method == "POST" {
+						externalPosts.Add(1)
+						key = r.Header.Get("Idempotency-Key")
+						connection, _, err := w.(http.Hijacker).Hijack()
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						connection.Close()
+						return
+					}
+					if r.URL.Path != "/operations/"+key {
+						w.WriteHeader(404)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"idempotency_key": key, "state": "applied", "result": map[string]string{"reply": "ack"}})
+				}))
+				defer target.Close()
+				schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["reply"],"properties":{"reply":{"type":"string","maxLength":8192}}}`)
+				raw, status := fixtureCall(t, client, "POST", "http://"+operator+"/api/action-targets", "", map[string]any{"id": actionTarget, "tenant": map[string]string{"org": "fixture", "project": "app"}, "agents": []string{"mitos.generalist"}, "endpoint": target.URL, "bearer": "private-fixture-target", "input_schema": schema, "result_schema": schema})
+				if status != 200 {
+					t.Fatal("configure external target", status, string(raw))
+				}
 			}
 
 			applicationDB := filepath.Join(dir, "application.db")
@@ -208,23 +317,118 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 				defer cancel()
 				cmd := exec.CommandContext(ctx, appBinary, "--database", applicationDB, "--mitos", "https://"+remote, "--ca-file", cert, "--message-id", "once", "--text", "Hello", "--timeout", "40s")
+				if actionTarget != "" {
+					cmd.Args = append(cmd.Args, "--action-target", actionTarget)
+				}
 				cmd.Env = fixtureEnv(map[string]string{"MITOS_APPLICATION_TOKEN": principal.Token, "MITOS_ENABLE_FAILPOINTS": "1", "MITOS_APPFIXTURE_FAILPOINT": failpoint})
 				return cmd.CombinedOutput()
 			}
-			output, err := invoke(point)
-			exit, ok := err.(*exec.ExitError)
-			if !ok || exit.ExitCode() != 86 {
-				fixtureRunDiagnostics(t, client, operator)
-				raw, _ := os.ReadFile(runtime.log.Name())
-				t.Fatalf("app did not reach %s: %v\n%s\nserver:\n%s", point, err, output, raw)
+			var output []byte
+			if strings.HasPrefix(point, "worker:") {
+				type appResult struct {
+					raw []byte
+					err error
+				}
+				done := make(chan appResult, 1)
+				go func() { raw, err := invoke(""); done <- appResult{raw, err} }()
+				if point == "worker:crash" || point == "worker:lease_expiry" || point == "worker:server_restart" {
+					select {
+					case err := <-currentWorker.done:
+						exit, ok := err.(*exec.ExitError)
+						if !ok || exit.ExitCode() != 86 {
+							t.Fatal("worker did not crash after claim", err)
+						}
+					case <-time.After(20 * time.Second):
+						t.Fatal("worker crash boundary not reached")
+					}
+					if point == "worker:lease_expiry" {
+						deadline := time.Now().Add(40 * time.Second)
+						expired := false
+						for time.Now().Before(deadline) {
+							raw, status := fixtureCall(t, client, "GET", "https://"+remote+"/api/runs?limit=200", principal.Token, nil)
+							var attempts []map[string]any
+							if status == 200 && json.Unmarshal(raw, &attempts) == nil && len(attempts) >= 2 {
+								expired = true
+								break
+							}
+							time.Sleep(200 * time.Millisecond)
+						}
+						if !expired {
+							t.Fatal("expired lease stranded responsibility")
+						}
+					}
+					if point == "worker:server_restart" {
+						runtime.stop()
+						runtime = start()
+					}
+					currentWorker = startWorker("")
+				}
+				if point == "worker:lost_receipt" {
+					ended := make(chan error, 1)
+					go func() { ended <- runtime.cmd.Wait() }()
+					select {
+					case err := <-ended:
+						exit, ok := err.(*exec.ExitError)
+						if !ok || exit.ExitCode() != 86 {
+							t.Fatal("authority did not crash after result commit", err)
+						}
+					case <-time.After(25 * time.Second):
+						t.Fatal("lost receipt boundary not reached")
+					}
+					serverFailpoint = ""
+					runtime.stop()
+					runtime = start()
+				}
+				first := <-done
+				output, err = first.raw, first.err
+				if err != nil {
+					output, err = invoke("")
+				}
+				if err != nil || !strings.Contains(string(output), `"reply":"ack"`) {
+					fixtureRunDiagnostics(t, client, operator)
+					for _, worker := range workerProcesses {
+						raw, _ := os.ReadFile(worker.log.Name())
+						t.Log("worker:", string(raw))
+					}
+					t.Fatalf("worker fault recovery: %v %s", err, output)
+				}
+				if point == "worker:duplicate_result" {
+					select {
+					case err := <-currentWorker.done:
+						t.Fatal("duplicate replay failed", err)
+					case <-time.After(150 * time.Millisecond):
+					}
+				}
+				if point == "worker:external_lost_response" && externalPosts.Load() != 1 {
+					t.Fatal("external action repeated", externalPosts.Load())
+				}
+			} else {
+
+				output, err = invoke(point)
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 86 {
+					fixtureRunDiagnostics(t, client, operator)
+					raw, _ := os.ReadFile(runtime.log.Name())
+					t.Fatalf("app did not reach %s: %v\n%s\nserver:\n%s", point, err, output, raw)
+				}
+				runtime.stop()
+				runtime = start()
 			}
-			runtime.stop()
-			runtime = start()
 			if output, err = invoke(""); err != nil || !strings.Contains(string(output), `"reply":"ack"`) {
 				fixtureRunDiagnostics(t, client, operator)
 				raw, _ := os.ReadFile(runtime.log.Name())
 				t.Fatalf("recovery: %v\n%s\nserver:\n%s", err, output, raw)
 			}
+			if point == "worker:missed_mqtt" {
+				deadline := time.Now().Add(3 * time.Second)
+				for wakePublishes.Load() == 0 && time.Now().Before(deadline) {
+					time.Sleep(20 * time.Millisecond)
+				}
+				if wakePublishes.Load() == 0 {
+					t.Fatal("missed-wake case did not actually publish MQTT")
+				}
+			}
+
 			if _, err = invoke(""); err != nil {
 				t.Fatal("publication replay", err)
 			}
@@ -244,14 +448,26 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 				t.Fatal(status, string(raw))
 			}
 			var runs []struct {
-				TaskID string `json:"task_id"`
+				TaskID   string `json:"task_id"`
+				Status   string `json:"status"`
+				Verified bool   `json:"verified"`
 			}
 			if err = json.Unmarshal(raw, &runs); err != nil {
 				t.Fatal(err)
 			}
 			tasks := map[string]bool{}
+			accepted := 0
 			for _, run := range runs {
+				if run.Status == "done" && run.Verified {
+					accepted++
+				}
 				tasks[run.TaskID] = true
+			}
+			if accepted != 1 {
+				t.Fatal("accepted result applied more or less than once", accepted)
+			}
+			if (point == "worker:lost_receipt" || point == "worker:duplicate_result") && len(runs) != 1 {
+				t.Fatal("committed result was rerun", len(runs))
 			}
 			if len(tasks) != 1 {
 				t.Fatal("admission created multiple logical tasks", tasks)
@@ -301,5 +517,18 @@ func fixtureRunDiagnostics(t *testing.T, client *http.Client, operator string) {
 			resp.Body.Close()
 			t.Log(string(data))
 		}
+	}
+}
+
+type fixtureWakeHook struct {
+	mqtt.HookBase
+	count *atomic.Int64
+}
+
+func (h *fixtureWakeHook) ID() string           { return "fixture-wake" }
+func (h *fixtureWakeHook) Provides(b byte) bool { return b == mqtt.OnPublished }
+func (h *fixtureWakeHook) OnPublished(_ *mqtt.Client, packet packets.Packet) {
+	if strings.HasPrefix(packet.TopicName, "mitos/worker/v1/") {
+		h.count.Add(1)
 	}
 }

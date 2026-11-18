@@ -87,9 +87,9 @@ It needs no external database service, broker or remote worker.
 
 ## Not provided
 
-Remote worker claims/leases/checkpoints, MQTT work
-ownership and checkpointed conversation waits (gates S2–S4) are not implemented;
-the operator API remains loopback-only. Authenticated application access uses the
+Checkpointed conversation waits remain gated on S4. The
+operator API remains loopback-only. Remote structured workers use the separate
+worker protocol described below; MQTT carries hints, while HTTP claims own work. Authenticated application access uses the
 separate TLS listener described below.
 
 ## Runtime storage and crash fixtures
@@ -158,8 +158,9 @@ local execution and before acceptance.
 
 S2 application-boundary conformance is demonstrated by the independent application
 fixture and its four runtime/application crash cases. `service_principal_auth` and
-`tenant_isolation` are true; PostgreSQL, remote workers and dormant waits retain
-their separate gates.
+`tenant_isolation` are true. The separate S3 subprocess fault matrix demonstrates
+`remote_workers` and `mqtt_work_claims`; PostgreSQL and dormant waits retain their
+separate gates.
 
 
 ## Bounded reads, capacity and restart recovery
