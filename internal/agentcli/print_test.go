@@ -8,7 +8,7 @@ import (
 // Every coordinated CLI must have a non-interactive invocation, accept a
 // selected model verbatim and expose only efforts it can pass to that CLI.
 func TestCoordinatedPrintArguments(t *testing.T) {
-	modes := map[string]string{"opencode": "run", "kilo": "run", "pi": "--print", "gemini": "--output-format", "qwen": "--output-format", "copilot": "-s", "goose": "run", "amp": "--execute", "cursor": "--print", "cline": "--auto-approve", "aider": "--message-file"}
+	modes := map[string]string{"opencode": "run", "kilo": "run", "pi": "--print", "gemini": "--output-format", "qwen": "--output-format", "copilot": "-s", "goose": "run", "amp": "--execute", "cursor": "--print", "cline": "--acp", "aider": "--message-file"}
 	for _, adapter := range Builtins() {
 		spec := adapter.Definition()
 		if spec.Kind != "agent" {
@@ -25,6 +25,9 @@ func TestCoordinatedPrintArguments(t *testing.T) {
 			args, err := PrintArguments(spec.ID, "provider/model", "", granted)
 			if err != nil || args[0] != modes[spec.ID] || !slices.Equal(args[len(args)-2:], []string{"--model", "provider/model"}) {
 				t.Fatalf("%s: %v", args, err)
+			}
+			if spec.ID == "cline" && !slices.Equal(args[:len(args)-2], []string{"--acp", "--auto-approve", "false"}) {
+				t.Fatalf("Cline must request permission for native tools: %v", args)
 			}
 			if spec.ID == "pi" && !slices.Contains(args, "--no-tools") {
 				t.Fatal(args)

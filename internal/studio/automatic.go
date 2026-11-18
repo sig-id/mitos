@@ -684,6 +684,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), dir, prompt, options)
 	}}
 	var turns *printTurn
+	var turnCommand func([]byte) compute.Command
 	if agentcli.PrintRuntime(b.Runtime) {
 		cliArgs, argErr := agentcli.PrintArguments(b.Runtime, b.Model, b.Effort, authority.Granted)
 		if argErr != nil {
@@ -695,7 +696,18 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		if inputErr != nil {
 			return inputErr
 		}
-		command = compute.Command{Argv: append([]string{native.Executable}, cliArgs...), Directory: dir, NativeEnv: agentEnv, Input: input, Stdout: &turns.output}
+		turnCommand = func(input []byte) compute.Command {
+			cmd := compute.Command{Argv: append([]string{native.Executable}, cliArgs...), Directory: dir, NativeEnv: agentEnv}
+			if b.Runtime == "cline" {
+				cmd.Interact = func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+					return harness.RunClineACP(ctx, stream, io.MultiWriter(&turns.output, output), dir, string(input), b.Model, authority.Granted)
+				}
+			} else {
+				cmd.Input, cmd.Stdout = input, &turns.output
+			}
+			return cmd
+		}
+		command = turnCommand(input)
 	}
 	session, err := e.agentProvider.Start(ctx, handle, command)
 	if err != nil {
@@ -712,7 +724,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	var output []byte
 	var runErr error
 	if turns != nil && stageErr == nil {
-		output, runErr = turns.run(ctx, e.agentProvider, session, command, preview)
+		output, runErr = turns.run(ctx, e.agentProvider, session, turnCommand, preview)
 	} else {
 		<-session.Done()
 		output, runErr = session.Result()

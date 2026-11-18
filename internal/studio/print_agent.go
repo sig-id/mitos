@@ -190,7 +190,7 @@ type nextCommandProvider interface {
 	Next(context.Context, compute.Session, compute.Command) (compute.Session, error)
 }
 
-func (p *printTurn) run(ctx context.Context, provider compute.Provider, first compute.Session, command compute.Command, preview io.Writer) ([]byte, error) {
+func (p *printTurn) run(ctx context.Context, provider compute.Provider, first compute.Session, command func([]byte) compute.Command, preview io.Writer) ([]byte, error) {
 	session := first
 	var logs printOutput
 	for turn := 1; ; turn++ {
@@ -208,7 +208,7 @@ func (p *printTurn) run(ctx context.Context, provider compute.Provider, first co
 			return logs.Bytes(), err
 		}
 		fmt.Fprintf(preview, "Completed Mitos handoff turn %d.\n", turn)
-		command.Input, err = p.input()
+		input, err := p.input()
 		if err != nil {
 			return logs.Bytes(), err
 		}
@@ -217,7 +217,7 @@ func (p *printTurn) run(ctx context.Context, provider compute.Provider, first co
 		if !ok {
 			return logs.Bytes(), errors.New("provider cannot continue a coordinated CLI tool exchange")
 		}
-		session, err = next.Next(ctx, session, command)
+		session, err = next.Next(ctx, session, command(input))
 		if err != nil {
 			return logs.Bytes(), err
 		}

@@ -55,7 +55,7 @@ func PrintArguments(id, model, effort string, granted func(string) bool) ([]stri
 			args = append(args, "--mode", "ask")
 		}
 	case "cline":
-		args = []string{"--auto-approve", "false"}
+		args = []string{"--acp", "--auto-approve", "false"}
 	case "aider":
 		args = []string{"--message-file", "/dev/stdin", "--no-show-release-notes", "--no-pretty", "--no-stream", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-check-update", "--chat-history-file", "/dev/null", "--input-history-file", "/dev/null"}
 		if !granted("workspace.write") {

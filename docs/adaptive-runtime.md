@@ -347,7 +347,10 @@ which supports all built-in coding agents. A setup reply requires operator revie
 
 Coordinated work uses native protocols for Codex and Claude Code. OpenCode, Pi,
 Gemini CLI, GitHub Copilot, Aider, Goose, Amp, Cursor Agent, Qwen Code, Cline
-and Kilo Code use their non-interactive CLI. Each invocation can submit a Mitos
+and Kilo Code use their non-interactive CLI. Cline uses ACP over stdio so Mitos
+can approve individual native reads, edits, commands and web requests using
+the task's grants. Unknown tools and native subagent requests are denied.
+Each invocation can submit a Mitos
 tool request, ask for an operator decision or return a final answer. Mitos passes
 the receipt into the next invocation in the same workspace. Worker results and
 orchestrator plans go through the same validation as native-protocol results.
