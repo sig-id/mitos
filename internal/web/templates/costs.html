@@ -1,0 +1,30 @@
+{{define "costs"}}
+<div class="page-heading"><div><p class="eyebrow">ESTIMATED FROM HARNESS USAGE</p><h1>Agent cost statistics</h1><p>{{.Costs.Runs}} attempts with reported model usage · list prices retrieved {{.Costs.PricesRetrieved}}</p></div><a class="button" href="/api/agent-costs" hx-boost="false" download="agent-costs.json">Download cost report {{icon "download"}}</a></div>
+{{if .Costs.Agents}}
+{{range .Costs.Agents}}
+<section class="panel padded">
+<h2>{{if .AgentName}}{{.AgentName}}{{else}}{{.AgentID}}{{end}}</h2>
+<dl class="facts">
+<div><dt>Estimated cost</dt><dd>{{usd .CostUSD}}{{if .UnpricedRuns}} across {{.PricedRuns}} priced runs; {{.UnpricedRuns}} runs have no matching list price{{end}}</dd></div>
+<div><dt>Runs with usage</dt><dd>{{.Runs}}</dd></div>
+<div><dt>Input tokens (uncached)</dt><dd>{{bytes .InputTokens}}</dd></div>
+<div><dt>Cache hits</dt><dd>{{bytes .CachedInputTokens}}</dd></div>
+<div><dt>Cache writes</dt><dd>{{bytes .CacheWriteTokens}}</dd></div>
+<div><dt>Output tokens</dt><dd>{{bytes .OutputTokens}}</dd></div>
+</dl>
+{{range .Models}}<p><code>{{.Model}}</code> · {{.Runs}} runs · {{bytes .InputTokens}} in + {{bytes .CachedInputTokens}} cached + {{bytes .CacheWriteTokens}} written + {{bytes .OutputTokens}} out{{if .CostUSD}} · {{usd .CostUSD}}{{else}} · no published list price{{end}}</p>{{end}}
+</section>
+{{end}}
+<section class="panel padded"><h2>Totals</h2>
+<dl class="facts">
+<div><dt>Total estimated spend</dt><dd>{{usd .Costs.TotalCostUSD}} over {{.Costs.PricedRuns}} priced attempts</dd></div>
+<div><dt>Unpriced attempts</dt><dd>{{.Costs.UnpricedRuns}}{{if .Costs.UnpricedModels}} on {{range $i, $m := .Costs.UnpricedModels}}{{if $i}}, {{end}}<code>{{$m}}</code>{{end}}{{end}}</dd></div>
+</dl>
+</section>
+{{else}}
+<section class="panel padded"><h2>No usage recorded yet</h2><p>No attempt has recorded model usage. Usage is journaled when a native harness reports token counts with its cache split; print-mode CLIs and absent reports mean unknown spend, not zero spend.</p></section>
+{{end}}
+<section class="panel padded"><h2>How to read this evidence</h2>{{range .Costs.Limitations}}<p>{{.}}</p>{{end}}
+<p>Unit prices come from {{len .Costs.PriceSources}} published pricing pages: {{range $i, $src := .Costs.PriceSources}}{{if $i}} · {{end}}{{$src}}{{end}}.</p>
+</section>
+{{end}}

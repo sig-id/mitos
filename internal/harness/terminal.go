@@ -44,6 +44,10 @@ type CodexOptions struct {
 	Result   func(string) error
 	// Activity receives public records separately from stdout, stderr, and tool output.
 	Activity io.Writer
+	// Usage receives normalized token usage reported by the native harness,
+	// including the cache hit/write split, as best-effort telemetry: it must
+	// never block or fail the run, and absent reports mean unknown, not zero.
+	Usage func(Usage)
 }
 
 func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io.Reader, output io.Writer, workspace, prompt string, options CodexOptions) error {
@@ -254,6 +258,12 @@ func RunCodex(ctx context.Context, b Broker, server io.ReadWriteCloser, input io
 			}
 			if options.Headless {
 				writeCodexActivity(output, options.Activity, event)
+			}
+			if options.Usage != nil {
+				if usage, ok := CodexUsage(event.Method, event.Params); ok {
+					usage.Model = thread.Model
+					options.Usage(usage)
+				}
 			}
 			if len(event.ID) > 0 && event.Method != "" {
 				if event.Method == "item/tool/call" && options.ToolCall != nil {

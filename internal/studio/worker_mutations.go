@@ -44,6 +44,7 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 	kind := "worker_" + in.Kind
 	var artifacts []ArtifactData
 	var checkpoint *StructuredCheckpoint
+	var usageChange *change
 	switch in.Kind {
 	case "renew":
 		lease.ExpiresAt = time.Now().UTC().Add(30 * time.Second)
@@ -199,6 +200,7 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 		c.Stage = "Complete"
 		c.Verified = true
 		c.Summary = "Typed result accepted against the declared schema (sha256 " + response.SHA256 + ")."
+		usageChange, _ = structuredUsageChange(r, result.Usage)
 	default:
 		return response, ErrNotFound
 	}
@@ -217,6 +219,16 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 		names[a.Name] = true
 		artifact := &Artifact{Name: a.Name, SHA256: digestText(string(a.Data)), Bytes: int64(len(a.Data))}
 		event, err := s.prepareEvent(r.ID, "effect", "artifact_harvested", change{Artifact: artifact}, seq+1, previous)
+		if err != nil {
+			return response, err
+		}
+		events = append(events, event)
+		seq, previous = event.Seq, event.Hash
+	}
+	// The cost record joins the same atomic batch as the result it belongs to,
+	// ahead of the terminal result event.
+	if usageChange != nil {
+		event, err := s.prepareEvent(r.ID, "effect", "agent_usage_recorded", *usageChange, seq+1, previous)
 		if err != nil {
 			return response, err
 		}

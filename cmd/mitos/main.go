@@ -69,10 +69,10 @@ func run(args []string) error {
 	case "egress-loop":
 		// Internal helper mounted inside mediated sandboxes; not for operators.
 		return egressLoop(args[1:])
-	case "run", "status", "log", "interrupts", "checkpoints", "rewind", "decisions", "resolve", "autonomy", "fleet", "evidence", "release-claims", "tasks", "task", "pools", "configure-pool", "services", "services-preview", "services-configure", "service-run", "heartbeat", "service-signal", "emit-event", "service-events", "service-stop", "service-restart", "service-resume", "service-lifecycle":
+	case "run", "status", "log", "interrupts", "checkpoints", "rewind", "decisions", "resolve", "autonomy", "costs", "fleet", "evidence", "release-claims", "tasks", "task", "pools", "configure-pool", "services", "services-preview", "services-configure", "service-run", "heartbeat", "service-signal", "emit-event", "service-events", "service-stop", "service-restart", "service-resume", "service-lifecycle":
 		return client(args[0], args[1:])
 	case "help", "--help", "-h":
-		fmt.Println("Mitos Studio\n\n  mitos worker Run a confined structured worker or manage credentials\n  mitos principal Manage application service credentials\n  mitos storage Back up, restore and expire runtime receipts\n  mitos message  Send and inspect durable MQTT messages\n  mitos agent  Connect Codex or Claude waiting requests\n  mitos device  Pair, list, rotate or revoke handheld credentials\n  mitos serve   Restart the local Go + HTMX studio\n  mitos stop    Stop the Studio using a data directory\n  mitos run     Submit a brief to a running studio\n  mitos status  Read a run from a running studio\n  mitos log     Read a run's events\n  mitos interrupts  Report recorded human interruptions\n  mitos checkpoints List a run's saved recovery points\n  mitos autonomy Report autonomy evidence and coverage\n  mitos fleet   List structured fleet status\n  mitos tasks   List durable task state\n  mitos task    Read a task and its attempt lineage\n  mitos pools   List persisted scheduling policies\n  mitos services Read desired service activation and reasons\n  mitos services-preview Validate a service catalog without saving\n  mitos services-configure Save a catalog at an expected revision\n  mitos service-run Trigger a service task with an idempotency key\n  mitos service-signal Deliver a JSON message to an external-signal service\n  mitos service-stop Stop a service or target and its part_of members\n  mitos service-restart Stop a service group and publish fresh Tasks\n  mitos service-resume Release a settled service stop\n  mitos service-lifecycle Read service stop operations\n  mitos emit-event Emit a named JSON event to active subscribers\n  mitos service-events List custom events or read one by sequence\n  mitos heartbeat Record a current run monitor heartbeat\n  mitos configure-pool Save a scheduling policy\n  mitos evidence Read a run’s bounded structured evidence\n  mitos release-claims Release inspected previous execution claims\n  mitos decisions List pending human decisions\n  mitos resolve Record a choice for a decision\n  mitos rewind  Restore a checkpoint of parked work\n\nUse a command with --help for its options.")
+		fmt.Println("Mitos Studio\n\n  mitos worker Run a confined structured worker or manage credentials\n  mitos principal Manage application service credentials\n  mitos storage Back up, restore and expire runtime receipts\n  mitos message  Send and inspect durable MQTT messages\n  mitos agent  Connect Codex or Claude waiting requests\n  mitos device  Pair, list, rotate or revoke handheld credentials\n  mitos serve   Restart the local Go + HTMX studio\n  mitos stop    Stop the Studio using a data directory\n  mitos run     Submit a brief to a running studio\n  mitos status  Read a run from a running studio\n  mitos log     Read a run's events\n  mitos interrupts  Report recorded human interruptions\n  mitos checkpoints List a run's saved recovery points\n  mitos autonomy Report autonomy evidence and coverage\n  mitos costs   Report estimated per-agent model spend\n  mitos fleet   List structured fleet status\n  mitos tasks   List durable task state\n  mitos task    Read a task and its attempt lineage\n  mitos pools   List persisted scheduling policies\n  mitos services Read desired service activation and reasons\n  mitos services-preview Validate a service catalog without saving\n  mitos services-configure Save a catalog at an expected revision\n  mitos service-run Trigger a service task with an idempotency key\n  mitos service-signal Deliver a JSON message to an external-signal service\n  mitos service-stop Stop a service or target and its part_of members\n  mitos service-restart Stop a service group and publish fresh Tasks\n  mitos service-resume Release a settled service stop\n  mitos service-lifecycle Read service stop operations\n  mitos emit-event Emit a named JSON event to active subscribers\n  mitos service-events List custom events or read one by sequence\n  mitos heartbeat Record a current run monitor heartbeat\n  mitos configure-pool Save a scheduling policy\n  mitos evidence Read a run’s bounded structured evidence\n  mitos release-claims Release inspected previous execution claims\n  mitos decisions List pending human decisions\n  mitos resolve Record a choice for a decision\n  mitos rewind  Restore a checkpoint of parked work\n\nUse a command with --help for its options.")
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q; use mitos help", args[0])
@@ -345,8 +345,10 @@ func client(command string, args []string) error {
 			report, err = studio.AuditInterruptLogs(*logs)
 		case "autonomy":
 			report, err = studio.AuditAutonomyLogs(*logs)
+		case "costs":
+			report, err = studio.AuditAgentCostLogs(*logs)
 		default:
-			return errors.New("--logs is only supported by interrupts and autonomy")
+			return errors.New("--logs is only supported by interrupts, autonomy and costs")
 		}
 		if err != nil {
 			return err
@@ -529,6 +531,8 @@ func client(command string, args []string) error {
 		req, err = http.NewRequest("GET", base+"/api/fleet", nil)
 	} else if command == "autonomy" {
 		req, err = http.NewRequest("GET", base+"/api/autonomy", nil)
+	} else if command == "costs" {
+		req, err = http.NewRequest("GET", base+"/api/agent-costs", nil)
 	} else if command == "decisions" {
 		req, err = http.NewRequest("GET", base+"/api/decisions", nil)
 	} else if command == "resolve" {

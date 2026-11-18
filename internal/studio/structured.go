@@ -363,6 +363,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 			}
 			_ = e.Store.SaveArtifacts(r.ID, data...)
 		}
+		_ = recordStructuredUsage(e.Store, r, result.Usage)
 		return err
 	}
 	// Validate the original bytes before marshaling the transport envelope.

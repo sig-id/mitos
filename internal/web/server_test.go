@@ -52,7 +52,7 @@ func request(s *Server, method, path, body string, hx bool) *httptest.ResponseRe
 }
 func TestScreensRenderWithLocalAssetsAndProgressiveForms(t *testing.T) {
 	s, _ := testServer(t)
-	for _, path := range []string{"/", "/work", "/decisions", "/apps", "/apps/workspace-inventory", "/new", "/static/htmx.min.js", "/static/studio.css"} {
+	for _, path := range []string{"/", "/work", "/decisions", "/apps", "/apps/workspace-inventory", "/new", "/costs", "/api/agent-costs", "/static/htmx.min.js", "/static/studio.css"} {
 		t.Run(path, func(t *testing.T) {
 			w := request(s, "GET", path, "", false)
 			if w.Code != 200 {

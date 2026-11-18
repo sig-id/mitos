@@ -52,6 +52,7 @@ type claudeFrame struct {
 	Structured json.RawMessage `json:"structured_output"`
 	Message    struct {
 		ID      string `json:"id"`
+		Model   string `json:"model"`
 		Content []struct {
 			Type   string `json:"type"`
 			ID     string `json:"id"`
@@ -211,6 +212,11 @@ func RunClaude(ctx context.Context, broker Broker, stream io.ReadWriteCloser, ou
 					}
 				}(f, session)
 			case "assistant", "user":
+				if f.Type == "assistant" && options.Usage != nil {
+					if usage, ok := ClaudeUsage(frame.line); ok {
+						options.Usage(usage)
+					}
+				}
 				for _, part := range f.Message.Content {
 					switch part.Type {
 					case "text":
