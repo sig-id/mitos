@@ -37,6 +37,10 @@ type Config struct {
 	Peers         []Peer `json:"peers"`
 }
 
+// Transport validates broker identity and TLS options for other MQTT protocols
+// without sharing signed peer mailbox subscriptions or their credentials.
+func (c *Config) Transport() (*url.URL, *tls.Config, error) { return c.validate() }
+
 func LoadConfig(path string) (Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

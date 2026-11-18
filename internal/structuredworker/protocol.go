@@ -45,12 +45,13 @@ type Mutation struct {
 	Data      json.RawMessage `json:"data,omitempty"`
 }
 type Receipt struct {
-	RequestID    string   `json:"request_id"`
-	Seq          int64    `json:"seq"`
-	State        string   `json:"state"`
-	SHA256       string   `json:"sha256,omitempty"`
-	LeaseSeconds int      `json:"lease_seconds,omitempty"`
-	Binding      *Binding `json:"binding,omitempty"`
+	WakeAuthority string   `json:"wake_authority,omitempty"`
+	RequestID     string   `json:"request_id"`
+	Seq           int64    `json:"seq"`
+	State         string   `json:"state"`
+	SHA256        string   `json:"sha256,omitempty"`
+	LeaseSeconds  int      `json:"lease_seconds,omitempty"`
+	Binding       *Binding `json:"binding,omitempty"`
 }
 type Context struct {
 	Binding

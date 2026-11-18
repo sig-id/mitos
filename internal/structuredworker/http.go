@@ -14,8 +14,9 @@ import (
 )
 
 type HTTPClient struct {
-	URL, Token string
-	HTTP       *http.Client
+	WakeFactory func(context.Context, string) (<-chan struct{}, func(), error)
+	URL, Token  string
+	HTTP        *http.Client
 }
 type HTTPError struct {
 	Status int

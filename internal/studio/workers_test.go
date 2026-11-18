@@ -77,7 +77,7 @@ func TestWorkerClaimAcceptanceReplayAndEpoch(t *testing.T) {
 		t.Fatal("request ID payload changed", err)
 	}
 	done, _ := e.Store.Get(r.ID)
-	if done.Status != "done" || !done.Verified || len(e.Store.workerOutbox) != 1 {
+	if done.Status != "done" || !done.Verified || len(e.Store.workerOutbox) != 2 {
 		t.Fatal("result/receipt/outbox not co-committed")
 	}
 	dir := e.Store.Dir()
@@ -319,5 +319,34 @@ func TestWorkerClaimBudgetIntersectsAdmittedLimits(t *testing.T) {
 	binding = testWorkerClaim(t, e, token, identity, longer.ID, "budget-claim-60")
 	if binding.BudgetSeconds <= 0 || binding.BudgetSeconds > 1800 {
 		t.Fatalf("definition timeout did not cap the 60-minute budget: %d", binding.BudgetSeconds)
+	}
+}
+
+// A structured run whose admitted revision cannot be resolved carries no
+// frozen definition body; the local dispatcher must refuse it visibly instead
+// of panicking the authority.
+func TestLocalWorkerClaimRefusesUnresolvableDefinitions(t *testing.T) {
+	e, _ := automaticScriptEngine(t, `print('unused')`)
+	e.stop()
+	e.wg.Wait()
+	r, err := e.LaunchStructured(structuredBrief("no-definition", "agent:mitos.generalist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Store.mu.Lock()
+	e.Store.runs[r.ID].Brief.Structured.Frozen = nil
+	e.Store.mu.Unlock()
+	stale, err := e.Store.Get(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Brief.Structured.Frozen != nil {
+		t.Fatal("test setup failed to clear the frozen body")
+	}
+	e.mu.Lock()
+	_, err = e.localWorkerClaim(stale)
+	e.mu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "cannot be resolved") {
+		t.Fatalf("unresolvable definition was not refused: %v", err)
 	}
 }
