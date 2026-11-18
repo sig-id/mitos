@@ -123,6 +123,68 @@ func TestReportAgentCostsFoldsJournalEvidence(t *testing.T) {
 	}
 }
 
+func TestWorkCostsGroupByTaskGraphAndProject(t *testing.T) {
+	e, req := graphEngine(t, false)
+	s := e.Store
+	g := createGraphTest(t, e, req)
+	priced := createRun(t, s)
+	unpriced := createRun(t, s)
+	outside := createRun(t, s)
+	// Inject synthetic lineage: WorkCosts groups by the run's recorded graph
+	// and task identity, while the journal accepts evidence for runs whose
+	// graph owns no current attempt for them.
+	attach := func(id, project, graph string) {
+		t.Helper()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		run := s.runs[id]
+		if run == nil {
+			t.Fatal("missing run")
+		}
+		run.ProjectID = project
+		if graph != "" {
+			run.GraphAttempt = &GraphAttempt{GraphID: graph}
+		}
+		s.runs[id] = run
+	}
+	attach(priced.ID, g.ProjectID, g.ID)
+	attach(unpriced.ID, g.ProjectID, "")
+	attach(outside.ID, "proj-other", g.ID)
+	tracker := harness.NewUsageTracker("gpt-6.2-sol")
+	tracker.Observe(harness.Usage{InputTokens: 500_000, OutputTokens: 250_000})
+	record, _ := newAgentUsageRecord("mitos.engineer", "Engineer", "codex", tracker)
+	if err := s.RecordEvidence(priced.ID, "agent_usage_recorded", record.summary(), record); err != nil {
+		t.Fatal(err)
+	}
+	fixture := harness.NewUsageTracker("unpriced-model")
+	fixture.Observe(harness.Usage{InputTokens: 10, OutputTokens: 10})
+	unpricedRecord, _ := newAgentUsageRecord("mitos.researcher", "Researcher", "codex", fixture)
+	if err := s.RecordEvidence(unpriced.ID, "agent_usage_recorded", unpricedRecord.summary(), unpricedRecord); err != nil {
+		t.Fatal(err)
+	}
+	index := s.WorkCosts(g.ProjectID)
+	graph := index.Graphs[g.ID]
+	if graph.CostUSD == nil || *graph.CostUSD != 3.50 || graph.Runs != 1 || graph.UnpricedRuns != 0 {
+		t.Fatalf("graph cost wrong: %+v", graph)
+	}
+	task := index.Tasks[unpriced.TaskID]
+	if task.CostUSD != nil || task.Runs != 1 || task.UnpricedRuns != 1 {
+		t.Fatalf("unpriced task cost wrong: %+v", task)
+	}
+	if index.Total.CostUSD == nil || *index.Total.CostUSD != 3.50 || index.Total.Runs != 2 || index.Total.UnpricedRuns != 1 {
+		t.Fatalf("project total wrong: %+v", index.Total)
+	}
+	// The graph-owned run of another project must not leak into this project's
+	// total even though its graph is shared.
+	if other := s.WorkCosts("proj-other"); other.Total.Runs != 0 {
+		t.Fatalf("other project leaked: %+v", other.Total)
+	}
+	// A run without any usage evidence contributes nothing anywhere.
+	if empty := s.WorkCosts("proj-3"); empty.Total.Runs != 0 || empty.Total.CostUSD != nil {
+		t.Fatalf("absent usage is not zero spend: %+v", empty.Total)
+	}
+}
+
 func TestStructuredWorkerResultJournalsUsageCost(t *testing.T) {
 	e, _ := automaticScriptEngine(t, `print('unused')`)
 	e.stop()

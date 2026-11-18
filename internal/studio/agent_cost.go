@@ -71,6 +71,17 @@ func displayName(name, id string) string {
 	return id
 }
 
+// RecordAgentUsage journals one attempt's harness-reported usage as cost
+// evidence. It is the public seam for runtimes outside the graph adapters;
+// attempts whose harness reported nothing record nothing.
+func (s *Store) RecordAgentUsage(id, agentID, agentName, runtime string, t *harness.UsageTracker) error {
+	record, ok := newAgentUsageRecord(agentID, agentName, runtime, t)
+	if !ok {
+		return nil
+	}
+	return s.RecordEvidence(id, "agent_usage_recorded", record.summary(), record)
+}
+
 // recordStructuredUsage journals worker-reported usage as cost evidence for a
 // structured attempt. Best effort by design: telemetry must not change the
 // outcome of the attempt that produced it, so only a store failure is
@@ -157,6 +168,94 @@ func AuditAgentCostLogs(path string) (AgentCostReport, error) {
 		return AgentCostReport{}, err
 	}
 	return ReportAgentCosts(runs), nil
+}
+
+// WorkCost is one work item's cost statistics: the sum over priced usage
+// records and the count of records without a matching list price. A nil
+// CostUSD with zero runs means no usage was reported at all; a nil CostUSD
+// with UnpricedRuns means usage exists but nothing could be priced.
+type WorkCost struct {
+	CostUSD      *float64 `json:"cost_usd,omitempty"`
+	Runs         int      `json:"runs"`
+	UnpricedRuns int      `json:"unpriced_runs"`
+}
+
+// WorkCostIndex aggregates journaled usage cost by desk Task and by graph,
+// plus the project total, for work views. It reads the same evidence as
+// ReportAgentCosts, never a mutable projection.
+type WorkCostIndex struct {
+	Tasks  map[string]WorkCost `json:"tasks"`
+	Graphs map[string]WorkCost `json:"graphs"`
+	Total  WorkCost            `json:"total"`
+}
+
+// foldUsage sums a run's agent_usage_recorded evidence.
+func foldUsage(run *Run) (priced float64, pricedRuns, unpricedRuns int) {
+	for _, event := range run.Events {
+		if event.Kind != "agent_usage_recorded" || event.Type != "effect" {
+			continue
+		}
+		var payload struct {
+			Evidence AgentUsageRecord `json:"evidence"`
+		}
+		if json.Unmarshal(event.Data, &payload) != nil {
+			continue
+		}
+		record := payload.Evidence
+		if record.Priced && record.CostUSD != nil {
+			priced += *record.CostUSD
+			pricedRuns++
+		} else {
+			unpricedRuns++
+		}
+	}
+	return priced, pricedRuns, unpricedRuns
+}
+
+func accumulate(cost *WorkCost, priced float64, pricedRuns, unpricedRuns int) {
+	if pricedRuns > 0 {
+		if cost.CostUSD == nil {
+			cost.CostUSD = &priced
+		} else {
+			*cost.CostUSD += priced
+		}
+	}
+	cost.Runs += pricedRuns + unpricedRuns
+	cost.UnpricedRuns += unpricedRuns
+}
+
+// WorkCosts aggregates cost statistics for one project's runs. Graph rows and
+// the total share the same run set, so a graph's spend is never counted twice
+// in the total even when its runs also carry a Task ID.
+func (s *Store) WorkCosts(project string) WorkCostIndex {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	index := WorkCostIndex{Tasks: map[string]WorkCost{}, Graphs: map[string]WorkCost{}}
+	for _, run := range s.runs {
+		// Runs created through the plain brief path carry the project on the
+		// brief rather than the projected run field.
+		runProject := run.ProjectID
+		if runProject == "" {
+			runProject = run.Brief.ProjectID
+		}
+		if runProject != project {
+			continue
+		}
+		priced, pricedRuns, unpricedRuns := foldUsage(run)
+		if pricedRuns+unpricedRuns == 0 {
+			continue
+		}
+		accumulate(&index.Total, priced, pricedRuns, unpricedRuns)
+		task := index.Tasks[run.TaskID]
+		accumulate(&task, priced, pricedRuns, unpricedRuns)
+		index.Tasks[run.TaskID] = task
+		if run.GraphAttempt != nil {
+			graph := index.Graphs[run.GraphAttempt.GraphID]
+			accumulate(&graph, priced, pricedRuns, unpricedRuns)
+			index.Graphs[run.GraphAttempt.GraphID] = graph
+		}
+	}
+	return index
 }
 
 // ReportAgentCosts folds recorded agent_usage_recorded evidence. It consumes

@@ -18,7 +18,8 @@ type projectWorkRow struct {
 	Branch       string    `json:"branch,omitempty"`
 	Labels       []string  `json:"labels,omitempty"`
 	AttemptMS    *int64    `json:"attempt_ms"`
-	CostUSD      *float64  `json:"cost_usd"` // Supplied by billing when a work total is available.
+	CostUSD      *float64  `json:"cost_usd"` // Estimated from journaled harness usage against published list prices.
+	UnpricedRuns int       `json:"unpriced_runs,omitempty"`
 	ID           string    `json:"id"`
 	Kind         string    `json:"kind"`
 	Title        string    `json:"title"`
@@ -37,6 +38,7 @@ type projectWorkStats struct {
 	Underway     int      `json:"underway"`
 	ActiveAgents int      `json:"active_agents"`
 	CostUSD      *float64 `json:"cost_usd"`
+	UnpricedRuns int      `json:"unpriced_runs,omitempty"`
 }
 
 func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +79,7 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 		deskResult(w, nil, err)
 		return
 	}
+	costs := s.engine.Store.WorkCosts(project)
 	now := time.Now().UTC()
 	branch := desk.CheckoutBranch(r.Context(), p.Directory)
 	rows := []projectWorkRow{}
@@ -84,10 +87,12 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 	// Aggregate before filtering and pagination so totals always cover the project.
 	graphs, _ := s.engine.Store.GraphSummaries(project, "", int(^uint(0)>>1))
 	for _, g := range graphs {
+		graphCost := costs.Graphs[g.ID]
 		rows = append(rows, projectWorkRow{
 			ID: g.ID, Kind: "graph", Title: g.Title, Revision: g.Revision,
 			State: g.WorkState, Status: projectGraphStatus(g), Workspace: g.Workspace,
 			Agents: g.Agents, ActiveAgents: g.ActiveAgents, AttemptMS: &g.AttemptMS,
+			CostUSD: graphCost.CostUSD, UnpricedRuns: graphCost.UnpricedRuns,
 			CreatedAt: g.CreatedAt, UpdatedAt: g.UpdatedAt,
 		})
 		stats.ActiveAgents += g.ActiveAgents
@@ -128,10 +133,12 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 			ms := sessionTime[task.ID].Milliseconds()
 			attemptMS = &ms
 		}
+		taskCost := costs.Tasks[task.ID]
 		rows = append(rows, projectWorkRow{
 			ID: task.ID, Kind: "task", Title: task.Title, Revision: int64(task.Revision),
 			State: state, Status: task.Status, Workspace: session.Workspace, Branch: session.WorktreeBranch,
 			Agents: agents, ActiveAgents: sessions[task.ID], AttemptMS: attemptMS,
+			CostUSD: taskCost.CostUSD, UnpricedRuns: taskCost.UnpricedRuns,
 			CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
 		})
 	}
@@ -190,6 +197,8 @@ func (s *Server) projectOverview(w http.ResponseWriter, r *http.Request) {
 			labelSet[name] = true
 		}
 	}
+	stats.CostUSD = costs.Total.CostUSD
+	stats.UnpricedRuns = costs.Total.UnpricedRuns
 	names := make([]string, 0, len(labelSet))
 	for name := range labelSet {
 		names = append(names, name)
