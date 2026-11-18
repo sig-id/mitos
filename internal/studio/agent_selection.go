@@ -67,7 +67,7 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 	}
 	m := b.Definition.Manifest
 	candidates := []RuntimeCandidate{}
-	for _, runtime := range []string{"codex", "claude"} {
+	for _, runtime := range agentcli.CoordinatedRuntimes() {
 		c := RuntimeCandidate{Runtime: runtime}
 		// The binding's own profile is preferred for its runtime; other runtimes
 		// are discovered through any registered profile.
@@ -124,6 +124,12 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 		// not been prepared by an execution preset yet.
 		if b.Executable == "" {
 			b.Executable = candidates[bound].Executable
+			b.ProfileID = candidates[bound].Profile
+			var err error
+			b.Profile, err = e.executionProfile(b.Runtime, b.ProfileID)
+			if err != nil {
+				return err
+			}
 		}
 		b.RuntimeSelection = &selection
 		return nil

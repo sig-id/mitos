@@ -96,7 +96,7 @@ func TestSetupDefaultsOverridesAndFrozenExecution(t *testing.T) {
 	if _, err = e.SavePreferences("", RuntimePreferences{}); !errors.Is(err, ErrConflict) {
 		t.Fatal("stale defaults accepted")
 	}
-	if _, err = e.SavePreferences(req.ProjectID, RuntimePreferences{Runtime: "pi"}); err == nil {
+	if _, err = e.SavePreferences(req.ProjectID, RuntimePreferences{Runtime: "shell"}); err == nil {
 		t.Fatal("unsupported automatic runtime accepted")
 	}
 	_, err = e.SavePreferences(req.ProjectID, RuntimePreferences{Model: "project-model", Minutes: 10, Attempts: 12})

@@ -5,7 +5,6 @@
  // within the harness). Size buckets set attempt budgets.
  const VERSION='agent-execution/v2',TIERS=['low','medium','high'],SIZES=['small','medium','large'];
  const NATURES=['context','design','implement','document','review','verify'];
- const EFFORTS={codex:['minimal','low','medium','high','xhigh'],claude:['low','medium','high','xhigh','max']};
  const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n};
  const field=(box,label,input)=>{const n=el('label',label);n.append(input);box.append(n);return input};
  const action=(label,fn)=>{const b=el('button',label);b.type='button';b.onclick=fn;return b};
@@ -26,16 +25,16 @@
   }
   return options;
  }
- function suggestedTiers(runtime,environment,configuredModel){
+ function suggestedTiers(agent,environment,configuredModel){
   const models=environment?.models||[];
   return Object.fromEntries(TIERS.map(t=>{
    const compatible=models.filter(m=>!m.efforts||m.efforts.includes(t));
    const alias={low:'haiku',medium:'sonnet',high:'opus'}[t];
-   const preferred=(runtime==='claude'&&compatible.find(m=>m.id===alias))||
+   const preferred=(agent?.id==='claude'&&compatible.find(m=>m.id===alias))||
     compatible.find(m=>m.default)||compatible[0]||models.find(m=>m.default)||models[0];
    const model=configuredModel||preferred?.id||'';
    const efforts=models.find(m=>m.id===model)?.efforts;
-   return [t,{model,effort:efforts&&!efforts.includes(t)?'':t}];
+   return [t,{model,effort:(agent?.id!=='amp'||model)&&agent?.capabilities.reasoning_efforts?.includes(t)&&(!efforts||efforts.includes(t))?t:''}];
   }));
  }
  function initial(preferences,installations){
@@ -43,15 +42,15 @@
   const available=installations.filter(canCoordinate);
   const requested=preferences.runtime||'codex',selected=available.find(r=>r.id===requested)||available.find(r=>r.installed)||available[0];
   const runtime=selected?.id||requested,environment=environments(selected)[0];
-  const harnesses=[{id:'default',name:'Project default',runtime,profile_id:environment?.profile_id||'',tiers:suggestedTiers(runtime,environment,runtime===requested&&preferences.model)}];
+  const harnesses=[{id:'default',name:'Project default',runtime,profile_id:environment?.profile_id||'',tiers:suggestedTiers(selected,environment,runtime===requested&&preferences.model)}];
   for(const r of available){
    if(r===selected)continue;
    const env=environments(r)[0];
-   harnesses.push({id:r.id,name:r.name,runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r.id,env)});
+   harnesses.push({id:r.id,name:r.name,runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r,env)});
   }
   return {version:VERSION,harnesses,harness_rules:[],default_harness:'default',allowed_harnesses:harnesses.map(h=>h.id),orchestrator:{harness:'default',tier:'high'},size_budgets:{small:{minutes:15,max_turns:40},medium:{minutes:30,max_turns:80},large:{minutes:60,max_turns:160}}};
  }
- function tierFields(h,t,models){
+ function tierFields(h,t,models,efforts){
   const tier=h.tiers[t]||(h.tiers[t]={model:'',effort:''});
   const tierRow=el('div');tierRow.className='execution-tier';
   const label=t[0].toUpperCase()+t.slice(1)+' tier';
@@ -60,7 +59,7 @@
   const choice=tier.model&&!known()?':custom':(tier.model||'');
   const custom=el('input');custom.maxLength=200;custom.placeholder='Model ID';custom.setAttribute('aria-label',label+' custom model');
   custom.value=choice===':custom'?tier.model:'';custom.hidden=choice!==':custom';
-  custom.oninput=()=>{tier.model=custom.value.trim()};
+  custom.oninput=()=>{tier.model=custom.value.trim();renderEffort(true)};
   const picker=select(label+' model',options,choice,v=>{
    custom.hidden=v!==':custom';tier.model=custom.hidden?v:custom.value.trim();
    if(!custom.hidden)custom.focus();
@@ -70,7 +69,7 @@
   field(modelField,label+' model',picker);modelField.append(custom);
   const effort=el('select');field(tierRow,label+' effort',effort);effort.setAttribute('aria-label',label+' effort');
   function renderEffort(changed){
-   const supported=known()?.efforts,choices=EFFORTS[h.runtime].filter(e=>!supported||supported.includes(e));
+   const supported=known()?.efforts,choices=h.runtime==='amp'&&!tier.model?[]:efforts.filter(e=>!supported||supported.includes(e));
    if(changed&&tier.effort&&!choices.includes(tier.effort))tier.effort=choices.includes(t)?t:'';
    effort.replaceChildren(new Option('Default effort',''));
    for(const e of new Set([...choices,...(tier.effort?[tier.effort]:[])]))effort.append(new Option(e,e));
@@ -98,7 +97,7 @@
   const available=installations.filter(canCoordinate);
   const add=action('Add harness',()=>{
    const r=available.find(r=>r.id===policy.harnesses[0]?.runtime)||available[0],env=environments(r)[0];
-   policy.harnesses.push({id:crypto.randomUUID(),name:'New harness',runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r.id,env)});draw();
+   policy.harnesses.push({id:crypto.randomUUID(),name:'New harness',runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r,env)});draw();
   });
   add.disabled=!available.length;harnesses.append(add);
   const note=el('p','Native environment uses the Mitos server’s PATH and environment variables. Named profiles in agents.json can select a different executable or account.');note.className='muted';harnesses.append(note);
@@ -131,18 +130,18 @@
     const env=envs.find(p=>p.profile_id===(h.profile_id||''));
     field(row,'Coding agent',select('Coding agent',codingAgentOptions(installations,h.runtime),h.runtime,v=>{
      h.runtime=v;
-     const first=environments(available.find(r=>r.id===v))[0];
-     h.profile_id=first.profile_id;h.tiers=suggestedTiers(v,first);draw();
+     const selected=available.find(r=>r.id===v),first=environments(selected)[0];
+     h.profile_id=first.profile_id;h.tiers=suggestedTiers(selected,first);draw();
     }));
     const profile=el('select');profile.setAttribute('aria-label','Environment profile');field(row,'Environment profile',profile);
     for(const p of envs)profile.append(new Option(agent.profiles?.find(x=>x.id===p.profile_id)?.name||p.profile_id||'Native environment',p.profile_id));
     if(!env){const option=new Option((h.profile_id||'Native environment')+' – unavailable',h.profile_id||'');option.disabled=true;profile.append(option)}
     profile.value=h.profile_id||'';profile.onchange=()=>{
-     h.profile_id=profile.value;h.tiers=suggestedTiers(h.runtime,envs.find(p=>p.profile_id===profile.value));draw();
+     h.profile_id=profile.value;h.tiers=suggestedTiers(agent,envs.find(p=>p.profile_id===profile.value));draw();
     };
     const modelRows=el('div');modelRows.className='execution-tier-list';row.append(modelRows);
     if(env&&!env.models?.length)modelRows.append(el('small','Model list unavailable. Use the agent default or enter a model ID.'));
-    for(const t of TIERS)modelRows.append(tierFields(h,t,env?.models||[]));
+    for(const t of TIERS)modelRows.append(tierFields(h,t,env?.models||[],agent?.capabilities.reasoning_efforts||[]));
     const allowed=el('input');allowed.type='checkbox';allowed.checked=policy.allowed_harnesses.includes(h.id);
     const workerLabel=el('label');workerLabel.className='execution-worker-toggle';workerLabel.append(allowed,'Allow workers to use this harness');row.append(workerLabel);
     allowed.onchange=()=>{policy.allowed_harnesses=allowed.checked?[...policy.allowed_harnesses,h.id]:policy.allowed_harnesses.filter(id=>id!==h.id);draw()};

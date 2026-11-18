@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mitos/internal/agentcli"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/cooperation"
 	"mitos/internal/resourcepolicy"
@@ -166,8 +167,8 @@ func validatePreferences(v RuntimePreferences) error {
 	if v.Enforcement != "" && !validEnforcement(v.Enforcement) {
 		return errors.New("enforcement must be advisory, strict_required or strict")
 	}
-	if v.Runtime != "" && v.Runtime != "codex" && v.Runtime != "claude" {
-		return errors.New("automatic work supports Codex and Claude Code; other installed runtimes can be used where their adapters support the requested action")
+	if v.Runtime != "" && !agentcli.SupportsCoordination(v.Runtime) {
+		return errors.New("the selected runtime has no coordinated-work adapter")
 	}
 	if len(v.Model) > 200 || strings.ContainsAny(v.Model, "\x00\r\n") || strings.HasPrefix(v.Model, "-") || v.Minutes < 0 || v.Minutes > 43200 || v.Attempts < 0 || v.Attempts > 2048 || len(v.Guidance) > 16000 || strings.ContainsRune(v.Guidance, 0) {
 		return errors.New("invalid runtime preference or limit")

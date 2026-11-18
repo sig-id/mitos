@@ -110,21 +110,14 @@ func (e *Engine) AutomaticAgents() map[string]any {
 		reason = "Coding agent discovery is unavailable."
 	} else {
 		ready = false
-		for _, runtime := range []string{"codex", "claude"} {
-			if _, err = e.Desk.Agents.Prepare(agentcli.Request{AgentID: runtime}); err == nil {
+		for _, runtime := range agentcli.CoordinatedRuntimes() {
+			if _, err = e.prepareRuntime(runtime, ""); err == nil {
 				ready = true
-			}
-			installation, inspectErr := e.Desk.Agents.Inspect(runtime, "", "")
-			if inspectErr == nil {
-				for _, profile := range installation.Profiles {
-					if _, prepareErr := e.Desk.Agents.Prepare(agentcli.Request{AgentID: runtime, ProfileID: profile.ID}); prepareErr == nil {
-						ready = true
-					}
-				}
+				break
 			}
 		}
 		if !ready {
-			reason = "Install Codex or Claude Code and sign in to start coordinated work."
+			reason = "Install a supported coding agent and sign in to start coordinated work."
 		}
 	}
 
@@ -132,7 +125,7 @@ func (e *Engine) AutomaticAgents() map[string]any {
 	for _, d := range library {
 		rows = append(rows, map[string]any{"id": d.ID, "name": d.Name, "description": d.Description, "kind": d.Kind, "revision": d.Revision, "natures": d.Manifest.Natures, "max_specialization_bytes": d.Manifest.Specialization.MaxInstructionBytes})
 	}
-	return map[string]any{"ready": ready, "runtime": "Codex / Claude Code", "runtimes": []string{"codex", "claude"}, "reason": reason, "agents": rows}
+	return map[string]any{"ready": ready, "runtime": strings.Join(agentcli.CoordinatedRuntimes(), " / "), "runtimes": agentcli.CoordinatedRuntimes(), "reason": reason, "agents": rows}
 }
 
 type AutomaticGoal struct {
@@ -476,7 +469,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	if !orchestrator {
 		if authority.Granted(ProposalCapability) {
-			ca.instruct(fmt.Sprintf("Delegation: native subagents are unavailable. To get work done by other agents, add proposals to result_submit (at most %d per task, %d task specs each, in the orchestrator add shape with agent:{library id} app IDs). Each proposed task declares traits {nature, size, intelligence}: what kind of work, how much (small, medium, large), and how much reasoning it needs (low, medium, high). Never choose models; the execution policy routes the work, possibly to a different harness than yours. A blocking proposal ends this attempt: submit, then stop; you resume in this conversation with the accepted results or the rejection rationale (at most %d times per task). Non-blocking proposals record follow-up work; your result stays final. Prefer doing small work yourself.", HandoffProposalsPerTask, HandoffTasksPerProposal, HandoffYieldsPerTask))
+			ca.instruct(fmt.Sprintf("Delegation: do not launch native subagents. To get work done by other agents, add proposals to result_submit (at most %d per task, %d task specs each, in the orchestrator add shape with agent:{library id} app IDs). Each proposed task declares traits {nature, size, intelligence}: what kind of work, how much (small, medium, large), and how much reasoning it needs (low, medium, high). Never choose models; the execution policy routes the work, possibly to a different harness than yours. A blocking proposal ends this attempt: submit, then stop; you resume in this conversation with the accepted results or the rejection rationale (at most %d times per task). Non-blocking proposals record follow-up work; your result stays final. Prefer doing small work yourself.", HandoffProposalsPerTask, HandoffTasksPerProposal, HandoffYieldsPerTask))
 		} else {
 			ca.instruct("Delegation: native subagents are unavailable and this agent cannot propose work. Do the assignment yourself and report anything you could not do as a limitation.")
 		}
@@ -567,17 +560,18 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return err
 	}
 	defer os.RemoveAll(cache)
-	cacheJSON, _ := json.Marshal(cache)
-	config := []string{"shell_environment_policy.set.GOCACHE=" + string(cacheJSON)}
-	if b.Effort != "" && b.Runtime != "claude" {
-		config = append(config, "model_reasoning_effort="+strconvQuote(b.Effort))
-	}
-	if authority.Granted("network.read") {
-		config = append(config, "sandbox_workspace_write.network_access=true")
-	}
-	args := append([]string{native.Executable}, harness.CodexArguments(config...)...)
 	native.Env = agentCacheEnvironment(native.Env, cache)
-	if b.Runtime != "claude" {
+	args := []string{native.Executable}
+	if b.Runtime == "codex" {
+		cacheJSON, _ := json.Marshal(cache)
+		config := []string{"shell_environment_policy.set.GOCACHE=" + string(cacheJSON)}
+		if b.Effort != "" {
+			config = append(config, "model_reasoning_effort="+strconvQuote(b.Effort))
+		}
+		if authority.Granted("network.read") {
+			config = append(config, "sandbox_workspace_write.network_access=true")
+		}
+		args = append(args, harness.CodexArguments(config...)...)
 		if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
 			return err
 		}
@@ -683,12 +677,27 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	defer closePreview()
 	var activity bytes.Buffer
 	options.Activity = io.MultiWriter(&activity, preview.activity)
-	session, err := e.agentProvider.Start(ctx, handle, compute.Command{Argv: args, Directory: dir, NativeEnv: agentEnv, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+	command := compute.Command{Argv: args, Directory: dir, NativeEnv: agentEnv, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		if b.Runtime == "claude" {
 			return harness.RunClaude(ctx, broker, stream, io.MultiWriter(output, preview), dir, prompt, options)
 		}
 		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), dir, prompt, options)
-	}})
+	}}
+	var turns *printTurn
+	if agentcli.PrintRuntime(b.Runtime) {
+		cliArgs, argErr := agentcli.PrintArguments(b.Runtime, b.Model, b.Effort, authority.Granted)
+		if argErr != nil {
+			return argErr
+		}
+		turns = newPrintTurn(prompt, options, broker)
+		turns.allowCommand = authority.Granted("command.run")
+		input, inputErr := turns.input()
+		if inputErr != nil {
+			return inputErr
+		}
+		command = compute.Command{Argv: append([]string{native.Executable}, cliArgs...), Directory: dir, NativeEnv: agentEnv, Input: input, Stdout: &turns.output}
+	}
+	session, err := e.agentProvider.Start(ctx, handle, command)
 	if err != nil {
 		return err
 	}
@@ -700,8 +709,14 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	// A concurrent stop may reject the stage update. Still harvest the process's
 	// output and changes before returning the transition error.
-	<-session.Done()
-	output, runErr := session.Result()
+	var output []byte
+	var runErr error
+	if turns != nil && stageErr == nil {
+		output, runErr = turns.run(ctx, e.agentProvider, session, command, preview)
+	} else {
+		<-session.Done()
+		output, runErr = session.Result()
+	}
 	var routingError *harness.QuestionRoutingError
 	if errors.As(runErr, &routingError) {
 		runErr = &agentPrerequisiteError{summary: routingError.Error()}

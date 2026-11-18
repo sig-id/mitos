@@ -5,15 +5,16 @@ package agentcli
 import "time"
 
 type Capabilities struct {
-	CoordinatedWork  bool   `json:"coordinated_work"`
-	RequestBridge    bool   `json:"request_bridge"`
-	ProjectContext   bool   `json:"project_context"`
-	Transport        string `json:"transport"`
-	InitialPrompt    bool   `json:"initial_prompt"`
-	StructuredEvents bool   `json:"structured_events"`
-	Fork             bool   `json:"fork"`
-	Resume           bool   `json:"resume"`
-	Usage            bool   `json:"usage"`
+	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
+	CoordinatedWork  bool     `json:"coordinated_work"`
+	RequestBridge    bool     `json:"request_bridge"`
+	ProjectContext   bool     `json:"project_context"`
+	Transport        string   `json:"transport"`
+	InitialPrompt    bool     `json:"initial_prompt"`
+	StructuredEvents bool     `json:"structured_events"`
+	Fork             bool     `json:"fork"`
+	Resume           bool     `json:"resume"`
+	Usage            bool     `json:"usage"`
 }
 
 type Definition struct {

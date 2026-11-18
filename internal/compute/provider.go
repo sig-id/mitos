@@ -24,6 +24,8 @@ type Session interface {
 	OutputOffset() uint64
 }
 type Command struct {
+	// Stdout receives native stdout separately from stderr for single-shot protocols.
+	Stdout io.Writer `json:"-"`
 	// Interact drives a structured stdio protocol under provider process ownership.
 	Interact func(context.Context, io.ReadWriteCloser, io.Writer) error `json:"-"`
 	// NativeEnv is resolved at launch, never serialized or persisted.

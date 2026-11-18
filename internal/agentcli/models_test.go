@@ -29,12 +29,10 @@ echo '{"type":"system","secrets":"ignored"}'
 echo '{"type":"control_response","response":{"subtype":"success","request_id":"other","response":{"models":[{"value":"wrong"}]}}}'
 echo '{"type":"control_response","response":{"subtype":"success","request_id":"models","response":{"models":[{"value":"default"},{"value":"'$ALIAS'","displayName":"Work model","supportsEffort":false},{"value":"--bad-option"}]}}}'
 `)
-	// Session-only agents must be detected without running a model probe.
-	sessionOnly := `echo unexpected >> "$CALLS"`
-	for _, id := range []string{"opencode", "aider"} {
-		fakeCLI(t, dir, id, sessionOnly)
-	}
-	pi := fakeCLI(t, dir, "pi-wrapper", sessionOnly)
+	fakeCLI(t, dir, "cursor-agent", `[ "$1" = --list-models ] && echo 'fixture/model - Studio model'`)
+	fakeCLI(t, dir, "opencode", `[ "$1" = models ] && echo fixture/model`)
+	fakeCLI(t, dir, "aider", `echo unexpected >> "$CALLS"`)
+	pi := fakeCLI(t, dir, "pi-wrapper", `echo "fixture model 32K 2K yes no"`)
 	r, err := New(Builtins(), Config{Profiles: []Profile{
 		{ID: "pi-account", Name: "Pi account", AgentID: "pi", Executable: pi},
 		{ID: "work", Name: "Work", AgentID: "claude", Executable: claude, Env: map[string]string{"ALIAS": "WORK_MODEL"}},
@@ -47,13 +45,17 @@ echo '{"type":"control_response","response":{"subtype":"success","request_id":"m
 	for range 2 {
 		for _, a := range r.ListWithModels(t.Context(), dir) {
 			switch a.ID {
-			case "opencode", "aider", "pi":
+			case "opencode", "aider", "pi", "cursor":
 				profile := ""
 				if a.ID == "pi" {
 					profile = "pi-account"
 				}
-				if a.Capabilities.CoordinatedWork || len(a.HarnessEnvironments) != 1 || a.HarnessEnvironments[0].ProfileID != profile || len(a.HarnessEnvironments[0].Models) != 0 {
+				if !a.Capabilities.CoordinatedWork || len(a.HarnessEnvironments) != 1 || a.HarnessEnvironments[0].ProfileID != profile {
 					t.Fatalf("incorrect discovery for %s: %+v", a.ID, a.HarnessEnvironments)
+				}
+				models := a.HarnessEnvironments[0].Models
+				if a.ID != "aider" && (len(models) != 1 || models[0].ID != "fixture/model") {
+					t.Fatal(a.ID, models)
 				}
 			case "codex":
 				want := []HarnessModel{{ID: "model-a", Default: true, Efforts: []string{"low"}}, {ID: "model-b", Efforts: []string{}}}

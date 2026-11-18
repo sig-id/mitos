@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"mitos/internal/agentcli"
 	"mitos/internal/decision"
 	"mitos/internal/harness"
 )
@@ -55,7 +56,8 @@ func (s *Store) CreateBoundAgentSession(adapter, title, workspace, project, sess
 	if !p.Authenticated || !p.Tenant.Valid() || p.ID == "" {
 		return AgentSession{}, "", deviceError(403, "forbidden")
 	}
-	if adapter != "codex" && adapter != "claude" || title == "" || len(title) > 160 || workspace == "" {
+	supported := adapter == "codex" || adapter == "claude" || (runID != "" && agentcli.PrintRuntime(adapter))
+	if !supported || title == "" || len(title) > 160 || workspace == "" {
 		return AgentSession{}, "", deviceError(400, "malformed")
 	}
 	token, err := newDeviceToken()
@@ -132,9 +134,13 @@ func (s *Store) IngestAgentRequest(id, token string, raw json.RawMessage) (Agent
 	if err != nil {
 		return AgentRequestView{}, err
 	}
-	request, err := harness.Normalize(a.Adapter, raw)
+	wire := decisionWire(a.Adapter)
+	request, err := harness.Normalize(wire, raw)
 	if err != nil {
 		return AgentRequestView{}, deviceError(422, "native_console_required")
+	}
+	if agentcli.PrintRuntime(a.Adapter) && request.Method != "item/commandExecution/requestApproval" && request.Method != "item/tool/requestUserInput" {
+		return AgentRequestView{}, deviceError(422, "unsupported_cli_request")
 	}
 	for _, thread := range a.EndedThreads {
 		if thread == request.Thread {
@@ -249,7 +255,7 @@ func (s *Store) agentOutbox(r *Run, resolution decision.Resolution) (*AgentAnswe
 			answers = append(answers, *current.Decision.Resolution)
 		}
 	}
-	body, err := harness.Response(r.Decision.Source.Adapter, request.Request, answers)
+	body, err := harness.Response(decisionWire(r.Decision.Source.Adapter), request.Request, answers)
 	if err != nil {
 		return nil, err
 	}
@@ -434,4 +440,13 @@ func (s *Store) cancelAgentRun(id string) error {
 	}
 	request.Invalidated = true
 	return s.commit("", "effect", "agent_request_cancelled", change{AgentRequest: &request})
+}
+
+// The print adapter sends explicit, addressed JSON-RPC decision frames. The
+// persisted source still identifies the CLI that requested the decision.
+func decisionWire(runtime string) string {
+	if agentcli.PrintRuntime(runtime) {
+		return "codex"
+	}
+	return runtime
 }
