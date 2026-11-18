@@ -60,7 +60,7 @@ func TestRuntimeSelectionRecordsCandidatesAndRefusesIncompatible(t *testing.T) {
 	if err := e.selectAgentRuntime(bound); err != nil {
 		t.Fatal(err)
 	}
-	if bound.RuntimeSelection == nil || bound.RuntimeSelection.Runtime != "codex" || len(bound.RuntimeSelection.Candidates) != 2 {
+	if bound.RuntimeSelection == nil || bound.RuntimeSelection.Runtime != "codex" || len(bound.RuntimeSelection.Candidates) != len(agentcli.CoordinatedRuntimes()) {
 		t.Fatalf("selection receipt missing: %+v", bound.RuntimeSelection)
 	}
 	for _, c := range bound.RuntimeSelection.Candidates {

@@ -380,10 +380,14 @@ func (r *Registry) Refresh(ctx context.Context) {
 	wg.Wait()
 }
 
-type boundedOutput struct{ data []byte }
+type boundedOutput struct {
+	data      []byte
+	truncated bool
+}
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
 	n := min(len(p), (16<<10)-len(b.data))
+	b.truncated = b.truncated || n < len(p)
 	b.data = append(b.data, p[:n]...)
 	return len(p), nil
 }

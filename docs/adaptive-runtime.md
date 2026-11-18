@@ -172,7 +172,7 @@ preset bundled:
 }
 ```
 
-1. **Harness** (Codex CLI or Claude Code, with an environment profile). Harnesses
+1. **Harness** (an installed coordinated coding agent and its environment profile). Harnesses
    that cannot run the task are filtered out first: the definition and nature must be
    admissible on the runtime under the project's enforcement policy (for example,
    `strict_required` with a required `workspace.write` excludes Claude, whose
@@ -343,7 +343,22 @@ Mitos-specific section structure.
 The assistant uses installed runtime discovery. Codex, Claude Code and Pi have
 read-only setup adapters; other installed runtimes are listed with their actual
 capability. Setup runtime/model selection is independent of automatic task execution,
-which supports Codex and Claude Code through the coordinated-work adapters. A setup reply cannot save settings itself.
+which supports all built-in coding agents. A setup reply requires operator review before saving.
+
+Coordinated work uses native protocols for Codex and Claude Code. OpenCode, Pi,
+Gemini CLI, GitHub Copilot, Aider, Goose, Amp, Cursor Agent, Qwen Code, Cline
+and Kilo Code use their non-interactive CLI. Cline uses ACP over stdio so Mitos
+can approve individual native reads, edits, commands and web requests using
+the task's grants. Unknown tools and native subagent requests are denied.
+Each invocation can submit a Mitos
+tool request, ask for an operator decision or return a final answer. Mitos passes
+the receipt into the next invocation in the same workspace. Worker results and
+orchestrator plans go through the same validation as native-protocol results.
+The turn budget counts CLI invocations. A CLI can take multiple internal steps
+during one invocation. On the local process provider, native tools follow each
+CLI's own permissions. Strict policies refuse capabilities the provider cannot
+enforce. Confined print clients need model credentials available inside the
+sandbox, such as an API key supplied by the selected environment profile.
 Conversations and pending proposals persist in the server data directory, survive a
 browser reload, and appear interrupted after a server restart. They have bounded
 history/output, a cancellation endpoint and an eight-minute reply timeout.

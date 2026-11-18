@@ -102,6 +102,9 @@ func (r *Registry) catalog(ctx context.Context, launch Launch) []HarnessModel {
 func probeModels(ctx context.Context, launch Launch) []HarnessModel {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	if PrintRuntime(launch.AgentID) {
+		return printCatalog(ctx, launch)
+	}
 	args := []string{"app-server"}
 	if launch.AgentID == "claude" {
 		args = []string{"--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--setting-sources", "", "--strict-mcp-config", "--tools", "", "--no-session-persistence"}
@@ -253,6 +256,72 @@ func codexCatalog(send *json.Encoder, wire *bufio.Scanner) modelCatalog {
 			break
 		}
 		params["cursor"] = result.NextCursor
+	}
+	return catalog
+}
+
+// Read only documented model fields. Several CLIs only expose their configured
+// model. Never invoke an interactive picker or start a prompt for discovery.
+func printCatalog(ctx context.Context, launch Launch) modelCatalog {
+	var catalog modelCatalog
+	key := map[string]string{"aider": "AIDER_MODEL", "goose": "GOOSE_MODEL", "gemini": "GEMINI_MODEL", "qwen": "OPENAI_MODEL", "copilot": "COPILOT_MODEL"}[launch.AgentID]
+	for _, entry := range launch.Env {
+		if name, value, ok := strings.Cut(entry, "="); ok && key != "" && name == key {
+			catalog.add(value, "", true, nil)
+		}
+	}
+	var args []string
+	switch launch.AgentID {
+	case "opencode", "kilo":
+		args = []string{"models"}
+	case "cursor":
+		args = []string{"--list-models"}
+	case "pi":
+		args = []string{"--no-extensions", "--list-models"}
+	default:
+		return catalog
+	}
+	dir, err := os.MkdirTemp("", "mitos-models-")
+	if err != nil {
+		return catalog
+	}
+	defer os.RemoveAll(dir)
+	cmd := exec.CommandContext(ctx, launch.Executable, args...)
+	cmd.Dir, cmd.Env = dir, launch.Env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 100 * time.Millisecond
+	output := &boundedOutput{}
+	cmd.Stdout = output
+	if cmd.Run() != nil {
+		return catalog
+	}
+	lines := string(output.data)
+	if output.truncated {
+		end := strings.LastIndexByte(lines, '\n')
+		lines = lines[:end+1]
+	}
+	for line := range strings.SplitSeq(lines, "\n") {
+		fields := strings.Fields(line)
+		switch launch.AgentID {
+		case "cursor":
+			id, name, ok := strings.Cut(strings.TrimSpace(line), " - ")
+			if ok {
+				catalog.add(id, name, id == "auto", nil)
+			}
+		case "pi":
+			if len(fields) == 6 && fields[0] != "provider" && (fields[4] == "yes" || fields[4] == "no") {
+				var efforts []string
+				if fields[4] == "no" {
+					efforts = []string{}
+				}
+				catalog.add(fields[0]+"/"+fields[1], "", false, efforts)
+			}
+		default:
+			if len(fields) == 1 && strings.Contains(fields[0], "/") {
+				catalog.add(fields[0], "", false, nil)
+			}
+		}
 	}
 	return catalog
 }

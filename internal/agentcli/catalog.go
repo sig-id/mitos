@@ -11,13 +11,14 @@ type CLI struct{ Spec Definition }
 func (c CLI) Definition() Definition { return c.Spec }
 func (c CLI) Capabilities() Capabilities {
 	return Capabilities{
-		CoordinatedWork: c.Spec.ID == "codex" || c.Spec.ID == "claude",
-		RequestBridge:   supportsBridge(c.Spec.ID),
-		ProjectContext:  c.Spec.Kind == "agent" && (len(c.Spec.ContextArgs) > 0 || c.Spec.ID == "codex" || c.Spec.ID == "claude" || c.Spec.ID == "pi"),
-		Transport:       "pty",
-		InitialPrompt:   c.Spec.Prompt != "none",
-		Resume:          c.Spec.SessionProtocol != "",
-		Fork:            c.Spec.SessionProtocol != "",
+		CoordinatedWork:  SupportsCoordination(c.Spec.ID),
+		ReasoningEfforts: ReasoningEfforts(c.Spec.ID),
+		RequestBridge:    supportsBridge(c.Spec.ID),
+		ProjectContext:   c.Spec.Kind == "agent" && (len(c.Spec.ContextArgs) > 0 || c.Spec.ID == "codex" || c.Spec.ID == "claude" || c.Spec.ID == "pi"),
+		Transport:        "pty",
+		InitialPrompt:    c.Spec.Prompt != "none",
+		Resume:           c.Spec.SessionProtocol != "",
+		Fork:             c.Spec.SessionProtocol != "",
 	}
 }
 func (c CLI) Resources(workspace string, env map[string]string) []Resource {

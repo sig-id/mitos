@@ -97,11 +97,6 @@ type ExecutionSelection struct {
 	Budget        SizeBudget `json:"budget"`
 }
 
-var runtimeEfforts = map[string][]string{
-	"codex":  {"minimal", "low", "medium", "high", "xhigh"},
-	"claude": {"low", "medium", "high", "xhigh", "max"},
-}
-
 func defaultSizeBudgets() map[string]SizeBudget {
 	return map[string]SizeBudget{"small": {Minutes: 15, MaxTurns: 40}, "medium": {Minutes: 30, MaxTurns: 80}, "large": {Minutes: 60, MaxTurns: 160}}
 }
@@ -114,7 +109,11 @@ func defaultExecution(runtime, model string) *AgentExecutionPolicy {
 	}
 	tiers := map[string]ModelTier{}
 	for _, t := range TaskIntelligences {
-		tiers[t] = ModelTier{Model: model, Effort: t}
+		effort := ""
+		if slices.Contains(agentcli.ReasoningEfforts(runtime), t) && (runtime != "amp" || model != "") {
+			effort = t
+		}
+		tiers[t] = ModelTier{Model: model, Effort: effort}
 	}
 	return &AgentExecutionPolicy{Version: ExecutionPolicyVersion, Harnesses: []ExecutionHarness{{ID: "default", Name: "Project default", Runtime: runtime, Tiers: tiers}}, HarnessRules: []HarnessRule{}, DefaultHarness: "default", AllowedHarnesses: []string{"default"}, Orchestrator: OrchestratorExecution{Harness: "default", Tier: "high"}, SizeBudgets: defaultSizeBudgets()}
 }
@@ -174,9 +173,9 @@ func (p *AgentExecutionPolicy) validate() error {
 			return graphError("harnesses need unique IDs and names")
 		}
 		ids[h.ID] = true
-		efforts, ok := runtimeEfforts[h.Runtime]
-		if !ok {
-			return graphError("coordinated work supports Codex and Claude Code; %s has no coordinated adapter", h.Runtime)
+		efforts := agentcli.ReasoningEfforts(h.Runtime)
+		if !agentcli.SupportsCoordination(h.Runtime) {
+			return graphError("%s has no coordinated adapter", h.Runtime)
 		}
 		if len(h.ProfileID) > 128 || strings.ContainsAny(h.ProfileID, "\x00\r\n") {
 			return graphError("invalid environment profile in harness %s", h.ID)
@@ -191,6 +190,9 @@ func (p *AgentExecutionPolicy) validate() error {
 			}
 			if len(t.Model) > 200 || strings.ContainsAny(t.Model, "\x00\r\n\"") || strings.HasPrefix(t.Model, "-") {
 				return graphError("invalid model in harness %s tier %s", h.ID, name)
+			}
+			if h.Runtime == "amp" && t.Model == "" && t.Effort != "" {
+				return graphError("Amp requires an explicit model to select an effort in harness %s tier %s", h.ID, name)
 			}
 			if t.Effort != "" && !slices.Contains(efforts, t.Effort) {
 				return graphError("harness %s tier %s: %s cannot honour effort %q (supported: %s)", h.ID, name, h.Runtime, t.Effort, strings.Join(efforts, ", "))

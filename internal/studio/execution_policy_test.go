@@ -166,7 +166,7 @@ func TestExecutionRulesAndValidation(t *testing.T) {
 		func(p *AgentExecutionPolicy) {
 			p.HarnessRules = append(p.HarnessRules, HarnessRule{Match: HarnessMatch{Role: "unknown.role"}, Harness: "code"})
 		},
-		func(p *AgentExecutionPolicy) { p.Harnesses[1].Runtime = "pi" },
+		func(p *AgentExecutionPolicy) { p.Harnesses[1].Runtime = "custom" },
 		func(p *AgentExecutionPolicy) { p.Harnesses[1].ProfileID = "missing" },
 		func(p *AgentExecutionPolicy) { p.AllowedHarnesses = []string{"code"} },
 		func(p *AgentExecutionPolicy) { p.Version = "" },

@@ -3,11 +3,12 @@ package studio
 import (
 	"encoding/json"
 	"fmt"
-	"mitos/internal/compute"
 	"slices"
 	"strings"
 
 	"mitos/agents"
+	"mitos/internal/agentcli"
+	"mitos/internal/compute"
 	"mitos/internal/harness"
 )
 
@@ -73,7 +74,7 @@ func RuntimeCapabilityProfiles() map[string]any {
 
 func RuntimeCapabilityProfilesFor(provider compute.Capabilities) map[string]any {
 	out := map[string]any{}
-	for _, runtime := range []string{"codex", "claude", "codex-headless"} {
+	for _, runtime := range append(agentcli.CoordinatedRuntimes(), "codex-headless") {
 		base, _ := nativeRuntimeProfile(runtime)
 		p := confinedProfile(base, provider)
 		caps := map[string]any{}
@@ -106,19 +107,24 @@ func nativeRuntimeProfile(runtime string) (runtimeProfile, bool) {
 	switch runtime {
 	case "codex":
 		return codexProfile, true
-	case "claude":
+	case "codex-headless":
+		return codexHeadlessProfile, true
+	default:
+		if runtime != "claude" && !agentcli.PrintRuntime(runtime) {
+			return runtimeProfile{}, false
+		}
 		p := runtimeProfile{Features: slices.Clone(codexProfile.Features), Capabilities: map[string]capabilitySupport{}}
 		for name, c := range codexProfile.Capabilities {
 			if strings.HasPrefix(name, "workspace.") || name == "command.run" || name == "network.read" {
-				c = capabilitySupport{Note: "Claude native tool restrictions are advisory on the local process provider; they do not provide OS confinement."}
+				c = capabilitySupport{Note: runtime + " native tool restrictions are advisory on the local process provider; they do not provide OS confinement."}
+			}
+			if name == ProposalCapability && agentcli.PrintRuntime(runtime) {
+				c = capabilitySupport{Note: "Mitos validates graph proposals. Native CLI delegation is restricted by instruction only."}
 			}
 			p.Capabilities[name] = c
 		}
 		return p, true
-	case "codex-headless":
-		return codexHeadlessProfile, true
 	}
-	return runtimeProfile{}, false
 }
 
 type CapabilityReceipt struct {
@@ -207,6 +213,9 @@ func resolveAuthority(d agents.Definition, runtime, policy string, attemptSecond
 	profile := confinedProfile(base, caps)
 	m := d.Manifest
 	r := AuthorityReceipt{Nature: nature, Policy: policy, Runtime: runtime, Definition: fmt.Sprintf("%s@%d", d.ID, d.Revision), Digest: d.Digest, Features: slices.Clone(m.Runtime.Requires), GrantSource: "definition request intersected with runtime support; no project capability grants are configured", MaxTurns: m.Limits.MaxTurns, TimeoutSeconds: m.Limits.TimeoutSeconds, TurnCounting: "model steps, counted as completed tool actions plus the final answer"}
+	if agentcli.PrintRuntime(runtime) {
+		r.TurnCounting = "Non-interactive CLI invocations, one Mitos tool request or final response per invocation. CLI-internal steps are not observable."
+	}
 	if attemptSeconds > 0 && attemptSeconds < r.TimeoutSeconds {
 		r.TimeoutSeconds = attemptSeconds
 	}

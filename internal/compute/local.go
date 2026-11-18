@@ -36,6 +36,7 @@ type localHandle struct {
 	owner    *Local
 	spec     LaunchSpec
 	started  bool
+	sequence uint64
 	mu       sync.Mutex
 }
 
@@ -43,13 +44,14 @@ func (h *localHandle) ID() string        { return h.spec.Base }
 func (h *localHandle) Workspace() string { return h.spec.Workspace.Directory }
 
 type localSession struct {
-	handle *localHandle
-	cmd    *exec.Cmd
-	done   chan struct{}
-	output limitedBuffer
-	err    error
-	events []Event
-	mu     sync.Mutex
+	sequence uint64
+	handle   *localHandle
+	cmd      *exec.Cmd
+	done     chan struct{}
+	output   limitedBuffer
+	err      error
+	events   []Event
+	mu       sync.Mutex
 }
 
 func (s *localSession) ID() string              { return s.handle.ID() }
@@ -159,6 +161,31 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 	if h.started {
 		return nil, ErrAlreadyStarted
 	}
+	return l.startCommand(ctx, h, command)
+}
+
+// Next runs another invocation in the same prepared workspace and posture.
+// Only the latest successfully exited process may advance the attempt once.
+func (l *Local) Next(ctx context.Context, previous Session, command Command) (Session, error) {
+	s, err := l.session(previous)
+	if err != nil {
+		return nil, err
+	}
+	h := s.handle
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	select {
+	case <-s.done:
+	default:
+		return nil, errors.New("previous command is still running")
+	}
+	if h.sequence != s.sequence || s.err != nil {
+		return nil, errors.New("cannot continue failed or superseded command")
+	}
+	return l.startCommand(ctx, h, command)
+}
+
+func (l *Local) startCommand(ctx context.Context, h *localHandle, command Command) (Session, error) {
 	if len(command.Argv) == 0 || !filepath.IsAbs(command.Argv[0]) {
 		return nil, errors.New("command requires an absolute executable")
 	}
@@ -229,6 +256,9 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 		protocol = &protocolStream{Reader: output, WriteCloser: input, readCloser: output}
 	} else {
 		cmd.Stdout = &s.output
+		if command.Stdout != nil {
+			cmd.Stdout = io.MultiWriter(command.Stdout, &s.output)
+		}
 	}
 	cmd.Stderr = &s.output
 	if err := cmd.Start(); err != nil {
@@ -236,6 +266,8 @@ func (l *Local) Start(ctx context.Context, handle Handle, command Command) (Sess
 		return nil, err
 	}
 	h.started = true
+	h.sequence++
+	s.sequence = h.sequence
 	s.events = []Event{{Offset: 1, Type: "status", Status: "started", At: time.Now().UTC()}}
 	go func() {
 		defer cancel()

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mitos/internal/agentcli"
 	"mitos/internal/compute"
 )
 
@@ -38,13 +39,24 @@ func confinementBlocksTransport(c compute.Confinement) bool {
 // home is never mounted; only the staged configuration and the fresh sandbox
 // home are visible.
 func stageConfinementHome(base, runtime string, env []string) ([]string, error) {
-	conf, ok := agentConfinementEnv[runtime]
-	if !ok {
+	conf, stageLogin := agentConfinementEnv[runtime]
+	if !stageLogin && !agentcli.PrintRuntime(runtime) {
 		return env, nil
 	}
 	home := filepath.Join(base, "home")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, err
+	}
+	if !stageLogin {
+		// These clients can use credentials supplied by their environment
+		// profile. Keep their native caches and settings in the attempt home.
+		out := []string{"HOME=" + home}
+		for _, entry := range env {
+			if !strings.HasPrefix(entry, "HOME=") {
+				out = append(out, entry)
+			}
+		}
+		return out, nil
 	}
 	source, envHome := "", ""
 	for _, entry := range env {
