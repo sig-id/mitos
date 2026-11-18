@@ -9,8 +9,23 @@
  const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n};
  const field=(box,label,input)=>{const n=el('label',label);n.append(input);box.append(n);return input};
  const action=(label,fn)=>{const b=el('button',label);b.type='button';b.onclick=fn;return b};
- const select=(label,options,value,onchange)=>{const s=el('select');s.setAttribute('aria-label',label);for(const [v,t]of options)s.append(new Option(t,v));s.value=value;s.onchange=()=>onchange(s.value);return s};
+ const select=(label,options,value,onchange)=>{const s=el('select');s.setAttribute('aria-label',label);for(const [v,t,disabled=false]of options){const o=new Option(t,v);o.disabled=disabled;s.append(o)}s.value=value;s.onchange=()=>onchange(s.value);return s};
  const environments=r=>r?.harness_environments||[];
+ const canCoordinate=r=>r.capabilities.coordinated_work&&environments(r).length>0;
+ function codingAgentOptions(installations,current){
+  const options=[];
+  for(const r of installations){
+   if(r.kind!=='agent')continue;
+   if(!environments(r).length){
+    if(r.capabilities.coordinated_work||r.id===current)options.push([r.id,r.name+' – unavailable',true]);
+   }else if(r.capabilities.coordinated_work){
+    options.push([r.id,r.name,false]);
+   }else{
+    options.push([r.id,r.name+' – installed, no coordinated-work adapter',true]);
+   }
+  }
+  return options;
+ }
  function suggestedTiers(runtime,environment,configuredModel){
   const models=environment?.models||[];
   return Object.fromEntries(TIERS.map(t=>{
@@ -25,7 +40,7 @@
  }
  function initial(preferences,installations){
   if(preferences.execution?.version===VERSION)return structuredClone(preferences.execution);
-  const available=installations.filter(r=>environments(r).length);
+  const available=installations.filter(canCoordinate);
   const requested=preferences.runtime||'codex',selected=available.find(r=>r.id===requested)||available.find(r=>r.installed)||available[0];
   const runtime=selected?.id||requested,environment=environments(selected)[0];
   const harnesses=[{id:'default',name:'Project default',runtime,profile_id:environment?.profile_id||'',tiers:suggestedTiers(runtime,environment,runtime===requested&&preferences.model)}];
@@ -80,13 +95,13 @@
   const harnesses=el('details');harnesses.append(el('summary','Harnesses, model tiers & permitted workers'));box.append(harnesses);
   harnesses.append(el('p','Each harness is a coding agent with a model and reasoning effort per intelligence tier. Declared intelligence (low, medium, high) picks the tier within the chosen harness.'));
   const harnessRows=el('div');harnesses.append(harnessRows);
-  const available=installations.filter(r=>environments(r).length);
+  const available=installations.filter(canCoordinate);
   const add=action('Add harness',()=>{
    const r=available.find(r=>r.id===policy.harnesses[0]?.runtime)||available[0],env=environments(r)[0];
    policy.harnesses.push({id:crypto.randomUUID(),name:'New harness',runtime:r.id,profile_id:env.profile_id,tiers:suggestedTiers(r.id,env)});draw();
   });
   add.disabled=!available.length;harnesses.append(add);
-  const note=el('p','Codex and Claude Code support coordinated work. Other detected agents remain available in Start agent session.');note.className='muted';harnesses.append(note);
+  const note=el('p','Native environment uses the Mitos server’s PATH and environment variables. Named profiles in agents.json can select a different executable or account.');note.className='muted';harnesses.append(note);
   function draw(){
    top.replaceChildren();
    field(top,'Orchestrator harness',select('Orchestrator harness',harnessOptions(false),policy.orchestrator.harness,v=>{policy.orchestrator.harness=v}));
@@ -112,19 +127,13 @@
    for(const h of policy.harnesses){
     const row=el('fieldset');row.dataset.harness=h.id;row.append(el('legend',h.name));
     const name=el('input');name.value=h.name;name.required=true;name.maxLength=100;field(row,'Harness name',name);name.onchange=()=>{h.name=name.value;draw()};
-    const runtime=el('select');runtime.setAttribute('aria-label','Coding agent');field(row,'Coding agent',runtime);
-    for(const r of installations.filter(r=>['codex','claude'].includes(r.id))){
-     const installed=environments(r).length>0,option=new Option(r.name+(installed?'':' – unavailable'),r.id);
-     option.disabled=!installed;runtime.append(option);
-    }
-    runtime.value=h.runtime;
     const agent=installations.find(r=>r.id===h.runtime),envs=environments(agent);
     const env=envs.find(p=>p.profile_id===(h.profile_id||''));
-    runtime.onchange=()=>{
-     h.runtime=runtime.value;
-     const first=environments(available.find(r=>r.id===h.runtime))[0];
-     h.profile_id=first.profile_id;h.tiers=suggestedTiers(h.runtime,first);draw();
-    };
+    field(row,'Coding agent',select('Coding agent',codingAgentOptions(installations,h.runtime),h.runtime,v=>{
+     h.runtime=v;
+     const first=environments(available.find(r=>r.id===v))[0];
+     h.profile_id=first.profile_id;h.tiers=suggestedTiers(v,first);draw();
+    }));
     const profile=el('select');profile.setAttribute('aria-label','Environment profile');field(row,'Environment profile',profile);
     for(const p of envs)profile.append(new Option(agent.profiles?.find(x=>x.id===p.profile_id)?.name||p.profile_id||'Native environment',p.profile_id));
     if(!env){const option=new Option((h.profile_id||'Native environment')+' – unavailable',h.profile_id||'');option.disabled=true;profile.append(option)}
@@ -150,5 +159,5 @@
   }};
  }
  function documentWithPolicy(document,policy){const pattern=/^```mitos\s*\n([\s\S]*?)^```\s*$/m,match=document.match(pattern);const settings=match?JSON.parse(match[1]):{};settings.execution=policy;const block='```mitos\n'+JSON.stringify(settings,null,2)+'\n```';return match?document.replace(pattern,()=>block):document.trimEnd()+'\n\n'+block+'\n'}
- window.MitosExecutionPolicy={initial,editor,documentWithPolicy};
+ window.MitosExecutionPolicy={initial,editor,codingAgentOptions,documentWithPolicy};
 })();
