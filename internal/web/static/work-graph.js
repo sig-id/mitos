@@ -173,7 +173,7 @@
  }
  let executionEditor;
  async function loadOptions() {
-  const [library,installations,setup]=await Promise.all([request('/api/graphs/agents'),request('/api/agents?project='+encodeURIComponent(project)),request('/api/projects/'+encodeURIComponent(project)+'/setup')]);
+  const [library,installations,setup]=await Promise.all([request('/api/graphs/agents'),request('/api/agents?models=1&project='+encodeURIComponent(project)),request('/api/projects/'+encodeURIComponent(project)+'/setup')]);
   executionEditor=MitosExecutionPolicy.editor(MitosExecutionPolicy.initial(setup.effective,installations),installations,library.agents);
   $('graph-execution').replaceChildren(executionEditor.box);
   optionsLoaded=true; $('graph-create').disabled=!library.ready;

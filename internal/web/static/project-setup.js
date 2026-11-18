@@ -20,7 +20,7 @@
   const token=++generation;container.replaceChildren(el('p','Loading AGENTS.md…','muted'));
   const base='/api/projects/'+encodeURIComponent(project);
   let setup;let installations;
-  try{[setup,installations]=await Promise.all([api(base+'/setup'),api('/api/agents?project='+encodeURIComponent(project))])}catch(e){container.replaceChildren(el('p',e.message,'form-error'));return}
+  try{[setup,installations]=await Promise.all([api(base+'/setup'),api('/api/agents?models=1&project='+encodeURIComponent(project))])}catch(e){container.replaceChildren(el('p',e.message,'form-error'));return}
   if(token!==generation)return;
   let projectDocumentChanged=()=>{},executionSetupChanged=()=>{};
   async function surface(root,target){

@@ -18,11 +18,13 @@ import (
 )
 
 type Registry struct {
-	adapters []Adapter
-	profiles []Profile
-	env      map[string]string
-	mu       sync.RWMutex
-	versions map[probeKey]probe
+	adapters   []Adapter
+	profiles   []Profile
+	env        map[string]string
+	mu         sync.RWMutex
+	versions   map[probeKey]probe
+	models     map[probeKey]*modelProbe
+	modelSlots chan struct{}
 }
 
 type probeKey struct{ agent, profile, executable string }
@@ -63,7 +65,11 @@ func Open(path string, environ []string) (*Registry, error) {
 }
 
 func New(adapters []Adapter, config Config, environ []string) (*Registry, error) {
-	r := &Registry{adapters: append([]Adapter{}, adapters...), profiles: config.Profiles, env: make(map[string]string), versions: make(map[probeKey]probe)}
+	r := &Registry{
+		adapters: append([]Adapter{}, adapters...), profiles: config.Profiles,
+		env: make(map[string]string), versions: make(map[probeKey]probe),
+		models: make(map[probeKey]*modelProbe), modelSlots: make(chan struct{}, 4),
+	}
 	for _, entry := range environ {
 		name, value, ok := strings.Cut(entry, "=")
 		if ok {

@@ -60,6 +60,7 @@ type Config struct {
 }
 
 type Installation struct {
+	HarnessEnvironments []*HarnessEnvironment `json:"harness_environments,omitempty"`
 	Definition
 	Executable   string        `json:"executable,omitempty"`
 	Installed    bool          `json:"installed"`

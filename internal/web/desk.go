@@ -108,6 +108,10 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 			deskResult(w, nil, err)
 			return
 		}
+		if r.URL.Query().Get("models") == "1" {
+			deskResult(w, m.Agents.ListWithModels(r.Context(), root), nil)
+			return
+		}
 		deskResult(w, m.Agents.List(root), nil)
 	})
 	mux.HandleFunc("GET /api/agents/{agent}", func(w http.ResponseWriter, r *http.Request) {
