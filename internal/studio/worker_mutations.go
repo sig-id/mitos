@@ -129,6 +129,15 @@ func (s *Store) WorkerMutate(token string, in structuredworker.Mutation) (struct
 		c.Stage = "Worker released"
 		c.Summary = "The worker released the attempt; a bounded replacement may claim the Task."
 		c.StructuredRetryPending = &pending
+		// A releasing worker may attach its settled usage so the failed
+		// attempt's consumed tokens still land in the cost statistics.
+		if len(in.Data) > 0 {
+			var release structuredworker.Release
+			if json.Unmarshal(in.Data, &release) != nil {
+				return response, ErrConflict
+			}
+			usageChange, _ = structuredUsageChange(r, release.Usage)
+		}
 	case "result":
 		for _, held := range s.externalOperations {
 			if held.TaskID == r.TaskID && s.actionHolds[actionHoldKey(held.TaskID, held.Target.ID)] != "" {

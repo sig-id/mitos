@@ -46,6 +46,36 @@ func TestCodexUsageLegacyTokenCount(t *testing.T) {
 	}
 }
 
+func TestUsageTrackerBaselineSubtractsOnlyCumulativeReports(t *testing.T) {
+	tracker := NewUsageTracker("gpt-6.2-sol")
+	// An earlier attempt on the same native thread recorded these totals.
+	tracker.Baseline(Usage{InputTokens: 8_000, CachedInputTokens: 20_000, OutputTokens: 8_000})
+	first, ok := CodexUsage("thread/tokenUsage/updated", json.RawMessage(`{"tokenUsage":{"total":{"inputTokens":30200,"cachedInputTokens":21000,"outputTokens":9500,"totalTokens":39700}}}`))
+	if !ok {
+		t.Fatal("cumulative report must parse")
+	}
+	tracker.Observe(first)
+	model, usage, ok := tracker.Snapshot()
+	if !ok || model != "gpt-6.2-sol" || usage.InputTokens != 1_200 || usage.CachedInputTokens != 1_000 || usage.OutputTokens != 1_500 {
+		t.Fatalf("resumed thread re-billed prior consumption: %+v", usage)
+	}
+	// A later cumulative report that still fits inside the baseline clamps at
+	// zero instead of going negative.
+	tracker.Observe(Usage{Cumulative: true, InputTokens: 500, CachedInputTokens: 100, OutputTokens: 10})
+	_, usage, _ = tracker.Snapshot()
+	if usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 {
+		t.Fatalf("baseline subtraction went negative: %+v", usage)
+	}
+	// Per-call reports are deltas already and must never be adjusted.
+	fresh := NewUsageTracker("claude-sonnet-4-5")
+	fresh.Baseline(Usage{InputTokens: 100_000})
+	fresh.Observe(Usage{Model: "claude-sonnet-4-5", InputTokens: 413, OutputTokens: 50})
+	_, usage, ok = fresh.Snapshot()
+	if !ok || usage.InputTokens != 413 || usage.OutputTokens != 50 {
+		t.Fatalf("per-call report was wrongly baselined: %+v", usage)
+	}
+}
+
 func TestClaudeUsageAssistantFrame(t *testing.T) {
 	frame := json.RawMessage(`{"type":"assistant","session_id":"s1","message":{"id":"msg_1","model":"claude-sonnet-4-5-20250929",
 		"content":[{"type":"text","text":"hi"}],

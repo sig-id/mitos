@@ -2,6 +2,7 @@ package studio
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -182,6 +183,96 @@ func TestWorkCostsGroupByTaskGraphAndProject(t *testing.T) {
 	// A run without any usage evidence contributes nothing anywhere.
 	if empty := s.WorkCosts("proj-3"); empty.Total.Runs != 0 || empty.Total.CostUSD != nil {
 		t.Fatalf("absent usage is not zero spend: %+v", empty.Total)
+	}
+}
+
+func TestNativeThreadUsageSumsRecordedDeltas(t *testing.T) {
+	s := testStore(t)
+	first := createRun(t, s)
+	second := createRun(t, s)
+	record := func(run Run, input, cached, output int64) {
+		t.Helper()
+		tracker := harness.NewUsageTracker("gpt-6.2-sol")
+		tracker.Observe(harness.Usage{InputTokens: input, CachedInputTokens: cached, OutputTokens: output})
+		if err := s.RecordAgentUsage(run.ID, "mitos.engineer", "Engineer", "codex", tracker); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two attempts on one native thread each recorded their own delta; the
+	// sum is the thread's lifetime usage a continuation must baseline.
+	record(first, 1_000, 2_000, 3_000)
+	record(second, 500, 250, 750)
+	other := createRun(t, s)
+	s.mu.Lock()
+	s.runs[first.ID].NativeThreadID = "thread-1"
+	s.runs[second.ID].NativeThreadID = "thread-1"
+	s.runs[other.ID].NativeThreadID = "thread-2"
+	s.mu.Unlock()
+	total := s.NativeThreadUsage("thread-1")
+	if total.InputTokens != 1_500 || total.CachedInputTokens != 2_250 || total.OutputTokens != 3_750 {
+		t.Fatalf("thread baseline wrong: %+v", total)
+	}
+	if other := s.NativeThreadUsage("thread-2"); other != (harness.Usage{}) {
+		t.Fatalf("run without usage contributed: %+v", other)
+	}
+	if empty := s.NativeThreadUsage(""); empty != (harness.Usage{}) {
+		t.Fatal("empty thread must not match every run")
+	}
+}
+
+func TestWorkerReleaseJournalsFailedAttemptUsage(t *testing.T) {
+	e, _ := automaticScriptEngine(t, `print('unused')`)
+	e.stop()
+	e.wg.Wait()
+	token, identity := testWorker(t, e, "release-worker")
+	r, err := e.LaunchStructured(structuredBrief("release-input", "agent:mitos.generalist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := testWorkerClaim(t, e, token, identity, r.ID, "release-claim")
+	release, _ := json.Marshal(structuredworker.Release{Usage: &harness.Usage{Model: "gpt-6.1-sol", InputTokens: 30_000, CachedInputTokens: 10_000, OutputTokens: 2_000}})
+	receipt, err := e.Store.WorkerMutate(token, structuredworker.Mutation{Binding: binding, RequestID: "release-with-usage", Kind: "release", Data: release})
+	if err != nil || receipt.State != "release" {
+		t.Fatal("release", receipt, err)
+	}
+	failed, err := e.Store.Get(r.ID)
+	if err != nil || failed.Status != "failed" {
+		t.Fatal("release did not fail the run", failed.Status, err)
+	}
+	var sawUsage bool
+	for _, event := range failed.Events {
+		if event.Kind != "agent_usage_recorded" || event.Type != "effect" {
+			continue
+		}
+		sawUsage = true
+		var payload struct {
+			Evidence AgentUsageRecord `json:"evidence"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		record := payload.Evidence
+		// 30000*2 + 10000*0.10 + 2000*10 per 1M = 0.081 USD.
+		if record.AgentID != "mitos.generalist" || record.Model != "gpt-6.1-sol" || record.Priced != true || record.CostUSD == nil || *record.CostUSD != 0.081 {
+			t.Fatalf("bad release usage evidence: %+v", record)
+		}
+	}
+	if !sawUsage {
+		t.Fatal("failed external attempt lost its usage")
+	}
+	report := ReportAgentCosts(e.Store.List())
+	if report.Runs != 1 || report.UnpricedRuns != 0 || report.TotalCostUSD != 0.081 {
+		t.Fatalf("released usage missing from report: %+v", report)
+	}
+	// A malformed release payload is rejected rather than silently dropped.
+	badRun, err := e.LaunchStructured(structuredBrief("release-bad-input", "agent:mitos.generalist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badBinding := testWorkerClaim(t, e, token, identity, badRun.ID, "release-bad-claim")
+	bad := structuredworker.Mutation{Binding: badBinding, RequestID: "release-bad", Kind: "release", Data: json.RawMessage(`{not json`)}
+	if _, err = e.Store.WorkerMutate(token, bad); !errors.Is(err, ErrConflict) {
+		t.Fatalf("malformed release payload must conflict: %v", err)
 	}
 }
 

@@ -581,6 +581,12 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	// reports as they arrive and the evidence is journaled once the attempt
 	// settles, on both success and failure paths.
 	usage := harness.NewUsageTracker(b.Model)
+	if prior.NativeThreadID != "" {
+		// A resumed native conversation reports lifetime token totals; seed
+		// what earlier attempts on it already recorded so this attempt bills
+		// only its new consumption.
+		usage.Baseline(e.Store.NativeThreadUsage(prior.NativeThreadID))
+	}
 	options.Usage = usage.Observe
 	if authority.Granted("workspace.write") {
 		options.Sandbox = "workspace-write"

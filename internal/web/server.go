@@ -386,7 +386,7 @@ func (s *Server) base(view, title, section string) page {
 	p := page{Navigation: s.navigation(section, ""), View: view, Title: title, Section: section, Apps: s.engine.Apps, Root: s.engine.Root, Date: time.Now().Format("Monday, 2 January"), Demo: s.demo}
 	p.Navigation.View = view
 	switch view {
-	case "services", "service-lifecycle", "custom-event", "tasks", "overview", "autonomy":
+	case "services", "service-lifecycle", "custom-event", "tasks", "overview", "autonomy", "costs":
 		p.Navigation.Section = "system"
 	case "decisions":
 		p.Navigation.Section = "inbox"

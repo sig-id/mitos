@@ -11,6 +11,7 @@ type UsageTracker struct {
 	fallback string
 	model    string
 	usage    Usage
+	baseline Usage
 	reported bool
 }
 
@@ -18,12 +19,31 @@ func NewUsageTracker(requestedModel string) *UsageTracker {
 	return &UsageTracker{fallback: requestedModel}
 }
 
+// Baseline records consumption already journaled by earlier attempts on the
+// same native conversation. It is subtracted from later cumulative reports so
+// a resumed Codex thread bills only new consumption; per-call reports are
+// never adjusted because they already exclude prior turns.
+func (t *UsageTracker) Baseline(prior Usage) {
+	t.baseline = t.baseline.Add(prior)
+}
+
+func subtract(atmost, less Usage) Usage {
+	return Usage{
+		InputTokens:       max(atmost.InputTokens-less.InputTokens, 0),
+		CachedInputTokens: max(atmost.CachedInputTokens-less.CachedInputTokens, 0),
+		CacheWriteTokens:  max(atmost.CacheWriteTokens-less.CacheWriteTokens, 0),
+		OutputTokens:      max(atmost.OutputTokens-less.OutputTokens, 0),
+	}
+}
+
 func (t *UsageTracker) Observe(report Usage) {
 	if report.Model != "" {
 		t.model = report.Model
 	}
 	if report.Cumulative {
-		t.usage = report
+		// A resumed thread reports lifetime totals; keep only the delta over
+		// what earlier attempts on this conversation already recorded.
+		t.usage = subtract(report, t.baseline)
 	} else {
 		t.usage = t.usage.Add(report)
 	}

@@ -138,13 +138,17 @@ type ModelCost struct {
 
 // AgentCost aggregates one agent's estimated spend across its attempts.
 type AgentCost struct {
-	AgentID      string      `json:"agent_id"`
-	AgentName    string      `json:"agent_name,omitempty"`
-	Runs         int         `json:"runs"`
-	Models       []ModelCost `json:"models"`
-	CostUSD      float64     `json:"cost_usd"`
-	PricedRuns   int         `json:"priced_runs"`
-	UnpricedRuns int         `json:"unpriced_runs"`
+	AgentID           string      `json:"agent_id"`
+	AgentName         string      `json:"agent_name,omitempty"`
+	Runs              int         `json:"runs"`
+	InputTokens       int64       `json:"input_tokens"`
+	CachedInputTokens int64       `json:"cached_input_tokens"`
+	CacheWriteTokens  int64       `json:"cache_write_tokens"`
+	OutputTokens      int64       `json:"output_tokens"`
+	Models            []ModelCost `json:"models"`
+	CostUSD           float64     `json:"cost_usd"`
+	PricedRuns        int         `json:"priced_runs"`
+	UnpricedRuns      int         `json:"unpriced_runs"`
 }
 
 // AgentCostReport folds journal evidence into per-agent cost statistics.
@@ -189,8 +193,11 @@ type WorkCostIndex struct {
 	Total  WorkCost            `json:"total"`
 }
 
-// foldUsage sums a run's agent_usage_recorded evidence.
-func foldUsage(run *Run) (priced float64, pricedRuns, unpricedRuns int) {
+// usageRecords decodes a run's journaled agent_usage_recorded evidence in
+// journal order. Records are per-attempt deltas, including resumed native
+// conversations whose evidence covers only newly consumed tokens.
+func usageRecords(run *Run) []AgentUsageRecord {
+	var records []AgentUsageRecord
 	for _, event := range run.Events {
 		if event.Kind != "agent_usage_recorded" || event.Type != "effect" {
 			continue
@@ -201,7 +208,14 @@ func foldUsage(run *Run) (priced float64, pricedRuns, unpricedRuns int) {
 		if json.Unmarshal(event.Data, &payload) != nil {
 			continue
 		}
-		record := payload.Evidence
+		records = append(records, payload.Evidence)
+	}
+	return records
+}
+
+// foldUsage sums a run's agent_usage_recorded evidence.
+func foldUsage(run *Run) (priced float64, pricedRuns, unpricedRuns int) {
+	for _, record := range usageRecords(run) {
 		if record.Priced && record.CostUSD != nil {
 			priced += *record.CostUSD
 			pricedRuns++
@@ -222,6 +236,31 @@ func accumulate(cost *WorkCost, priced float64, pricedRuns, unpricedRuns int) {
 	}
 	cost.Runs += pricedRuns + unpricedRuns
 	cost.UnpricedRuns += unpricedRuns
+}
+
+// NativeThreadUsage sums the usage already journaled by attempts on one native
+// conversation. A resumed Codex thread keeps reporting lifetime totals, so a
+// continuation seeds its tracker with this baseline and records only the
+// delta instead of re-billing earlier attempts.
+func (s *Store) NativeThreadUsage(threadID string) harness.Usage {
+	if threadID == "" {
+		return harness.Usage{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var total harness.Usage
+	for _, run := range s.runs {
+		if run.NativeThreadID != threadID {
+			continue
+		}
+		for _, record := range usageRecords(run) {
+			total.InputTokens += record.InputTokens
+			total.CachedInputTokens += record.CachedInputTokens
+			total.CacheWriteTokens += record.CacheWriteTokens
+			total.OutputTokens += record.OutputTokens
+		}
+	}
+	return total
 }
 
 // WorkCosts aggregates cost statistics for one project's runs. Graph rows and
@@ -293,6 +332,10 @@ func ReportAgentCosts(runs []Run) AgentCostReport {
 			}
 			a.Runs++
 			m.Runs++
+			a.InputTokens += record.InputTokens
+			a.CachedInputTokens += record.CachedInputTokens
+			a.CacheWriteTokens += record.CacheWriteTokens
+			a.OutputTokens += record.OutputTokens
 			m.InputTokens += record.InputTokens
 			m.CachedInputTokens += record.CachedInputTokens
 			m.CacheWriteTokens += record.CacheWriteTokens

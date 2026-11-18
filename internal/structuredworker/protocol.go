@@ -103,6 +103,13 @@ type Result struct {
 	Usage *harness.Usage `json:"usage,omitempty"`
 }
 
+// Release is the optional payload a worker attaches when it gives up an
+// attempt. It carries the settled usage so a failed remote attempt still
+// lands in the server's cost statistics instead of vanishing with its error.
+type Release struct {
+	Usage *harness.Usage `json:"usage,omitempty"`
+}
+
 // LeaseRecord is server state. Deadlines never cross the worker boundary.
 type LeaseRecord struct {
 	Binding
