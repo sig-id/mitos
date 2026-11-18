@@ -39,3 +39,22 @@ func (s *Store) freezeStructuredAgent(r *Run) error {
 	s.frozenAgents.Store(&next)
 	return nil
 }
+
+// hydratableDefinitionLocked resolves the admitted definition body from the
+// immutable revisions this store already holds. It cannot reach the library;
+// startup hydration covers that wider search.
+func (s *Store) hydratableDefinitionLocked(w *StructuredWork) *agents.Definition {
+	if w.Definition == "" || w.Digest == "" {
+		return nil
+	}
+	frozen := s.frozenAgents.Load()
+	if frozen == nil {
+		return nil
+	}
+	d, ok := (*frozen)[w.Definition]
+	if !ok || d.Digest != w.Digest {
+		return nil
+	}
+	body := graphClone(d)
+	return &body
+}

@@ -184,6 +184,7 @@ type Event struct {
 }
 
 type change struct {
+	Action                 *actionChange              `json:"action,omitempty"`
 	Worker                 *workerChange              `json:"worker,omitempty"`
 	StructuredRetryPending *bool                      `json:"structured_retry_pending,omitempty"`
 	RuntimePolicy          *RuntimePolicy             `json:"runtime_policy,omitempty"`

@@ -22,6 +22,7 @@ import (
 // repository, workspace, Git or PTY, and an exact typed result validated against
 // a declared schema. The definition revision and digest are frozen at admission.
 type StructuredWork struct {
+	ActionTargets    []string           `json:"action_targets,omitempty"`
 	CheckpointSchema json.RawMessage    `json:"checkpoint_schema,omitempty"`
 	Frozen           *agents.Definition `json:"frozen_definition,omitempty"`
 	Key              string             `json:"key"`
@@ -51,6 +52,14 @@ func (w *StructuredWork) validate() error {
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("structured input has trailing data")
+	}
+	if len(w.ActionTargets) > 16 {
+		return errors.New("too many action targets")
+	}
+	for _, id := range w.ActionTargets {
+		if !ValidDeviceID(id) {
+			return errors.New("invalid action target")
+		}
 	}
 	if len(w.CheckpointSchema) > 0 {
 		if _, err := compileResultSchema(w.CheckpointSchema); err != nil {
@@ -103,6 +112,12 @@ func (e *Engine) prepareStructured(b Brief) (Brief, string, error) {
 			CheckpointSchema json.RawMessage
 		}{b.Structured.RequestHash, w.CheckpointSchema})
 	}
+	if len(w.ActionTargets) > 0 {
+		b.Structured.RequestHash = graphDigest(struct {
+			Request string
+			Targets []string
+		}{b.Structured.RequestHash, w.ActionTargets})
+	}
 	return b, app.Name, nil
 }
 
@@ -133,6 +148,12 @@ func (e *Engine) launchStructuredAs(p decision.Principal, b Brief) (Run, error) 
 	}
 	if !strings.HasPrefix(b.AppID, agentAppPrefix) || !s.principalAgentAllowedLocked(p, b.AppID) {
 		return Run{}, ErrForbidden
+	}
+	candidate := Run{Brief: b, Tenant: p.Tenant, PrincipalID: p.ID}
+	for _, id := range b.Structured.ActionTargets {
+		if _, err := s.actionTargetAllowedLocked(&candidate, id); err != nil {
+			return Run{}, err
+		}
 	}
 	key := scopedRequestKey(p.Tenant, b.Structured.Key)
 	if s.expiredRequestKeys[key] {
@@ -311,6 +332,9 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 		egress = "unix://" + e.egressEndpoint
 	}
 	executor := structuredworker.Executor{Provider: provider, Executable: native.Executable, Environment: native.Env, Base: filepath.Join(e.Store.Dir(), "workspaces", r.ID), Scoped: scoped, EgressEndpoint: egress, Preview: preview, Activity: preview.activity}
+	executor.Action = func(ctx context.Context, kind string, raw json.RawMessage) (structuredworker.Receipt, error) {
+		return e.WorkerAction(ctx, token, structuredworker.Mutation{Binding: lease.Binding, RequestID: newID("action"), Kind: kind, Data: raw})
+	}
 	result, err := executor.Execute(ctx, assignment)
 	if err != nil {
 		// Failed attempts keep their captured evidence for diagnosis.

@@ -83,3 +83,39 @@ namespace. Workers use the shared subscription group `mitos-workers`; any valid
 hint means only “poll now.” A coalescing channel bounds pending hints. Without
 notifications, a jittered scan every 1–2 seconds discovers work. The TLS claim
 handler checks identity, capability, pool, fairness and capacity on every poll.
+
+## External action gateway
+
+The loopback operator endpoint `POST /api/action-targets` configures an ID, tenant,
+allowed agent IDs, HTTPS `endpoint`, strict `input_schema`/`result_schema`, and an
+optional `bearer`. Literal loopback HTTP is available for local integrations.
+Credentials are immutable private files under `credentials`, included by backup;
+they are absent from journal records, worker context and tools. A target can be
+disabled immediately. Admissions request up to 16 `structured.action_targets`;
+foreign or disallowed targets are refused.
+
+Workers use `/worker/v1/action` and `/worker/v1/reconcile` with their ordinary
+binding and stable request ID. Action data is `{target,key,payload}`; reconcile
+data is `{target,key}`. The native library exposes `mitos_action` and
+`mitos_reconcile` only for admitted targets. Other native approval requests stay
+denied.
+
+The target adapter contract is:
+
+* POST `<endpoint>/operations` with `Idempotency-Key: <operation-id>` and
+  `{idempotency_key,payload}`.
+* GET `<endpoint>/operations/<operation-id>` queries the same immutable identity.
+* HTTP 200 replies bind `idempotency_key` and explicitly report `applied` with a
+  schema-valid `result`, or `not_applied`. All errors, missing identities,
+  malformed outcomes, pending results and transport failures are uncertain.
+
+The gateway journals the operation ID, original target revision, payload digest,
+and a Task/target hold before dispatch. The immutable admission receipt says
+`prepared`; the worker then reconciles the original key to obtain its outcome.
+Retries of that admission request return the same receipt. A different worker
+request for the same application key resolves to the original operation; changed
+payloads conflict. An unresolved hold blocks any new key for that Task and target,
+and blocks result acceptance. It survives both server restart and replacement
+attempts. Reconciliation queries the original endpoint and credential revision;
+it never repeats an uncertain POST. Only explicit `applied` or `not_applied`
+removes the hold. A restore or worker replacement cannot undo an external effect.

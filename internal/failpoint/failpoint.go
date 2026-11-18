@@ -10,7 +10,12 @@ const ExitCode = 86
 // shutdown. Fixture subprocesses must set MITOS_ENABLE_FAILPOINTS=1 and name one
 // exact boundary in MITOS_FAILPOINT. Never enable this in a serving deployment.
 func Hit(name string) {
-	if name != "" && os.Getenv("MITOS_ENABLE_FAILPOINTS") == "1" && os.Getenv("MITOS_FAILPOINT") == name {
+	if Enabled(name) {
 		os.Exit(ExitCode)
 	}
+}
+
+// Enabled also supports non-crashing fault fixtures such as duplicated delivery.
+func Enabled(name string) bool {
+	return name != "" && os.Getenv("MITOS_ENABLE_FAILPOINTS") == "1" && os.Getenv("MITOS_FAILPOINT") == name
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"mitos/internal/failpoint"
 	"path/filepath"
 	"time"
 )
@@ -53,6 +54,7 @@ func (c *HTTPClient) Work(ctx context.Context, id string, capabilities []string,
 			continue
 		}
 		binding := *claimed.Binding
+		failpoint.Hit("worker.after_claim")
 		if err := c.workAttempt(ctx, binding, executor); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -102,6 +104,11 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 		}
 	}()
 	executor.Base = filepath.Join(executor.Base, b.RunID)
+	executor.Action = func(ctx context.Context, kind string, raw json.RawMessage) (Receipt, error) {
+		var receipt Receipt
+		err := c.Call(ctx, kind, Mutation{Binding: b, RequestID: RequestID(), Kind: kind, Data: raw}, &receipt)
+		return receipt, err
+	}
 	result, err := executor.Execute(ctx, assignment)
 	if err != nil {
 		// Synchronize with the renewal watcher before reading its failure, so
@@ -116,7 +123,18 @@ func (c *HTTPClient) workAttempt(ctx context.Context, b Binding, executor Execut
 		var raw []byte
 		if raw, err = json.Marshal(result); err == nil {
 			var receipt Receipt
-			if err = c.Call(ctx, "result", Mutation{Binding: b, RequestID: RequestID(), Kind: "result", Data: raw}, &receipt); err == nil && receipt.State != "accepted" {
+			request := Mutation{Binding: b, RequestID: RequestID(), Kind: "result", Data: raw}
+			failpoint.Hit("worker.before_result")
+			err = c.Call(ctx, "result", request, &receipt)
+			if err == nil && failpoint.Enabled("worker.duplicate_result") {
+				var duplicate Receipt
+				err = c.Call(ctx, "result", request, &duplicate)
+				if err == nil && (duplicate.Seq != receipt.Seq || duplicate.SHA256 != receipt.SHA256 || duplicate.State != receipt.State) {
+					err = errors.New("duplicate result changed receipt")
+				}
+			}
+
+			if err == nil && receipt.State != "accepted" {
 				err = errors.New("result not accepted")
 			}
 		}

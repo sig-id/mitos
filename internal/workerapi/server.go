@@ -99,6 +99,13 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		value, err = s.Engine.WorkerContext(token, in)
+	case "/worker/v1/action", "/worker/v1/reconcile":
+		var in structuredworker.Mutation
+		if decode(&in) != nil || in.Kind != strings.TrimPrefix(r.URL.Path, "/worker/v1/") {
+			send(400, map[string]string{"error": "invalid_request"})
+			return
+		}
+		value, err = s.Engine.WorkerAction(r.Context(), token, in)
 	case "/worker/v1/progress", "/worker/v1/renew", "/worker/v1/checkpoint", "/worker/v1/result", "/worker/v1/release":
 		var in structuredworker.Mutation
 		if decode(&in) != nil {
@@ -115,6 +122,14 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		// The held operation's identity travels with the refusal: the worker
+		// needs it to reconcile, not just the error class.
+		if errors.Is(err, studio.ErrReconciliationRequired) {
+			if receipt, ok := value.(structuredworker.Receipt); ok && receipt.OperationID != "" {
+				send(409, receipt)
+				return
+			}
+		}
 		status, code := 422, "invalid_worker_request"
 		switch {
 		case errors.Is(err, studio.ErrUnauthenticated):
@@ -123,6 +138,8 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			status, code = 403, "forbidden"
 		case errors.Is(err, studio.ErrStaleBinding):
 			status, code = 409, "stale_binding"
+		case errors.Is(err, studio.ErrReconciliationRequired):
+			status, code = 409, "reconciliation_required"
 		case errors.Is(err, studio.ErrConflict):
 			status, code = 409, "request_conflict"
 		case errors.Is(err, studio.ErrNotFound):

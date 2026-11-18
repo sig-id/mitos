@@ -18,6 +18,7 @@ import (
 )
 
 type Executor struct {
+	Action      func(context.Context, string, json.RawMessage) (Receipt, error)
 	Provider    compute.Provider
 	Executable  string
 	Environment []string
@@ -96,6 +97,22 @@ func (e Executor) Execute(ctx context.Context, assignment Context) (Result, erro
 	}
 	final := ""
 	options := harness.CodexOptions{Headless: true, Model: assignment.Model, Sandbox: "read-only", MaxTurns: assignment.MaxTurns, OutputSchema: assignment.ResultSchema, Result: func(text string) error { final = text; return nil }, Activity: io.MultiWriter(&activity, activityPreview)}
+	if len(assignment.Actions) > 0 && e.Action != nil {
+		schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["target","key","payload"],"properties":{"target":{"type":"string"},"key":{"type":"string"},"payload":{"type":"object","additionalProperties":true}}}`)
+		reconcileSchema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["target","key"],"properties":{"target":{"type":"string"},"key":{"type":"string"}}}`)
+		targets, _ := json.Marshal(assignment.Actions)
+		options.Tools = []harness.DynamicTool{{Type: "function", Name: "mitos_action", Description: "Request an external operation only on an admitted target. Schemas: " + string(targets) + ". A prepared or unknown outcome requires mitos_reconcile with the same target and key. Never invent a different key while reconciliation is required.", InputSchema: schema}, {Type: "function", Name: "mitos_reconcile", Description: "Query the original external operation identity; never dispatch an ambiguous action again.", InputSchema: reconcileSchema}}
+		options.ToolCall = func(name string, raw json.RawMessage) (any, error) {
+			kind := "action"
+			if name == "mitos_reconcile" {
+				kind = "reconcile"
+			} else if name != "mitos_action" {
+				return nil, errors.New("unknown action tool")
+			}
+			return e.Action(ctx, kind, raw)
+		}
+	}
+
 	session, err := e.Provider.Start(ctx, handle, compute.Command{Argv: append([]string{e.Executable}, harness.CodexArguments()...), Directory: scratch, NativeEnv: env, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		return harness.RunCodex(ctx, deniedBroker{}, stream, strings.NewReader(""), io.MultiWriter(output, preview), scratch, assignment.Prompt, options)
 	}})
