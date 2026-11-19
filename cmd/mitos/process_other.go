@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package main
 
@@ -7,4 +7,6 @@ import (
 	"os"
 )
 
-func signalStoreServer(*os.File) error { return errors.New("mitos stop currently requires Linux") }
+func signalStoreServer(*os.File) error {
+	return errors.New("mitos stop currently requires Linux or macOS")
+}
