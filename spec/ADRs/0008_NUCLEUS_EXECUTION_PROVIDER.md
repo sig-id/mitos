@@ -140,6 +140,13 @@ evidence listed below.
 
 ## Delivery
 
+Applications that declare a confined posture are served first: they need no
+model egress, so the provider is useful before brokered egress exists. Agents
+follow once Nucleus forwards the broker socket itself
+([nucleus#39](https://github.com/sig-id/nucleus/issues/39)); without that, the
+in-container forwarder would need to ship in the toolchain rootfs, because
+caller-owned volumes and `/context` are not executable.
+
 1. Provider: launch document, events, posture comparison, cgroup stop, crash
    recovery, capability probe, delegated user service.
 2. Toolchain rootfs with Codex packaged from its static binary, plus Claude
