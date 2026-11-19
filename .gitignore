@@ -1,6 +1,6 @@
 /bin/
 /.mitos/
-/.mitos-demo/
+/.mitos-*/
 /target/
 /.direnv/
 /.runs/
