@@ -1,12 +1,16 @@
 package compute
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,7 +141,7 @@ func startedEvent(name, root, workspace string) nucleusEvent {
 
 func TestNucleusPostureVerificationRefusesEveryDeviation(t *testing.T) {
 	memory, quota := int64(512<<20), int64(150000)
-	posture := nucleusPosture{CgroupRoot: "/sys/fs/cgroup/mitos", Workspace: "/attempt/workspace", MemoryBytes: &memory, CPUQuota: &quota, PidsMax: nucleusPidsMax}
+	posture := nucleusPosture{CgroupRoot: "/sys/fs/cgroup/mitos", Workspace: "/attempt/workspace", WorkspaceMode: "bind-rw", NetworkMode: "none", MemoryBytes: &memory, CPUQuota: &quota, PidsMax: nucleusPidsMax}
 	good := startedEvent("mitos-x", posture.CgroupRoot, posture.Workspace)
 	if err := posture.verify(good, "mitos-x"); err != nil {
 		t.Fatal(err)
@@ -157,6 +161,7 @@ func TestNucleusPostureVerificationRefusesEveryDeviation(t *testing.T) {
 		"no cgroup":  func(e *nucleusEvent) { e.Container.CgroupPath = "" },
 		"workspace":  func(e *nucleusEvent) { e.Container.WorkspaceMount.Source = "/elsewhere" },
 		"read-only":  func(e *nucleusEvent) { e.Container.WorkspaceMount.Mode = "bind-ro" },
+		"broker":     func(e *nucleusEvent) { e.Container.BrokerProxyListen = EgressLoopAddr },
 		"seccomp":    func(e *nucleusEvent) { e.Security.SeccompMode = "trace" },
 		"landlock":   func(e *nucleusEvent) { e.Security.LandlockStatus = "partially_enforced" },
 		"caps":       func(e *nucleusEvent) { e.Security.CapabilitiesStatus = "policy" },
@@ -174,9 +179,59 @@ func TestNucleusPostureVerificationRefusesEveryDeviation(t *testing.T) {
 		}
 	}
 	// An unrequested limit is a deviation too: the posture is exact.
-	unlimited := nucleusPosture{CgroupRoot: posture.CgroupRoot, Workspace: posture.Workspace, PidsMax: nucleusPidsMax}
+	unlimited := nucleusPosture{CgroupRoot: posture.CgroupRoot, Workspace: posture.Workspace, WorkspaceMode: "bind-rw", NetworkMode: "none", PidsMax: nucleusPidsMax}
 	if err := unlimited.verify(good, "mitos-x"); err == nil {
 		t.Fatal("unrequested limits accepted")
+	}
+	// A brokered, read-only posture must be attested as exactly that.
+	brokered := posture
+	brokered.NetworkMode, brokered.BrokerListen, brokered.WorkspaceMode = "broker-socket", EgressLoopAddr, "bind-ro"
+	if err := brokered.verify(good, "mitos-x"); err == nil {
+		t.Fatal("unbrokered writable container accepted for a brokered read-only posture")
+	}
+	attested := startedEvent("mitos-x", posture.CgroupRoot, posture.Workspace)
+	attested.Container.NetworkMode, attested.Container.BrokerProxyListen, attested.Container.WorkspaceMount.Mode = "broker-socket", EgressLoopAddr, "bind-ro"
+	if err := brokered.verify(attested, "mitos-x"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRenderNucleusBrokersEgressAndMountsTheWorkspaceByRole(t *testing.T) {
+	base := t.TempDir()
+	spec := nucleusSpec(t, base)
+	shell := hostShell(t)
+	if err := os.MkdirAll(filepath.Join(base, "context"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := NucleusConfig{Binary: "/usr/bin/nucleus", CgroupRoot: "/sys/fs/cgroup/mitos"}
+	socket := filepath.Join(base, "broker.sock")
+	spec.Posture.NetMode, spec.Posture.BrokerEndpoint, spec.Posture.ReadOnlyWorkspace, spec.Posture.SeccompAllow = NetBroker, "unix://"+socket, true, HarnessSyscalls
+	doc, _, posture, err := renderNucleus(cfg, spec, []string{shell, filepath.Join(base, "context", "00-assignment.md")}, spec.Workspace.Directory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Network != "none" || doc.BrokerSocket != socket || doc.BrokerProxyListen != EgressLoopAddr || !doc.BrokerNoProxyEnv || posture.BrokerListen != EgressLoopAddr || posture.NetworkMode != "broker-socket" {
+		t.Fatalf("brokered document %+v posture %+v", doc, posture)
+	}
+	if !slices.Equal(doc.SeccompAllow, HarnessSyscalls) {
+		t.Fatalf("harness system calls %v", doc.SeccompAllow)
+	}
+	if doc.WorkspaceMode != "bind-ro" || posture.WorkspaceMode != "bind-ro" {
+		t.Fatalf("read-only role mounted %s", doc.WorkspaceMode)
+	}
+	if doc.Command[1] != nucleusContext+"/00-assignment.md" || !slices.Contains(doc.Volumes, filepath.Join(base, "context")+":"+nucleusContext+":ro,caller-owned") {
+		t.Fatalf("context files not mounted read-only: %v %v", doc.Command, doc.Volumes)
+	}
+	spec.Posture.SeccompAllow = []string{"inotify_init1", "io_uring_setup"}
+	if _, _, _, err := renderNucleus(cfg, spec, []string{shell}, spec.Workspace.Directory, nil); err == nil {
+		t.Fatal("posture widened seccomp beyond the harness calls")
+	}
+	spec.Posture.SeccompAllow = nil
+	for _, endpoint := range []string{"", "https://broker.example", "unix://relative.sock"} {
+		spec.Posture.BrokerEndpoint = endpoint
+		if _, _, _, err := renderNucleus(cfg, spec, []string{shell}, spec.Workspace.Directory, nil); err == nil {
+			t.Fatalf("broker endpoint %q accepted", endpoint)
+		}
 	}
 }
 
@@ -262,6 +317,36 @@ func TestNucleusSessionStartsOnlyAfterAttestedPosture(t *testing.T) {
 	record, err := os.ReadFile(filepath.Join(base, nucleusEventsFile))
 	if err != nil || strings.Count(string(record), "\n") != 2 || !strings.Contains(string(record), "container_summary") {
 		t.Fatalf("attested events not recorded with the attempt: %q %v", record, err)
+	}
+}
+
+// An agent session ends when its protocol completes: the container is
+// revoked, but the supervisor must survive to report the summary, or every
+// completed agent turn would be an untrusted outcome.
+func TestNucleusProtocolSessionKeepsItsSummary(t *testing.T) {
+	hostShell(t)
+	dir, base, root := t.TempDir(), t.TempDir(), t.TempDir()
+	event := startedEvent(nucleusName(base), root, filepath.Join(base, "workspace"))
+	// The stand-in supervisor echoes the protocol, then reports a summary
+	// once its input closes, as Nucleus does after the container ends.
+	l := fakeProvider(t, fakeNucleus(t, dir, &event, "CAT"), root)
+	handle := admitNucleus(t, l, base)
+	interact := func(ctx context.Context, stream io.ReadWriteCloser, _ io.Writer) error {
+		if _, err := io.WriteString(stream, "turn\n"); err != nil {
+			return err
+		}
+		line, err := bufio.NewReader(stream).ReadString('\n')
+		if err != nil || line != "turn\n" {
+			return fmt.Errorf("protocol answered %q: %v", line, err)
+		}
+		return nil
+	}
+	session, err := l.Start(context.Background(), handle, Command{Argv: []string{"/bin/sh"}, Interact: interact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = session.Result(); err != nil {
+		t.Fatalf("completed protocol session failed: %v", err)
 	}
 }
 

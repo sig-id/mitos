@@ -356,6 +356,12 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if confinementBlocksTransport(e.confinement) {
 		return &agentPrerequisiteError{summary: "Agent confinement is configured with the network withheld, and no mediated model transport is available: the sandbox namespace has no route to the model endpoint, so the agent could never answer. Configure MITOS_AGENT_NETWORK=unrestricted to admit agent egress, or keep confinement off until a mediated transport is provided."}
 	}
+	var brokerVendor, brokerKey string
+	if e.agentNucleus {
+		if brokerVendor, brokerKey, err = nucleusAgentCredential(b.Runtime, native.Env); err != nil {
+			return err
+		}
+	}
 	nature := ""
 	if b.Selection != nil {
 		nature = b.Selection.Traits.Nature
@@ -440,7 +446,22 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			}
 		}
 	}
-	inputJSON, _ := json.Marshal(inputs)
+	// Under Nucleus the agent sees attempt paths in its container namespace.
+	guest := func(path string) (string, error) { return path, nil }
+	if e.agentNucleus {
+		guest = compute.LaunchSpec{Provider: compute.ConfinementNucleus, Base: base, Workspace: compute.Workspace{Directory: dir}}.GuestPath
+	}
+	guestDir, err := guest(dir)
+	if err != nil {
+		return err
+	}
+	shownInputs := slices.Clone(inputs)
+	for i := range shownInputs {
+		if shownInputs[i].Directory, err = guest(shownInputs[i].Directory); err != nil {
+			return err
+		}
+	}
+	inputJSON, _ := json.Marshal(shownInputs)
 	priorNotes, priorErr := e.prepareFollowup(r, base)
 	if priorErr != nil {
 		return priorErr
@@ -544,6 +565,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			ca.add(tierAttempt, "prior_findings", "previous attempt evidence; no saved native conversation (untrusted output)", evidence)
 		}
 	}
+	if e.agentNucleus {
+		if ca.spillView, err = guest(filepath.Join(base, "context")); err != nil {
+			return err
+		}
+	}
 	prompt, contextReceipt, contextErr := ca.assemble(b.Definition, filepath.Join(base, "context"))
 	receipt, _ = json.MarshalIndent(contextReceipt, "", "  ")
 	if err = e.Store.SaveArtifact(r.ID, "context.json", receipt); err != nil {
@@ -555,25 +581,41 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	resultPath := filepath.Join(base, "agent-result.txt")
 	// The inherited Go cache is commonly outside workspace-write roots. Give
 	// routine checks a writable cache without asking for broader permissions.
-	cache, err := os.MkdirTemp("", "mitos-go-build-")
+	// Under Nucleus the cache lives in the mounted attempt temporary directory.
+	var cache string
+	if e.agentNucleus {
+		cache = filepath.Join(base, "tmp", "go-build")
+		if err = os.MkdirAll(cache, 0o700); err != nil {
+			return err
+		}
+	} else {
+		if cache, err = os.MkdirTemp("", "mitos-go-build-"); err != nil {
+			return err
+		}
+		defer os.RemoveAll(cache)
+	}
+	guestCache, err := guest(cache)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(cache)
 	native.Env = agentCacheEnvironment(native.Env, cache)
 	args := []string{native.Executable}
 	if b.Runtime == "codex" {
-		cacheJSON, _ := json.Marshal(cache)
+		cacheJSON, _ := json.Marshal(guestCache)
 		config := []string{"shell_environment_policy.set.GOCACHE=" + string(cacheJSON)}
 		if b.Effort != "" {
 			config = append(config, "model_reasoning_effort="+strconvQuote(b.Effort))
 		}
-		if authority.Granted("network.read") {
+		if e.agentNucleus {
+			config = append(config, nucleusCodexConfig())
+		} else if authority.Granted("network.read") {
 			config = append(config, "sandbox_workspace_write.network_access=true")
 		}
 		args = append(args, harness.CodexArguments(config...)...)
-		if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
-			return err
+		if !e.agentNucleus {
+			if native.Env, err = codexWorkerEnvironment(e.Store.Dir(), native.Env); err != nil {
+				return err
+			}
 		}
 	}
 	options := harness.CodexOptions{Headless: true, ResumeThread: prior.NativeThreadID, ThreadStarted: func(thread string) error { return e.Store.recordNativeThread(r.ID, thread) }, Model: b.Model, Effort: b.Effort, Sandbox: "read-only", MaxTurns: authority.MaxTurns, Result: func(text string) error { return os.WriteFile(resultPath, []byte(text), 0600) }}
@@ -590,6 +632,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	options.Usage = usage.Observe
 	if authority.Granted("workspace.write") {
 		options.Sandbox = "workspace-write"
+	}
+	if e.agentNucleus {
+		// One enforcing layer per attempt: Nucleus confines the harness, which
+		// could not create its own sandbox inside it anyway.
+		options.Sandbox = "danger-full-access"
 	}
 	if orchestrator {
 		options.OutputSchema = OrchestratorSchema()
@@ -655,7 +702,20 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if caps.WorkspaceConfined {
 		development = false
 	}
-	launch, err := compileWorkflowLaunch(resources, caps, development)
+	var launch compute.LaunchSpec
+	if e.agentNucleus {
+		modelBroker, brokerErr := compute.StartModelBroker(nucleusBrokerSocket(e.Store.Dir(), r.ID), map[string]string{brokerVendor: brokerKey})
+		if brokerErr != nil {
+			return brokerErr
+		}
+		defer modelBroker.Close()
+		launch, err = compute.Compile(compute.Request{Resources: resources, Provider: compute.ConfinementNucleus, NetMode: compute.NetBroker, BrokerEndpoint: modelBroker.Endpoint()}, map[string]compute.Capabilities{compute.ConfinementNucleus: caps}, false)
+		// Withheld writes are enforced by the mount, not by the harness.
+		launch.Posture.ReadOnlyWorkspace = !authority.Granted("workspace.write")
+		launch.Posture.SeccompAllow = compute.HarnessSyscalls
+	} else {
+		launch, err = compileWorkflowLaunch(resources, caps, development)
+	}
 	if err != nil {
 		return err
 	}
@@ -679,7 +739,12 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return err
 	}
 	agentEnv := native.Env
-	if e.confinement.Enabled() {
+	if e.agentNucleus {
+		if agentEnv, err = nucleusAgentEnvironment(b.Runtime, base, filepath.Join(e.Store.Dir(), "workspaces", prior.ID), prior.NativeThreadID != "", native.Env); err != nil {
+			return err
+		}
+		agentEnv = agentCacheEnvironment(agentEnv, cache)
+	} else if e.confinement.Enabled() {
 		if agentEnv, err = stageConfinementHome(base, b.Runtime, agentEnv); err != nil {
 			return err
 		}
@@ -690,9 +755,9 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	options.Activity = io.MultiWriter(&activity, preview.activity)
 	command := compute.Command{Argv: args, Directory: dir, NativeEnv: agentEnv, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		if b.Runtime == "claude" {
-			return harness.RunClaude(ctx, broker, stream, io.MultiWriter(output, preview), dir, prompt, options)
+			return harness.RunClaude(ctx, broker, stream, io.MultiWriter(output, preview), guestDir, prompt, options)
 		}
-		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), dir, prompt, options)
+		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), guestDir, prompt, options)
 	}}
 	var turns *printTurn
 	var turnCommand func([]byte) compute.Command

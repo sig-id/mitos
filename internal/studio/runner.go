@@ -39,8 +39,11 @@ type Engine struct {
 	agentProvider compute.Provider
 	// nucleus, when configured, enforces the confined postures applications
 	// declare in their compute request (ADR 0008); nil otherwise.
-	nucleus     compute.Provider
-	confinement compute.Confinement
+	nucleus compute.Provider
+	// agentNucleus runs native agents under Nucleus with brokered model
+	// access (MITOS_AGENT_CONFINEMENT=nucleus); agentProvider is nucleus.
+	agentNucleus bool
+	confinement  compute.Confinement
 	// egressRelay mediates model transport for network-isolated tenant
 	// workers; egressEndpoint is its UNIX socket, empty when confinement is
 	// off or the network is fully withheld.
@@ -78,7 +81,8 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 	var confinement compute.Confinement
 	var egressRelay *compute.EgressRelay
 	egressEndpoint := ""
-	if tool := os.Getenv("MITOS_AGENT_CONFINEMENT"); tool != "" {
+	agentTool := os.Getenv("MITOS_AGENT_CONFINEMENT")
+	if tool := agentTool; tool != "" && tool != compute.ConfinementNucleus {
 		var confineErr error
 		confinement, confineErr = compute.NewConfinement(tool, os.Getenv("MITOS_AGENT_NETWORK"))
 		if confineErr != nil {
@@ -129,7 +133,21 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		}
 		nucleus = confined
 	}
-	e := &Engine{provider: provider, agentProvider: agentProvider, nucleus: nucleus, confinement: confinement, egressRelay: egressRelay, egressEndpoint: egressEndpoint, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	// Agents under Nucleus have one way out, their per-attempt model broker,
+	// so there is no network mode to choose.
+	agentNucleus := agentTool == compute.ConfinementNucleus
+	if agentNucleus {
+		if nucleus == nil {
+			cancel()
+			return nil, errors.New("MITOS_AGENT_CONFINEMENT=nucleus requires MITOS_NUCLEUS")
+		}
+		if os.Getenv("MITOS_AGENT_NETWORK") != "" {
+			cancel()
+			return nil, errors.New("MITOS_AGENT_NETWORK does not apply under nucleus: agents reach only their model API, through the per-attempt broker")
+		}
+		agentProvider = nucleus
+	}
+	e := &Engine{provider: provider, agentProvider: agentProvider, nucleus: nucleus, agentNucleus: agentNucleus, confinement: confinement, egressRelay: egressRelay, egressEndpoint: egressEndpoint, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err

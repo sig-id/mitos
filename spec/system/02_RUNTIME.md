@@ -306,8 +306,12 @@ hygiene do not restrict host access; interactive agents use native configuration
 When configured, the Nucleus provider admits confined application postures with
 network mode `off`: enforced CPU, memory and process limits, revocation through
 the container cgroup, and a workload held until the runtime attests the frozen
-posture, so a mismatch refuses the start before the workload runs. Brokered
-egress and agent execution under it remain delivery targets.
+posture, so a mismatch refuses the start before the workload runs. Configured
+for agents, it runs Codex and Claude Code as the only enforcing layer, with the
+harness sandbox off and a workspace mounted read-only for roles without write
+grants. Network access is withheld except for the model API, which the harness
+reaches through a per-attempt credential broker that holds the API key outside
+the sandbox.
 Strict unattended operation requires demonstrated authority, observation, acceptance,
 and recovery guarantees, not a configuration label.
 

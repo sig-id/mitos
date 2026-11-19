@@ -2,12 +2,19 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -201,7 +208,7 @@ func TestNucleusNeverReleasesAnUnattestedWorkload(t *testing.T) {
 			t.Fatal("refused start exited successfully")
 		}
 	case <-time.After(20 * time.Second):
-		_ = run.kill()
+		_, _ = run.kill()
 		t.Fatal("closed start gate did not tear the container down")
 	}
 	if err = run.finish(); err != nil {
@@ -239,5 +246,174 @@ func TestNucleusKillsAWorkloadAtItsMemoryLimit(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		_ = l.Stop(context.Background(), session)
 		t.Fatal("over-limit workload was throttled instead of killed")
+	}
+}
+
+// A brokered agent posture: the workload reaches its model API only through
+// the per-attempt broker, holds no credential, cannot tunnel or route
+// anywhere else, and sees the workspace read-only when its role cannot write.
+func TestNucleusBrokersModelAccessWithoutCredentialsInside(t *testing.T) {
+	l := realNucleus(t)
+	if !slices.Contains(l.Capabilities().NetModes, NetBroker) {
+		t.Fatalf("probe did not establish brokered egress: %+v", l.Capabilities())
+	}
+	shell := hostShell(t)
+	curl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("no curl")
+	}
+	if curl, err = filepath.EvalSymlinks(curl); err != nil || !visibleHostPath(curl) {
+		t.Skip("curl is not visible in the sandbox")
+	}
+	upstream, seen := recordingUpstream(t)
+	socket := filepath.Join(t.TempDir(), "b.sock")
+	broker, err := startModelBroker(socket, map[string]string{BrokerVendorAnthropic: "sk-ant-real"}, map[string]string{BrokerVendorAnthropic: upstream.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer broker.Close()
+	base := filepath.Join(t.TempDir(), "attempt")
+	spec := nucleusSpec(t, base)
+	admitted, err := Compile(Request{Resources: spec.Posture.Resources, TrustTier: "T1", NetMode: NetBroker, BrokerEndpoint: broker.Endpoint(), WorkspaceMode: "copy"}, map[string]Capabilities{"local": (&Local{}).Capabilities(), ConfinementNucleus: l.Capabilities()}, false)
+	if err != nil || admitted.Provider != ConfinementNucleus {
+		t.Fatalf("brokered posture admitted by %q: %v", admitted.Provider, err)
+	}
+	admitted.Posture.ReadOnlyWorkspace = true
+	admitted.RunID, admitted.CapabilityRef, admitted.Base = "run-1", "agent", base
+	admitted.Workspace = Workspace{Mode: "copy", Source: t.TempDir(), Directory: filepath.Join(base, "workspace")}
+	handle, err := l.Prepare(context.Background(), admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `set -u
+fail() { echo "FAIL $*"; exit 1; }
+env | grep -q sk-ant-real && fail credential in environment
+env | grep -qi '_proxy=' && fail proxy variables injected
+test -S /run/nucleus/broker.sock && fail broker socket mounted
+touch /workspace/written 2>/dev/null && fail workspace writable
+answer=$(` + curl + ` -sS --max-time 10 -H 'x-api-key: ` + BrokerPlaceholderKey + `' -d '{}' ` + BrokerBaseURL(BrokerVendorAnthropic) + `/v1/messages) || fail broker unreachable
+test "$answer" = ok || fail "broker answered $answer"
+` + curl + ` -sS --max-time 5 -o /dev/null -x ` + "http://" + EgressLoopAddr + ` https://api.anthropic.com/ 2>/dev/null && fail tunnel admitted
+` + curl + ` -sS --max-time 5 -o /dev/null http://1.1.1.1/ 2>/dev/null && fail direct route
+echo brokered`
+	session, err := l.Start(context.Background(), handle, Command{Argv: []string{shell, "-c", script}, NativeEnv: []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(base, "home")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := session.Result()
+	if err != nil || !strings.Contains(string(output), "brokered") {
+		t.Fatalf("%v: %s", err, output)
+	}
+	got := seen()
+	if len(got) != 1 || got[0].uri != "/v1/messages" || got[0].header.Get("X-Api-Key") != "sk-ant-real" {
+		t.Fatalf("upstream saw %+v", got)
+	}
+}
+
+// Real Codex, its own sandbox off, inside a brokered Nucleus container: it
+// runs a command in the workspace and answers through the broker, which is
+// the only party holding the key. The vendor is a scripted Responses server.
+//
+//	MITOS_TEST_CODEX=/nix/store/...-codex/bin/codex just test-nucleus
+func TestNucleusRunsCodexThroughTheBroker(t *testing.T) {
+	l := realNucleus(t)
+	codex := os.Getenv("MITOS_TEST_CODEX")
+	if codex == "" {
+		t.Skip("set MITOS_TEST_CODEX to a Codex binary in the Nix store")
+	}
+	var mu sync.Mutex
+	var auth []string
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		calls++
+		n := calls
+		mu.Unlock()
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		event := func(kind string, payload map[string]any) {
+			payload["type"] = kind
+			raw, _ := json.Marshal(payload)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind, raw)
+		}
+		id := fmt.Sprintf("resp_%d", n)
+		event("response.created", map[string]any{"response": map[string]any{"id": id, "status": "in_progress"}})
+		item := map[string]any{"type": "message", "id": "msg_" + id, "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": "pong", "annotations": []any{}}}}
+		if !strings.Contains(string(body), "function_call_output") {
+			var request struct {
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+			}
+			_ = json.Unmarshal(body, &request)
+			command := map[string]any{}
+			for _, tool := range request.Tools {
+				switch tool.Name {
+				case "exec_command":
+					command["cmd"], item = "touch /workspace/made-by-codex && echo ran", map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": tool.Name}
+				case "shell_command":
+					command["command"], item = "touch /workspace/made-by-codex && echo ran", map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": tool.Name}
+				}
+			}
+			raw, _ := json.Marshal(command)
+			item["arguments"] = string(raw)
+		}
+		event("response.output_item.added", map[string]any{"output_index": 0, "item": item})
+		event("response.output_item.done", map[string]any{"output_index": 0, "item": item})
+		event("response.completed", map[string]any{"response": map[string]any{"id": id, "status": "completed", "output": []any{item}, "usage": map[string]int{"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}}})
+	}))
+	defer upstream.Close()
+	broker, err := startModelBroker(filepath.Join(t.TempDir(), "b.sock"), map[string]string{BrokerVendorOpenAI: "sk-oai-real"}, map[string]string{BrokerVendorOpenAI: upstream.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer broker.Close()
+	base := filepath.Join(t.TempDir(), "attempt")
+	spec := nucleusSpec(t, base)
+	admitted, err := Compile(Request{Resources: spec.Posture.Resources, TrustTier: "T1", NetMode: NetBroker, BrokerEndpoint: broker.Endpoint(), Provider: ConfinementNucleus}, map[string]Capabilities{ConfinementNucleus: l.Capabilities()}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted.Posture.SeccompAllow = HarnessSyscalls
+	admitted.RunID, admitted.CapabilityRef, admitted.Base = "run-1", "agent", base
+	admitted.Workspace = Workspace{Mode: "copy", Source: t.TempDir(), Directory: filepath.Join(base, "workspace")}
+	handle, err := l.Prepare(context.Background(), admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(base, "home")
+	if err = os.MkdirAll(filepath.Join(home, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"`+BrokerPlaceholderKey+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	argv := []string{codex, "exec", "-c", `openai_base_url="` + BrokerBaseURL(BrokerVendorOpenAI) + `/v1"`, "-c", `model="gpt-5.4"`, "--skip-git-repo-check", "--sandbox", "danger-full-access", "Run the command, then answer."}
+	// The server's PATH, as an agent inherits it; profile directories resolve
+	// to the store paths Nucleus binds.
+	session, err := l.Start(ctx, handle, Command{Argv: argv, NativeEnv: []string{"HOME=" + home, "CODEX_HOME=" + filepath.Join(home, ".codex"), "PATH=" + os.Getenv("PATH")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := session.Result()
+	if err != nil || !strings.Contains(string(output), "pong") {
+		t.Fatalf("%v: %s", err, output)
+	}
+	if _, err = os.Stat(filepath.Join(base, "workspace", "made-by-codex")); err != nil {
+		t.Fatalf("codex command did not run in the workspace: %v\n%s", err, output)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, header := range auth {
+		if header != "Bearer sk-oai-real" {
+			t.Fatalf("upstream saw credential %q", header)
+		}
 	}
 }

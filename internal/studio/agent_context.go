@@ -69,6 +69,9 @@ type ContextReceipt struct {
 type contextAssembly struct {
 	protocol []string
 	inputs   []contextSection
+	// spillView is where the agent sees the spill directory, when its
+	// sandbox mounts it elsewhere; empty means the host path.
+	spillView string
 }
 
 func (a *contextAssembly) instruct(text string) {
@@ -162,7 +165,11 @@ func (a *contextAssembly) assemble(d agents.Definition, spillDir string) (string
 			included[i] = false
 			r.Sections[i].Included = false
 			r.Sections[i].Reason = "omitted to fit the context budget"
-			r.Sections[i].Reference = fmt.Sprintf("[Omitted to fit the context budget: %d characters, sha256 %s. Read the full text at %s when it is relevant.]", r.Sections[i].Characters, r.Sections[i].SHA256, file)
+			shown := file
+			if a.spillView != "" {
+				shown = filepath.Join(a.spillView, filepath.Base(file))
+			}
+			r.Sections[i].Reference = fmt.Sprintf("[Omitted to fit the context budget: %d characters, sha256 %s. Read the full text at %s when it is relevant.]", r.Sections[i].Characters, r.Sections[i].SHA256, shown)
 			r.OverflowAction = "omit_with_reference"
 		}
 	}
