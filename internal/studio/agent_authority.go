@@ -193,7 +193,13 @@ func confinedProfile(base runtimeProfile, caps compute.Capabilities) runtimeProf
 	p.Capabilities["workspace.read"] = capabilitySupport{BoundedGrant: true, BlockedDenial: true, Note: "Reads are confined to the mounted workspace copy, dependency inputs, the runtime home and required toolchains; other host paths are not mounted."}
 	p.Capabilities["workspace.write"] = capabilitySupport{BoundedGrant: true, Note: "Writes are confined to the mounted workspace copy, the runtime home and temporary directories."}
 	p.Capabilities["command.run"] = capabilitySupport{BoundedGrant: true, Note: "Commands run inside the OS-confined sandbox; execution cannot be disabled."}
-	if !slices.Contains(caps.NetModes, compute.NetUnrestricted) || caps.Egress == compute.NetOff {
+	if caps.ReadOnlyWorkspace {
+		p.Capabilities["workspace.write"] = capabilitySupport{BoundedGrant: true, BlockedDenial: true, Note: "Writes are confined to the mounted workspace copy, the runtime home and temporary directories; withheld means the workspace copy is mounted read-only."}
+	}
+	if slices.Contains(caps.NetModes, compute.NetBroker) {
+		const brokered = "General network access is withheld under this provider: the runtime reaches only its model API, through the per-attempt Mitos credential broker, and holds no credential itself."
+		p.Capabilities["network.read"] = capabilitySupport{BlockedDenial: true, Withheld: brokered, Note: brokered}
+	} else if !slices.Contains(caps.NetModes, compute.NetUnrestricted) || caps.Egress == compute.NetOff {
 		p.Capabilities["network.read"] = capabilitySupport{BlockedDenial: true, Withheld: "Network access is withheld for every attempt under the confining provider; the runtime's own model transport is equally unreachable, so agents are admitted only with unrestricted egress.", Note: "Network access is withheld for every attempt under the confining provider; the runtime's own model transport is equally unreachable, so agents are admitted only with unrestricted egress."}
 	}
 	return p

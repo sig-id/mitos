@@ -20,7 +20,10 @@ type Capabilities struct {
 	Snapshot          bool     `json:"snapshot"`
 	NetModes          []string `json:"net_modes"`
 	WorkspaceConfined bool     `json:"workspace_confined"`
-	Metered           bool     `json:"metered"`
+	// ReadOnlyWorkspace reports that the provider can mount the workspace
+	// copy read-only for a launch whose posture asks for it.
+	ReadOnlyWorkspace bool `json:"read_only_workspace,omitempty"`
+	Metered           bool `json:"metered"`
 }
 type Request struct {
 	Resources      resourcepolicy.Agent `json:"resources"`
@@ -55,8 +58,22 @@ type Posture struct {
 	NetMode        string               `json:"net_mode"`
 	BrokerEndpoint string               `json:"broker_endpoint,omitempty"`
 	DataMount      string               `json:"data_mount"`
-	Deadline       time.Time            `json:"deadline"`
+	// ReadOnlyWorkspace mounts the workspace copy read-only for a role that
+	// is not granted writes. Only a confining provider can honour it.
+	ReadOnlyWorkspace bool `json:"read_only_workspace,omitempty"`
+	// SeccompAllow names opt-in system calls the workload needs beyond a
+	// confining provider's default profile; see HarnessSyscalls.
+	SeccompAllow []string `json:"seccomp_allow,omitempty"`
+	// AllowJIT permits writable and executable memory for a JIT runtime
+	// (V8, JavaScriptCore) that cannot run under the default W^X policy.
+	// It is an explicit weakening the provider must attest.
+	AllowJIT bool      `json:"allow_jit,omitempty"`
+	Deadline time.Time `json:"deadline"`
 }
+
+// NetBroker is the network mode whose only egress is the launch's broker
+// endpoint.
+const NetBroker = "deny-all-except-broker"
 
 // Compile is deterministic. The legacy development exception is supplied by the
 // local operator's runtime, never inferred from a requested tier or provider.
@@ -89,7 +106,7 @@ func Compile(request Request, providers map[string]Capabilities, development boo
 	}
 	netMode := request.NetMode
 	if netMode == "" {
-		netMode = "deny-all-except-broker"
+		netMode = NetBroker
 		if development {
 			netMode = "unrestricted"
 		}
@@ -128,7 +145,7 @@ func Compile(request Request, providers map[string]Capabilities, development boo
 					continue
 				}
 			} else if !localContainer || netMode != "unrestricted" || request.TrustTier == "T2" || !caps.WorkspaceConfined {
-				if caps.Egress != "broker" || netMode != "deny-all-except-broker" || request.BrokerEndpoint == "" || !caps.WorkspaceConfined {
+				if caps.Egress != "broker" || netMode != NetBroker || request.BrokerEndpoint == "" || !caps.WorkspaceConfined {
 					continue
 				}
 			}

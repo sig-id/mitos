@@ -261,11 +261,30 @@ Each launch is a rootless strict-agent container with enforced CPU, memory and
 process limits and no network. Nucleus holds the workload until it attests the
 admitted posture; any mismatch refuses the start before the workload runs, and
 the attested events are kept with the attempt. A workload killed at its memory
-limit fails with `memory_exhausted`. The provider needs a Nucleus build newer
-than 0.5.3 (the start gate is unreleased) and a server that owns a delegated
-cgroup: `just serve-nucleus` starts it in one, and `just test-nucleus` runs the
-integration tests. Agents still run under the local provider; moving them is
-the next delivery step.
+limit fails with `memory_exhausted`. The provider needs Nucleus 0.6.0 or later
+and a server that owns a delegated cgroup: `just serve-nucleus` starts it in
+one, and `just test-nucleus` runs the integration tests.
+
+With `MITOS_AGENT_CONFINEMENT=nucleus` as well, Codex, Claude Code and Pi agents
+run under Nucleus too. Nucleus is the only enforcing layer: the harness's own
+sandbox is off, a role that may not write sees the workspace copy read-only, and
+general network access is withheld. The harness holds no credential. It talks to
+a loopback base URL that Nucleus relays to a per-attempt Mitos broker, which
+adds the API key and connects to the vendor itself. The broker needs
+`OPENAI_API_KEY` (Codex) or `ANTHROPIC_API_KEY` (Claude Code) in the server
+environment, either directly, as a `NAME_FILE` variable, or as an absolute path
+to a file holding the key. Pi uses its configured default provider (`zai`,
+`openai` or `anthropic`) and that provider's server variable (`ZAI_API_KEY` for
+Z.ai), or the API key stored by `pi` login. Subscription logins are not
+brokered, so an agent without an API key is refused. Claude Code and Pi run on
+JIT runtimes, so their launches request Nucleus's `allow_jit` allowance, and
+Mitos refuses the start unless Nucleus reports it. Pi on Node needs a Nucleus
+build newer than 0.6.0, with the fixes for
+[nucleus#45](https://github.com/sig-id/nucleus/issues/45) and
+[nucleus#46](https://github.com/sig-id/nucleus/issues/46) and Node 26's
+`prctl` calls; 0.6.0 kills Node at startup. The harness executable must be one the container
+can see, such as a Nix store path. A wrapper that installs the harness into the
+operator's home at first run cannot work inside the sandbox.
 
 ## Cost statistics
 

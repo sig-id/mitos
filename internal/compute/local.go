@@ -383,10 +383,24 @@ func (s *localSession) closeSandbox() {
 }
 
 func killGroup(s *localSession) error {
+	pid := s.cmd.Process.Pid
 	if s.sandbox != nil {
-		_ = s.sandbox.kill()
+		// Revoking the container ends the workload; its supervisor then
+		// reports the summary and exits. Killing the supervisor now would
+		// lose the summary and make every outcome untrusted, so it is killed
+		// only if it outlives the grace period.
+		if revoked, err := s.sandbox.kill(); revoked && err == nil {
+			time.AfterFunc(nucleusExitGrace, func() {
+				select {
+				case <-s.done:
+				default:
+					_ = syscall.Kill(-pid, syscall.SIGKILL)
+				}
+			})
+			return nil
+		}
 	}
-	err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+	err := syscall.Kill(-pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}

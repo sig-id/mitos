@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,11 +26,16 @@ import (
 // never executes, and the posture is never downgraded after admission.
 //
 // The workload sees only the workspace copy (/workspace, executable), the
-// per-attempt home and temporary directories, read-only dependency inputs,
-// and either the host system directories Nucleus binds (/bin, /usr, /lib,
+// per-attempt home and temporary directories, read-only dependency inputs and
+// context files, and either the host system directories Nucleus binds (/bin, /usr, /lib,
 // /lib64, /nix/store) or a pinned agent toolchain rootfs. The attempt base
 // itself is never mounted: it holds the workspace history and baseline that
 // harvest trusts.
+//
+// A brokered launch (NetBroker) keeps network mode none. Nucleus listens on
+// loopback inside the container and relays each connection to the launch's
+// broker socket, which is not mounted; the workload is the broker's client
+// and reaches nothing else.
 
 const (
 	ConfinementNucleus = "nucleus"
@@ -38,13 +45,37 @@ const (
 	nucleusPidsMax      = 4096
 	nucleusCPUPeriod    = 100000
 	nucleusStartTimeout = 30 * time.Second
-	nucleusLeaf         = "mitos-server"
-	nucleusEventsFile   = "nucleus-events.jsonl"
-	nucleusConfigFD     = 3
-	nucleusEventsFD     = 4
-	nucleusEnvFD        = 5
-	nucleusStartFD      = 6
+	// nucleusExitGrace is how long a supervisor whose container was revoked
+	// may take to report the summary and exit before it is killed too.
+	nucleusExitGrace  = 5 * time.Second
+	nucleusLeaf       = "mitos-server"
+	nucleusEventsFile = "nucleus-events.jsonl"
+	nucleusConfigFD   = 3
+	nucleusEventsFD   = 4
+	nucleusEnvFD      = 5
+	nucleusStartFD    = 6
 )
+
+// HarnessSyscalls are the opt-in system calls an agent and the developer
+// toolchains it runs need beyond the strict-agent seccomp profile, which
+// kills a process on any call it does not allow. Codex watches its
+// configuration with inotify; touch, tar and git set timestamps; Go and tokio
+// spawn processes through pidfds; V8 allocates protection keys; runtimes
+// query priorities, limits and system information. Every entry is one
+// Nucleus permits in strict-agent mode; io_uring, namespaces, memory policy,
+// identity changes and extended attributes stay denied. They are the only
+// calls a posture may add.
+var HarnessSyscalls = []string{
+	"inotify_init", "inotify_init1", "inotify_add_watch", "inotify_rm_watch",
+	"utimensat", "utimes", "utime", "futimesat", "fchmodat2", "creat", "openat2",
+	"pidfd_open", "pidfd_send_signal", "tkill", "rt_tgsigqueueinfo", "pause", "alarm",
+	"epoll_pwait2", "futex_waitv", "futex_wake", "futex_wait", "futex_requeue", "membarrier",
+	"timer_create", "timer_settime", "timer_gettime", "timer_getoverrun", "timer_delete",
+	"sysinfo", "time", "getpriority", "setpriority", "setrlimit", "getresuid", "getresgid", "getsid", "capget",
+	"sched_getattr", "sched_get_priority_max", "sched_get_priority_min", "sched_rr_get_interval",
+	"pkey_alloc", "pkey_free", "pkey_mprotect", "mincore", "readahead",
+	"sync", "syncfs", "splice", "tee", "sendfile", "recvmmsg", "sendmmsg",
+}
 
 // ErrMemoryExhausted reports a workload that the kernel killed at its admitted
 // memory limit, as distinct from any other failure.
@@ -108,6 +139,10 @@ func NewNucleus(ctx context.Context, cfg NucleusConfig) (*Local, error) {
 }
 
 func (n *nucleusRuntime) capabilities() Capabilities { return n.caps }
+
+// nucleusCapabilities is what a passing probe proves: enforced CPU and memory
+// caps, a confined workspace, and egress that is either off or brokered.
+var nucleusCapabilities = Capabilities{CPUQuota: true, MemoryLimit: true, Isolation: "container", Egress: "broker", DataMount: "bind-ro", NetModes: []string{NetOff, NetBroker}, WorkspaceConfined: true, ReadOnlyWorkspace: true}
 
 const cgroupMount = "/sys/fs/cgroup"
 
@@ -222,6 +257,11 @@ type nucleusDocument struct {
 	CPUs                 float64  `json:"cpus,omitempty"`
 	Pids                 int      `json:"pids"`
 	Network              string   `json:"network"`
+	BrokerSocket         string   `json:"broker_socket,omitempty"`
+	BrokerProxyListen    string   `json:"broker_proxy_listen,omitempty"`
+	BrokerNoProxyEnv     bool     `json:"credential_broker_no_proxy_env,omitempty"`
+	SeccompAllow         []string `json:"seccomp_allow,omitempty"`
+	AllowJIT             bool     `json:"allow_jit,omitempty"`
 	AgentToolchainRootfs string   `json:"agent_toolchain_rootfs,omitempty"`
 	Volumes              []string `json:"volumes"`
 	EnvFD                int      `json:"env_fd"`
@@ -231,8 +271,16 @@ type nucleusDocument struct {
 
 // nucleusPosture is what the started event must attest.
 type nucleusPosture struct {
-	CgroupRoot  string
-	Workspace   string
+	CgroupRoot    string
+	Workspace     string
+	WorkspaceMode string
+	// NetworkMode is the attested network mode: "none", or "broker-socket"
+	// when loopback is relayed to a broker.
+	NetworkMode string
+	// BrokerListen is the in-container broker address, empty without one.
+	BrokerListen string
+	// AllowJIT is whether writable-executable memory was requested.
+	AllowJIT    bool
 	MemoryBytes *int64
 	CPUQuota    *int64
 	PidsMax     int64
@@ -256,10 +304,14 @@ func (m pathMap) guest(path string) (string, bool) {
 	return m[best].guest + strings.TrimPrefix(path, m[best].host), true
 }
 
-const nucleusInputs = nucleusStateRoot + "/inputs"
+const (
+	nucleusInputs  = nucleusStateRoot + "/inputs"
+	nucleusContext = nucleusStateRoot + "/context"
+)
 
 // nucleusMounts is the attempt's path namespace: the workspace copy first,
-// then the per-attempt home, temporary and dependency input directories.
+// then the per-attempt home and temporary directories, and the read-only
+// dependency inputs and context files that spill out of an agent prompt.
 func nucleusMounts(spec LaunchSpec) (base, workspace string, mounts pathMap, err error) {
 	base = filepath.Clean(spec.Base)
 	workspace = filepath.Clean(spec.Workspace.Directory)
@@ -267,7 +319,7 @@ func nucleusMounts(spec LaunchSpec) (base, workspace string, mounts pathMap, err
 		return "", "", nil, errors.New("nucleus launch needs absolute attempt paths")
 	}
 	mounts = pathMap{{workspace, nucleusWorkspace}}
-	for _, name := range []string{"home", "tmp", "inputs"} {
+	for _, name := range []string{"home", "tmp", "inputs", "context"} {
 		mounts = append(mounts, struct{ host, guest string }{filepath.Join(base, name), filepath.Join(nucleusStateRoot, name)})
 	}
 	return base, workspace, mounts, nil
@@ -299,8 +351,17 @@ func within(root, path string) bool {
 // event must attest. It is pure apart from resolving executable symlinks.
 func renderNucleus(cfg NucleusConfig, spec LaunchSpec, argv []string, dir string, env []string) (nucleusDocument, []string, nucleusPosture, error) {
 	var doc nucleusDocument
-	if spec.Posture.NetMode != NetOff {
-		return doc, nil, nucleusPosture{}, fmt.Errorf("nucleus confinement supports network mode %q only; brokered egress awaits a Nucleus-side forwarder", NetOff)
+	broker := ""
+	switch spec.Posture.NetMode {
+	case NetOff:
+	case NetBroker:
+		path, ok := strings.CutPrefix(spec.Posture.BrokerEndpoint, "unix://")
+		if !ok || !filepath.IsAbs(path) {
+			return doc, nil, nucleusPosture{}, errors.New("nucleus brokered egress needs a local unix broker endpoint")
+		}
+		broker = filepath.Clean(path)
+	default:
+		return doc, nil, nucleusPosture{}, fmt.Errorf("nucleus confinement supports network modes %q and %q only", NetOff, NetBroker)
 	}
 	base, workspace, mounts, err := nucleusMounts(spec)
 	if err != nil {
@@ -309,7 +370,7 @@ func renderNucleus(cfg NucleusConfig, spec LaunchSpec, argv []string, dir string
 	var volumes []string
 	for _, mount := range mounts[1:] {
 		access := "rw"
-		if mount.guest == nucleusInputs {
+		if mount.guest == nucleusInputs || mount.guest == nucleusContext {
 			if !dirExists(mount.host) {
 				continue
 			}
@@ -378,8 +439,25 @@ func renderNucleus(cfg NucleusConfig, spec LaunchSpec, argv []string, dir string
 		}
 		guestEnv = append(guestEnv, key+"="+value)
 	}
-	posture := nucleusPosture{CgroupRoot: cfg.CgroupRoot, Workspace: workspace, PidsMax: nucleusPidsMax}
-	doc = nucleusDocument{Name: nucleusName(base), Workspace: workspace, WorkspaceMode: "bind-rw", WorkspaceExec: true, Workdir: workdir, Rootless: true, Runtime: "native", ServiceMode: "strict-agent", TrustLevel: "trusted", Pids: nucleusPidsMax, Network: "none", AgentToolchainRootfs: cfg.Rootfs, Volumes: volumes, EnvFD: nucleusEnvFD, StartFD: nucleusStartFD, Command: command}
+	mode := "bind-rw"
+	if spec.Posture.ReadOnlyWorkspace {
+		mode = "bind-ro"
+	}
+	posture := nucleusPosture{CgroupRoot: cfg.CgroupRoot, Workspace: workspace, WorkspaceMode: mode, NetworkMode: "none", PidsMax: nucleusPidsMax}
+	doc = nucleusDocument{Name: nucleusName(base), Workspace: workspace, WorkspaceMode: mode, WorkspaceExec: true, Workdir: workdir, Rootless: true, Runtime: "native", ServiceMode: "strict-agent", TrustLevel: "trusted", Pids: nucleusPidsMax, Network: "none", AgentToolchainRootfs: cfg.Rootfs, Volumes: volumes, EnvFD: nucleusEnvFD, StartFD: nucleusStartFD, Command: command}
+	for _, name := range spec.Posture.SeccompAllow {
+		if !slices.Contains(HarnessSyscalls, name) {
+			return doc, nil, nucleusPosture{}, fmt.Errorf("posture may not allow system call %q", name)
+		}
+	}
+	doc.SeccompAllow = slices.Clone(spec.Posture.SeccompAllow)
+	doc.AllowJIT, posture.AllowJIT = spec.Posture.AllowJIT, spec.Posture.AllowJIT
+	if broker != "" {
+		// The harness is configured with explicit base URLs; proxy variables
+		// would only steer other tools into tunnels the broker refuses.
+		doc.BrokerSocket, doc.BrokerProxyListen, doc.BrokerNoProxyEnv = broker, EgressLoopAddr, true
+		posture.NetworkMode, posture.BrokerListen = "broker-socket", EgressLoopAddr
+	}
 	if limit := spec.Posture.Resources.MemoryMiB; limit.Mode == "limit" {
 		doc.Memory = strconv.FormatInt(limit.Amount, 10) + "M"
 		bytes := limit.Amount << 20
@@ -438,12 +516,13 @@ func nucleusName(base string) string {
 type nucleusEvent struct {
 	Type      string `json:"type"`
 	Container struct {
-		ID             string `json:"id"`
-		Name           string `json:"name"`
-		Runtime        string `json:"runtime"`
-		CgroupPath     string `json:"cgroup_path"`
-		NetworkMode    string `json:"network_mode"`
-		WorkspaceMount *struct {
+		ID                string `json:"id"`
+		Name              string `json:"name"`
+		Runtime           string `json:"runtime"`
+		CgroupPath        string `json:"cgroup_path"`
+		NetworkMode       string `json:"network_mode"`
+		BrokerProxyListen string `json:"broker_proxy_listen"`
+		WorkspaceMount    *struct {
 			Source       string `json:"source"`
 			Destination  string `json:"destination"`
 			Mode         string `json:"mode"`
@@ -457,6 +536,7 @@ type nucleusEvent struct {
 		CapabilitiesStatus    string `json:"capabilities_status"`
 		Rootless              bool   `json:"rootless"`
 		AllowDegradedSecurity bool   `json:"allow_degraded_security"`
+		AllowJIT              bool   `json:"allow_jit"`
 	} `json:"security"`
 	ResourceLimits struct {
 		MemoryBytes *int64 `json:"memory_bytes"`
@@ -488,14 +568,16 @@ func (p nucleusPosture) verify(event nucleusEvent, name string) error {
 	check(event.Type == "container_started", "event %q", event.Type)
 	check(c.Name == name, "container name %q", c.Name)
 	check(c.Runtime == "native", "runtime %q", c.Runtime)
-	check(c.NetworkMode == "none", "network mode %q", c.NetworkMode)
+	check(c.NetworkMode == p.NetworkMode, "network mode %q", c.NetworkMode)
+	check(c.BrokerProxyListen == p.BrokerListen, "broker listener %q", c.BrokerProxyListen)
 	check(c.CgroupPath != "" && strings.HasPrefix(filepath.Clean(c.CgroupPath), p.CgroupRoot+"/"), "cgroup %q outside %s", c.CgroupPath, p.CgroupRoot)
 	ws := c.WorkspaceMount
-	check(ws != nil && ws.Source == p.Workspace && ws.Destination == nucleusWorkspace && ws.Mode == "bind-rw", "workspace mount %+v", ws)
+	check(ws != nil && ws.Source == p.Workspace && ws.Destination == nucleusWorkspace && ws.Mode == p.WorkspaceMode, "workspace mount %+v", ws)
 	check(s.SeccompMode == "enforce" && s.SeccompStatus == "installed", "seccomp %s/%s", s.SeccompMode, s.SeccompStatus)
 	check(s.LandlockStatus == "fully_enforced", "landlock %s", s.LandlockStatus)
 	check(s.CapabilitiesStatus == "drop_all", "capabilities %s", s.CapabilitiesStatus)
 	check(s.Rootless && !s.AllowDegradedSecurity, "rootless=%t degraded=%t", s.Rootless, s.AllowDegradedSecurity)
+	check(s.AllowJIT == p.AllowJIT, "jit allowance %t", s.AllowJIT)
 	check(equalLimit(r.MemoryBytes, p.MemoryBytes), "memory limit %s", formatLimit(r.MemoryBytes))
 	if p.CPUQuota == nil {
 		check(r.CPUQuotaUS == nil, "unrequested cpu quota %s", formatLimit(r.CPUQuotaUS))
@@ -705,19 +787,21 @@ func (r *sandboxRun) attest(ctx context.Context, exited <-chan struct{}) error {
 }
 
 // kill revokes the container through its cgroup, which reaches every
-// descendant regardless of process group or session changes.
-func (r *sandboxRun) kill() error {
+// descendant regardless of process group or session changes. It reports
+// whether a started container was revoked, so the caller can leave the
+// supervisor alive to report the outcome.
+func (r *sandboxRun) kill() (bool, error) {
 	r.mu.Lock()
 	cgroup := r.cgroup
 	r.mu.Unlock()
 	if cgroup == "" || !strings.HasPrefix(filepath.Clean(cgroup), r.posture.CgroupRoot+"/") {
-		return nil
+		return false, nil
 	}
 	err := os.WriteFile(filepath.Join(cgroup, "cgroup.kill"), []byte("1"), 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return true, nil
 	}
-	return err
+	return err == nil, err
 }
 
 // finish waits for the event stream to close after the supervisor exited and
@@ -763,7 +847,15 @@ func (n *nucleusRuntime) probe(ctx context.Context) (Capabilities, error) {
 			return Capabilities{}, err
 		}
 	}
-	spec := LaunchSpec{Base: n.cfg.ProbeDir, Workspace: Workspace{Directory: workspace}, Posture: Posture{NetMode: NetOff}}
+	// The canary is brokered, so brokered egress is advertised only when this
+	// Nucleus accepts and attests a broker. Nothing connects to the socket.
+	socket := filepath.Join(n.cfg.ProbeDir, "broker.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return Capabilities{}, fmt.Errorf("probe broker socket: %w", err)
+	}
+	defer listener.Close()
+	spec := LaunchSpec{Base: n.cfg.ProbeDir, Workspace: Workspace{Directory: workspace}, Posture: Posture{NetMode: NetBroker, BrokerEndpoint: "unix://" + socket}}
 	spec.Posture.Resources.MemoryMiB.Mode, spec.Posture.Resources.MemoryMiB.Amount = "limit", 64
 	spec.Posture.Resources.CPUMillicores.Mode, spec.Posture.Resources.CPUMillicores.Amount = "limit", 500
 	if n.cfg.Rootfs != "" {
@@ -780,5 +872,5 @@ func (n *nucleusRuntime) probe(ctx context.Context) (Capabilities, error) {
 		return Capabilities{}, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
 	_ = os.RemoveAll(n.cfg.ProbeDir)
-	return Capabilities{CPUQuota: true, MemoryLimit: true, Isolation: "container", Egress: NetOff, DataMount: "bind-ro", NetModes: []string{NetOff}, WorkspaceConfined: true}, nil
+	return nucleusCapabilities, nil
 }
