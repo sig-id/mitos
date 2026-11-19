@@ -31,7 +31,19 @@ type terminal struct {
 	keys    []string
 }
 
-func (t *terminal) stop() { killSession(t.pid); _ = t.file.Close() }
+func (t *terminal) stop() {
+	killSession(t.pid)
+	t.closeMaster()
+}
+
+// closeMaster closes both descriptors of the shared master: the poller's
+// duplicate and the pty library's original. Only the last close tears the
+// master down and delivers its hang-up, so closing both keeps that signal
+// prompt instead of waiting for the pinned wrapper's finalizer.
+func (t *terminal) closeMaster() {
+	_ = t.file.Close()
+	_ = t.pin.Close()
+}
 
 func (m *Manager) StartAgent(project string, request agentcli.Request, serverURL string) (Session, error) {
 	p, err := m.Project(project)
@@ -355,10 +367,10 @@ func (m *Manager) waitTerminal(id string, cmd *exec.Cmd, t *terminal) {
 	select {
 	case readErr = <-readDone:
 	case <-time.After(300 * time.Millisecond):
-		_ = t.file.Close()
+		t.closeMaster()
 		readErr = <-readDone
 	}
-	_ = t.file.Close()
+	t.closeMaster()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.live, id)
