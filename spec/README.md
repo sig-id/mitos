@@ -48,6 +48,14 @@ router and supervisor responsibilities. [Agent sessions and supervision](system/
 defines six delivery slices, project preferences, the proposed COOPERATION.md
 convention, explicit model classification, and boundary enforcement limitations.
 
+## Enforced local execution reading path
+
+[ADR 0008](ADRs/0008_NUCLEUS_EXECUTION_PROVIDER.md) proposes Nucleus as the
+enforcing local provider for [M4](system/06_DELIVERY_AND_CONFORMANCE.md#m4--enforced-execution-and-verified-continuity):
+one enforcing layer per attempt, posture attested by the runtime's event stream,
+and model credentials held by a host broker. Read it with
+[grants, resources and providers](system/02_RUNTIME.md#grants-resources-and-providers).
+
 ## Authority
 
 Product and system specifications are normative, including requirements not yet
