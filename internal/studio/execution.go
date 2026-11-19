@@ -64,7 +64,7 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	if err := e.Store.TransitionAfterDecision(r.ID, "advance", "Prepare a fresh workspace for the brief.", "run_started", "running", "Preparing workspace", "Selecting tracked and untracked non-ignored files. The source stays untouched."); err != nil {
 		return err
 	}
-	launch, err := compileApplication(app)
+	launch, err := e.compileApplication(app)
 	if err != nil && !app.Builtin {
 		return err
 	}
@@ -180,7 +180,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 			return err
 		}
 	}
-	launch, err := compileApplication(app)
+	launch, err := e.compileApplication(app)
 	if err != nil {
 		return err
 	}
@@ -207,17 +207,36 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 	if err != nil {
 		return err
 	}
-	var healthMonitor *serviceHealthMonitor
-	var healthInput map[string]any
-	if healthState != nil {
-		healthMonitor = &serviceHealthMonitor{store: e.Store, runID: r.ID, scope: healthState, provider: e.provider, launch: launch}
-		healthInput = map[string]any{"monitor_id": healthState.MonitorID, "segment_id": segment.ID, "heartbeat_route": "/api/runs/" + r.ID + "/heartbeat"}
-	}
-	input, err := json.Marshal(map[string]any{"graph": r.GraphAttempt, "run_id": r.ID, "task_id": r.TaskID, "dependencies": task.DependencyEvidence, "service_lifecycle": task.ServiceLifecycle, "service_ingress": task.ServiceIngress, "service_event": task.ServiceEvent, "service_cycle": task.ServiceCycle, "service_dependencies": task.ServiceDependencyEvidence, "service_health": healthInput, "inputs": inputs, "brief": r.Brief, "workspace": workspace, "segment": segment, "failure_memo": memo})
+	provider, err := e.providerFor(launch)
 	if err != nil {
 		return err
 	}
-	session, output, runErr := executeProviderCommand(ctx, e.provider, launch, app.Command, workspace, input, monitor, healthMonitor)
+	var healthMonitor *serviceHealthMonitor
+	var healthInput map[string]any
+	if healthState != nil {
+		healthMonitor = &serviceHealthMonitor{store: e.Store, runID: r.ID, scope: healthState, provider: provider, launch: launch}
+		healthInput = map[string]any{"monitor_id": healthState.MonitorID, "segment_id": segment.ID, "heartbeat_route": "/api/runs/" + r.ID + "/heartbeat"}
+	}
+	// The input names attempt paths as the workload sees them.
+	guestWorkspace, err := launch.GuestPath(workspace)
+	if err != nil {
+		return err
+	}
+	var guestInputs []DependencyInput
+	if inputs != nil {
+		guestInputs = make([]DependencyInput, len(inputs))
+	}
+	for i, in := range inputs {
+		if in.Directory, err = launch.GuestPath(in.Directory); err != nil {
+			return err
+		}
+		guestInputs[i] = in
+	}
+	input, err := json.Marshal(map[string]any{"graph": r.GraphAttempt, "run_id": r.ID, "task_id": r.TaskID, "dependencies": task.DependencyEvidence, "service_lifecycle": task.ServiceLifecycle, "service_ingress": task.ServiceIngress, "service_event": task.ServiceEvent, "service_cycle": task.ServiceCycle, "service_dependencies": task.ServiceDependencyEvidence, "service_health": healthInput, "inputs": guestInputs, "brief": r.Brief, "workspace": guestWorkspace, "segment": segment, "failure_memo": memo})
+	if err != nil {
+		return err
+	}
+	session, output, runErr := executeProviderCommand(ctx, provider, launch, app.Command, workspace, input, monitor, healthMonitor)
 	if err = e.Store.SaveArtifact(r.ID, prefix+"output.txt", output); err != nil {
 		return err
 	}
@@ -230,7 +249,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 	}
 	var harvested workspacefs.Harvest
 	if session != nil {
-		stream, streamErr := e.provider.Stream(harvestCtx, session, 0)
+		stream, streamErr := provider.Stream(harvestCtx, session, 0)
 		if streamErr != nil {
 			return streamErr
 		}
@@ -239,7 +258,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 				return err
 			}
 		}
-		result, harvestErr := e.provider.Harvest(harvestCtx, session)
+		result, harvestErr := provider.Harvest(harvestCtx, session)
 		err = harvestErr
 		if err == nil {
 			if result.Change == nil {

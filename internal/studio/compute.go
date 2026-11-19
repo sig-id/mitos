@@ -3,20 +3,47 @@ package studio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"mitos/internal/compute"
 	"mitos/internal/resourcepolicy"
 )
 
-func compileApplication(app Application) (compute.LaunchSpec, error) {
-	local := &compute.Local{}
+// compileApplication admits an application's declared compute request
+// against every configured provider. Applications without a request use the
+// local development exception; a declared confined posture is admitted only by
+// an enforcing provider and is never downgraded to the local process.
+func (e *Engine) compileApplication(app Application) (compute.LaunchSpec, error) {
 	request := compute.Request{}
 	development := app.Compute == nil
 	if app.Compute != nil {
 		request = *app.Compute
 	}
-	return compute.Compile(request, map[string]compute.Capabilities{"local": local.Capabilities()}, development)
+	providers := map[string]compute.Capabilities{"local": (&compute.Local{}).Capabilities()}
+	if e != nil && e.nucleus != nil {
+		providers[compute.ConfinementNucleus] = e.nucleus.Capabilities()
+	}
+	return compute.Compile(request, providers, development)
+}
+
+// providerFor returns the provider a frozen launch was admitted against. A
+// launch admitted by a provider that is no longer configured is refused rather
+// than run under a weaker one.
+func (e *Engine) providerFor(launch compute.LaunchSpec) (compute.Provider, error) {
+	switch launch.Provider {
+	case "", "local":
+		if e.provider == nil {
+			return nil, errors.New("execution provider is not configured")
+		}
+		return e.provider, nil
+	case compute.ConfinementNucleus:
+		if e.nucleus == nil {
+			return nil, errors.New("this launch was admitted by the nucleus provider, which is not configured; set MITOS_NUCLEUS")
+		}
+		return e.nucleus, nil
+	}
+	return nil, fmt.Errorf("launch provider %q is not available", launch.Provider)
 }
 
 // Automatic workflows use native local agents, while preserving their frozen

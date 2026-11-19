@@ -127,7 +127,7 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 		b.Ownership.Paths = []string{"."}
 	}
 	if !app.Builtin && app.Agent == nil {
-		if _, err := compileApplication(app); err != nil {
+		if _, err := e.compileApplication(app); err != nil {
 			return spec, nil, err
 		}
 		if err := app.Acceptance.Validate(); err != nil {
