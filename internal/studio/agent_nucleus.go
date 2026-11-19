@@ -25,11 +25,14 @@ import (
 var nucleusAgentRuntimes = map[string]struct {
 	vendor, configDir, configEnv string
 	keys                         []string
+	// jit marks a harness on a JIT runtime (Node's V8, Bun's
+	// JavaScriptCore), which needs writable-executable memory to start.
+	jit bool
 }{
-	"codex":  {compute.BrokerVendorOpenAI, ".codex", "CODEX_HOME", []string{"OPENAI_API_KEY", "CODEX_API_KEY"}},
-	"claude": {compute.BrokerVendorAnthropic, ".claude", "CLAUDE_CONFIG_DIR", []string{"ANTHROPIC_API_KEY"}},
+	"codex":  {compute.BrokerVendorOpenAI, ".codex", "CODEX_HOME", []string{"OPENAI_API_KEY", "CODEX_API_KEY"}, false},
+	"claude": {compute.BrokerVendorAnthropic, ".claude", "CLAUDE_CONFIG_DIR", []string{"ANTHROPIC_API_KEY"}, true},
 	// Pi's vendor is the operator's default Pi provider; see piVendors.
-	"pi": {"", filepath.Join(".pi", "agent"), "PI_CODING_AGENT_DIR", nil},
+	"pi": {"", filepath.Join(".pi", "agent"), "PI_CODING_AGENT_DIR", nil, true},
 }
 
 // piVendors are the Pi providers the broker serves: the server variable

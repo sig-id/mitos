@@ -166,6 +166,7 @@ func TestNucleusPostureVerificationRefusesEveryDeviation(t *testing.T) {
 		"landlock":   func(e *nucleusEvent) { e.Security.LandlockStatus = "partially_enforced" },
 		"caps":       func(e *nucleusEvent) { e.Security.CapabilitiesStatus = "policy" },
 		"degraded":   func(e *nucleusEvent) { e.Security.AllowDegradedSecurity = true },
+		"jit":        func(e *nucleusEvent) { e.Security.AllowJIT = true },
 		"memory":     func(e *nucleusEvent) { e.ResourceLimits.MemoryBytes = nil },
 		"cpu":        func(e *nucleusEvent) { v := int64(200000); e.ResourceLimits.CPUQuotaUS = &v },
 		"pids":       func(e *nucleusEvent) { e.ResourceLimits.PidsMax = nil },
@@ -194,6 +195,18 @@ func TestNucleusPostureVerificationRefusesEveryDeviation(t *testing.T) {
 	if err := brokered.verify(attested, "mitos-x"); err != nil {
 		t.Fatal(err)
 	}
+	// A requested JIT allowance must be attested; a launcher that silently
+	// keeps W^X would kill the workload, one that drops it is refused.
+	jit := posture
+	jit.AllowJIT = true
+	if err := jit.verify(good, "mitos-x"); err == nil {
+		t.Fatal("unattested jit allowance accepted")
+	}
+	withJIT := startedEvent("mitos-x", posture.CgroupRoot, posture.Workspace)
+	withJIT.Security.AllowJIT = true
+	if err := jit.verify(withJIT, "mitos-x"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRenderNucleusBrokersEgressAndMountsTheWorkspaceByRole(t *testing.T) {
@@ -216,6 +229,14 @@ func TestRenderNucleusBrokersEgressAndMountsTheWorkspaceByRole(t *testing.T) {
 	if !slices.Equal(doc.SeccompAllow, HarnessSyscalls) {
 		t.Fatalf("harness system calls %v", doc.SeccompAllow)
 	}
+	if doc.AllowJIT || posture.AllowJIT {
+		t.Fatal("jit allowed without being requested")
+	}
+	spec.Posture.AllowJIT = true
+	if doc, _, posture, err := renderNucleus(cfg, spec, []string{shell}, spec.Workspace.Directory, nil); err != nil || !doc.AllowJIT || !posture.AllowJIT {
+		t.Fatalf("requested jit allowance not rendered: %v", err)
+	}
+	spec.Posture.AllowJIT = false
 	if doc.WorkspaceMode != "bind-ro" || posture.WorkspaceMode != "bind-ro" {
 		t.Fatalf("read-only role mounted %s", doc.WorkspaceMode)
 	}

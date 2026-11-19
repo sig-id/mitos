@@ -276,11 +276,13 @@ environment, either directly, as a `NAME_FILE` variable, or as an absolute path
 to a file holding the key. Pi uses its configured default provider (`zai`,
 `openai` or `anthropic`) and that provider's server variable (`ZAI_API_KEY` for
 Z.ai), or the API key stored by `pi` login. Subscription logins are not
-brokered, so an agent without an API key is refused. Node-based harnesses such
-as Pi do not start under Nucleus 0.6.0. Node's JIT and its io_uring probe are
-both killed by the strict profile
-([nucleus#45](https://github.com/sig-id/nucleus/issues/45),
-[nucleus#46](https://github.com/sig-id/nucleus/issues/46)). The harness executable must be one the container
+brokered, so an agent without an API key is refused. Claude Code and Pi run on
+JIT runtimes, so their launches request Nucleus's `allow_jit` allowance, and
+Mitos refuses the start unless Nucleus reports it. Pi on Node needs a Nucleus
+build newer than 0.6.0, with the fixes for
+[nucleus#45](https://github.com/sig-id/nucleus/issues/45) and
+[nucleus#46](https://github.com/sig-id/nucleus/issues/46) and Node 26's
+`prctl` calls; 0.6.0 kills Node at startup. The harness executable must be one the container
 can see, such as a Nix store path. A wrapper that installs the harness into the
 operator's home at first run cannot work inside the sandbox.
 

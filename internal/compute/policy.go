@@ -63,8 +63,12 @@ type Posture struct {
 	ReadOnlyWorkspace bool `json:"read_only_workspace,omitempty"`
 	// SeccompAllow names opt-in system calls the workload needs beyond a
 	// confining provider's default profile; see HarnessSyscalls.
-	SeccompAllow []string  `json:"seccomp_allow,omitempty"`
-	Deadline     time.Time `json:"deadline"`
+	SeccompAllow []string `json:"seccomp_allow,omitempty"`
+	// AllowJIT permits writable and executable memory for a JIT runtime
+	// (V8, JavaScriptCore) that cannot run under the default W^X policy.
+	// It is an explicit weakening the provider must attest.
+	AllowJIT bool      `json:"allow_jit,omitempty"`
+	Deadline time.Time `json:"deadline"`
 }
 
 // NetBroker is the network mode whose only egress is the launch's broker

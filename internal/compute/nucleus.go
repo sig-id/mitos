@@ -261,6 +261,7 @@ type nucleusDocument struct {
 	BrokerProxyListen    string   `json:"broker_proxy_listen,omitempty"`
 	BrokerNoProxyEnv     bool     `json:"credential_broker_no_proxy_env,omitempty"`
 	SeccompAllow         []string `json:"seccomp_allow,omitempty"`
+	AllowJIT             bool     `json:"allow_jit,omitempty"`
 	AgentToolchainRootfs string   `json:"agent_toolchain_rootfs,omitempty"`
 	Volumes              []string `json:"volumes"`
 	EnvFD                int      `json:"env_fd"`
@@ -278,9 +279,11 @@ type nucleusPosture struct {
 	NetworkMode string
 	// BrokerListen is the in-container broker address, empty without one.
 	BrokerListen string
-	MemoryBytes  *int64
-	CPUQuota     *int64
-	PidsMax      int64
+	// AllowJIT is whether writable-executable memory was requested.
+	AllowJIT    bool
+	MemoryBytes *int64
+	CPUQuota    *int64
+	PidsMax     int64
 }
 
 // pathMap translates host paths of an attempt into container paths.
@@ -448,6 +451,7 @@ func renderNucleus(cfg NucleusConfig, spec LaunchSpec, argv []string, dir string
 		}
 	}
 	doc.SeccompAllow = slices.Clone(spec.Posture.SeccompAllow)
+	doc.AllowJIT, posture.AllowJIT = spec.Posture.AllowJIT, spec.Posture.AllowJIT
 	if broker != "" {
 		// The harness is configured with explicit base URLs; proxy variables
 		// would only steer other tools into tunnels the broker refuses.
@@ -532,6 +536,7 @@ type nucleusEvent struct {
 		CapabilitiesStatus    string `json:"capabilities_status"`
 		Rootless              bool   `json:"rootless"`
 		AllowDegradedSecurity bool   `json:"allow_degraded_security"`
+		AllowJIT              bool   `json:"allow_jit"`
 	} `json:"security"`
 	ResourceLimits struct {
 		MemoryBytes *int64 `json:"memory_bytes"`
@@ -572,6 +577,7 @@ func (p nucleusPosture) verify(event nucleusEvent, name string) error {
 	check(s.LandlockStatus == "fully_enforced", "landlock %s", s.LandlockStatus)
 	check(s.CapabilitiesStatus == "drop_all", "capabilities %s", s.CapabilitiesStatus)
 	check(s.Rootless && !s.AllowDegradedSecurity, "rootless=%t degraded=%t", s.Rootless, s.AllowDegradedSecurity)
+	check(s.AllowJIT == p.AllowJIT, "jit allowance %t", s.AllowJIT)
 	check(equalLimit(r.MemoryBytes, p.MemoryBytes), "memory limit %s", formatLimit(r.MemoryBytes))
 	if p.CPUQuota == nil {
 		check(r.CPUQuotaUS == nil, "unrequested cpu quota %s", formatLimit(r.CPUQuotaUS))

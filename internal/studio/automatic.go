@@ -713,6 +713,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		// Withheld writes are enforced by the mount, not by the harness.
 		launch.Posture.ReadOnlyWorkspace = !authority.Granted("workspace.write")
 		launch.Posture.SeccompAllow = compute.HarnessSyscalls
+		launch.Posture.AllowJIT = nucleusAgentRuntimes[b.Runtime].jit
 	} else {
 		launch, err = compileWorkflowLaunch(resources, caps, development)
 	}
