@@ -29,11 +29,12 @@ import (
 // replaces it on every request.
 const BrokerPlaceholderKey = "mitos-brokered"
 
-// BrokerVendorAnthropic and BrokerVendorOpenAI name the vendor APIs the
-// broker serves; each is the first path segment of its base URL.
+// The vendor APIs the broker serves; each is the first path segment of its
+// base URL.
 const (
 	BrokerVendorAnthropic = "anthropic"
 	BrokerVendorOpenAI    = "openai"
+	BrokerVendorZAI       = "zai"
 )
 
 type modelVendor struct {
@@ -44,6 +45,7 @@ type modelVendor struct {
 var modelVendors = map[string]modelVendor{
 	BrokerVendorAnthropic: {"https://api.anthropic.com", func(h http.Header, key string) { h.Set("X-Api-Key", key) }},
 	BrokerVendorOpenAI:    {"https://api.openai.com", func(h http.Header, key string) { h.Set("Authorization", "Bearer "+key) }},
+	BrokerVendorZAI:       {"https://api.z.ai", func(h http.Header, key string) { h.Set("Authorization", "Bearer "+key) }},
 }
 
 // clientCredentialHeaders are removed from every brokered request: the only

@@ -740,7 +740,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	}
 	agentEnv := native.Env
 	if e.agentNucleus {
-		if agentEnv, err = nucleusAgentEnvironment(b.Runtime, base, filepath.Join(e.Store.Dir(), "workspaces", prior.ID), prior.NativeThreadID != "", native.Env); err != nil {
+		if agentEnv, err = nucleusAgentEnvironment(b.Runtime, brokerVendor, base, filepath.Join(e.Store.Dir(), "workspaces", prior.ID), prior.NativeThreadID != "", native.Env); err != nil {
 			return err
 		}
 		agentEnv = agentCacheEnvironment(agentEnv, cache)

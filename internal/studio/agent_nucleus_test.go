@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"mitos/agents"
 	"mitos/internal/compute"
@@ -47,7 +48,7 @@ func TestNucleusAgentEnvironmentHoldsNoHostCredential(t *testing.T) {
 	server := []string{"PATH=/run/current-system/sw/bin", "LANG=C.UTF-8", "HOME=/home/operator", "OPENAI_API_KEY=sk-oai-real", "ANTHROPIC_API_KEY=sk-ant-real", "GITHUB_TOKEN=ghp-real", "AWS_SECRET_ACCESS_KEY=aws-real", "CODEX_HOME=/home/operator/.codex"}
 	for _, runtime := range []string{"codex", "claude"} {
 		base := t.TempDir()
-		env, err := nucleusAgentEnvironment(runtime, base, "", false, server)
+		env, err := nucleusAgentEnvironment(runtime, nucleusAgentRuntimes[runtime].vendor, base, "", false, server)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +93,7 @@ func TestNucleusAgentResumeSeedsOnlyThePreviousAttemptsState(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := t.TempDir()
-	env, err := nucleusAgentEnvironment("codex", base, prior, true, nil)
+	env, err := nucleusAgentEnvironment("codex", compute.BrokerVendorOpenAI, base, prior, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestNucleusAgentResumeSeedsOnlyThePreviousAttemptsState(t *testing.T) {
 		t.Fatalf("native conversation not seeded: %v", err)
 	}
 	var prerequisite *agentPrerequisiteError
-	if _, err = nucleusAgentEnvironment("claude", t.TempDir(), prior, true, nil); !errors.As(err, &prerequisite) {
+	if _, err = nucleusAgentEnvironment("claude", compute.BrokerVendorAnthropic, t.TempDir(), prior, true, nil); !errors.As(err, &prerequisite) {
 		t.Fatalf("resume without the previous attempt's state: %v", err)
 	}
 }
@@ -144,5 +145,134 @@ func TestAgentNucleusRequiresTheNucleusProvider(t *testing.T) {
 	}
 	if _, err = NewEngine(s, nil, root); err == nil || !strings.Contains(err.Error(), "MITOS_NUCLEUS") {
 		t.Fatalf("agents under nucleus started without it: %v", err)
+	}
+}
+
+// The native workflow with Pi as the project runtime, for a live check under
+// Nucleus: MITOS_TEST_NATIVE_PI=1 with MITOS_AGENT_CONFINEMENT=nucleus, a
+// Nix-store pi on PATH and a brokerable key for Pi's default provider.
+func TestAutomaticInstalledPi(t *testing.T) {
+	if os.Getenv("MITOS_TEST_NATIVE_PI") != "1" {
+		t.Skip("set MITOS_TEST_NATIVE_PI=1 for the authenticated native Pi smoke test")
+	}
+	e, req := graphEngine(t, true)
+	if _, err := e.SavePreferences(req.ProjectID, RuntimePreferences{Runtime: "pi"}); err != nil {
+		t.Fatal(err)
+	}
+	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "native-pi", ProjectID: req.ProjectID, Goal: "Use exactly one researcher agent to read hello.txt and report its exact contents. Do not edit any files. The orchestrator should review that report and finish; no additional workers are needed."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(8 * time.Minute)
+	for time.Now().Before(until) {
+		if g, err = e.Store.Graph(g.ID); err != nil {
+			t.Fatal(err)
+		}
+		if g.Status == "accepted" {
+			for _, m := range g.Members {
+				if r, err := e.Store.Get(m.CurrentRunID); err == nil {
+					t.Logf("%s: %s %s", r.AppName, r.Status, r.Summary)
+				}
+			}
+			t.Logf("Pi finished with %d attempts and %d orchestrator calls", g.Attempts, g.OrchestratorCalls)
+			return
+		}
+		for _, x := range g.Expansions {
+			if x.Error != "" {
+				for _, m := range g.Members {
+					if m.CurrentRunID != "" {
+						r, _ := e.Store.Get(m.CurrentRunID)
+						out, _ := e.Store.Artifact(r.ID, "output.txt")
+						if len(out) > 4000 {
+							out = out[len(out)-4000:]
+						}
+						t.Logf("%s: %s %s\n%s", r.AppName, r.Status, r.Summary, out)
+					}
+				}
+				t.Fatal(x.Error)
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatal("native Pi workflow did not complete within 8 minutes")
+}
+
+func writePiConfig(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestPiBrokersItsDefaultProviderWithAStoredAPIKey(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".pi", "agent")
+	writePiConfig(t, dir, map[string]string{
+		"settings.json": `{"defaultProvider":"zai","defaultModel":"glm-5.3","defaultThinkingLevel":"max","theme":"dark","packages":["npm:x"]}`,
+		"auth.json":     `{"zai":{"type":"api_key","key":"zai-real"},"anthropic":{"type":"oauth","access":"tok"}}`,
+		"models.json":   `{"providers":{"zai":{"apiKey":"!pass show zai","headers":{"X-Secret":"s"},"models":[{"id":"glm-5.3","headers":{"X-M":"m"},"contextWindow":1000000}]},"other":{"baseUrl":"https://x"}}}`,
+	})
+	server := []string{"HOME=" + home, "PATH=/bin"}
+	vendor, key, err := nucleusAgentCredential("pi", server)
+	if err != nil || vendor != compute.BrokerVendorZAI || key != "zai-real" {
+		t.Fatalf("pi credential %s %q %v", vendor, key, err)
+	}
+	// A server variable wins over the stored login.
+	if _, key, _ = nucleusAgentCredential("pi", append(server, "ZAI_API_KEY=zai-env")); key != "zai-env" {
+		t.Fatalf("server key %q", key)
+	}
+	base := t.TempDir()
+	env, err := nucleusAgentEnvironment("pi", vendor, base, "", false, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := envValue(env, "PI_CODING_AGENT_DIR")
+	if config != filepath.Join(base, "home", ".pi", "agent") || envValue(env, "PI_OFFLINE") != "1" || envValue(env, "PI_TELEMETRY") != "0" {
+		t.Fatalf("pi environment %v", env)
+	}
+	if _, err = os.Stat(filepath.Join(config, "auth.json")); err == nil {
+		t.Fatal("stored login copied into the sandbox")
+	}
+	models, _ := os.ReadFile(filepath.Join(config, "models.json"))
+	for _, leaked := range []string{"pass show", "X-Secret", "X-M", "zai-real", "other"} {
+		if strings.Contains(string(models), leaked) {
+			t.Fatalf("sandbox models.json carries %q: %s", leaked, models)
+		}
+	}
+	var parsed struct {
+		Providers map[string]struct {
+			BaseURL string           `json:"baseUrl"`
+			APIKey  string           `json:"apiKey"`
+			Models  []map[string]any `json:"models"`
+		} `json:"providers"`
+	}
+	if json.Unmarshal(models, &parsed) != nil || parsed.Providers["zai"].BaseURL != "http://"+compute.EgressLoopAddr+"/zai/api/coding/paas/v4" || parsed.Providers["zai"].APIKey != compute.BrokerPlaceholderKey || len(parsed.Providers["zai"].Models) != 1 {
+		t.Fatalf("sandbox models.json %s", models)
+	}
+	settings, _ := os.ReadFile(filepath.Join(config, "settings.json"))
+	if !strings.Contains(string(settings), `"defaultModel": "glm-5.3"`) || strings.Contains(string(settings), "packages") {
+		t.Fatalf("sandbox settings.json %s", settings)
+	}
+}
+
+func TestPiRefusesUnbrokeredProvidersAndLogins(t *testing.T) {
+	var prerequisite *agentPrerequisiteError
+	for name, files := range map[string]map[string]string{
+		"no default":    {"settings.json": `{}`},
+		"unserved":      {"settings.json": `{"defaultProvider":"google"}`},
+		"oauth login":   {"settings.json": `{"defaultProvider":"anthropic"}`, "auth.json": `{"anthropic":{"type":"oauth","key":"tok"}}`},
+		"command key":   {"settings.json": `{"defaultProvider":"zai"}`, "auth.json": `{"zai":{"type":"api_key","key":"!pass show zai"}}`},
+		"env reference": {"settings.json": `{"defaultProvider":"zai"}`, "auth.json": `{"zai":{"type":"api_key","key":"$ZAI"}}`},
+	} {
+		dir := t.TempDir()
+		writePiConfig(t, dir, files)
+		if _, _, err := nucleusAgentCredential("pi", []string{"PI_CODING_AGENT_DIR=" + dir}); !errors.As(err, &prerequisite) {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }

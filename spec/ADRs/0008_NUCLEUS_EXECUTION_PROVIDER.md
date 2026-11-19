@@ -41,7 +41,8 @@ checked with the Mitos integration tests and direct runs.
 | Cgroup delegation detected for a user-manager unit | no; `NUCLEUS_CGROUP_ROOT` works | yes ([nucleus#34](https://github.com/sig-id/nucleus/issues/34)) |
 | Supervisor SIGKILL kills workload and removes cgroup | yes; gVisor state directory remains | state directory reaped ([nucleus#38](https://github.com/sig-id/nucleus/issues/38)); not re-tested |
 | Caller-owned volume is executable | no | no |
-| Opt-in syscall not passed in `seccomp_allow` | process killed (`SIGSYS`) | same: Codex dies on `inotify_init1`, `touch` and `git` on `utimensat` ([nucleus#45](https://github.com/sig-id/nucleus/issues/45)) |
+| Opt-in syscall not passed in `seccomp_allow` | process killed (`SIGSYS`) | same: Codex dies on `inotify_init1`, `touch` and `git` on `utimensat`, every Node on `io_uring_setup` ([nucleus#45](https://github.com/sig-id/nucleus/issues/45)) |
+| JIT runtimes (Node/V8 maps RWX code memory) | not tested | killed by the W^X rule; `--jitless` disables WebAssembly, which Node's HTTP client needs ([nucleus#46](https://github.com/sig-id/nucleus/issues/46)) |
 
 Codex 0.169 always sandboxes its shell commands with a bundled bubblewrap; its
 Landlock-only fallback is deprecated. Inside either Nucleus runtime every such
@@ -118,7 +119,10 @@ environment. The broker sees every request and response, which gives
 `workflow.tokens` its future enforcement point; counting there is not built yet,
 and usage is still reported by the harness.
 
-Only API keys are brokered. Subscription logins (ChatGPT, claude.ai) would
+Pi is brokered for its configured default provider (`zai`, `openai` or
+`anthropic`). Its sandbox configuration keeps the operator's model definitions
+for that provider, with the base URL pointed at the broker and keys, headers
+and other providers removed. Only API keys are brokered. Subscription logins (ChatGPT, claude.ai) would
 require Mitos to reimplement each vendor's token refresh, so an agent under
 Nucleus without an API key is refused. The broker reads the key from
 `NAME`, `NAME_FILE`, or a `NAME` holding an absolute path to a file, as secret

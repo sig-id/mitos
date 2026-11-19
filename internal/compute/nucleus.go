@@ -47,13 +47,13 @@ const (
 	nucleusStartTimeout = 30 * time.Second
 	// nucleusExitGrace is how long a supervisor whose container was revoked
 	// may take to report the summary and exit before it is killed too.
-	nucleusExitGrace = 5 * time.Second
-	nucleusLeaf         = "mitos-server"
-	nucleusEventsFile   = "nucleus-events.jsonl"
-	nucleusConfigFD     = 3
-	nucleusEventsFD     = 4
-	nucleusEnvFD        = 5
-	nucleusStartFD      = 6
+	nucleusExitGrace  = 5 * time.Second
+	nucleusLeaf       = "mitos-server"
+	nucleusEventsFile = "nucleus-events.jsonl"
+	nucleusConfigFD   = 3
+	nucleusEventsFD   = 4
+	nucleusEnvFD      = 5
+	nucleusStartFD    = 6
 )
 
 // HarnessSyscalls are the opt-in system calls an agent and the developer
