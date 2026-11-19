@@ -64,7 +64,7 @@ func (p Policy) Match(command, directory, workspace string) (Rule, bool) {
 	if !filepath.IsAbs(directory) || !filepath.IsAbs(workspace) {
 		return Rule{}, false
 	}
-	relative, err := filepath.Rel(workspace, directory)
+	relative, err := filepath.Rel(resolvePath(workspace), resolvePath(directory))
 	if err != nil || !filepath.IsLocal(relative) {
 		return Rule{}, false
 	}
@@ -74,6 +74,18 @@ func (p Policy) Match(command, directory, workspace string) (Rule, bool) {
 		}
 	}
 	return Rule{}, false
+}
+
+// resolvePath canonicalizes through symlinks so observed working directories
+// compare against the workspace even when one spelling carries a symlinked
+// prefix (for example /var versus /private/var on macOS). Paths that vanish
+// between observation and check keep their cleaned spelling.
+func resolvePath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 type Supervision struct {

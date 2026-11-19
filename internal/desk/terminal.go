@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"mitos/internal/agentcli"
+	"mitos/internal/procsys"
 
 	"github.com/creack/pty"
 )
@@ -20,7 +21,10 @@ import (
 const maxOutput = 16 << 20
 
 type terminal struct {
-	file    *os.File
+	file *os.File
+	// pin keeps the pty library's original wrapper alive: its finalizer
+	// would close the shared master fd once the poller wrapper took it over.
+	pin     *os.File
 	pid     int
 	inputMu sync.Mutex
 	seen    map[string]bool
@@ -270,18 +274,33 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	}
 	binary, _ := os.Executable()
 	cmd.Env = append(cmd.Env, "MITOS_COORDINATION="+instructions, "MITOS_BIN="+binary, "MITOS_SCRATCH="+scratch, "MITOS_ORCHESTRATOR_ID="+s.OrchestratorID, "MITOS_WORKSPACE="+s.Workspace)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = procsys.Child(false)
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.Rows, Cols: s.Cols})
 	if err != nil {
 		return m.startFailedLocked(s.ID, err)
 	}
-	if err = syscall.SetNonblock(int(f.Fd()), true); err != nil {
+	// Make the master nonblocking, then hand the runtime poller its own
+	// descriptor: on platforms where a plainly opened ptmx is not pollable
+	// (kqueue on macOS), reads would surface EAGAIN instead of waiting, so
+	// the copy loop would mistake terminal silence for failure and stop the
+	// session. The dup carries its own fd number so the poller registration
+	// never collides with the pty library's wrapper; both descriptors share
+	// one open file description, and the pinned original keeps it alive.
+	fd := int(f.Fd())
+	if err = syscall.SetNonblock(fd, true); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = f.Close()
 		_ = cmd.Wait()
 		return m.startFailedLocked(s.ID, err)
 	}
-	t := &terminal{file: f, pid: cmd.Process.Pid, seen: map[string]bool{}}
+	pollFd, err := syscall.Dup(fd)
+	if err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = f.Close()
+		_ = cmd.Wait()
+		return m.startFailedLocked(s.ID, err)
+	}
+	t := &terminal{file: os.NewFile(uintptr(pollFd), f.Name()), pin: f, pid: cmd.Process.Pid, seen: map[string]bool{}}
 	m.live[s.ID] = t
 	stored, _ := m.sessionLocked(s.ID)
 	stored.Status, stored.PID = "running", cmd.Process.Pid

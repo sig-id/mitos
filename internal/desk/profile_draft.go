@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"mitos/internal/agentcli"
+	"mitos/internal/procsys"
 )
 
 // A setup draft is not a worker or a orchestrator conversation. It cannot change
@@ -199,7 +200,7 @@ func (m *Manager) runProfileDraft(ctx context.Context, cancel context.CancelFunc
 	// Native CLIs stream repository reads and progress on stderr. Retain a
 	// bounded tail without treating ordinary diagnostic volume as a failure.
 	cmd.Stderr = log
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = procsys.Child(true)
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
 			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

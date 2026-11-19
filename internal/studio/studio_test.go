@@ -266,6 +266,12 @@ func TestInventoryExecutesAndPreservesSource(t *testing.T) {
 func TestOpenedProjectWorkspaceRunsAndSurvivesRestart(t *testing.T) {
 	s := testStore(t)
 	root, projectDir, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	// Runs carry the canonical workspace spelling; temp roots are
+	// symlinked on some platforms.
+	resolvedDir, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	apps, err := LoadApps("")
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +306,7 @@ func TestOpenedProjectWorkspaceRunsAndSurvivesRestart(t *testing.T) {
 		t.Fatal("confirmed workspace lost on restart", err)
 	}
 	r = waitRun(t, s, r.ID, func(r Run) bool { return r.Terminal() })
-	if r.Status != "done" || r.Brief.Workspace != projectDir {
+	if r.Status != "done" || r.Brief.Workspace != resolvedDir {
 		t.Fatal("task did not run in selected workspace", r.Status, r.Brief.Workspace)
 	}
 	if _, err := e.Workspace(outside); err == nil {
