@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,7 @@ func TestRenderNucleusTranslatesAttemptPathsAndFreezesLimits(t *testing.T) {
 	if doc.Command[0] != shell || doc.Command[3] != "--out=/mitos/home/result.txt" || doc.Command[4] != "/workspace/src" || doc.Workdir != "/workspace/src" {
 		t.Fatalf("command or workdir not translated: %q %q", doc.Command, doc.Workdir)
 	}
-	if doc.Workspace != spec.Workspace.Directory || !doc.WorkspaceExec || doc.WorkspaceMode != "bind-rw" || doc.Network != "none" || doc.ServiceMode != "strict-agent" || doc.Runtime != "native" || !doc.Rootless || doc.EnvFD != nucleusEnvFD {
+	if doc.Workspace != spec.Workspace.Directory || !doc.WorkspaceExec || doc.WorkspaceMode != "bind-rw" || doc.Network != "none" || doc.ServiceMode != "strict-agent" || doc.Runtime != "native" || !doc.Rootless || doc.EnvFD != nucleusEnvFD || doc.StartFD != nucleusStartFD {
 		t.Fatalf("posture fields not fixed: %+v", doc)
 	}
 	if doc.Memory != "512M" || doc.CPUs != 1.5 || doc.Pids != nucleusPidsMax {
@@ -180,8 +181,9 @@ func TestNucleusPostureVerificationRefusesEveryDeviation(t *testing.T) {
 }
 
 // fakeNucleus writes a stand-in runtime that speaks the descriptor protocol:
-// it saves the launch document and environment, emits the given events and
-// then runs the given shell body.
+// it saves the launch document and environment, emits the started event,
+// holds on the start gate like Nucleus, and runs the given shell body only
+// after the gate released it. The body may set summary and status.
 func fakeNucleus(t *testing.T, dir string, started *nucleusEvent, body string) string {
 	t.Helper()
 	cat, err := exec.LookPath("cat")
@@ -189,15 +191,20 @@ func fakeNucleus(t *testing.T, dir string, started *nucleusEvent, body string) s
 		t.Skip("no cat")
 	}
 	startedLine := ""
+	gate := ""
 	if started != nil {
+		refused := `{"type":"container_summary","exit_status":{"code":1,"error":"Start gate closed"}}`
+		gate = "if [ \"$(head -c 1 <&6 | wc -c)\" -ne 1 ]; then printf '%s\\n' '" + refused + "' >&4; exit 1; fi\n"
 		encoded, _ := json.Marshal(started)
 		if err = os.WriteFile(filepath.Join(dir, "started.json"), append(encoded, '\n'), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		startedLine = cat + " " + filepath.Join(dir, "started.json") + " >&4\n"
 	}
-	summary := `{"type":"container_summary","exit_status":{"code":0}}`
-	script := "#!/bin/sh\nPATH=" + os.Getenv("PATH") + "\n" + cat + " <&3 > " + filepath.Join(dir, "config.json") + "\n" + cat + " <&5 > " + filepath.Join(dir, "env.json") + "\n" + startedLine + strings.ReplaceAll(body, "CAT", cat) + "\nprintf '%s\\n' '" + summary + "' >&4\n"
+	script := "#!/bin/sh\nPATH=" + os.Getenv("PATH") + "\nsummary='{\"type\":\"container_summary\",\"exit_status\":{\"code\":0}}'\nstatus=0\n" +
+		cat + " <&3 > " + filepath.Join(dir, "config.json") + "\n" + cat + " <&5 > " + filepath.Join(dir, "env.json") + "\n" + startedLine +
+		gate +
+		strings.ReplaceAll(body, "CAT", cat) + "\nprintf '%s\\n' \"$summary\" >&4\nexit $status\n"
 	path := filepath.Join(dir, "nucleus")
 	if err = os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -264,8 +271,8 @@ func TestNucleusRefusesDegradedOrSilentStarts(t *testing.T) {
 		"degraded": func(base, root string) (*nucleusEvent, string) {
 			e := startedEvent(nucleusName(base), root, filepath.Join(base, "workspace"))
 			e.Security.LandlockStatus = "not_enforced"
-			// The fake keeps running; refusal must kill it rather than wait.
-			return &e, "exec sleep 60"
+			// The held workload must never be released.
+			return &e, "touch " + filepath.Join(base, "released") + "; exec sleep 60"
 		},
 		"silent": func(base, root string) (*nucleusEvent, string) { return nil, "exit 1" },
 	}
@@ -285,6 +292,9 @@ func TestNucleusRefusesDegradedOrSilentStarts(t *testing.T) {
 		if name == "degraded" && !strings.Contains(err.Error(), "landlock") {
 			t.Fatalf("degraded refusal does not name the deviation: %v", err)
 		}
+		if _, statErr := os.Stat(filepath.Join(base, "released")); statErr == nil {
+			t.Fatalf("%s start released the workload", name)
+		}
 	}
 }
 
@@ -301,6 +311,37 @@ func TestNucleusMissingSummaryMakesOutcomeUntrusted(t *testing.T) {
 	}
 	if _, err = session.Result(); err == nil || !strings.Contains(err.Error(), "summary") {
 		t.Fatalf("missing summary accepted: %v", err)
+	}
+}
+
+func TestGuestPathNamesAttemptPathsInTheWorkloadNamespace(t *testing.T) {
+	spec := LaunchSpec{Provider: ConfinementNucleus, Base: "/srv/attempt", Workspace: Workspace{Directory: "/srv/attempt/workspace"}}
+	for host, want := range map[string]string{"/srv/attempt/workspace": "/workspace", "/srv/attempt/workspace/src": "/workspace/src", "/srv/attempt/inputs/task-1": "/mitos/inputs/task-1"} {
+		if got, err := spec.GuestPath(host); err != nil || got != want {
+			t.Fatalf("%s -> %q %v", host, got, err)
+		}
+	}
+	if _, err := spec.GuestPath("/srv/attempt/history.git"); err == nil {
+		t.Fatal("invisible attempt path translated")
+	}
+	spec.Provider = "local"
+	if got, err := spec.GuestPath("/srv/attempt/history.git"); err != nil || got != "/srv/attempt/history.git" {
+		t.Fatalf("local launch path changed: %q %v", got, err)
+	}
+}
+
+func TestNucleusReportsMemoryExhaustion(t *testing.T) {
+	hostShell(t)
+	dir, base, root := t.TempDir(), t.TempDir(), t.TempDir()
+	event := startedEvent(nucleusName(base), root, filepath.Join(base, "workspace"))
+	body := `summary='{"type":"container_summary","exit_status":{"code":137},"resource_stats":{"memory_events":{"max":3,"oom":1,"oom_kill":1}}}'; status=137`
+	l := fakeProvider(t, fakeNucleus(t, dir, &event, body), root)
+	session, err := l.Start(context.Background(), admitNucleus(t, l, base), Command{Argv: []string{"/bin/sh", "-c", "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = session.Result(); !errors.Is(err, ErrMemoryExhausted) {
+		t.Fatalf("oom kill not reported as memory exhaustion: %v", err)
 	}
 }
 

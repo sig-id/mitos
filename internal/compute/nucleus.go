@@ -19,9 +19,9 @@ import (
 // Nucleus confinement (ADR 0008). Every launch runs in a rootless Nucleus
 // strict-agent container on the native runtime. Mitos admits the posture;
 // Nucleus enforces it and attests what it enforced in its control event
-// stream, which is compared with the admitted posture before the session is
-// handed out. A mismatch kills the container: the posture is never downgraded
-// after admission.
+// stream. Nucleus holds the workload on a start gate until that attestation
+// matches the admitted posture; a mismatch closes the gate, so the workload
+// never executes, and the posture is never downgraded after admission.
 //
 // The workload sees only the workspace copy (/workspace, executable), the
 // per-attempt home and temporary directories, read-only dependency inputs,
@@ -43,7 +43,12 @@ const (
 	nucleusConfigFD     = 3
 	nucleusEventsFD     = 4
 	nucleusEnvFD        = 5
+	nucleusStartFD      = 6
 )
+
+// ErrMemoryExhausted reports a workload that the kernel killed at its admitted
+// memory limit, as distinct from any other failure.
+var ErrMemoryExhausted = errors.New("memory_exhausted: the workload was killed at its memory limit")
 
 // nucleusHostPaths are the host directories Nucleus binds read-only into a
 // native agent container that has no toolchain rootfs.
@@ -220,6 +225,7 @@ type nucleusDocument struct {
 	AgentToolchainRootfs string   `json:"agent_toolchain_rootfs,omitempty"`
 	Volumes              []string `json:"volumes"`
 	EnvFD                int      `json:"env_fd"`
+	StartFD              int      `json:"start_fd"`
 	Command              []string `json:"command"`
 }
 
@@ -250,6 +256,40 @@ func (m pathMap) guest(path string) (string, bool) {
 	return m[best].guest + strings.TrimPrefix(path, m[best].host), true
 }
 
+const nucleusInputs = nucleusStateRoot + "/inputs"
+
+// nucleusMounts is the attempt's path namespace: the workspace copy first,
+// then the per-attempt home, temporary and dependency input directories.
+func nucleusMounts(spec LaunchSpec) (base, workspace string, mounts pathMap, err error) {
+	base = filepath.Clean(spec.Base)
+	workspace = filepath.Clean(spec.Workspace.Directory)
+	if !filepath.IsAbs(base) || !filepath.IsAbs(workspace) {
+		return "", "", nil, errors.New("nucleus launch needs absolute attempt paths")
+	}
+	mounts = pathMap{{workspace, nucleusWorkspace}}
+	for _, name := range []string{"home", "tmp", "inputs"} {
+		mounts = append(mounts, struct{ host, guest string }{filepath.Join(base, name), filepath.Join(nucleusStateRoot, name)})
+	}
+	return base, workspace, mounts, nil
+}
+
+// GuestPath reports where an attempt path appears to the launched workload,
+// so callers can describe attempt paths in the workload's own namespace. A
+// path the workload cannot see is an error.
+func (spec LaunchSpec) GuestPath(host string) (string, error) {
+	if spec.Provider != ConfinementNucleus {
+		return host, nil
+	}
+	_, _, mounts, err := nucleusMounts(spec)
+	if err != nil {
+		return "", err
+	}
+	if guest, ok := mounts.guest(filepath.Clean(host)); ok {
+		return guest, nil
+	}
+	return "", fmt.Errorf("path %s is not visible in the sandbox", host)
+}
+
 func within(root, path string) bool {
 	return path == root || strings.HasPrefix(path, root+"/")
 }
@@ -262,25 +302,20 @@ func renderNucleus(cfg NucleusConfig, spec LaunchSpec, argv []string, dir string
 	if spec.Posture.NetMode != NetOff {
 		return doc, nil, nucleusPosture{}, fmt.Errorf("nucleus confinement supports network mode %q only; brokered egress awaits a Nucleus-side forwarder", NetOff)
 	}
-	base := filepath.Clean(spec.Base)
-	workspace := filepath.Clean(spec.Workspace.Directory)
-	if !filepath.IsAbs(base) || !filepath.IsAbs(workspace) {
-		return doc, nil, nucleusPosture{}, errors.New("nucleus launch needs absolute attempt paths")
+	base, workspace, mounts, err := nucleusMounts(spec)
+	if err != nil {
+		return doc, nil, nucleusPosture{}, err
 	}
-	mounts := pathMap{{workspace, nucleusWorkspace}}
 	var volumes []string
-	for _, name := range []string{"home", "tmp", "inputs"} {
-		host := filepath.Join(base, name)
-		if name == "inputs" && !dirExists(host) {
-			continue
-		}
-		guest := filepath.Join(nucleusStateRoot, name)
+	for _, mount := range mounts[1:] {
 		access := "rw"
-		if name == "inputs" {
+		if mount.guest == nucleusInputs {
+			if !dirExists(mount.host) {
+				continue
+			}
 			access = "ro"
 		}
-		mounts = append(mounts, struct{ host, guest string }{host, guest})
-		volumes = append(volumes, host+":"+guest+":"+access+",caller-owned")
+		volumes = append(volumes, mount.host+":"+mount.guest+":"+access+",caller-owned")
 	}
 	translate := func(value string) (string, error) {
 		candidate := value
@@ -344,7 +379,7 @@ func renderNucleus(cfg NucleusConfig, spec LaunchSpec, argv []string, dir string
 		guestEnv = append(guestEnv, key+"="+value)
 	}
 	posture := nucleusPosture{CgroupRoot: cfg.CgroupRoot, Workspace: workspace, PidsMax: nucleusPidsMax}
-	doc = nucleusDocument{Name: nucleusName(base), Workspace: workspace, WorkspaceMode: "bind-rw", WorkspaceExec: true, Workdir: workdir, Rootless: true, Runtime: "native", ServiceMode: "strict-agent", TrustLevel: "trusted", Pids: nucleusPidsMax, Network: "none", AgentToolchainRootfs: cfg.Rootfs, Volumes: volumes, EnvFD: nucleusEnvFD, Command: command}
+	doc = nucleusDocument{Name: nucleusName(base), Workspace: workspace, WorkspaceMode: "bind-rw", WorkspaceExec: true, Workdir: workdir, Rootless: true, Runtime: "native", ServiceMode: "strict-agent", TrustLevel: "trusted", Pids: nucleusPidsMax, Network: "none", AgentToolchainRootfs: cfg.Rootfs, Volumes: volumes, EnvFD: nucleusEnvFD, StartFD: nucleusStartFD, Command: command}
 	if limit := spec.Posture.Resources.MemoryMiB; limit.Mode == "limit" {
 		doc.Memory = strconv.FormatInt(limit.Amount, 10) + "M"
 		bytes := limit.Amount << 20
@@ -433,6 +468,11 @@ type nucleusEvent struct {
 		Code  *int   `json:"code"`
 		Error string `json:"error"`
 	} `json:"exit_status"`
+	ResourceStats *struct {
+		MemoryEvents *struct {
+			OOMKill uint64 `json:"oom_kill"`
+		} `json:"memory_events"`
+	} `json:"resource_stats"`
 }
 
 // verify compares the attested posture with the admitted one. Every field is
@@ -489,8 +529,8 @@ type sandboxRun struct {
 	argv     []string
 	dir      string
 	env      []string
-	files    []*os.File // child ends, inherited as fd 3, 4, 5
-	parent   []*os.File // our ends: config writer, events reader, env writer
+	files    []*os.File // child ends, inherited as fd 3, 4, 5, 6
+	parent   []*os.File // our ends: config writer, events reader, env writer, start gate writer
 	config   []byte
 	guestEnv []byte
 	posture  nucleusPosture
@@ -541,8 +581,15 @@ func (n *nucleusRuntime) launch(spec LaunchSpec, argv []string, dir string, env 
 		closeFiles(configRead, configWrite, eventsRead, eventsWrite)
 		return nil, err
 	}
-	run.files = []*os.File{configRead, eventsWrite, envRead}
-	run.parent = []*os.File{configWrite, eventsRead, envWrite}
+	// The gate's read end is the only one Nucleus inherits, so closing our
+	// write end without a byte is an EOF that refuses the start.
+	gateRead, gateWrite, err := os.Pipe()
+	if err != nil {
+		closeFiles(configRead, configWrite, eventsRead, eventsWrite, envRead, envWrite)
+		return nil, err
+	}
+	run.files = []*os.File{configRead, eventsWrite, envRead, gateRead}
+	run.parent = []*os.File{configWrite, eventsRead, envWrite, gateWrite}
 	return run, nil
 }
 
@@ -616,15 +663,35 @@ func (r *sandboxRun) fail(err error) {
 	r.readErr = errors.Join(r.readErr, err)
 }
 
-// await blocks until the started event arrives and the attested posture
-// matches the admitted one.
+// await blocks until the started event arrives, then releases the held
+// workload only if the attested posture matches the admitted one. Every other
+// outcome closes the gate, so the workload never runs.
 func (r *sandboxRun) await(ctx context.Context, exited <-chan struct{}) error {
+	gate := r.parent[3]
+	err := r.attest(ctx, exited)
+	if err == nil {
+		if _, err = gate.Write([]byte{1}); err != nil {
+			err = fmt.Errorf("release nucleus start gate: %w", err)
+		}
+	}
+	_ = gate.Close()
+	return err
+}
+
+func (r *sandboxRun) attest(ctx context.Context, exited <-chan struct{}) error {
 	timer := time.NewTimer(nucleusStartTimeout)
 	defer timer.Stop()
 	select {
 	case event := <-r.started:
 		return r.posture.verify(event, r.name)
 	case <-r.drained:
+		// A short stream can close right after its started event; select
+		// does not prefer either ready case, so look for it first.
+		select {
+		case event := <-r.started:
+			return r.posture.verify(event, r.name)
+		default:
+		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		return errors.Join(errors.New("nucleus exited before the container started"), r.readErr)
@@ -667,6 +734,15 @@ func (r *sandboxRun) finish() error {
 		return errors.Join(errors.New("nucleus reported no container summary"), r.readErr)
 	}
 	return r.readErr
+}
+
+// memoryExhausted reports whether the kernel OOM-killed a process of the
+// container at its memory limit.
+func (r *sandboxRun) memoryExhausted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stats := r.summary
+	return stats != nil && stats.ResourceStats != nil && stats.ResourceStats.MemoryEvents != nil && stats.ResourceStats.MemoryEvents.OOMKill > 0
 }
 
 func (r *sandboxRun) close() { closeFiles(append(r.files, r.parent...)...) }

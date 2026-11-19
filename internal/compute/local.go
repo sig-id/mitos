@@ -306,8 +306,9 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 		cancel()
 		return nil, err
 	}
-	// A sandboxed session is handed out, and its protocol driven, only after
-	// the runtime attested the admitted posture.
+	// A sandboxed workload is released from the start gate, and its session
+	// handed out and protocol driven, only after the runtime attested the
+	// admitted posture.
 	var gate chan error
 	if s.sandbox != nil {
 		gate = make(chan error, 1)
@@ -343,6 +344,9 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 		if s.sandbox != nil {
 			if err := s.sandbox.finish(); err != nil {
 				s.err = errors.Join(s.err, err)
+			}
+			if s.err != nil && s.sandbox.memoryExhausted() {
+				s.err = errors.Join(ErrMemoryExhausted, s.err)
 			}
 		}
 		code := cmd.ProcessState.ExitCode()

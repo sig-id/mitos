@@ -305,8 +305,9 @@ The current local provider runs as the operator. Batch HOME/TMPDIR and credentia
 hygiene do not restrict host access; interactive agents use native configuration.
 When configured, the Nucleus provider admits confined application postures with
 network mode `off`: enforced CPU, memory and process limits, revocation through
-the container cgroup, and a start refused unless the runtime attests the frozen
-posture. Brokered egress and agent execution under it remain delivery targets.
+the container cgroup, and a workload held until the runtime attests the frozen
+posture, so a mismatch refuses the start before the workload runs. Brokered
+egress and agent execution under it remain delivery targets.
 Strict unattended operation requires demonstrated authority, observation, acceptance,
 and recovery guarantees, not a configuration label.
 

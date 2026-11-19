@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -16,7 +17,13 @@ type enforcingStub struct {
 	compute.Local
 	mu       sync.Mutex
 	prepared []compute.LaunchSpec
+	inputs   [][]byte
 }
+
+type stubHandle struct{ workspace string }
+
+func (h stubHandle) ID() string        { return "stub" }
+func (h stubHandle) Workspace() string { return h.workspace }
 
 func (p *enforcingStub) Capabilities() compute.Capabilities {
 	return compute.Capabilities{CPUQuota: true, MemoryLimit: true, Isolation: "container", Egress: compute.NetOff, DataMount: "bind-ro", NetModes: []string{compute.NetOff}, WorkspaceConfined: true}
@@ -26,6 +33,13 @@ func (p *enforcingStub) Prepare(_ context.Context, spec compute.LaunchSpec) (com
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.prepared = append(p.prepared, spec)
+	return stubHandle{spec.Workspace.Directory}, nil
+}
+
+func (p *enforcingStub) Start(_ context.Context, _ compute.Handle, command compute.Command) (compute.Session, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.inputs = append(p.inputs, command.Input)
 	return nil, errors.New("stub provider does not execute")
 }
 
@@ -60,6 +74,13 @@ func TestDeclaredConfinedPostureRunsOnlyUnderNucleus(t *testing.T) {
 	launch := stub.prepared[0]
 	if launch.Provider != compute.ConfinementNucleus || launch.Development || launch.Posture.NetMode != compute.NetOff || launch.Posture.Resources.MemoryMiB.Amount != 256 {
 		t.Fatalf("admitted launch %+v", launch)
+	}
+	// The application input names its paths as the container sees them.
+	var input struct {
+		Workspace string `json:"workspace"`
+	}
+	if len(stub.inputs) == 0 || json.Unmarshal(stub.inputs[0], &input) != nil || input.Workspace != "/workspace" {
+		t.Fatalf("confined input carries host paths: %s", stub.inputs)
 	}
 }
 

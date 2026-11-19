@@ -258,12 +258,14 @@ Applications that declare a confined compute request (for example
 {"mode": "limit", "amount": 512}}}`) run under [Nucleus](https://github.com/sig-id/nucleus)
 when `MITOS_NUCLEUS` names its executable ([ADR 0008](spec/ADRs/0008_NUCLEUS_EXECUTION_PROVIDER.md)).
 Each launch is a rootless strict-agent container with enforced CPU, memory and
-process limits and no network. Its start is refused unless Nucleus attests the
-admitted posture, and the attested events are kept with the attempt. The server
-must own a delegated cgroup: `just serve-nucleus` starts it in one, and
-`just test-nucleus` runs the integration tests. Agents still run under the
-local provider: under Nucleus they would need brokered model egress, which
-awaits a Nucleus-side forwarder.
+process limits and no network. Nucleus holds the workload until it attests the
+admitted posture; any mismatch refuses the start before the workload runs, and
+the attested events are kept with the attempt. A workload killed at its memory
+limit fails with `memory_exhausted`. The provider needs a Nucleus build newer
+than 0.5.3 (the start gate is unreleased) and a server that owns a delegated
+cgroup: `just serve-nucleus` starts it in one, and `just test-nucleus` runs the
+integration tests. Agents still run under the local provider; moving them is
+the next delivery step.
 
 ## Cost statistics
 
