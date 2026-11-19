@@ -253,6 +253,18 @@ hygiene and a separate verification directory do not establish confinement. Stri
 unsupported compute requirements are refused. Interactive agents use their native
 credentials and configuration; free-text project rules are instructions.
 
+Applications that declare a confined compute request (for example
+`"compute": {"trust_tier": "T1", "net_mode": "off", "resources": {"memory_mib":
+{"mode": "limit", "amount": 512}}}`) run under [Nucleus](https://github.com/sig-id/nucleus)
+when `MITOS_NUCLEUS` names its executable ([ADR 0008](spec/ADRs/0008_NUCLEUS_EXECUTION_PROVIDER.md)).
+Each launch is a rootless strict-agent container with enforced CPU, memory and
+process limits and no network. Its start is refused unless Nucleus attests the
+admitted posture, and the attested events are kept with the attempt. The server
+must own a delegated cgroup: `just serve-nucleus` starts it in one, and
+`just test-nucleus` runs the integration tests. Agents still run under the
+local provider: under Nucleus they would need brokered model egress, which
+awaits a Nucleus-side forwarder.
+
 ## Cost statistics
 
 Codex and Claude Code attempts report their token usage, including the split

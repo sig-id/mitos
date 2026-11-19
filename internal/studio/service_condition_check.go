@@ -214,7 +214,7 @@ func (e *Engine) runConditionCommand(ctx context.Context, r Run, h *ServiceCondi
 	if !ok {
 		return nil, ErrNotFound
 	}
-	launch, err := compileApplication(app)
+	launch, err := e.compileApplication(app)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +235,10 @@ func (e *Engine) runConditionCommand(ctx context.Context, r Run, h *ServiceCondi
 	launch.Base = base
 	launch.Workspace = compute.Workspace{Mode: launch.Workspace.Mode, Directory: filepath.Join(base, "workspace"), HistoryDirectory: history.Directory, BaselineCommit: history.BaselineCommit, BaselineFingerprint: before.Fingerprint}
 	launch.Posture.Deadline, _ = ctx.Deadline()
-	_, output, err := executeProviderCommand(ctx, e.provider, launch, []string{"/bin/sh", "-c", h.Policy.Command}, launch.Workspace.Directory, nil, nil)
+	provider, err := e.providerFor(launch)
+	if err != nil {
+		return nil, err
+	}
+	_, output, err := executeProviderCommand(ctx, provider, launch, []string{"/bin/sh", "-c", h.Policy.Command}, launch.Workspace.Directory, nil, nil)
 	return output, err
 }

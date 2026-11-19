@@ -18,6 +18,7 @@ import (
 	workspacefs "mitos/internal/workspace"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -36,7 +37,10 @@ type Engine struct {
 	// confinement is scoped here so other launch paths keep the plain local
 	// posture they were admitted against.
 	agentProvider compute.Provider
-	confinement   compute.Confinement
+	// nucleus, when configured, enforces the confined postures applications
+	// declare in their compute request (ADR 0008); nil otherwise.
+	nucleus     compute.Provider
+	confinement compute.Confinement
 	// egressRelay mediates model transport for network-isolated tenant
 	// workers; egressEndpoint is its UNIX socket, empty when confinement is
 	// off or the network is fully withheld.
@@ -104,7 +108,28 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			agentProvider = &compute.Local{Confinement: confinement}
 		}
 	}
-	e := &Engine{provider: provider, agentProvider: agentProvider, confinement: confinement, egressRelay: egressRelay, egressEndpoint: egressEndpoint, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
+	// Nucleus enforces confined application postures (ADR 0008). Configured
+	// but unusable fails startup: a declared posture never silently loses its
+	// enforcing provider.
+	var nucleus compute.Provider
+	if binary := os.Getenv("MITOS_NUCLEUS"); binary != "" {
+		resolved, lookErr := exec.LookPath(binary)
+		if lookErr != nil {
+			cancel()
+			return nil, fmt.Errorf("MITOS_NUCLEUS: %w", lookErr)
+		}
+		if resolved, lookErr = filepath.Abs(resolved); lookErr != nil {
+			cancel()
+			return nil, lookErr
+		}
+		confined, nucleusErr := compute.NewNucleus(ctx, compute.NucleusConfig{Binary: resolved, CgroupRoot: os.Getenv("NUCLEUS_CGROUP_ROOT"), Rootfs: os.Getenv("MITOS_NUCLEUS_ROOTFS"), ProbeDir: filepath.Join(s.Dir(), "nucleus", "probe")})
+		if nucleusErr != nil {
+			cancel()
+			return nil, nucleusErr
+		}
+		nucleus = confined
+	}
+	e := &Engine{provider: provider, agentProvider: agentProvider, nucleus: nucleus, confinement: confinement, egressRelay: egressRelay, egressEndpoint: egressEndpoint, Store: s, Apps: apps, Root: abs, cancel: map[string]context.CancelFunc{}, ctx: ctx, stop: cancel}
 	if err = s.ensureHome(); err != nil {
 		cancel()
 		return nil, err
@@ -312,7 +337,7 @@ func (e *Engine) prepareBrief(b Brief) (Brief, string, error) {
 		return Brief{}, "", err
 	}
 	if !app.Builtin {
-		if _, err := compileApplication(app); err != nil {
+		if _, err := e.compileApplication(app); err != nil {
 			return Brief{}, "", err
 		}
 		if err := app.Acceptance.Validate(); err != nil {

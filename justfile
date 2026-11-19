@@ -57,6 +57,16 @@ build:
 serve port="4646": build
     ./bin/mitos serve --addr 127.0.0.1:{{port}} --apps ./examples
 
+# Serve with the Nucleus provider for confined application postures (ADR 0008).
+# The server runs as the only member of a delegated user cgroup it owns.
+serve-nucleus port="4646": build
+    systemd-run --user --scope -q -p Delegate=yes sh -c 'export NUCLEUS_CGROUP_ROOT=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup) MITOS_NUCLEUS="${MITOS_NUCLEUS:-nucleus}"; exec ./bin/mitos serve --addr 127.0.0.1:{{port}} --apps ./examples'
+
+# Run the Nucleus integration tests against the installed runtime.
+test-nucleus:
+    go test -c -o bin/compute.test ./internal/compute
+    systemd-run --user --scope -q -p Delegate=yes sh -c 'export NUCLEUS_CGROUP_ROOT=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup) MITOS_TEST_NUCLEUS="$(command -v "${MITOS_NUCLEUS:-nucleus}")"; exec ./bin/compute.test -test.run Nucleus -test.v'
+
 stop data=".mitos": build
     ./bin/mitos stop --data {{quote(data)}}
 

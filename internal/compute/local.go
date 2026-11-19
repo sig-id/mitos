@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -20,6 +21,11 @@ import (
 
 type Local struct {
 	Confinement Confinement
+	// sandbox, when set, runs every command in an enforcing container
+	// runtime that attests its posture (see NewNucleus).
+	sandbox *nucleusRuntime
+	// name is the provider name admission compiles against; "local" unless set.
+	name string
 	// helper is the host binary mounted into mediated sandboxes to run the
 	// in-sandbox egress loop.
 	helper  string
@@ -51,6 +57,7 @@ type localSession struct {
 	output   limitedBuffer
 	err      error
 	events   []Event
+	sandbox  *sandboxRun
 	mu       sync.Mutex
 }
 
@@ -60,17 +67,30 @@ func (s *localSession) Done() <-chan struct{}   { return s.done }
 func (s *localSession) Result() ([]byte, error) { <-s.done; return s.output.Bytes(), s.err }
 func (s *localSession) OutputOffset() uint64    { return s.output.Total() }
 func (l *Local) Capabilities() Capabilities {
+	if l.sandbox != nil {
+		return l.sandbox.capabilities()
+	}
 	if l.Confinement.enabled() {
 		return l.Confinement.capabilities()
 	}
 	return Capabilities{Isolation: "process", Egress: "unrestricted", DataMount: "unsupported", NetModes: []string{"unrestricted"}}
 }
+
+// Name is the provider name launches are admitted against.
+func (l *Local) Name() string {
+	if l.name == "" {
+		return "local"
+	}
+	return l.name
+}
+
 func (l *Local) Prepare(ctx context.Context, spec LaunchSpec) (Handle, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	admitted, err := Compile(Request{Resources: spec.Posture.Resources, TrustTier: spec.TrustTier, Provider: "local", NetMode: spec.Posture.NetMode, WorkspaceMode: spec.Workspace.Mode, BrokerEndpoint: spec.Posture.BrokerEndpoint}, map[string]Capabilities{"local": l.Capabilities()}, spec.Development)
-	if err != nil || spec.Provider != "local" || admitted.TrustTier != spec.TrustTier || !reflect.DeepEqual(admitted.Capabilities, spec.Capabilities) || admitted.Posture.NetMode != spec.Posture.NetMode || admitted.Posture.DataMount != spec.Posture.DataMount {
+	name := l.Name()
+	admitted, err := Compile(Request{Resources: spec.Posture.Resources, TrustTier: spec.TrustTier, Provider: name, NetMode: spec.Posture.NetMode, WorkspaceMode: spec.Workspace.Mode, BrokerEndpoint: spec.Posture.BrokerEndpoint}, map[string]Capabilities{name: l.Capabilities()}, spec.Development)
+	if err != nil || spec.Provider != name || admitted.TrustTier != spec.TrustTier || !reflect.DeepEqual(admitted.Capabilities, spec.Capabilities) || admitted.Posture.NetMode != spec.Posture.NetMode || admitted.Posture.DataMount != spec.Posture.DataMount {
 		return nil, errors.New("local provider cannot enforce the requested launch posture")
 	}
 	if spec.Workspace.Mode != "copy" {
@@ -219,37 +239,57 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 			return nil, confineErr
 		}
 	}
-	cmd := exec.CommandContext(commandCtx, argv[0], argv[1:]...)
-	s.cmd = cmd
-	cmd.Dir = h.spec.Workspace.Directory
+	dir := h.spec.Workspace.Directory
 	if command.Directory != "" {
 		if !filepath.IsAbs(command.Directory) {
 			cancel()
 			return nil, errors.New("working directory must be absolute")
 		}
-		cmd.Dir = command.Directory
+		dir = command.Directory
 	}
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
+	if command.NativeEnv != nil {
+		env = append([]string(nil), command.NativeEnv...)
+	}
+	if h.owner.sandbox != nil {
+		run, err := h.owner.sandbox.launch(h.spec, argv, dir, env)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		s.sandbox = run
+		argv, dir, env = run.argv, run.dir, run.env
+	}
+	cmd := exec.CommandContext(commandCtx, argv[0], argv[1:]...)
+	s.cmd = cmd
+	cmd.Dir = dir
+	cmd.Env = env
 	if command.Interact == nil {
 		cmd.Stdin = bytes.NewReader(command.Input)
 	}
-	_ = base
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(cmd.Dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
-	if command.NativeEnv != nil {
-		cmd.Env = append([]string(nil), command.NativeEnv...)
-	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if s.sandbox != nil {
+		cmd.ExtraFiles = s.sandbox.files
+		// The supervisor dies with the server; Nucleus's reaper then kills
+		// the container cgroup, so a crashed server leaves nothing running.
+		// The signal follows the forking thread, an unlocked runtime thread
+		// that Go does not retire.
+		cmd.SysProcAttr.Pdeathsig = syscall.SIGKILL
+	}
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Cancel = func() error { return killGroup(s) }
 	var protocol *protocolStream
 	if command.Interact != nil {
 		input, err := cmd.StdinPipe()
 		if err != nil {
+			s.closeSandbox()
 			cancel()
 			return nil, err
 		}
 		output, err := cmd.StdoutPipe()
 		if err != nil {
 			input.Close()
+			s.closeSandbox()
 			cancel()
 			return nil, err
 		}
@@ -262,16 +302,30 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 	}
 	cmd.Stderr = &s.output
 	if err := cmd.Start(); err != nil {
+		s.closeSandbox()
 		cancel()
 		return nil, err
 	}
-	h.started = true
-	h.sequence++
-	s.sequence = h.sequence
-	s.events = []Event{{Offset: 1, Type: "status", Status: "started", At: time.Now().UTC()}}
+	// A sandboxed session is handed out, and its protocol driven, only after
+	// the runtime attested the admitted posture.
+	var gate chan error
+	if s.sandbox != nil {
+		gate = make(chan error, 1)
+		s.sandbox.begin()
+	}
 	go func() {
 		defer cancel()
-		if protocol != nil {
+		var gateErr error
+		if gate != nil {
+			gateErr = <-gate
+		}
+		if gateErr != nil {
+			if protocol != nil {
+				_ = protocol.Close()
+			}
+			_ = killGroup(s)
+			s.err = errors.Join(gateErr, cmd.Wait())
+		} else if protocol != nil {
 			protocolErr := command.Interact(commandCtx, protocol, &s.output)
 			_ = protocol.Close()
 			_ = killGroup(s)
@@ -286,15 +340,48 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 			s.err = cmd.Wait()
 		}
 		_ = killGroup(s)
+		if s.sandbox != nil {
+			if err := s.sandbox.finish(); err != nil {
+				s.err = errors.Join(s.err, err)
+			}
+		}
 		code := cmd.ProcessState.ExitCode()
 		s.mu.Lock()
 		s.events = append(s.events, Event{Offset: 2, Type: "status", Status: "exited", At: time.Now().UTC(), ExitCode: &code})
 		s.mu.Unlock()
 		close(s.done)
 	}()
+	if gate != nil {
+		err := s.sandbox.await(commandCtx, nil)
+		gate <- err
+		if err != nil {
+			<-s.done
+			output := strings.TrimSpace(string(s.output.Bytes()))
+			if output != "" {
+				err = fmt.Errorf("%w: %s", err, output)
+			}
+			return nil, err
+		}
+	}
+	h.started = true
+	h.sequence++
+	s.sequence = h.sequence
+	s.mu.Lock()
+	s.events = append([]Event{{Offset: 1, Type: "status", Status: "started", At: time.Now().UTC()}}, s.events...)
+	s.mu.Unlock()
 	return s, nil
 }
+
+func (s *localSession) closeSandbox() {
+	if s.sandbox != nil {
+		s.sandbox.close()
+	}
+}
+
 func killGroup(s *localSession) error {
+	if s.sandbox != nil {
+		_ = s.sandbox.kill()
+	}
 	err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
