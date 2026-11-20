@@ -15,6 +15,8 @@ import (
 	"mitos/internal/agentcli"
 	"mitos/internal/procsys"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/creack/pty"
 )
 
@@ -295,9 +297,12 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	// descriptor: on platforms where a plainly opened ptmx is not pollable
 	// (kqueue on macOS), reads would surface EAGAIN instead of waiting, so
 	// the copy loop would mistake terminal silence for failure and stop the
-	// session. The dup carries its own fd number so the poller registration
-	// never collides with the pty library's wrapper; both descriptors share
-	// one open file description, and the pinned original keeps it alive.
+	// session. The duplicate carries its own fd number so the poller
+	// registration never collides with the pty library's wrapper, and it is
+	// created atomically with close-on-exec: exec.Command relies on
+	// FD_CLOEXEC to keep children from inheriting other sessions' masters,
+	// and a plain dup would clear that flag. Both descriptors share one open
+	// file description; the pinned original keeps it alive.
 	fd := int(f.Fd())
 	if err = syscall.SetNonblock(fd, true); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -305,7 +310,7 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 		_ = cmd.Wait()
 		return m.startFailedLocked(s.ID, err)
 	}
-	pollFd, err := syscall.Dup(fd)
+	pollFd, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = f.Close()
