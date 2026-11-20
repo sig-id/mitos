@@ -64,8 +64,24 @@ type piEvent struct {
 // NewPiEventStream renders into output, the human-readable execution log, and
 // writes public activity records to activity. Either may be nil.
 func NewPiEventStream(output, activity io.Writer) *PiEventStream {
-	return &PiEventStream{output: output, activity: activity, pending: map[string]piPendingCall{}}
+	return newPiEventStream(output, activity, 0)
 }
+
+// ContinuePiEventStream starts after the given number of completed messages,
+// so a continuation process keeps message identities unique: the activity
+// feed merges records by id, and two processes both starting at pi-1 would
+// overwrite each other's messages.
+func ContinuePiEventStream(output, activity io.Writer, messages int) *PiEventStream {
+	return newPiEventStream(output, activity, messages)
+}
+
+func newPiEventStream(output, activity io.Writer, messages int) *PiEventStream {
+	return &PiEventStream{output: output, activity: activity, pending: map[string]piPendingCall{}, messages: messages}
+}
+
+// Messages reports how many assistant messages completed so far; feed it to
+// ContinuePiEventStream for the next process of the same attempt.
+func (s *PiEventStream) Messages() int { return s.messages }
 
 func (s *PiEventStream) Write(p []byte) (int, error) {
 	data := append(s.partial, p...)

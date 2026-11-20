@@ -278,3 +278,57 @@ func TestMCPPlanRulesRefuseOperatorOnlyOperations(t *testing.T) {
 		t.Fatalf("clean plan refused: %v", problems)
 	}
 }
+
+func TestAgentMCPRunSavesRenderedLogWithDiagnostics(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	finished := harness.NewMCPServer(harness.MCPOptions{Terminal: true, Result: func(string) error { return nil }})
+	if _, callErr := finishedMessage(finished); callErr != nil {
+		t.Fatal(callErr)
+	}
+	mcp := &agentMCP{server: finished, session: agentcli.NewSessionID(), close: func() {}}
+	rendered, diagnostics := &printOutput{}, &printOutput{}
+	mcp.rendered, mcp.stderr, mcp.stream = rendered, diagnostics, harness.NewPiEventStream(io.MultiWriter(io.Discard, rendered), io.Discard)
+	// The stream renders into the live preview and the saved log, as the
+	// MCP command path assembles it. The process streamed one rendered message, then failed with a
+	// diagnostic on stderr; the raw capture mixes both with the JSONL.
+	if _, err := mcp.stream.Write([]byte(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"The work is done."}]}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	diagnostics.Write([]byte("pi: provider request failed\n"))
+	raw := []byte(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"The work is done."}]}}` + "\npi: provider request failed\n")
+	output, err := mcp.run(ctx, &mcpExitSession{output: raw}, func() (compute.Session, error) {
+		t.Fatal("continuation after a terminal submission")
+		return nil, nil
+	}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(output), "The work is done.") || !strings.Contains(string(output), "pi: provider request failed") {
+		t.Fatalf("saved log must keep the rendered message and the diagnostics: %q", output)
+	}
+	if strings.Contains(string(output), `"type":"message_end"`) {
+		t.Fatalf("the raw JSONL must not be saved when the rendered log exists: %q", output)
+	}
+}
+
+// A CLI that died before rendering anything keeps its raw captured output,
+// including whatever it printed on stderr.
+func TestAgentMCPRunKeepsRawCaptureWithoutEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	finished := harness.NewMCPServer(harness.MCPOptions{Terminal: true, Result: func(string) error { return nil }})
+	if _, callErr := finishedMessage(finished); callErr != nil {
+		t.Fatal(callErr)
+	}
+	mcp := &agentMCP{server: finished, session: agentcli.NewSessionID(), close: func() {}}
+	mcp.rendered, mcp.stderr, mcp.stream = &printOutput{}, &printOutput{}, harness.NewPiEventStream(io.Discard, io.Discard)
+	raw := []byte("pi: cannot read settings.json\n")
+	output, err := mcp.run(ctx, &mcpExitSession{output: raw}, func() (compute.Session, error) {
+		t.Fatal("continuation after a terminal submission")
+		return nil, nil
+	}, io.Discard)
+	if err != nil || !strings.Contains(string(output), "cannot read settings.json") {
+		t.Fatalf("run: %v %q", err, output)
+	}
+}

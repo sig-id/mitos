@@ -802,10 +802,16 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 				// JSON event mode: the CLI's own progress (assistant text, shell
 				// commands, file edits) streams into the live preview and the
 				// rendered log while the process works, instead of one reply
-				// after it exits.
-				rendered := &printOutput{}
-				mcp.rendered, mcp.stream = rendered, harness.NewPiEventStream(io.MultiWriter(preview, rendered), records)
-				cmd := compute.Command{Argv: mcp.arguments(native.Executable, cliArgs, resume), Directory: dir, NativeEnv: agentEnv, Stdout: mcp.stream}
+				// after it exits. A continuation keeps counting messages so its
+				// ids never overwrite the first process's records; stderr is kept
+				// for the saved log, because the rendered stream covers stdout.
+				rendered, diagnostics := &printOutput{}, &printOutput{}
+				messages := 0
+				if mcp.stream != nil {
+					messages = mcp.stream.Messages()
+				}
+				mcp.rendered, mcp.stderr, mcp.stream = rendered, diagnostics, harness.ContinuePiEventStream(io.MultiWriter(preview, rendered), records, messages)
+				cmd := compute.Command{Argv: mcp.arguments(native.Executable, cliArgs, resume), Directory: dir, NativeEnv: agentEnv, Stdout: mcp.stream, Stderr: diagnostics}
 				if resume {
 					cmd.Input = mcp.continuationInput()
 				} else {

@@ -174,6 +174,44 @@ func TestPiEventStreamDropsUnusedEventRecords(t *testing.T) {
 	}
 }
 
+func TestContinuePiEventStreamKeepsMessageIDsUnique(t *testing.T) {
+	var activity syncBuffer
+	first := NewPiEventStream(nil, &activity)
+	for _, event := range []string{
+		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"first process answer"}]}}`,
+		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"second message"}]}}`,
+	} {
+		if _, err := first.Write([]byte(event + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A continuation process must never reuse the first process's ids: the
+	// feed merges records by id and would overwrite the earlier messages.
+	continuation := ContinuePiEventStream(nil, &activity, first.Messages())
+	if _, err := continuation.Write([]byte(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"continuation answer"}]}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	seen := map[string]bool{}
+	for _, record := range activity.lines() {
+		if record["kind"] != "message" {
+			t.Fatalf("unexpected record: %v", record)
+		}
+		text, _ := record["text"].(string)
+		if seen[text] {
+			t.Fatalf("message overwritten: %v", activity.lines())
+		}
+		seen[text] = true
+		texts = append(texts, text)
+	}
+	if len(texts) != 3 {
+		t.Fatalf("expected three distinct messages, got %v", texts)
+	}
+	if texts[2] != "continuation answer" {
+		t.Fatalf("continuation message lost: %v", texts)
+	}
+}
+
 // syncBuffer is a minimal concurrent-safe activity sink for tests.
 type syncBuffer struct {
 	mu  sync.Mutex

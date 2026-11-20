@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
@@ -89,6 +90,9 @@ type agentMCP struct {
 	stream *harness.PiEventStream
 	// rendered collects the human-readable log of the current process.
 	rendered *printOutput
+	// stderr collects the current process's CLI diagnostics, which the
+	// rendered stream does not carry.
+	stderr *printOutput
 
 	serial int
 	logs   printOutput
@@ -220,11 +224,16 @@ func (a *agentMCP) run(ctx context.Context, session compute.Session, next func()
 		output, err := session.Result()
 		if a.stream != nil {
 			a.stream.Flush()
-			// The rendered activity is the saved log; the raw capture (which
+			// The rendered activity is the saved log. The raw capture (which
 			// mixes in stderr) only survives when the CLI died before rendering
-			// anything, so a startup failure keeps its explanation.
+			// anything, so a startup failure keeps its explanation; a process
+			// that rendered progress keeps its stderr diagnostics separately.
 			if rendered := a.rendered.Bytes(); len(rendered) > 0 {
 				output = rendered
+				if diagnostics := a.stderr.Bytes(); len(diagnostics) > 0 {
+					output = append(bytes.TrimSuffix(output, []byte("\n")), '\n')
+					output = append(output, diagnostics...)
+				}
 			}
 		}
 		a.logs.Write(output)

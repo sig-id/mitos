@@ -26,6 +26,10 @@ type Session interface {
 type Command struct {
 	// Stdout receives native stdout separately from stderr for single-shot protocols.
 	Stdout io.Writer `json:"-"`
+	// Stderr receives native stderr separately from the combined session
+	// capture, for adapters that render stdout into their own log but still
+	// need CLI diagnostics preserved.
+	Stderr io.Writer `json:"-"`
 	// Interact drives a structured stdio protocol under provider process ownership.
 	Interact func(context.Context, io.ReadWriteCloser, io.Writer) error `json:"-"`
 	// NativeEnv is resolved at launch, never serialized or persisted.

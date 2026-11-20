@@ -301,6 +301,9 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 		}
 	}
 	cmd.Stderr = &s.output
+	if command.Stderr != nil {
+		cmd.Stderr = io.MultiWriter(command.Stderr, &s.output)
+	}
 	if err := cmd.Start(); err != nil {
 		s.closeSandbox()
 		cancel()
