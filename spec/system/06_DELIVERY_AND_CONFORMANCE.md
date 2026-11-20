@@ -414,7 +414,10 @@ Implement the `level` Choice question, the bounded projection, asymmetric
 acceptance, fallback to the default level, and persistence before dispatch and
 before the receipt. Tests MUST cover each fallback reason, a pending request at
 restart delivering at the default with `outcome_unknown`, an exhausted allowance
-producing one `watch_degraded` notice, must-deliver events making no triage call,
+producing one `watch_degraded` notice, renewal or orchestrator replacement not
+replenishing `max_calls`, triage and `OrchestratorCalls` exhaustion leaving each
+other's consumers unaffected, repeated escalations coalescing into one open operator
+item, must-deliver events making no triage call,
 and an adversarial evidence summary unable to lower a level below the default
 without meeting the thresholds.
 

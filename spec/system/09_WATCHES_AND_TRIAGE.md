@@ -35,7 +35,7 @@ unversioned form.
     "kinds": ["verification_failed", "quiescent", "harness_session_recorded"]
   },
   "lease": {"expires_at": "2026-11-21T09:00:00Z", "max_renewals": 16},
-  "grouping": {"by": ["run_id"], "wait_ms": 2000, "interval_ms": 60000, "max_events": 64},
+  "grouping": {"by": ["run_id"], "wait_ms": 2000, "interval_ms": 60000, "max_events": 64, "repeat_interval_ms": 3600000},
   "max_silence_ms": 900000,
   "default_level": "notify",
   "triage": {"policy_ref": "triage_policy_…", "instructions": "Wake only when the failure changes which task should run next."}
@@ -70,6 +70,8 @@ unversioned form.
   continue. `max_events` (1–256) closes a group early. Continuous updates MUST NOT
   postpone delivery past `interval_ms` (no starvation), and a delivery MUST retain
   the identities of all contributing events (sequence range plus counts by kind).
+  `repeat_interval_ms` (60000–86400000) bounds how often a new operator item is
+  created for the same group key (§3).
 - **Maximum silence.** If set (60000–86400000), a window with no matching events
   produces a must-deliver `watch_silent` notice. This is the absence signal; quiet
   output alone is not evidence of a stall ([04](04_STATE_AND_VERIFICATION.md#observation-and-steering)).
@@ -120,6 +122,14 @@ instructions, grants or tool calls. A session that has been replaced cannot
 acknowledge a delivery addressed to a later generation, and a stale acknowledgement
 is rejected.
 
+Operator items are bounded the way kernel judgments bound operator cards. An
+`escalate` delivery for a watch and group key that already has an open operator item
+updates that item's counts and sequence range instead of creating a new one. A new
+item is created only after the previous one is resolved, or after the watch's
+`repeat_interval_ms` (default 3600000) has elapsed. A run parked for a kernel
+judgment already has its operator card, so its must-deliver notice goes only to the
+owner, at `notify`, and creates no second operator item.
+
 A digest is delivered when the owner next wakes, or at a watch's `interval_ms`
 if it has no other delivery. It contains counts by kind and group, plus the sequence
 range.
@@ -159,11 +169,25 @@ models. A request that is still pending at restart is not resent: the group is
 delivered at `D` with `outcome_unknown`. Every delivery records whether its level
 came from a rule, the default, triage, or a fallback, and why.
 
-**Budget.** A triage policy declares `max_calls` per watch lease (1–1024), a shared
-allowance per responsibility, and `timeout_ms` (1–30000). Pending and failed
-requests count. When the allowance is exhausted, the watch emits one
-`watch_degraded` notice and continues untriaged at `D`. Triage allowances are
-accounted separately from orchestrator, routing and supervision allowances.
+**Budget.** Triage draws on its own allowance:
+- A graph declares `Limits.TriageCalls` (0–4096) beside its other finite limits
+  ([02](02_RUNTIME.md#attempts-dependencies-and-iteration)). Watches owned by that
+  graph's responsibility and attempts share it.
+- Operator-owned watches use a project triage allowance from operator configuration.
+- A watch may narrow its share with `max_calls` (1–1024). That limit covers the
+  watch's whole life: renewal, orchestrator replacement and new attempts MUST NOT
+  replenish it.
+- Each request is bounded by `timeout_ms` (1–30000).
+
+Pending and failed requests count. When an allowance is exhausted, the watch emits
+one `watch_degraded` notice and continues untriaged at `D`. As with judgment-shaped
+kernel rules ([03](03_ORCHESTRATION.md#judgment-shaped-kernel-rules)), an exhausted
+or failed decision keeps the default, and a decision only changes the outcome.
+
+Triage MUST NOT charge `Limits.OrchestratorCalls`, which is shared by planning,
+graph decisions and kernel judgments, and those consumers MUST NOT charge
+`TriageCalls`. A noisy watch therefore cannot starve planning or judgments, and a
+flood of judgments cannot disable triage.
 
 ## 5. Outcomes and calibration
 

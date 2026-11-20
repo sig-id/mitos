@@ -142,8 +142,9 @@ additional work, with explicit causal lineage. A correction loop MUST NOT reopen
 accepted historical result or reset counters. A segment/checkpoint recovery within
 one Run remains part of that Attempt; it is not a new Task or a hidden budget reset.
 
-Every graph MUST declare finite admitted-work, expansion, orchestrator-call, retry,
-depth/fanout, and elapsed-time limits. Reservations MUST account for parallel proposals
+Every graph MUST declare finite admitted-work, expansion, orchestrator-call,
+triage-call ([09](09_WATCHES_AND_TRIAGE.md#4-triage)), retry, depth/fanout, and
+elapsed-time limits. Reservations MUST account for parallel proposals
 and children atomically. Remaining responsibility allowance is shared across tasks,
 orchestrator replacement, and attempts; per-attempt limits may narrow it but never
 replenish it. Time or allowance exhaustion MUST prevent new work and invoke the
