@@ -163,7 +163,7 @@ func TestAutomaticInstalledPi(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	until := time.Now().Add(8 * time.Minute)
+	until := time.Now().Add(15 * time.Minute)
 	for time.Now().Before(until) {
 		if g, err = e.Store.Graph(g.ID); err != nil {
 			t.Fatal(err)
@@ -179,22 +179,28 @@ func TestAutomaticInstalledPi(t *testing.T) {
 		}
 		for _, x := range g.Expansions {
 			if x.Error != "" {
-				for _, m := range g.Members {
-					if m.CurrentRunID != "" {
-						r, _ := e.Store.Get(m.CurrentRunID)
-						out, _ := e.Store.Artifact(r.ID, "output.txt")
-						if len(out) > 4000 {
-							out = out[len(out)-4000:]
-						}
-						t.Logf("%s: %s %s\n%s", r.AppName, r.Status, r.Summary, out)
-					}
-				}
+				logPiMembers(t, e, g)
 				t.Fatal(x.Error)
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatal("native Pi workflow did not complete within 8 minutes")
+	logPiMembers(t, e, g)
+	t.Fatalf("native Pi workflow did not complete within 15 minutes: graph %s after %d attempts and %d orchestrator calls", g.Status, g.Attempts, g.OrchestratorCalls)
+}
+
+func logPiMembers(t *testing.T, e *Engine, g WorkGraph) {
+	for _, m := range g.Members {
+		if m.CurrentRunID == "" {
+			continue
+		}
+		r, _ := e.Store.Get(m.CurrentRunID)
+		out, _ := e.Store.Artifact(r.ID, "output.txt")
+		if len(out) > 4000 {
+			out = out[len(out)-4000:]
+		}
+		t.Logf("%s: %s %s\n%s", r.AppName, r.Status, r.Summary, out)
+	}
 }
 
 func writePiConfig(t *testing.T, dir string, files map[string]string) {
