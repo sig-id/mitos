@@ -441,6 +441,24 @@ func (s *Store) apply(e Event) error {
 	if c.Result != nil {
 		r.Result = c.Result
 	}
+	if c.Judgment != nil {
+		if c.Judgment.State == "pending" {
+			r.HeldJudgment = c.Judgment
+		} else {
+			r.HeldJudgment = nil
+			replaced := false
+			for i := range r.KernelJudgments {
+				if r.KernelJudgments[i].ID == c.Judgment.ID {
+					r.KernelJudgments[i] = *c.Judgment
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				r.KernelJudgments = append(r.KernelJudgments, *c.Judgment)
+			}
+		}
+	}
 	if c.HandoffBytes != 0 {
 		r.HandoffBytes = c.HandoffBytes
 	}
@@ -886,6 +904,21 @@ func (s *Store) Complete(id, summary string, verified bool) error {
 	}
 	if r.Brief.Structured != nil && !s.admittedPrincipalAllowedLocked(r.PrincipalID, runTenant(r)) {
 		return ErrForbidden
+	}
+	if held := r.HeldJudgment; held != nil && held.State == "pending" {
+		// The submission is held for a judgment; the attempt parks instead of
+		// completing, and the decision records the outcome.
+		if r.Status != "parked" {
+			return ErrConflict
+		}
+		if r.Claim != nil && r.Claim.ReleasedAt == nil {
+			copyClaim := *r.Claim
+			at := time.Now().UTC()
+			copyClaim.ReleasedAt = &at
+			copyClaim.ReleaseReason = "execution_stopped_and_harvest_finished"
+			return s.commit(id, "effect", "judgment_awaited", change{Claim: &copyClaim, Stage: "Waiting for a judgment", Summary: "The result is held for a kernel judgment; evidence is preserved."})
+		}
+		return nil // already waiting; the resolution finishes the run
 	}
 	if requiresHandoff(r) {
 		if err := s.resultIntegrity(r); err != nil {

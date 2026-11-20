@@ -144,8 +144,14 @@ permitted worker harness as an explicit override; models are never named in task
 
 **Nature narrows authority.** `context` and `review` work runs without
 `workspace.write`, whatever the role may be granted; the authority receipt records
-the nature and the withheld capability. Such tasks may propose follow-up work but
-cannot yield on a blocking proposal.
+the nature and the withheld capability. Such tasks may propose follow-up work but,
+by default, cannot yield on a blocking proposal. That ceiling is a
+[judgment-shaped kernel rule](../spec/system/03_ORCHESTRATION.md#judgment-shaped-kernel-rules),
+not a safety invariant: a blocking submission is either held for a bounded
+apply/refuse decision (routed to the graph's decision application when one is
+configured, otherwise to the operator) or refused with the reason; while a
+decision is pending nothing proceeds, and a refusal returns the reason to the
+worker as feedback on its continuation.
 
 The execution policy (`agent-execution/v2`) separates the two decisions a former
 preset bundled:
