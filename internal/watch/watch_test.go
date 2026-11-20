@@ -23,7 +23,9 @@ func TestValidateRefusesOutOfContractWatches(t *testing.T) {
 	}
 	cases := map[string]func(*Spec){
 		"version":       func(s *Spec) { s.Version = "" },
-		"owner":         func(s *Spec) { s.Owner = Owner{Kind: "responsibility", ID: "r1"} },
+		"owner kind":    func(s *Spec) { s.Owner = Owner{Kind: "session", ID: "s1"} },
+		"owner id":      func(s *Spec) { s.Owner = Owner{Kind: "attempt"} },
+		"operator id":   func(s *Spec) { s.Owner = Owner{Kind: "operator", ID: "x"} },
 		"triage":        func(s *Spec) { s.Triage = map[string]any{"policy_ref": "x"} },
 		"empty scope":   func(s *Spec) { s.Condition.Scope = Scope{} },
 		"type":          func(s *Spec) { s.Condition.Types = []string{"message"} },
@@ -115,5 +117,17 @@ func TestGroupKeyAndLevels(t *testing.T) {
 	}
 	if Max(Digest, Escalate) != Escalate || Max(Wake, Notify) != Wake || Max(Notify, "bogus") != Notify {
 		t.Fatal("level order broken")
+	}
+}
+
+func TestScopeWithinGrant(t *testing.T) {
+	grant := Scope{Project: "p", Graph: "g"}
+	if !(Scope{Project: "p", Graph: "g", Run: "r"}).Within(grant) {
+		t.Fatal("a narrower scope was refused")
+	}
+	for _, s := range []Scope{{Project: "p"}, {Graph: "other"}, {Project: "q", Graph: "g"}} {
+		if s.Within(grant) {
+			t.Fatalf("%+v escaped its grant", s)
+		}
 	}
 }

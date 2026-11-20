@@ -11,9 +11,17 @@ import (
 	"mitos/internal/watch"
 )
 
-// watchRoutes expose operator watches (spec 09 §6). Responsibility and attempt
-// owners, and their granted tools, arrive with owner delivery.
+// watchRoutes expose watches (spec 09 §6). The operator creates watches for
+// any owner; responsibility and attempt owners act through granted tools.
 func (s *Server) watchRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/watch-inboxes/{kind}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		owner := watch.Owner{Kind: r.PathValue("kind"), ID: r.PathValue("id")}
+		if owner.Kind != watch.OwnerResponsibility && owner.Kind != watch.OwnerAttempt {
+			writeJSON(w, 400, map[string]string{"error": "owner kind must be responsibility or attempt"})
+			return
+		}
+		writeJSON(w, 200, s.engine.Store.WatchInbox(owner))
+	})
 	mux.HandleFunc("POST /api/watches", func(w http.ResponseWriter, r *http.Request) {
 		var spec watch.Spec
 		if !watchBody(w, r, &spec) {

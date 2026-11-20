@@ -62,6 +62,7 @@ var codexProfile = runtimeProfile{
 		"graph.propose":    {BoundedGrant: true, BlockedDenial: true, Note: "Proposals are validated and committed only by the kernel."},
 		"agent.specialize": {BoundedGrant: true, BlockedDenial: true, Note: "Specializations are validated against the base definition by the kernel."},
 		ProposalCapability: {BoundedGrant: true, BlockedDenial: true, Note: "Workers propose work only on their terminal result; the orchestrator admits it through graph validation. Native subagents are disabled."},
+		WatchCapability:    {BoundedGrant: true, BlockedDenial: true, Note: "Mitos exposes the watch tools only when granted; watch scope is clamped to the attempt's graph."},
 	},
 }
 
@@ -298,6 +299,11 @@ var handoffToolCapability = map[string]string{
 	"artifact_list":     "artifact.read",
 	"artifact_read":     "artifact.read",
 	"artifact_search":   "artifact.read",
+	"watch_create":      WatchCapability,
+	"watch_renew":       WatchCapability,
+	"watch_cancel":      WatchCapability,
+	"watch_inbox":       WatchCapability,
+	"delivery_outcome":  WatchCapability,
 }
 
 func handoffToolGranted(r AuthorityReceipt, tool string) bool {

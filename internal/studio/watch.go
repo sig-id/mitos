@@ -17,9 +17,13 @@ import (
 // admitted-but-undelivered events, so a restart between admission and its
 // delivery receipt loses nothing and delivers nothing twice.
 type Watch struct {
-	ID            string                  `json:"id"`
-	Spec          watch.Spec              `json:"spec"`
-	State         string                  `json:"state"` // active, expired, cancelled
+	ID    string     `json:"id"`
+	Spec  watch.Spec `json:"spec"`
+	State string     `json:"state"` // active, expired, cancelled, settled, revoked
+	// Grant is the scope the owner held at creation; Spec.Condition.Scope is
+	// within it. Revocation compares the owner's current grant against it.
+	Grant         watch.Scope             `json:"grant"`
+	CreatedBy     *watchCreator           `json:"created_by,omitempty"`
 	CreatedAt     time.Time               `json:"created_at"`
 	CreatedSeq    int64                   `json:"created_seq"`
 	Renewals      int                     `json:"renewals"`
@@ -37,7 +41,7 @@ type WatchDelivery struct {
 	ID         string         `json:"id"`
 	WatchID    string         `json:"watch_id"`
 	Owner      watch.Owner    `json:"owner"`
-	Kind       string         `json:"kind"` // group, expired, silent
+	Kind       string         `json:"kind"` // group, expired, silent, revoked, degraded, digest
 	Level      watch.Level    `json:"level"`
 	GroupKey   string         `json:"group_key,omitempty"`
 	FirstSeq   int64          `json:"first_seq,omitempty"`
@@ -55,6 +59,18 @@ type WatchDelivery struct {
 	ItemState  string     `json:"item_state,omitempty"` // open, resolved, superseded
 	Updates    int        `json:"updates,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// Owner inbox state for responsibility and attempt owners (spec 09 §3).
+	// Generation is the responsibility generation current when the receipt
+	// was written; Inbox is queued or folded; Absorbed is the digest this
+	// queued receipt carries; Trigger is the graph wake registration written
+	// in the same journal record.
+	Generation        int64      `json:"generation,omitempty"`
+	Inbox             string     `json:"inbox,omitempty"`
+	Absorbed          *WatchFold `json:"absorbed,omitempty"`
+	Trigger           int64      `json:"trigger,omitempty"`
+	Outcome           string     `json:"outcome,omitempty"`
+	OutcomeGeneration int64      `json:"outcome_generation,omitempty"`
+	OutcomeAt         *time.Time `json:"outcome_at,omitempty"`
 }
 
 type watchChange struct {
@@ -63,6 +79,10 @@ type watchChange struct {
 	Delivery *WatchDelivery `json:"delivery,omitempty"`
 	End      *watchEnd      `json:"end,omitempty"`
 	Resolve  *watchResolve  `json:"resolve,omitempty"`
+	// Notice is a second receipt written with Delivery: the single
+	// watch_degraded notice for a fold episode.
+	Notice  *WatchDelivery `json:"notice,omitempty"`
+	Outcome *watchOutcome  `json:"outcome,omitempty"`
 }
 type watchRenewal struct {
 	ID        string    `json:"id"`
@@ -76,9 +96,7 @@ type watchResolve struct {
 	DeliveryID string `json:"delivery_id"`
 }
 
-const maxOperatorWatches = 256
-
-var errWatchLimit = errors.New("operator watch limit reached")
+var errWatchLimit = errors.New("owner watch limit reached")
 
 func (s *Store) applyWatch(e Event, c *watchChange) error {
 	if s.watches == nil {
@@ -86,6 +104,7 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.watchDeliveries = map[string]*WatchDelivery{}
 		s.watchOrder = map[string][]string{}
 		s.watchItems = map[string]string{}
+		s.watchInboxes = map[string]*watchInbox{}
 	}
 	if w := c.Create; w != nil {
 		if s.watches[w.ID] != nil {
@@ -104,8 +123,16 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		w.Spec.Lease.ExpiresAt = r.ExpiresAt
 		w.Renewals++
 	}
-	if d := c.Delivery; d != nil {
+	for _, d := range []*WatchDelivery{c.Delivery, c.Notice} {
+		if d == nil {
+			continue
+		}
 		if err := s.applyWatchDelivery(e, d); err != nil {
+			return err
+		}
+	}
+	if o := c.Outcome; o != nil {
+		if err := s.applyDeliveryOutcome(e, o); err != nil {
 			return err
 		}
 	}
@@ -131,7 +158,8 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 
 func (s *Store) applyWatchDelivery(e Event, d *WatchDelivery) error {
 	w := s.watches[d.WatchID]
-	if w == nil || w.State != "active" || s.watchDeliveries[d.ID] != nil {
+	// A digest spans the owner's watches and may outlive the one it names.
+	if w == nil || w.State != "active" && d.Kind != "digest" || s.watchDeliveries[d.ID] != nil {
 		return errors.New("delivery for inactive watch")
 	}
 	saved := *d
@@ -197,6 +225,7 @@ func (s *Store) applyWatchDelivery(e Event, d *WatchDelivery) error {
 	}
 	s.watchDeliveries[d.ID] = &saved
 	s.watchOrder[d.WatchID] = append(s.watchOrder[d.WatchID], d.ID)
+	s.applyInbox(e, &saved)
 	return nil
 }
 
@@ -283,25 +312,48 @@ func (s *Store) observeWatches(f watch.Fact) {
 	}
 }
 
-// CreateWatch validates and records an operator watch.
+// CreateWatch validates and records a watch created by the operator. A
+// responsibility or attempt owner's scope is clamped to that owner's grant.
 func (s *Store) CreateWatch(spec watch.Spec) (Watch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createWatchLocked(spec, nil)
+}
+
+func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, error) {
 	now := time.Now().UTC()
 	if err := spec.Validate(now); err != nil {
 		return Watch{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	grant, err := s.ownerGrant(spec.Owner)
+	if err != nil {
+		return Watch{}, err
+	}
+	// Clamp: an unset project or graph narrows to the owner's grant; a
+	// conflicting value is refused.
+	scope := &spec.Condition.Scope
+	for _, f := range []struct {
+		field *string
+		value string
+	}{{&scope.Project, grant.Project}, {&scope.Graph, grant.Graph}} {
+		if *f.field == "" {
+			*f.field = f.value
+		}
+	}
+	if !scope.Within(grant) {
+		return Watch{}, errors.New("condition.scope must stay within the owner's graph")
+	}
 	active := 0
 	for _, w := range s.watches {
 		if w.State == "active" && w.Spec.Owner.Key() == spec.Owner.Key() {
 			active++
 		}
 	}
-	if active >= maxOperatorWatches {
+	if active >= spec.Owner.MaxActive() {
 		return Watch{}, errWatchLimit
 	}
 	spec.Lease.ExpiresAt = spec.Lease.ExpiresAt.UTC()
-	w := Watch{ID: newID("watch"), Spec: spec, State: "active", CreatedAt: now}
+	w := Watch{ID: newID("watch"), Spec: spec, State: "active", CreatedAt: now, Grant: grant, CreatedBy: by}
 	if err := s.commit("", "effect", "watch_created", change{Watch: &watchChange{Create: &w}}); err != nil {
 		return Watch{}, err
 	}
@@ -311,6 +363,10 @@ func (s *Store) CreateWatch(spec watch.Spec) (Watch, error) {
 func (s *Store) RenewWatch(id string, expiresAt time.Time) (Watch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.renewWatchLocked(id, expiresAt)
+}
+
+func (s *Store) renewWatchLocked(id string, expiresAt time.Time) (Watch, error) {
 	w := s.watches[id]
 	if w == nil {
 		return Watch{}, ErrNotFound
@@ -330,6 +386,10 @@ func (s *Store) RenewWatch(id string, expiresAt time.Time) (Watch, error) {
 func (s *Store) CancelWatch(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.cancelWatchLocked(id)
+}
+
+func (s *Store) cancelWatchLocked(id string) error {
 	w := s.watches[id]
 	if w == nil {
 		return ErrNotFound
@@ -372,16 +432,23 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 		if w.State != "active" {
 			continue
 		}
+		if !s.ownerGrantHolds(w) {
+			d := s.summaryDelivery(w, "revoked", watch.Notify, now)
+			if err := s.commitWatchDelivery("watch_revoked", w, &d, &watchEnd{ID: id, State: "revoked"}, now); err != nil {
+				return err
+			}
+			continue
+		}
 		if !now.Before(w.Spec.Lease.ExpiresAt) {
 			d := s.summaryDelivery(w, "expired", watch.Notify, now)
-			if err := s.commit("", "effect", "watch_expired", change{Watch: &watchChange{Delivery: &d, End: &watchEnd{ID: id, State: "expired"}}}); err != nil {
+			if err := s.commitWatchDelivery("watch_expired", w, &d, &watchEnd{ID: id, State: "expired"}, now); err != nil {
 				return err
 			}
 			continue
 		}
 		if w.Spec.MaxSilenceMS > 0 && !w.Silent && !now.Before(w.LastActivity.Add(time.Duration(w.Spec.MaxSilenceMS)*time.Millisecond)) {
 			d := s.summaryDelivery(w, "silent", watch.Notify, now)
-			if err := s.commit("", "effect", "watch_silent", change{Watch: &watchChange{Delivery: &d}}); err != nil {
+			if err := s.commitWatchDelivery("watch_silent", w, &d, nil, now); err != nil {
 				return err
 			}
 		}
@@ -396,12 +463,12 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 				continue
 			}
 			d := s.groupDelivery(w, g, now)
-			if err := s.commit("", "effect", "watch_delivered", change{Watch: &watchChange{Delivery: &d}}); err != nil {
+			if err := s.commitWatchDelivery("watch_delivered", w, &d, nil, now); err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+	return s.flushDigests(now)
 }
 
 // summaryDelivery reports a lease or silence notice with the count of events
@@ -461,10 +528,11 @@ func (s *Store) groupDelivery(w *Watch, g *watch.Group, now time.Time) WatchDeli
 	return d
 }
 
-// attachWatchItem decides whether a wake/escalate delivery for the operator
-// opens a Notifications item or coalesces into the open one.
+// attachWatchItem decides whether a delivery opens a Notifications item or
+// coalesces into the open one: wake and escalate for the operator, and
+// escalate for any other owner (escalate is wake plus an operator item).
 func (s *Store) attachWatchItem(d *WatchDelivery, w *Watch, now time.Time) {
-	if d.Owner.Kind != "operator" || d.Level.Rank() < watch.Wake.Rank() {
+	if d.Owner.Kind == watch.OwnerOperator && d.Level.Rank() < watch.Wake.Rank() || d.Owner.Kind != watch.OwnerOperator && d.Level != watch.Escalate {
 		return
 	}
 	open := s.watchDeliveries[s.watchItems[w.ID+"\x00"+d.GroupKey]]

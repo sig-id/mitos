@@ -272,7 +272,7 @@ func TestWatchCreationRefusesUnsupportedOwnersAndTriage(t *testing.T) {
 	spec := runWatch("run_x", nil, watch.Notify, 0)
 	spec.Owner = watch.Owner{Kind: "responsibility", ID: "responsibility_1"}
 	if _, err := s.CreateWatch(spec); err == nil {
-		t.Fatal("responsibility owner accepted before owner delivery exists")
+		t.Fatal("a responsibility owner without an active graph was accepted")
 	}
 	spec = runWatch("run_x", nil, watch.Notify, 0)
 	spec.Triage = map[string]any{"policy_ref": "p"}

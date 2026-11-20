@@ -63,7 +63,8 @@
     ],
     "optional": [
       "workspace.read",
-      "artifact.read"
+      "artifact.read",
+      "watch.manage"
     ]
   },
   "limits": {

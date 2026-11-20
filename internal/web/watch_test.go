@@ -61,3 +61,14 @@ func TestWatchAPIEscalationReachesNotifications(t *testing.T) {
 		t.Fatalf("missing watch: %d", res.Code)
 	}
 }
+
+func TestWatchInboxAPI(t *testing.T) {
+	server, _ := testServer(t)
+	res := request(server, "GET", "/api/watch-inboxes/responsibility/graph_none", "", false)
+	if res.Code != 200 || !strings.Contains(res.Body.String(), `"pending":[]`) || !strings.Contains(res.Body.String(), `"capacity":64`) {
+		t.Fatalf("empty inbox: %d %s", res.Code, res.Body.String())
+	}
+	if res = request(server, "GET", "/api/watch-inboxes/session/s1", "", false); res.Code != 400 {
+		t.Fatalf("session owner accepted: %d", res.Code)
+	}
+}

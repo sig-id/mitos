@@ -3,7 +3,8 @@
 A watch tells you when runtime events in a project, graph, task or run need your
 attention. The runtime evaluates it over the journal; nothing runs in a workspace.
 The contract is [spec 09](../spec/system/09_WATCHES_AND_TRIAGE.md). This release
-implements gate W1: operator-owned watches without triage.
+implements gates W1 and W2: watches owned by the operator, by an adaptive graph's
+responsibility, or by one attempt, without triage.
 
 ## Create one
 
@@ -27,6 +28,7 @@ mitos watch deliveries --id watch_…
 mitos watch renew --id watch_… --expires 2026-11-21T21:00:00Z
 mitos watch cancel --id watch_…
 mitos watch resolve --delivery delivery_…
+mitos watch inbox --owner responsibility:graph_…
 ```
 
 The HTTP API is under `/api/watches` and needs the `Mitos-API-Version` header.
@@ -55,8 +57,34 @@ Unknown fields are refused.
 Deliveries are journal receipts. A restart between an event and its delivery
 neither loses nor repeats it.
 
+## Watches for orchestrators and attempts
+
+`owner` can also be `{"kind": "responsibility", "id": "graph_…"}`, which is an
+adaptive graph's supervisory responsibility, or `{"kind": "attempt", "id": "run_…"}`,
+which is one attempt in a graph. Both may watch only their own graph. An unset
+project or graph in the scope is filled in, and a different one is refused.
+
+- **Wake.** A responsibility has no running session between planning rounds. A
+  `wake` or `escalate` delivery registers a graph trigger in the same journal
+  record, and the kernel starts the next planning round from it. The round's
+  context lists the pending deliveries. A restart or an orchestrator replacement
+  neither loses nor repeats the wake.
+- **Inbox.** Up to 64 deliveries queue per owner. `digest` deliveries, and
+  `notify` deliveries once the inbox is full, are folded into a digest. A full
+  inbox sends one `watch_degraded` notice. Wakes still queue and still wake. The
+  next queued delivery carries the digest.
+- **Generation.** Each delivery records the orchestrator generation current when
+  it was written. Only the current generation can record an outcome. A replaced
+  orchestrator's outcome is refused.
+- **Endings.** An attempt's watches end when the attempt finishes. Closing the
+  graph revokes its watches with a notice.
+
+Agents use the `watch_create`, `watch_renew`, `watch_cancel`, `watch_inbox` and
+`delivery_outcome` tools. They get these tools only when granted the `watch.manage`
+capability; the default orchestrator definition requests it. Deliveries arrive as
+`mitos.cooperation/v2` `observation` messages marked as untrusted evidence.
+
 ## Not yet available
 
-Watches owned by an orchestrator's responsibility or by an attempt, the
-`watch_*` agent tools, and decision-model triage are later gates (W2–W3). The
-runtime refuses those fields instead of ignoring them.
+Decision-model triage is gate W3. The runtime refuses `triage` instead of ignoring
+it.

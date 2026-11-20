@@ -47,14 +47,45 @@ func Max(a, b Level) Level {
 	return a
 }
 
-// Owner receives deliveries. W1 admits only the operator; responsibility and
-// attempt owners need the session delivery and grant clamping added in W2.
+// Owner receives deliveries: the operator, a responsibility (an adaptive
+// graph's supervisory responsibility, addressed by the graph ID like its
+// mailbox), or one attempt (a run). Watches never belong to a session.
 type Owner struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id,omitempty"`
 }
 
+const (
+	OwnerOperator       = "operator"
+	OwnerResponsibility = "responsibility"
+	OwnerAttempt        = "attempt"
+)
+
 func (o Owner) Key() string { return o.Kind + ":" + o.ID }
+
+func (o Owner) validate() error {
+	switch o.Kind {
+	case OwnerOperator:
+		if o.ID != "" {
+			return errors.New("the operator owner takes no id")
+		}
+	case OwnerResponsibility, OwnerAttempt:
+		if !idPattern.MatchString(o.ID) {
+			return errors.New("responsibility and attempt owners need a valid id")
+		}
+	default:
+		return errors.New("owner.kind must be operator, responsibility or attempt")
+	}
+	return nil
+}
+
+// MaxActive bounds an owner's active watches.
+func (o Owner) MaxActive() int {
+	if o.Kind == OwnerOperator {
+		return 256
+	}
+	return 32
+}
 
 type Scope struct {
 	Project string `json:"project,omitempty"`
@@ -64,6 +95,13 @@ type Scope struct {
 }
 
 func (s Scope) empty() bool { return s.Project == "" && s.Graph == "" && s.Task == "" && s.Run == "" }
+
+// Within reports whether s is no wider than grant: every field the grant sets
+// is set to the same value in s.
+func (s Scope) Within(grant Scope) bool {
+	return (grant.Project == "" || s.Project == grant.Project) && (grant.Graph == "" || s.Graph == grant.Graph) &&
+		(grant.Task == "" || s.Task == grant.Task) && (grant.Run == "" || s.Run == grant.Run)
+}
 
 // Condition is a closed filter. There are no expressions or text matches.
 type Condition struct {
@@ -113,8 +151,8 @@ func (s Spec) Validate(now time.Time) error {
 	if s.Version != Version {
 		return fmt.Errorf("watch version must be %s", Version)
 	}
-	if s.Owner.Kind != "operator" || s.Owner.ID != "" {
-		return errors.New("only operator-owned watches are supported; responsibility and attempt owners arrive with owner delivery")
+	if err := s.Owner.validate(); err != nil {
+		return err
 	}
 	if s.Description == "" || len(s.Description) > 200 {
 		return errors.New("description must be 1–200 bytes")
