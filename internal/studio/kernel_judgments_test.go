@@ -457,9 +457,19 @@ func TestJudgmentRefuseDefersUntilHarvestFinishes(t *testing.T) {
 	if m := graph.Members[r.TaskID]; m.CurrentRunID != r.ID {
 		t.Fatal("member requeued before harvest finished")
 	}
+	// The production completion path meets exactly this state: no result, no
+	// pending held judgment, only the journaled refusal. Its guard must route
+	// the attempt through Complete instead of failing it as a missing result.
+	current, err := e.Store.Get(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Result != nil || current.HeldJudgment != nil || refusedJudgmentPending(&current) == nil {
+		t.Fatal("fixture does not match the completion-path precondition after refusal")
+	}
 	// The completion path finalizes the refusal: cancelled attempt, released
 	// claim, and a requeued member with the feedback continuation.
-	if err := e.Store.Complete(r.ID, "Judgment refused", false); err != nil {
+	if err := e.Store.Complete(r.ID, "Result held for a kernel judgment; evidence is preserved.", false); err != nil {
 		t.Fatal(err)
 	}
 	run, _ = e.Store.Get(r.ID)
