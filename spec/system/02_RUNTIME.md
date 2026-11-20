@@ -238,6 +238,10 @@ ownership failures MUST NOT be overridden. `before_recovery` requires supervisio
 Verification MUST still run after an allowed segment. A successful inference is not
 successful work.
 
+Watch triage ([09 §4](09_WATCHES_AND_TRIAGE.md#4-triage)) is not a runner hook. It
+runs while work is live, it has no execution effect, and its failures deliver at the
+watch's default level instead of parking the Run.
+
 ### Model decision lifecycle
 
 Each enabled boundary MUST persist a request before sending it. A receipt binds its

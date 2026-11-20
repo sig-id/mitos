@@ -161,7 +161,8 @@ explicit deterministic handling even when a model proposes their recovery.
 The runtime MUST persist a orchestrator cursor, trigger identity, pending expansion
 obligations, candidate/decision receipts, durable waits, and remaining allowance.
 Relevant task outcomes, accepted artifacts, failures, decisions, and service inputs
-can wake it. Event consumption and expansion/wait registration MUST follow the
+can wake it. [Watches](09_WATCHES_AND_TRIAGE.md) declare that relevance and own the
+grouping, delivery levels and wake receipts. Event consumption and expansion/wait registration MUST follow the
 no-loss receipt contract. Duplicate delivery cannot create duplicate tasks or calls.
 Coalescing MUST retain contributing event identities and a bounded durable window;
 it MUST NOT discard unresolved work or cause starvation under continuous updates.

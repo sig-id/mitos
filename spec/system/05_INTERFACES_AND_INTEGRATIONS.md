@@ -354,7 +354,9 @@ The normalized answer retains the returned model identity, choice, confidence,
 probabilities, and optional input/output token usage. A configured alias is allowed;
 pin a provider model revision when reproducibility matters. A changed provider alias
 cannot make stochastic inference reproducible, so replay uses saved answers.
-Only string-valued Choice is implemented for runtime control. Predicate/Noul, Score,
+Only string-valued Choice is implemented for runtime control. Watch triage reuses
+these adapters with its own question and projection ([09 §4](09_WATCHES_AND_TRIAGE.md#4-triage)).
+Predicate/Noul, Score,
 images, batch inference, streaming, tool calling, and generated explanations are not
 part of this profile. Future types require explicit mappings and validation.
 

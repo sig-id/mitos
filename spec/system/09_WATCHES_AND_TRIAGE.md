@@ -1,0 +1,191 @@
+# 09 – Watches, delivery, and triage
+
+This contract defines how an owner declares which runtime events deserve its
+attention, how the runtime groups and delivers them, and how a decision model may
+grade that delivery. It implements the relevance and coalescing obligations of
+[event-driven coordination](03_ORCHESTRATION.md#event-driven-coordination-and-replacement).
+Requirements are targets until gates W1–W4 record evidence. Rationale is in
+[ADR 0009](../ADRs/0009_WATCHES_AND_TRIAGE.md).
+
+## Vocabulary
+
+| Term | Meaning |
+| --- | --- |
+| Watch | A durable, leased subscription evaluated by the runtime over the journal |
+| Owner | The responsibility or operator that receives a watch's deliveries |
+| Group | The events of one watch, within one group key, that are delivered together |
+| Delivery | One graded, receipted notice to an owner, referencing contributing events |
+| Triage | The decision-model role that selects a delivery level for a group |
+
+## 1. Watch record
+
+A watch is `mitos.watch/v1`. Unknown versions MUST be rejected; there is no
+unversioned form.
+
+```json
+{
+  "version": "mitos.watch/v1",
+  "id": "watch_…",
+  "owner": {"kind": "responsibility", "id": "responsibility_…"},
+  "description": "integration failures in the payments graph",
+  "cursor": 18231,
+  "condition": {
+    "scope": {"project": "project_…", "graph": "graph_…"},
+    "types": ["evidence", "decision"],
+    "kinds": ["verification_failed", "quiescent", "harness_session_recorded"]
+  },
+  "lease": {"expires_at": "2026-11-21T09:00:00Z", "max_renewals": 16},
+  "grouping": {"by": ["run_id"], "wait_ms": 2000, "interval_ms": 60000, "max_events": 64},
+  "max_silence_ms": 900000,
+  "default_level": "notify",
+  "triage": {"policy_ref": "triage_policy_…", "instructions": "Wake only when the failure changes which task should run next."}
+}
+```
+
+- **Owner.** A responsibility, an attempt, or the operator. Watches MUST NOT belong
+  to a session. A responsibility's watches survive orchestrator replacement, and every
+  delivery binds the responsibility generation current when it is written. An attempt's
+  watches are clamped to that attempt's grant and end when the attempt settles,
+  whatever their lease. This mirrors agent-owned monitors that stop with their agent.
+- **Multiplicity.** Owners and watches are one-to-many, and watches and events are
+  many-to-many. An owner holds at most 32 active watches, and the operator at most 256.
+  When an event matches several watches of the same owner, the owner receives it once.
+  The receipt lists every matching watch, and its level is the highest level any of
+  them assigns. Different owners receive their own deliveries independently.
+- **Cursor.** The journal sequence after which the watch has consumed events. The
+  cursor advances only in the same transaction that writes the delivery or digest
+  receipt for those events, so no event is lost or delivered twice.
+- **Condition.** A closed filter on scope (project, graph, task, run, responsibility),
+  event `type`, and event `kind`. The scope MUST be within what the creator may read.
+  A watch cannot match events outside that scope, including after the creator's
+  grant changes. Revocation ends the watch with a must-deliver notice. There are no
+  expressions, regular expressions or free-text matches in v1.
+- **Lease.** Every watch has an absolute expiry, at most 24 hours after creation or
+  renewal. Renewal is an explicit owner or operator operation, bounded by
+  `max_renewals` (1–1024). Expiry ends the watch and produces a must-deliver notice
+  carrying the count of events matched since the last delivery.
+- **Grouping.** `by` takes up to three fields from `run_id`, `task_id` and `kind`.
+  A group opens on its first matching event, is first delivered after `wait_ms`
+  (0–60000), and then at most once per `interval_ms` (1000–3600000) while events
+  continue. `max_events` (1–256) closes a group early. Continuous updates MUST NOT
+  postpone delivery past `interval_ms` (no starvation), and a delivery MUST retain
+  the identities of all contributing events (sequence range plus counts by kind).
+- **Maximum silence.** If set (60000–86400000), a window with no matching events
+  produces a must-deliver `watch_silent` notice. This is the absence signal; quiet
+  output alone is not evidence of a stall ([04](04_STATE_AND_VERIFICATION.md#observation-and-steering)).
+
+Creation, renewal, cancellation and expiry are journal events. A watch is created
+through the runtime API by an authorized operator, or by an orchestrator through a
+granted `watch_create` tool whose scope is clamped to its responsibility's graph.
+
+## 2. Must-deliver events
+
+These events bypass the author's condition and triage for any watch whose scope
+contains them. They are delivered at the level shown, or at the watch's default
+level if that is higher:
+
+| Event | Level |
+| --- | --- |
+| Run terminal: completed, failed, cancelled, parked | `notify` |
+| Quiescence `block` edge, `blocked_on_human` | `wake` |
+| `observation_failed`, supervision incident or hold | `escalate` |
+| Model decision parked or outcome unknown | `wake` |
+| Watch lease expiry, `watch_silent`, `watch_degraded`, scope revocation | `notify` |
+
+The list is runtime-owned, versioned with `mitos.watch/v1`, and cannot be narrowed by
+an author.
+
+## 3. Delivery levels and sinks
+
+Levels are totally ordered: `digest < notify < wake < escalate`. No level discards
+events.
+
+| Level | Effect |
+| --- | --- |
+| `digest` | Counted into the owner's next digest; no message per group |
+| `notify` | Appended to the owner's inbox; no wake |
+| `wake` | Appended to the inbox and wakes the owner through its wait registration |
+| `escalate` | `wake`, plus an operator item in the Notifications surface |
+
+The responsibility inbox becomes a bounded queue of delivery receipts. When it
+reaches its capacity, further `notify` deliveries fold into the pending digest, and
+a single `watch_degraded` notice records the fold. `wake` and `escalate` deliveries
+still wake their owner, carrying the folded count. The previous hard "inbox is full"
+error MUST NOT apply to watch deliveries.
+
+The owner receives deliveries as `mitos.cooperation/v2` `observation` messages
+bound to responsibility, generation, watch, sequence range and level. Delivered text
+is evidence. It MUST be presented as untrusted data, and it cannot carry
+instructions, grants or tool calls. A session that has been replaced cannot
+acknowledge a delivery addressed to a later generation, and a stale acknowledgement
+is rejected.
+
+A digest is delivered when the owner next wakes, or at a watch's `interval_ms`
+if it has no other delivery. It contains counts by kind and group, plus the sequence
+range.
+
+## 4. Triage
+
+Triage is optional. Without it, every matched group is delivered at `default_level`.
+
+**Question.** One Choice question per group, named `level`, using the shared
+decision service ([08 §5](08_AGENT_SESSIONS_AND_SUPERVISION.md#5-shared-decision-service))
+and the existing provider adapters ([05](05_INTERFACES_AND_INTEGRATIONS.md#decision-model-provider-profile)).
+The runtime offers `digest`, `notify` and `wake`, and offers `escalate` only when the
+owner's policy permits operator escalation. Triage is never invoked for
+must-deliver events.
+
+**Projection.** Watch ID and description, the author's triage instructions (at most
+4000 bytes), group key, event counts by kind, sequence range, up to eight
+runtime-authored evidence summaries with their kinds, the owner's current pending
+delivery count, and the remaining triage allowance. It excludes event payloads, raw
+output, transcripts, workspace contents and credentials. Evidence summaries written
+from worker output are untrusted data.
+
+**Acceptance.** Let `D` be the watch's default level and `A` the model's answer.
+
+- If `A ≥ D`, deliver at `A`.
+- If `A < D`, deliver at `A` only when both the configured confidence and the selected
+  probability meet the triage policy's thresholds. Otherwise deliver at `D`.
+- Refusal, an invalid answer, a timeout, a provider error, a missing credential or an
+  exhausted allowance delivers at `D` and records the reason.
+
+Triage MUST NOT park, steer, stop, continue, approve or accept work. It selects only a
+level from the offered set.
+
+**Durability.** The runtime persists the triage request before dispatch and the
+outcome before the delivery receipt. Replay uses recorded outcomes and never calls
+models. A request that is still pending at restart is not resent: the group is
+delivered at `D` with `outcome_unknown`. Every delivery records whether its level
+came from a rule, the default, triage, or a fallback, and why.
+
+**Budget.** A triage policy declares `max_calls` per watch lease (1–1024), a shared
+allowance per responsibility, and `timeout_ms` (1–30000). Pending and failed
+requests count. When the allowance is exhausted, the watch emits one
+`watch_degraded` notice and continues untriaged at `D`. Triage allowances are
+accounted separately from orchestrator, routing and supervision allowances.
+
+## 5. Outcomes and calibration
+
+Each delivery accepts at most one owner outcome: `acted`, `dismissed` or `deferred`.
+An operator may mark a delivered or digested group as `should_have_woken` or
+`needless_wake`. These records are evidence for tuning triage thresholds for a
+specific application and model, and the runtime MUST NOT adjust thresholds
+automatically from them. A watch report exposes counts by level, fallback reasons,
+outcomes, and triage calls used.
+
+## 6. Interfaces
+
+- HTTP: `POST /api/watches`, `GET /api/watches/{id}`, `POST /api/watches/{id}/renew`,
+  `POST /api/watches/{id}/cancel`, `GET /api/watches/{id}/deliveries`,
+  `POST /api/deliveries/{id}/outcome`. All require the `Mitos-API-Version` header.
+- Orchestrator tools (granted only): `watch_create`, `watch_renew`, `watch_cancel`,
+  `delivery_outcome`. Their scope is clamped to the caller's responsibility.
+- CLI: `mitos watch create|list|renew|cancel|deliveries`.
+
+## 7. Out of scope for v1
+
+Predicate (Noul) and Score questions; expression conditions; capability-declared
+watches in manifests; triage-selected steering or stopping; cross-project watches;
+external sources (WebSocket, MQTT topics) other than journalled service inputs.
+W4 defines which of these are admitted next.

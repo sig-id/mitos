@@ -48,6 +48,15 @@ router and supervisor responsibilities. [Agent sessions and supervision](system/
 defines six delivery slices, project preferences, the proposed COOPERATION.md
 convention, explicit model classification, and boundary enforcement limitations.
 
+## Watches and triage reading path
+
+[ADR 0009](ADRs/0009_WATCHES_AND_TRIAGE.md) records why attention is declared as
+runtime-evaluated watches rather than agent-run monitors, and why decision-model
+triage may raise but not freely lower delivery urgency. [Watches and triage](system/09_WATCHES_AND_TRIAGE.md)
+owns the record, must-deliver events, delivery levels and triage contract;
+[W1–W4](system/06_DELIVERY_AND_CONFORMANCE.md#watch-and-triage-delivery-gates)
+define delivery order.
+
 ## Enforced local execution reading path
 
 [ADR 0008](ADRs/0008_NUCLEUS_EXECUTION_PROVIDER.md) proposes Nucleus as the

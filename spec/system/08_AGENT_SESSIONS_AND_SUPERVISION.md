@@ -14,6 +14,7 @@ enforcement boundary.
 | Router | Selects the resolver for a particular request |
 | Decision model | Classifies evidence or selects among supplied eligible choices |
 | Supervisor | Independently examines actions and observations against project boundaries and can deny or stop work |
+| Triage | Grades how urgently a watch delivery reaches its owner ([09](09_WATCHES_AND_TRIAGE.md)); has no execution effect |
 | Daemon | A long-lived service process; not a model role |
 
 The obsolete project `/supervision` coordination endpoint and `desk supervision`
@@ -128,8 +129,9 @@ Every route records whether it came from a rule, classification or fallback.
 ## 5. Shared decision service
 
 The existing OpenAI Decisions and System One Choice adapters MUST be reused.
-Batch segment/recovery decisions, graph candidate selection, session routing and
-automated resolution share provider validation and outcome semantics. Each call
+Batch segment/recovery decisions, graph candidate selection, session routing,
+automated resolution and watch triage ([09 §4](09_WATCHES_AND_TRIAGE.md#4-triage))
+share provider validation and outcome semantics. Each call
 MUST reserve its allowance and persist intent before dispatch, and persist its
 outcome before an effect. Unknown consumption after interruption MUST NOT be
 silently resent. Classification and answer selection both count against budgets.
