@@ -227,6 +227,10 @@ func (s *Store) apply(e Event) error {
 			return err
 		}
 		if e.RunID == "" {
+			// Graph-level events carry no run, so the graph itself scopes the
+			// fact; without this observation a project- or graph-scoped watch
+			// would never see them.
+			s.observeWatches(s.graphFact(e, c.Graph))
 			return nil
 		}
 	}

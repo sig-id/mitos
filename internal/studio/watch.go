@@ -140,13 +140,25 @@ func (s *Store) applyWatchDelivery(e Event, d *WatchDelivery) error {
 		for _, seq := range d.Seqs {
 			delivered[seq] = true
 		}
-		// One owner receives an event once: drop it from every watch of that owner.
+		// One owner receives an event once: drop it from every watch of that
+		// owner and advance the delivery clock of every group it consumed, so
+		// the grouping interval holds whichever of those watches delivers next.
 		for _, other := range s.watches {
 			if other.State != "active" || other.Spec.Owner.Key() != d.Owner.Key() {
 				continue
 			}
 			for key, g := range other.Groups {
-				g.Entries = slices.DeleteFunc(g.Entries, func(x watch.Entry) bool { return delivered[x.Seq] })
+				consumed := false
+				g.Entries = slices.DeleteFunc(g.Entries, func(x watch.Entry) bool {
+					if delivered[x.Seq] {
+						consumed = true
+						return true
+					}
+					return false
+				})
+				if consumed {
+					other.LastDelivered[key] = e.At
+				}
 				if len(g.Entries) == 0 {
 					delete(other.Groups, key)
 				}
@@ -219,7 +231,13 @@ func watchRule(e Event, r *Run, c change) (watch.Level, string) {
 }
 
 func (s *Store) runFact(e Event, r *Run, c change) watch.Fact {
-	f := watch.Fact{Seq: e.Seq, At: e.At, Project: r.ProjectID, Task: r.TaskID, Run: r.ID, Type: e.Type, Kind: e.Kind}
+	project := r.ProjectID
+	if project == "" {
+		// Runs created through Store carry their project on the brief; the
+		// top-level field stays empty until a graph attempt binds one.
+		project = r.Brief.ProjectID
+	}
+	f := watch.Fact{Seq: e.Seq, At: e.At, Project: project, Task: r.TaskID, Run: r.ID, Type: e.Type, Kind: e.Kind}
 	if r.GraphAttempt != nil {
 		f.Graph = r.GraphAttempt.GraphID
 		if f.Project == "" && s.graphs[f.Graph] != nil {
@@ -228,6 +246,12 @@ func (s *Store) runFact(e Event, r *Run, c change) watch.Fact {
 	}
 	f.Rule, f.Reason = watchRule(e, r, c)
 	return f
+}
+
+// graphFact projects a graph-level journal event that carries no run: the
+// graph and its project scope the fact.
+func (s *Store) graphFact(e Event, c *graphChange) watch.Fact {
+	return watch.Fact{Seq: e.Seq, At: e.At, Project: c.Graph.ProjectID, Graph: c.Graph.ID, Type: e.Type, Kind: e.Kind}
 }
 
 // observeWatches folds one fact into every active watch. It runs inside apply,

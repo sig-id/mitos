@@ -10,9 +10,13 @@ import (
 )
 
 func runWatch(runID string, kinds []string, level watch.Level, wait int64) watch.Spec {
+	return scopeWatch(watch.Scope{Run: runID}, kinds, level, wait)
+}
+
+func scopeWatch(scope watch.Scope, kinds []string, level watch.Level, wait int64) watch.Spec {
 	return watch.Spec{
 		Version: watch.Version, Owner: watch.Owner{Kind: "operator"}, Description: "test watch",
-		Condition:    watch.Condition{Scope: watch.Scope{Run: runID}, Kinds: kinds},
+		Condition:    watch.Condition{Scope: scope, Kinds: kinds},
 		Lease:        watch.Lease{ExpiresAt: time.Now().Add(time.Hour), MaxRenewals: 2},
 		Grouping:     watch.Grouping{WaitMS: wait, IntervalMS: 1000, MaxEvents: 64, RepeatIntervalMS: 60000},
 		DefaultLevel: level,
@@ -290,4 +294,67 @@ func TestEngineLoopDeliversWithoutExplicitEvaluation(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("engine loop never delivered the group")
+}
+
+func TestProjectWatchMatchesRunsByBriefProject(t *testing.T) {
+	s := testStore(t)
+	brief := testBrief(".")
+	brief.ProjectID = "project_brief"
+	r, err := s.Create(brief, "Inventory", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := mustWatch(t, s, scopeWatch(watch.Scope{Project: "project_brief"}, nil, watch.Notify, 0))
+	evidence(t, s, r.ID, "note")
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, w.ID)
+	if len(got) != 1 || got[0].Count != 1 {
+		t.Fatalf("a run scoped only by its brief project was not delivered: %+v", got)
+	}
+}
+
+func TestWatchObservesGraphEventsWithoutRuns(t *testing.T) {
+	e, req := graphEngine(t, false)
+	s := e.Store
+	w := mustWatch(t, s, scopeWatch(watch.Scope{Project: req.ProjectID}, nil, watch.Notify, 0))
+	createGraphTest(t, e, req)
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, w.ID)
+	if len(got) != 1 || got[0].Counts["graph_created"] != 1 {
+		t.Fatalf("a graph-level event was never observed: %+v", got)
+	}
+}
+
+func TestOverlappingWatchesShareDeliveryTiming(t *testing.T) {
+	s := testStore(t)
+	r := createRun(t, s)
+	a := mustWatch(t, s, runWatch(r.ID, []string{"note"}, watch.Notify, 0))
+	b := mustWatch(t, s, runWatch(r.ID, []string{"note"}, watch.Notify, 0))
+	now := time.Now()
+	evidence(t, s, r.ID, "note")
+	if err := s.EvaluateWatches(now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(deliveries(t, s, a.ID)) + len(deliveries(t, s, b.ID)); got != 1 {
+		t.Fatalf("owner received %d deliveries, want 1", got)
+	}
+	// The undelivered copy of the next event must still honor interval_ms: a
+	// delivery through one watch advances every contributing watch's clock.
+	evidence(t, s, r.ID, "note")
+	if err := s.EvaluateWatches(now.Add(600 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(deliveries(t, s, a.ID)) + len(deliveries(t, s, b.ID)); got != 1 {
+		t.Fatalf("a second watch bypassed the grouping interval: %d deliveries", got)
+	}
+	if err := s.EvaluateWatches(now.Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(deliveries(t, s, a.ID)) + len(deliveries(t, s, b.ID)); got != 2 {
+		t.Fatalf("grouped event was never delivered after the interval: %d deliveries", got)
+	}
 }
