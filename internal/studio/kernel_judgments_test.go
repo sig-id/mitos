@@ -315,13 +315,33 @@ func TestJudgmentReplayAfterRestart(t *testing.T) {
 	if run.HeldJudgment == nil || run.HeldJudgment.State != "pending" {
 		t.Fatal("operator judgment must survive recovery:", run.HeldJudgment)
 	}
-	// A parked run completes without a result; nothing proceeds while pending.
-	if err := e.Store.Complete(r.ID, "held", false); err != nil {
+	// The agent completion path meets a held attempt: no result, pending
+	// judgment. It must route through Complete, which keeps the attempt
+	// parked (releasing its claim) so the card stays resolvable.
+	current, err := e.Store.Get(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Result != nil || current.HeldJudgment == nil || current.HeldJudgment.State != "pending" {
+		t.Fatal("fixture does not match the completion-path precondition")
+	}
+	if err = e.Store.Complete(r.ID, "Result held for a kernel judgment; evidence is preserved.", false); err != nil {
 		t.Fatal(err)
 	}
 	run, _ = e.Store.Get(r.ID)
 	if run.Status != "parked" || run.Result != nil {
 		t.Fatal("held run completed while judgment pending:", run.Status)
+	}
+	if run.Claim != nil && run.Claim.ReleasedAt == nil {
+		t.Fatal("held run kept its execution claim")
+	}
+	// The card remains resolvable after the attempt ended its execution.
+	if err = e.Store.Resolve(r.ID, run.Decision.ID, "apply"); err != nil {
+		t.Fatal(err)
+	}
+	run, _ = e.Store.Get(r.ID)
+	if run.Status != "done" || run.Result == nil || len(run.KernelJudgments) != 1 || run.KernelJudgments[0].State != "applied" {
+		t.Fatal("apply after completion-path park:", run.Status, run.KernelJudgments)
 	}
 }
 
@@ -380,5 +400,24 @@ func TestJudgmentSurvivesJournalReplay(t *testing.T) {
 	run, _ = reopened.Get(r.ID)
 	if run.Status != "cancelled" || len(run.KernelJudgments) != 1 || run.KernelJudgments[0].State != "refused" {
 		t.Fatal("refusal after replay:", run.Status, run.KernelJudgments)
+	}
+}
+
+func TestJudgmentRecoveryRefusesEndedAttempts(t *testing.T) {
+	e, r, a, token, _ := judgmentFixture(t, nil)
+	if _, err := submit(t, e, a, token, blockingSubmission("yield")); err != nil {
+		t.Fatal(err)
+	}
+	// The attempt is stopped while the operator card is still pending; the
+	// held submission can never be applied, so recovery refuses it.
+	if err := e.Store.Transition(r.ID, "run_cancelled", "cancelled", "Stopped", "Stopped before the judgment settled."); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.recoverKernelJudgments(); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := e.Store.Get(r.ID)
+	if run.HeldJudgment != nil || len(run.KernelJudgments) != 1 || run.KernelJudgments[0].State != "refused" || run.KernelJudgments[0].Reason != "attempt_ended_before_decision" {
+		t.Fatal("ended attempt judgment:", run.HeldJudgment, run.KernelJudgments)
 	}
 }

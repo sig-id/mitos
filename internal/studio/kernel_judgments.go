@@ -524,16 +524,26 @@ func (s *Store) finishHeldRunLocked(id, summary string) error {
 
 // recoverKernelJudgments settles judgments interrupted mid-flight. A pending
 // decision-application judgment whose attempt is no longer running was
-// interrupted with unknown consumption: the conservative default applies.
+// interrupted with unknown consumption, and a pending operator judgment whose
+// attempt already ended can never be applied: the conservative default
+// applies to both.
 func (s *Store) recoverKernelJudgments() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.runs {
 		j := r.HeldJudgment
-		if j == nil || j.State != "pending" || j.Mode != "decision_application" || r.Status == "running" {
+		if j == nil || j.State != "pending" {
+			continue
+		}
+		interrupted := j.Mode == "decision_application" && r.Status != "running"
+		ended := j.Mode == "operator" && r.Terminal()
+		if !interrupted && !ended {
 			continue
 		}
 		refused := withRefusalReason(*j, "interrupted_unknown_consumption")
+		if ended {
+			refused = withRefusalReason(*j, "attempt_ended_before_decision")
+		}
 		refused.State, refused.Submission = "refused", nil
 		if err := s.commit(r.ID, "effect", "kernel_judgment_interrupted", change{Judgment: &refused}); err != nil {
 			return fmt.Errorf("recover kernel judgment: %w", err)

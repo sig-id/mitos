@@ -944,6 +944,12 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			return err
 		}
 		if current.Result == nil {
+			if held := current.HeldJudgment; held != nil && held.State == "pending" {
+				// A kernel judgment holds the submission. Complete parks the
+				// attempt and releases its claim instead of failing it; the
+				// decision settles the held submission from there.
+				return e.Store.Complete(r.ID, "Result held for a kernel judgment; evidence is preserved.", false)
+			}
 			return errors.New("result_submission_missing: call result_submit before finishing; saved evidence is retained")
 		}
 		if err = e.Store.resultIntegrity(&current); err != nil {
