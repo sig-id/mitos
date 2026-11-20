@@ -169,6 +169,11 @@ func (e *Engine) judgeSubmission(run string, in ResultSubmission, req *judgmentR
 	}
 	j, err := s.holdForOperatorJudgment(run, in, req, rule, nil)
 	if err != nil {
+		if errors.Is(err, errJudgmentAllowance) {
+			// The decision allowance is spent; failing closed keeps a
+			// flailing proposer from flooding the operator with cards.
+			return nil, judgmentRefusal(req.code, req.detail)
+		}
 		return nil, err
 	}
 	return map[string]any{"held": "kernel_judgment", "judgment": j.ID, "code": j.Code, "detail": j.Detail, "note": "The submission is held for a judgment, not refused. Stop after submitting; this attempt continues with the judgment outcome."}, nil
@@ -216,8 +221,11 @@ func judgmentCard(r *Run, rule kernelJudgmentRule, req *judgmentRequired, digest
 }
 
 // holdForOperatorJudgment holds the submission and parks the attempt with an
-// operator card. It also serves as the fallback when a decision application
-// cannot decide: the pending record switches to operator mode in place.
+// operator card. A fresh hold charges the graph's decision allowance in the
+// same commit, so judgment cards cannot outlive the operator-flood bound the
+// spec places on them. It also serves as the fallback when a decision
+// application cannot decide: the pending record switches to operator mode in
+// place without charging again.
 func (s *Store) holdForOperatorJudgment(id string, in ResultSubmission, req *judgmentRequired, rule kernelJudgmentRule, escalated *KernelJudgment) (KernelJudgment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,6 +244,7 @@ func (s *Store) holdForOperatorJudgment(id string, in ResultSubmission, req *jud
 	if r.GraphAttempt != nil {
 		j.GraphID = r.GraphAttempt.GraphID
 	}
+	fresh := r.HeldJudgment == nil
 	if held := r.HeldJudgment; held != nil {
 		if held.State != "pending" || held.Digest != digest {
 			return KernelJudgment{}, ErrConflict
@@ -249,16 +258,58 @@ func (s *Store) holdForOperatorJudgment(id string, in ResultSubmission, req *jud
 		return KernelJudgment{}, ErrConflict
 	}
 	j.Proposals = len(in.Proposals)
+	var gc *graphChange
+	if fresh {
+		// A fresh operator judgment consumes the decision allowance; an
+		// escalation already charged it as an application judgment.
+		charged, err := s.chargeJudgmentGraphLocked(r, j.GraphID, "judgment_held")
+		if err != nil {
+			return KernelJudgment{}, err
+		}
+		gc = charged
+	}
 	card := judgmentCard(r, rule, req, digest, s.seq+1)
 	j.Mode, j.DecisionID, j.State = "operator", card.ID, "pending"
 	j.Submission = &in
 	if err := card.Validate(false); err != nil {
 		return KernelJudgment{}, err
 	}
-	if err := s.commit(id, "effect", "judgment_held", change{Judgment: &j, Decision: card, Status: "parked", Stage: "Waiting for a judgment", Summary: card.Context.BlockedBy}); err != nil {
+	if err := s.commit(id, "effect", "judgment_held", change{Judgment: &j, Decision: card, Status: "parked", Stage: "Waiting for a judgment", Summary: card.Context.BlockedBy, Graph: gc}); err != nil {
 		return KernelJudgment{}, err
 	}
 	return j, nil
+}
+
+// chargeJudgmentGraphLocked consumes one decision allowance slot and returns
+// the graph change that also carries the attempt's park projection (the change
+// supplies its own Graph, so graphRunChange will not run for it). Caller holds
+// the store lock.
+func (s *Store) chargeJudgmentGraphLocked(r *Run, graphID, kind string) (*graphChange, error) {
+	old := s.graphs[graphID]
+	if old == nil || old.Status != "active" || old.OrchestratorCalls >= old.Limits.OrchestratorCalls {
+		return nil, errJudgmentAllowance
+	}
+	now := time.Now().UTC()
+	seq := s.seq + 1
+	g := graphClone(*old)
+	g.OrchestratorCalls++
+	g.Revision++
+	g.UpdatedAt = now
+	if m := g.Members[r.TaskID]; m != nil && m.CurrentRunID == r.ID {
+		m.FactRevision++
+		m.State = "parked"
+		if g.Policy.Mode != "defined" && m.OrchestratorFor == "" {
+			g.Cursor = seq
+			g.Triggers = append(g.Triggers, GraphTrigger{Seq: seq, TaskID: r.TaskID, RunID: r.ID, Kind: kind})
+			if root := g.Members[g.RootTask]; root != nil && root.Sealed {
+				root.Sealed = false
+				g.Revision++
+			}
+		}
+	}
+	gc := &graphChange{Graph: g}
+	s.projectGraph(gc, old)
+	return gc, nil
 }
 
 // beginApplicationJudgment records the trigger and charges the graph's

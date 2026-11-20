@@ -256,7 +256,7 @@ func TestJudgmentDecisionApplicationRefuses(t *testing.T) {
 func TestJudgmentEscalatesUncertainApplicationToOperator(t *testing.T) {
 	server, calls := judgmentModelServer(t, "apply", 0.1)
 	app := decisionApplication(t, server)
-	e, r, a, token, _ := judgmentFixture(t, app)
+	e, r, a, token, g := judgmentFixture(t, app)
 	out, err := submit(t, e, a, token, blockingSubmission("yield"))
 	if err != nil {
 		t.Fatal(err)
@@ -270,6 +270,11 @@ func TestJudgmentEscalatesUncertainApplicationToOperator(t *testing.T) {
 	run, _ := e.Store.Get(r.ID)
 	if run.Status != "parked" || run.Decision == nil || run.HeldJudgment == nil || run.HeldJudgment.Mode != "operator" {
 		t.Fatal("escalation state:", run.Status, run.HeldJudgment)
+	}
+	// The escalation must not charge the decision allowance a second time.
+	graph, _ := e.Store.Graph(g.ID)
+	if graph.OrchestratorCalls != 1 {
+		t.Fatal("escalation double-charged the decision allowance:", graph.OrchestratorCalls)
 	}
 	if err = e.Store.Resolve(r.ID, run.Decision.ID, "apply"); err != nil {
 		t.Fatal(err)
@@ -487,5 +492,55 @@ func TestJudgmentRefuseDefersUntilHarvestFinishes(t *testing.T) {
 	graph, _ = e.Store.Graph(g.ID)
 	if m = graph.Members[r.TaskID]; m.CurrentRunID == "" || m.CurrentRunID == r.ID {
 		t.Fatal("continuation attempt not queued after finalization")
+	}
+}
+
+func TestJudgmentOperatorHoldChargesDecisionAllowance(t *testing.T) {
+	e, r, a, token, g := judgmentFixture(t, nil)
+	if _, err := submit(t, e, a, token, blockingSubmission("yield")); err != nil {
+		t.Fatal(err)
+	}
+	graph, _ := e.Store.Graph(g.ID)
+	if graph.OrchestratorCalls != 1 {
+		t.Fatal("operator judgment did not charge the decision allowance:", graph.OrchestratorCalls)
+	}
+	// Once the allowance is spent, further judgment triggers fail closed
+	// instead of minting another operator card.
+	e.Store.mu.Lock()
+	c := graphClone(*e.Store.graphs[g.ID])
+	c.Limits.OrchestratorCalls = c.OrchestratorCalls
+	if err := e.Store.commit("", "effect", "fixture_allowance", change{Graph: &graphChange{Graph: c}}); err != nil {
+		e.Store.mu.Unlock()
+		t.Fatal(err)
+	}
+	e.Store.mu.Unlock()
+	// Resolve the pending card first so the next submission is a new trigger.
+	run, _ := e.Store.Get(r.ID)
+	if err := e.Store.Resolve(r.ID, run.Decision.ID, "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	graph, _ = e.Store.Graph(g.ID)
+	next := graph.Members[r.TaskID].CurrentRunID
+	if next == "" || next == r.ID {
+		t.Fatal("continuation not queued after refusal")
+	}
+	continuation, _ := e.Store.Get(next)
+	if err := e.Store.Transition(continuation.ID, "fixture_continuation", "running", "Running", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	grantProposals(t, e, continuation.ID, true)
+	b, token2, err := e.Store.CreateBoundAgentSession("codex", "Handoff", e.Root, r.ProjectID, "", continuation.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = submit(t, e, b, token2, blockingSubmission("again")); handoffCode(err) != "proposal_blocking_not_permitted" {
+		t.Fatal("judgment minted past the decision allowance:", err)
+	}
+	continuation, _ = e.Store.Get(next)
+	if continuation.Decision != nil || continuation.HeldJudgment != nil || len(continuation.KernelJudgments) != 0 {
+		t.Fatal("exhausted allowance minted a card:", continuation.Decision != nil, continuation.HeldJudgment != nil)
 	}
 }
