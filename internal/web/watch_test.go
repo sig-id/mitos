@@ -36,7 +36,7 @@ func TestWatchAPIEscalationReachesNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	var home struct {
-		Watches []studio.WatchItem `json:"watches"`
+		Watches []studio.WatchItemView `json:"watches"`
 	}
 	if err := json.Unmarshal(request(server, "GET", "/api/workspace-home", "", false).Body.Bytes(), &home); err != nil {
 		t.Fatal(err)
@@ -44,15 +44,19 @@ func TestWatchAPIEscalationReachesNotifications(t *testing.T) {
 	if len(home.Watches) != 1 || home.Watches[0].Description != "inventory escalations" {
 		t.Fatalf("escalation missing from Notifications: %+v", home.Watches)
 	}
-	if res := request(server, "POST", "/api/deliveries/"+home.Watches[0].ID+"/resolve", "", false); res.Code != 200 {
+	if res := request(server, "POST", "/api/watch-items/"+home.Watches[0].ID+"/resolve", "", false); res.Code != 200 {
 		t.Fatalf("resolve: %d %s", res.Code, res.Body.String())
 	}
-	if res := request(server, "POST", "/api/deliveries/"+home.Watches[0].ID+"/resolve", "", false); res.Code != 409 {
+	if res := request(server, "POST", "/api/watch-items/"+home.Watches[0].ID+"/resolve", "", false); res.Code != 409 {
 		t.Fatalf("second resolve: %d", res.Code)
 	}
+	items := request(server, "GET", "/api/watches/"+w.ID+"/items", "", false)
+	if items.Code != 200 || !strings.Contains(items.Body.String(), `"state":"resolved"`) {
+		t.Fatalf("items: %d %s", items.Code, items.Body.String())
+	}
 	deliveries := request(server, "GET", "/api/watches/"+w.ID+"/deliveries", "", false)
-	if deliveries.Code != 200 || !strings.Contains(deliveries.Body.String(), `"item_state":"resolved"`) {
-		t.Fatalf("deliveries: %d %s", deliveries.Code, deliveries.Body.String())
+	if deliveries.Code != 200 || !strings.Contains(deliveries.Body.String(), `"item_id":"`+home.Watches[0].ID+`"`) || strings.Contains(deliveries.Body.String(), `"state"`) {
+		t.Fatalf("deliveries must reference the item, not carry its state: %d %s", deliveries.Code, deliveries.Body.String())
 	}
 	if res := request(server, "POST", "/api/watches/"+w.ID+"/cancel", "", false); res.Code != 200 {
 		t.Fatalf("cancel: %d", res.Code)

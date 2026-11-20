@@ -117,8 +117,11 @@ func TestResponsibilityWakeRegistersTriggerAndOpensPlanningRound(t *testing.T) {
 	evidence(t, s, helper, "verification_failed")
 	evaluate(t, s, time.Now().Add(time.Second))
 	got := deliveries(t, s, w.ID)
-	if len(got) != 1 || got[0].Inbox != "queued" || got[0].Generation != g.OrchestratorGeneration || got[0].Trigger == 0 {
+	if len(got) != 1 || got[0].Route != "inbox" || got[0].Generation != g.OrchestratorGeneration || got[0].Trigger == 0 || got[0].ItemID != "" {
 		t.Fatalf("wake delivery %+v", got)
+	}
+	if in := s.WatchInbox(responsibility(g)); len(in.Pending) != 1 || in.Pending[0].DeliveryID != got[0].ID || in.Pending[0].Delivery.ID != got[0].ID {
+		t.Fatalf("wake delivery is not an inbox item: %+v", in)
 	}
 	after, _ := s.Graph(g.ID)
 	var trigger *GraphTrigger
@@ -257,7 +260,7 @@ func TestRevokedGrantEndsWatchWithNotice(t *testing.T) {
 		t.Fatalf("watch outlived its grant: %s", got.State)
 	}
 	notices := deliveries(t, s, w.ID)
-	if len(notices) != 1 || notices[0].Kind != "revoked" || notices[0].Inbox != "queued" || notices[0].Trigger != 0 {
+	if len(notices) != 1 || notices[0].Kind != "revoked" || notices[0].Route != "inbox" || notices[0].Trigger != 0 {
 		t.Fatalf("revocation notice %+v", notices)
 	}
 }
@@ -278,8 +281,8 @@ func TestFullInboxFoldsIntoDigestWithOneDegradedNotice(t *testing.T) {
 	evaluate(t, s, now)
 	in := s.WatchInbox(responsibility(g))
 	degraded := 0
-	for _, d := range in.Pending {
-		if d.Kind == "degraded" {
+	for _, item := range in.Pending {
+		if item.Delivery.Kind == "degraded" {
 			degraded++
 		}
 	}
@@ -304,11 +307,23 @@ func TestFullInboxFoldsIntoDigestWithOneDegradedNotice(t *testing.T) {
 			wakes = append(wakes, d)
 		}
 	}
-	if len(wakes) != 1 || wakes[0].Level != watch.Wake || wakes[0].Inbox != "queued" || wakes[0].Trigger == 0 || wakes[0].Absorbed == nil || wakes[0].Absorbed.Count != extra+1 {
+	if len(wakes) != 1 || wakes[0].Level != watch.Wake || wakes[0].Route != "inbox" || wakes[0].Trigger == 0 {
 		t.Fatalf("wake past capacity %+v", wakes)
 	}
-	if in = s.WatchInbox(responsibility(g)); in.Folded.Receipts != 0 {
-		t.Fatalf("wake did not carry the digest: %+v", in.Folded)
+	in = s.WatchInbox(responsibility(g))
+	last := in.Pending[len(in.Pending)-1]
+	if last.DeliveryID != wakes[0].ID || last.Absorbed == nil || last.Absorbed.Count != extra+1 || in.Folded.Receipts != 0 {
+		t.Fatalf("wake did not carry the digest: %+v folded %+v", last, in.Folded)
+	}
+	// Folded receipts are deliveries but never inbox items.
+	folded := 0
+	for _, d := range deliveries(t, s, nw.ID) {
+		if d.Route == "folded" {
+			folded++
+		}
+	}
+	if folded != extra+1 {
+		t.Fatalf("folded receipts %d, want %d", folded, extra+1)
 	}
 	if n := len(deliveries(t, s, nw.ID)) + len(deliveries(t, s, ww.ID)); n != ownerInboxCapacity+extra+3 {
 		t.Fatalf("receipts %d: every group must still have its own receipt", n)
@@ -327,7 +342,7 @@ func TestDigestLevelFoldsAndFlushesAtInterval(t *testing.T) {
 	}
 	evaluate(t, s, now.Add(5*time.Second))
 	in := s.WatchInbox(responsibility(g))
-	if len(in.Pending) != 1 || in.Pending[0].Kind != "digest" || in.Pending[0].Count != 1 || in.Pending[0].Trigger != 0 || in.Folded.Receipts != 0 {
+	if len(in.Pending) != 1 || in.Pending[0].Delivery.Kind != "digest" || in.Pending[0].Delivery.Count != 1 || in.Pending[0].Delivery.Trigger != 0 || in.Folded.Receipts != 0 {
 		t.Fatalf("digest not flushed at interval: %+v", in)
 	}
 	if got := deliveries(t, s, w.ID); len(got) != 2 {

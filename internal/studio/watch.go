@@ -34,15 +34,20 @@ type Watch struct {
 	Silent        bool                    `json:"-"`
 }
 
-// WatchDelivery is one receipt. Wake and escalate deliveries for the operator
-// are Notifications items; repeated ones coalesce into the open item for the
-// same watch and group key until it is resolved or repeat_interval_ms passes.
+// WatchDelivery is one immutable receipt: which events reached an owner, at
+// which level, and where the runtime routed them. Route is feed (the
+// operator's delivery feed), inbox (queued for a responsibility or attempt;
+// see InboxEntry) or folded (counted into that owner's digest, never queued).
+// ItemID names the Notifications item the receipt opened or updated.
+// Generation is the responsibility generation current when it was written,
+// and Trigger the graph wake registration written in the same record.
 type WatchDelivery struct {
 	ID         string         `json:"id"`
 	WatchID    string         `json:"watch_id"`
 	Owner      watch.Owner    `json:"owner"`
 	Kind       string         `json:"kind"` // group, expired, silent, revoked, degraded, digest
 	Level      watch.Level    `json:"level"`
+	Route      string         `json:"route"`
 	GroupKey   string         `json:"group_key,omitempty"`
 	FirstSeq   int64          `json:"first_seq,omitempty"`
 	LastSeq    int64          `json:"last_seq,omitempty"`
@@ -52,37 +57,56 @@ type WatchDelivery struct {
 	Reasons    []string       `json:"reasons,omitempty"`
 	Watches    []string       `json:"watches,omitempty"`
 	Runs       []string       `json:"runs,omitempty"`
-	At         time.Time      `json:"at"`
+	Generation int64          `json:"generation,omitempty"`
+	Trigger    int64          `json:"trigger,omitempty"`
 	ItemID     string         `json:"item_id,omitempty"`
+	At         time.Time      `json:"at"`
+}
+
+const (
+	routeFeed   = "feed"
+	routeInbox  = "inbox"
+	routeFolded = "folded"
+)
+
+// WatchItem is an operator Notifications item. One delivery opens it; later
+// deliveries for the same watch and group key update it until it is resolved,
+// or until repeat_interval_ms has passed and a new item supersedes it.
+type WatchItem struct {
+	ID         string         `json:"id"`
+	WatchID    string         `json:"watch_id"`
+	Owner      watch.Owner    `json:"owner"`
+	GroupKey   string         `json:"group_key,omitempty"`
+	Kind       string         `json:"kind"`
+	State      string         `json:"state"` // open, resolved, superseded
+	Level      watch.Level    `json:"level"`
+	Count      int            `json:"count"`
+	Counts     map[string]int `json:"counts,omitempty"`
+	Reasons    []string       `json:"reasons,omitempty"`
+	FirstSeq   int64          `json:"first_seq,omitempty"`
+	LastSeq    int64          `json:"last_seq,omitempty"`
+	Deliveries []string       `json:"deliveries"`
 	Supersedes string         `json:"supersedes,omitempty"`
-	// Item state for deliveries that opened a Notifications item.
-	ItemState  string     `json:"item_state,omitempty"` // open, resolved, superseded
-	Updates    int        `json:"updates,omitempty"`
-	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
-	// Owner inbox state for responsibility and attempt owners (spec 09 §3).
-	// Generation is the responsibility generation current when the receipt
-	// was written; Inbox is queued or folded; Absorbed is the digest this
-	// queued receipt carries; Trigger is the graph wake registration written
-	// in the same journal record.
-	Generation        int64      `json:"generation,omitempty"`
-	Inbox             string     `json:"inbox,omitempty"`
-	Absorbed          *WatchFold `json:"absorbed,omitempty"`
-	Trigger           int64      `json:"trigger,omitempty"`
-	Outcome           string     `json:"outcome,omitempty"`
-	OutcomeGeneration int64      `json:"outcome_generation,omitempty"`
-	OutcomeAt         *time.Time `json:"outcome_at,omitempty"`
+	OpenedAt   time.Time      `json:"opened_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	ResolvedAt *time.Time     `json:"resolved_at,omitempty"`
+}
+
+// routedDelivery is one receipt with the records its routing creates in the
+// same journal event: a newly opened item and the owner's inbox entry.
+type routedDelivery struct {
+	Delivery WatchDelivery `json:"delivery"`
+	Item     *WatchItem    `json:"item,omitempty"`
+	Inbox    *InboxEntry   `json:"inbox,omitempty"`
 }
 
 type watchChange struct {
-	Create   *Watch         `json:"create,omitempty"`
-	Renew    *watchRenewal  `json:"renew,omitempty"`
-	Delivery *WatchDelivery `json:"delivery,omitempty"`
-	End      *watchEnd      `json:"end,omitempty"`
-	Resolve  *watchResolve  `json:"resolve,omitempty"`
-	// Notice is a second receipt written with Delivery: the single
-	// watch_degraded notice for a fold episode.
-	Notice  *WatchDelivery `json:"notice,omitempty"`
-	Outcome *watchOutcome  `json:"outcome,omitempty"`
+	Create     *Watch           `json:"create,omitempty"`
+	Renew      *watchRenewal    `json:"renew,omitempty"`
+	Deliveries []routedDelivery `json:"deliveries,omitempty"`
+	End        *watchEnd        `json:"end,omitempty"`
+	Resolve    *watchResolve    `json:"resolve,omitempty"`
+	Outcome    *watchOutcome    `json:"outcome,omitempty"`
 }
 type watchRenewal struct {
 	ID        string    `json:"id"`
@@ -93,7 +117,7 @@ type watchEnd struct {
 	State string `json:"state"`
 }
 type watchResolve struct {
-	DeliveryID string `json:"delivery_id"`
+	ItemID string `json:"item_id"`
 }
 
 var errWatchLimit = errors.New("owner watch limit reached")
@@ -103,8 +127,10 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.watches = map[string]*Watch{}
 		s.watchDeliveries = map[string]*WatchDelivery{}
 		s.watchOrder = map[string][]string{}
-		s.watchItems = map[string]string{}
+		s.watchItems = map[string]*WatchItem{}
+		s.watchOpenItems = map[string]string{}
 		s.watchInboxes = map[string]*watchInbox{}
+		s.inboxEntries = map[string]*InboxEntry{}
 	}
 	if w := c.Create; w != nil {
 		if s.watches[w.ID] != nil {
@@ -123,11 +149,8 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		w.Spec.Lease.ExpiresAt = r.ExpiresAt
 		w.Renewals++
 	}
-	for _, d := range []*WatchDelivery{c.Delivery, c.Notice} {
-		if d == nil {
-			continue
-		}
-		if err := s.applyWatchDelivery(e, d); err != nil {
+	for i := range c.Deliveries {
+		if err := s.applyWatchDelivery(e, &c.Deliveries[i]); err != nil {
 			return err
 		}
 	}
@@ -145,22 +168,26 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		w.State, w.EndedAt, w.Groups = end.State, &at, map[string]*watch.Group{}
 	}
 	if r := c.Resolve; r != nil {
-		d := s.watchDeliveries[r.DeliveryID]
-		if d == nil || d.ItemState != "open" {
+		item := s.watchItems[r.ItemID]
+		if item == nil || item.State != "open" {
 			return errors.New("resolution of a closed watch item")
 		}
 		at := e.At
-		d.ItemState, d.ResolvedAt = "resolved", &at
-		delete(s.watchItems, d.WatchID+"\x00"+d.GroupKey)
+		item.State, item.ResolvedAt = "resolved", &at
+		delete(s.watchOpenItems, item.WatchID+"\x00"+item.GroupKey)
 	}
 	return nil
 }
 
-func (s *Store) applyWatchDelivery(e Event, d *WatchDelivery) error {
+func (s *Store) applyWatchDelivery(e Event, rd *routedDelivery) error {
+	d := &rd.Delivery
 	w := s.watches[d.WatchID]
 	// A digest spans the owner's watches and may outlive the one it names.
 	if w == nil || w.State != "active" && d.Kind != "digest" || s.watchDeliveries[d.ID] != nil {
 		return errors.New("delivery for inactive watch")
+	}
+	if (d.Route == routeInbox) != (rd.Inbox != nil) || d.Route != routeFeed && d.Route != routeInbox && d.Route != routeFolded {
+		return errors.New("delivery route does not match its records")
 	}
 	saved := *d
 	saved.At = e.At
@@ -198,34 +225,57 @@ func (s *Store) applyWatchDelivery(e Event, d *WatchDelivery) error {
 	if d.Kind == "silent" {
 		w.Silent = true
 	}
-	itemKey := d.WatchID + "\x00" + d.GroupKey
-	switch {
-	case d.ItemID != "":
-		item := s.watchDeliveries[d.ItemID]
-		if item == nil || item.ItemState != "open" {
-			return errors.New("coalescing into a closed watch item")
-		}
-		item.Updates++
-		item.Count += d.Count
-		item.LastSeq = max(item.LastSeq, d.LastSeq)
-		item.Level = watch.Max(item.Level, d.Level)
-		for k, n := range d.Counts {
-			if item.Counts == nil {
-				item.Counts = map[string]int{}
-			}
-			item.Counts[k] += n
-		}
-	case d.ItemState == "open":
-		if d.Supersedes != "" {
-			if old := s.watchDeliveries[d.Supersedes]; old != nil && old.ItemState == "open" {
-				old.ItemState = "superseded"
-			}
-		}
-		s.watchItems[itemKey] = d.ID
+	if err := s.applyWatchItem(e, &saved, rd.Item); err != nil {
+		return err
 	}
 	s.watchDeliveries[d.ID] = &saved
 	s.watchOrder[d.WatchID] = append(s.watchOrder[d.WatchID], d.ID)
-	s.applyInbox(e, &saved)
+	s.applyInbox(e, &saved, rd.Inbox)
+	return nil
+}
+
+// applyWatchItem opens the item a delivery created, or folds the delivery
+// into the open item it names.
+func (s *Store) applyWatchItem(e Event, d *WatchDelivery, opened *WatchItem) error {
+	if d.ItemID == "" {
+		if opened != nil {
+			return errors.New("item without its delivery")
+		}
+		return nil
+	}
+	if opened != nil {
+		if opened.ID != d.ItemID || s.watchItems[opened.ID] != nil {
+			return errors.New("invalid watch item")
+		}
+		item := graphClone(*opened)
+		item.State, item.Deliveries, item.OpenedAt, item.UpdatedAt = "open", []string{d.ID}, e.At, e.At
+		if old := s.watchItems[item.Supersedes]; old != nil && old.State == "open" {
+			old.State = "superseded"
+		}
+		s.watchItems[item.ID] = &item
+		s.watchOpenItems[item.WatchID+"\x00"+item.GroupKey] = item.ID
+		return nil
+	}
+	item := s.watchItems[d.ItemID]
+	if item == nil || item.State != "open" {
+		return errors.New("coalescing into a closed watch item")
+	}
+	item.Deliveries = append(item.Deliveries, d.ID)
+	item.Count += d.Count
+	item.LastSeq = max(item.LastSeq, d.LastSeq)
+	item.Level = watch.Max(item.Level, d.Level)
+	item.UpdatedAt = e.At
+	for k, n := range d.Counts {
+		if item.Counts == nil {
+			item.Counts = map[string]int{}
+		}
+		item.Counts[k] += n
+	}
+	for _, r := range d.Reasons {
+		if !slices.Contains(item.Reasons, r) {
+			item.Reasons = append(item.Reasons, r)
+		}
+	}
 	return nil
 }
 
@@ -402,17 +452,17 @@ func (s *Store) cancelWatchLocked(id string) error {
 
 // ResolveWatchItem closes an open Notifications item so the next escalation for
 // its watch and group key opens a new one.
-func (s *Store) ResolveWatchItem(deliveryID string) error {
+func (s *Store) ResolveWatchItem(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d := s.watchDeliveries[deliveryID]
-	if d == nil {
+	item := s.watchItems[id]
+	if item == nil {
 		return ErrNotFound
 	}
-	if d.ItemState != "open" {
+	if item.State != "open" {
 		return ErrConflict
 	}
-	return s.commit("", "effect", "watch_item_resolved", change{Watch: &watchChange{Resolve: &watchResolve{DeliveryID: deliveryID}}})
+	return s.commit("", "effect", "watch_item_resolved", change{Watch: &watchChange{Resolve: &watchResolve{ItemID: id}}})
 }
 
 // EvaluateWatches ends expired leases, reports silence and delivers due groups
@@ -433,21 +483,21 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 			continue
 		}
 		if !s.ownerGrantHolds(w) {
-			d := s.summaryDelivery(w, "revoked", watch.Notify, now)
+			d := s.summaryDelivery(w, "revoked", watch.Notify)
 			if err := s.commitWatchDelivery("watch_revoked", w, &d, &watchEnd{ID: id, State: "revoked"}, now); err != nil {
 				return err
 			}
 			continue
 		}
 		if !now.Before(w.Spec.Lease.ExpiresAt) {
-			d := s.summaryDelivery(w, "expired", watch.Notify, now)
+			d := s.summaryDelivery(w, "expired", watch.Notify)
 			if err := s.commitWatchDelivery("watch_expired", w, &d, &watchEnd{ID: id, State: "expired"}, now); err != nil {
 				return err
 			}
 			continue
 		}
 		if w.Spec.MaxSilenceMS > 0 && !w.Silent && !now.Before(w.LastActivity.Add(time.Duration(w.Spec.MaxSilenceMS)*time.Millisecond)) {
-			d := s.summaryDelivery(w, "silent", watch.Notify, now)
+			d := s.summaryDelivery(w, "silent", watch.Notify)
 			if err := s.commitWatchDelivery("watch_silent", w, &d, nil, now); err != nil {
 				return err
 			}
@@ -462,7 +512,7 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 			if g == nil || !g.Due(now, w.LastDelivered[key], w.Spec.Grouping) {
 				continue
 			}
-			d := s.groupDelivery(w, g, now)
+			d := s.groupDelivery(w, g)
 			if err := s.commitWatchDelivery("watch_delivered", w, &d, nil, now); err != nil {
 				return err
 			}
@@ -473,7 +523,7 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 
 // summaryDelivery reports a lease or silence notice with the count of events
 // still waiting, at the rule level or the watch default if higher.
-func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level, now time.Time) WatchDelivery {
+func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level) WatchDelivery {
 	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: kind, Level: watch.Max(rule, w.Spec.DefaultLevel), Counts: map[string]int{}, Watches: []string{w.ID}}
 	for _, g := range w.Groups {
 		for _, e := range g.Entries {
@@ -481,14 +531,13 @@ func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level, now tim
 			d.Counts[e.Kind]++
 		}
 	}
-	s.attachWatchItem(&d, w, now)
 	return d
 }
 
 // groupDelivery builds the receipt for a due group. Entries that the owner's
 // other watches also hold join this delivery at the highest level any of them
 // assigned, so the owner receives each event once.
-func (s *Store) groupDelivery(w *Watch, g *watch.Group, now time.Time) WatchDelivery {
+func (s *Store) groupDelivery(w *Watch, g *watch.Group) WatchDelivery {
 	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: "group", GroupKey: g.Key, Counts: map[string]int{}}
 	levels := map[int64]watch.Level{}
 	watches := map[string]bool{w.ID: true}
@@ -524,27 +573,28 @@ func (s *Store) groupDelivery(w *Watch, g *watch.Group, now time.Time) WatchDeli
 	slices.Sort(d.Seqs)
 	d.FirstSeq, d.LastSeq = d.Seqs[0], d.Seqs[len(d.Seqs)-1]
 	d.Runs, d.Reasons, d.Watches = sortedKeys(runs), sortedKeys(reasons), sortedKeys(watches)
-	s.attachWatchItem(&d, w, now)
 	return d
 }
 
 // attachWatchItem decides whether a delivery opens a Notifications item or
-// coalesces into the open one: wake and escalate for the operator, and
-// escalate for any other owner (escalate is wake plus an operator item).
-func (s *Store) attachWatchItem(d *WatchDelivery, w *Watch, now time.Time) {
+// updates the open one: wake and escalate for the operator, and escalate for
+// any other owner (escalate is wake plus an operator item). It returns the
+// item to open, or nil when the delivery updates an open item or has none.
+func (s *Store) attachWatchItem(d *WatchDelivery, w *Watch, now time.Time) *WatchItem {
 	if d.Owner.Kind == watch.OwnerOperator && d.Level.Rank() < watch.Wake.Rank() || d.Owner.Kind != watch.OwnerOperator && d.Level != watch.Escalate {
-		return
+		return nil
 	}
-	open := s.watchDeliveries[s.watchItems[w.ID+"\x00"+d.GroupKey]]
-	if open != nil && open.ItemState == "open" {
+	item := &WatchItem{ID: newID("witem"), WatchID: w.ID, Owner: d.Owner, GroupKey: d.GroupKey, Kind: d.Kind, Level: d.Level, Count: d.Count, Counts: graphClone(d.Counts), Reasons: slices.Clone(d.Reasons), FirstSeq: d.FirstSeq, LastSeq: d.LastSeq}
+	if open := s.watchItems[s.watchOpenItems[w.ID+"\x00"+d.GroupKey]]; open != nil && open.State == "open" {
 		repeat := time.Duration(w.Spec.Grouping.RepeatIntervalMS) * time.Millisecond
-		if now.Before(open.At.Add(repeat)) {
+		if now.Before(open.OpenedAt.Add(repeat)) {
 			d.ItemID = open.ID
-			return
+			return nil
 		}
-		d.Supersedes = open.ID
+		item.Supersedes = open.ID
 	}
-	d.ItemState = "open"
+	d.ItemID = item.ID
+	return item
 }
 
 // WatchView is the read model: the record plus its derived cursor and pending groups.
@@ -622,27 +672,45 @@ func (s *Store) WatchDeliveries(id string, limit int) ([]WatchDelivery, error) {
 	return out, nil
 }
 
-// WatchItem is an open operator Notifications item.
-type WatchItem struct {
-	WatchDelivery
+// WatchItemView is a Notifications item with its watch's description.
+type WatchItemView struct {
+	WatchItem
 	Description string `json:"description"`
 	ProjectID   string `json:"project_id,omitempty"`
 }
 
-func (s *Store) OperatorWatchItems() []WatchItem {
+// OperatorWatchItems lists the open Notifications items, newest update first.
+func (s *Store) OperatorWatchItems() []WatchItemView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := []WatchItem{}
-	for _, id := range s.watchItems {
-		d := s.watchDeliveries[id]
-		if d == nil || d.ItemState != "open" {
+	out := []WatchItemView{}
+	for _, id := range s.watchOpenItems {
+		item := s.watchItems[id]
+		if item == nil || item.State != "open" {
 			continue
 		}
-		w := s.watches[d.WatchID]
-		out = append(out, WatchItem{WatchDelivery: cloneDelivery(d), Description: w.Spec.Description, ProjectID: w.Spec.Condition.Scope.Project})
+		w := s.watches[item.WatchID]
+		out = append(out, WatchItemView{WatchItem: graphClone(*item), Description: w.Spec.Description, ProjectID: w.Spec.Condition.Scope.Project})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out
+}
+
+// WatchItems returns a watch's Notifications items, newest first.
+func (s *Store) WatchItems(watchID string) ([]WatchItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.watches[watchID] == nil {
+		return nil, ErrNotFound
+	}
+	out := []WatchItem{}
+	for _, item := range s.watchItems {
+		if item.WatchID == watchID {
+			out = append(out, graphClone(*item))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].OpenedAt.After(out[j].OpenedAt) })
+	return out, nil
 }
 
 // watchLoop evaluates watches on a short fixed tick. Deliveries carry their own

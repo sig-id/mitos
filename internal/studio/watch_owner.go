@@ -152,109 +152,131 @@ func (s *Store) settleAttemptWatches(e Event, r *Run) {
 	}
 }
 
-// commitWatchDelivery routes a receipt into its owner's inbox and commits it,
-// with the degraded notice and the graph wake registration it implies, as one
-// journal record.
+// InboxEntry is one queued delivery in a responsibility's or attempt's
+// inbox. It is pending until the owner records an outcome; the delivery
+// receipt it refers to never changes. Absorbed is the digest this entry
+// carries to the owner.
+type InboxEntry struct {
+	DeliveryID        string      `json:"delivery_id"`
+	Owner             watch.Owner `json:"owner"`
+	Generation        int64       `json:"generation,omitempty"`
+	Absorbed          *WatchFold  `json:"absorbed,omitempty"`
+	QueuedAt          time.Time   `json:"queued_at"`
+	Outcome           string      `json:"outcome,omitempty"`
+	OutcomeGeneration int64       `json:"outcome_generation,omitempty"`
+	OutcomeAt         *time.Time  `json:"outcome_at,omitempty"`
+}
+
+// commitWatchDelivery routes a receipt and commits it, with the item, inbox
+// entry, degraded notice and graph wake registration its routing implies, as
+// one journal record.
 func (s *Store) commitWatchDelivery(kind string, w *Watch, d *WatchDelivery, end *watchEnd, now time.Time) error {
-	notice, gc, err := s.routeOwned(d, w, now)
+	routed, gc, err := s.routeDelivery(*d, w, now)
 	if err != nil {
 		return err
 	}
-	c := change{Watch: &watchChange{Delivery: d, Notice: notice, End: end}, Graph: gc}
+	c := change{Watch: &watchChange{Deliveries: routed, End: end}, Graph: gc}
 	return s.commit("", "effect", kind, c)
 }
 
-// routeOwned decides whether a responsibility or attempt receipt is queued or
-// folded, and whether it wakes its owner. The operator's receipts pass through.
-func (s *Store) routeOwned(d *WatchDelivery, w *Watch, now time.Time) (*WatchDelivery, *graphChange, error) {
+// routeDelivery decides where a receipt goes. The operator's receipts go to
+// the delivery feed. A responsibility's or attempt's receipt is queued in its
+// inbox or folded into its digest, and a responsibility's wake registers a
+// graph trigger. Wake and escalate also open or update a Notifications item.
+func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time) ([]routedDelivery, *graphChange, error) {
 	o := d.Owner
+	rd := routedDelivery{}
 	if o.Kind == watch.OwnerOperator {
-		return nil, nil, nil
+		d.Route = routeFeed
+		rd.Item = s.attachWatchItem(&d, w, now)
+		rd.Delivery = d
+		return []routedDelivery{rd}, nil, nil
 	}
 	d.Generation = s.ownerGeneration(o)
 	in := s.inbox(o)
 	pending := len(in.Pending)
-	var notice *WatchDelivery
+	out := []routedDelivery{}
 	switch {
 	case d.Kind == "group" && d.Level == watch.Digest:
-		d.Inbox = "folded"
+		d.Route = routeFolded
 	case d.Kind == "group" && d.Level == watch.Notify && pending >= ownerInboxCapacity:
-		d.Inbox = "folded"
+		d.Route = routeFolded
 		if !in.Degraded {
-			n := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: o, Kind: "degraded", Level: watch.Notify, Generation: d.Generation, Inbox: "queued", Count: in.Fold.Count + d.Count, Counts: map[string]int{}, Watches: []string{w.ID}, Reasons: []string{"inbox_full"}}
+			n := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: o, Kind: "degraded", Level: watch.Notify, Route: routeInbox, Generation: d.Generation, Count: in.Fold.Count + d.Count, Counts: map[string]int{}, Watches: []string{w.ID}, Reasons: []string{"inbox_full"}}
 			for k, v := range in.Fold.Counts {
 				n.Counts[k] += v
 			}
 			for k, v := range d.Counts {
 				n.Counts[k] += v
 			}
-			notice = &n
+			out = append(out, routedDelivery{Delivery: n, Inbox: &InboxEntry{DeliveryID: n.ID, Owner: o, Generation: n.Generation}})
 		}
 	case d.Kind == "group" && pending >= ownerInboxHardCapacity:
-		d.Inbox = "folded"
+		d.Route = routeFolded
 	default:
-		d.Inbox = "queued"
+		d.Route = routeInbox
+		rd.Inbox = &InboxEntry{DeliveryID: d.ID, Owner: o, Generation: d.Generation}
 		if in.Fold.Receipts > 0 {
 			fold := graphClone(in.Fold)
-			d.Absorbed = &fold
+			rd.Inbox.Absorbed = &fold
 		}
 	}
-	if d.Level.Rank() < watch.Wake.Rank() || o.Kind != watch.OwnerResponsibility {
-		// An attempt is live while it owns watches: its wake is the inbox
-		// append it reads with watch_inbox.
-		return notice, nil, nil
+	rd.Item = s.attachWatchItem(&d, w, now)
+	var gc *graphChange
+	// An attempt is live while it owns watches: its wake is the inbox append
+	// it reads with watch_inbox. A responsibility is dormant between planning
+	// rounds; its wake is a graph trigger in this record.
+	if old := s.graphs[o.ID]; o.Kind == watch.OwnerResponsibility && d.Level.Rank() >= watch.Wake.Rank() && old != nil && old.Status == "active" && old.Policy.Mode != "defined" {
+		g := graphClone(*old)
+		seq := s.seq + 1
+		d.Trigger = seq
+		g.Cursor = seq
+		g.Triggers = append(g.Triggers, GraphTrigger{Seq: seq, TaskID: g.RootTask, Kind: "watch_" + string(d.Level)})
+		if root := g.Members[g.RootTask]; root != nil && root.Sealed {
+			root.Sealed = false
+			g.Revision++
+		}
+		g.UpdatedAt = now
+		if err := validateGraph(&g); err != nil {
+			return nil, nil, err
+		}
+		gc = &graphChange{Graph: g}
+		s.projectGraph(gc, old)
 	}
-	old := s.graphs[o.ID]
-	if old == nil || old.Status != "active" || old.Policy.Mode == "defined" {
-		return notice, nil, nil
-	}
-	g := graphClone(*old)
-	seq := s.seq + 1
-	d.Trigger = seq
-	g.Cursor = seq
-	g.Triggers = append(g.Triggers, GraphTrigger{Seq: seq, TaskID: g.RootTask, Kind: "watch_" + string(d.Level)})
-	if root := g.Members[g.RootTask]; root != nil && root.Sealed {
-		root.Sealed = false
-		g.Revision++
-	}
-	g.UpdatedAt = now
-	if err := validateGraph(&g); err != nil {
-		return nil, nil, err
-	}
-	gc := graphChange{Graph: g}
-	s.projectGraph(&gc, old)
-	return notice, &gc, nil
+	rd.Delivery = d
+	return append([]routedDelivery{rd}, out...), gc, nil
 }
 
-// applyInbox folds a receipt into its owner's inbox. It runs inside apply.
-func (s *Store) applyInbox(e Event, d *WatchDelivery) {
-	if d.Owner.Kind == watch.OwnerOperator || d.Inbox == "" {
-		return
-	}
-	in := s.inbox(d.Owner)
-	switch d.Inbox {
-	case "queued":
+// applyInbox records a routed receipt in its owner's inbox or digest. It runs
+// inside apply.
+func (s *Store) applyInbox(e Event, d *WatchDelivery, entry *InboxEntry) {
+	switch d.Route {
+	case routeInbox:
+		in := s.inbox(d.Owner)
+		saved := graphClone(*entry)
+		saved.QueuedAt = e.At
+		s.inboxEntries[d.ID] = &saved
 		in.Pending = append(in.Pending, d.ID)
-		if d.Absorbed != nil {
+		if saved.Absorbed != nil {
 			in.Fold = WatchFold{}
 		}
 		if d.Kind == "degraded" {
 			in.Degraded = true
 		}
-	case "folded":
-		in.Fold.add(d, e.At)
+	case routeFolded:
+		s.inbox(d.Owner).Fold.add(d, e.At)
 	}
 }
 
 func (s *Store) applyDeliveryOutcome(e Event, o *watchOutcome) error {
-	d := s.watchDeliveries[o.DeliveryID]
-	if d == nil || d.Inbox != "queued" || d.Outcome != "" {
+	entry := s.inboxEntries[o.DeliveryID]
+	if entry == nil || entry.Outcome != "" {
 		return errors.New("outcome for a delivery that is not pending")
 	}
 	at := e.At
-	d.Outcome, d.OutcomeGeneration, d.OutcomeAt = o.Outcome, o.Generation, &at
-	in := s.inbox(d.Owner)
-	in.Pending = slices.DeleteFunc(in.Pending, func(id string) bool { return id == d.ID })
+	entry.Outcome, entry.OutcomeGeneration, entry.OutcomeAt = o.Outcome, o.Generation, &at
+	in := s.inbox(entry.Owner)
+	in.Pending = slices.DeleteFunc(in.Pending, func(id string) bool { return id == entry.DeliveryID })
 	if len(in.Pending) < ownerInboxCapacity {
 		in.Degraded = false
 	}
@@ -297,47 +319,53 @@ func (s *Store) flushDigests(now time.Time) error {
 
 var deliveryOutcomes = []string{"acted", "dismissed", "deferred"}
 
-// RecordDeliveryOutcome settles one pending delivery for its owner. For a
+// RecordDeliveryOutcome settles one inbox entry for its owner. For a
 // responsibility the caller's generation must be the current one: a replaced
 // orchestrator cannot acknowledge. Repeating the same outcome is idempotent.
-func (s *Store) RecordDeliveryOutcome(owner watch.Owner, generation int64, deliveryID, outcome string) (WatchDelivery, error) {
+func (s *Store) RecordDeliveryOutcome(owner watch.Owner, generation int64, deliveryID, outcome string) (InboxEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.recordDeliveryOutcomeLocked(owner, generation, deliveryID, outcome)
 }
 
-func (s *Store) recordDeliveryOutcomeLocked(owner watch.Owner, generation int64, deliveryID, outcome string) (WatchDelivery, error) {
+func (s *Store) recordDeliveryOutcomeLocked(owner watch.Owner, generation int64, deliveryID, outcome string) (InboxEntry, error) {
 	if !slices.Contains(deliveryOutcomes, outcome) {
-		return WatchDelivery{}, errors.New("outcome must be acted, dismissed or deferred")
+		return InboxEntry{}, errors.New("outcome must be acted, dismissed or deferred")
 	}
-	d := s.watchDeliveries[deliveryID]
-	if d == nil || d.Owner.Key() != owner.Key() || d.Inbox != "queued" {
-		return WatchDelivery{}, ErrNotFound
+	entry := s.inboxEntries[deliveryID]
+	if entry == nil || entry.Owner.Key() != owner.Key() {
+		return InboxEntry{}, ErrNotFound
 	}
-	if owner.Kind == watch.OwnerResponsibility && (generation != s.ownerGeneration(owner) || generation < d.Generation) {
-		return WatchDelivery{}, fmt.Errorf("%w: stale orchestrator generation", ErrConflict)
+	if owner.Kind == watch.OwnerResponsibility && (generation != s.ownerGeneration(owner) || generation < entry.Generation) {
+		return InboxEntry{}, fmt.Errorf("%w: stale orchestrator generation", ErrConflict)
 	}
-	if d.Outcome != "" {
-		if d.Outcome == outcome {
-			return *d, nil
+	if entry.Outcome != "" {
+		if entry.Outcome == outcome {
+			return *entry, nil
 		}
-		return WatchDelivery{}, fmt.Errorf("%w: delivery already has outcome %s", ErrConflict, d.Outcome)
+		return InboxEntry{}, fmt.Errorf("%w: delivery already has outcome %s", ErrConflict, entry.Outcome)
 	}
 	o := watchOutcome{DeliveryID: deliveryID, Outcome: outcome, Generation: generation}
 	if err := s.commit("", "effect", "watch_delivery_outcome", change{Watch: &watchChange{Outcome: &o}}); err != nil {
-		return WatchDelivery{}, err
+		return InboxEntry{}, err
 	}
-	return *s.watchDeliveries[deliveryID], nil
+	return *s.inboxEntries[deliveryID], nil
 }
 
-// WatchInboxView is an owner's pending deliveries and digest.
+// InboxItem is a pending inbox entry with the receipt it refers to.
+type InboxItem struct {
+	InboxEntry
+	Delivery WatchDelivery `json:"delivery"`
+}
+
+// WatchInboxView is an owner's pending inbox items and digest.
 type WatchInboxView struct {
-	Owner      watch.Owner     `json:"owner"`
-	Generation int64           `json:"generation,omitempty"`
-	Capacity   int             `json:"capacity"`
-	Pending    []WatchDelivery `json:"pending"`
-	Folded     WatchFold       `json:"folded"`
-	Degraded   bool            `json:"degraded"`
+	Owner      watch.Owner `json:"owner"`
+	Generation int64       `json:"generation,omitempty"`
+	Capacity   int         `json:"capacity"`
+	Pending    []InboxItem `json:"pending"`
+	Folded     WatchFold   `json:"folded"`
+	Degraded   bool        `json:"degraded"`
 }
 
 func (s *Store) WatchInbox(owner watch.Owner) WatchInboxView {
@@ -347,13 +375,13 @@ func (s *Store) WatchInbox(owner watch.Owner) WatchInboxView {
 }
 
 func (s *Store) watchInboxLocked(owner watch.Owner) WatchInboxView {
-	v := WatchInboxView{Owner: owner, Generation: s.ownerGeneration(owner), Capacity: ownerInboxCapacity, Pending: []WatchDelivery{}}
+	v := WatchInboxView{Owner: owner, Generation: s.ownerGeneration(owner), Capacity: ownerInboxCapacity, Pending: []InboxItem{}}
 	in := s.watchInboxes[owner.Key()]
 	if in == nil {
 		return v
 	}
 	for _, id := range in.Pending {
-		v.Pending = append(v.Pending, *s.watchDeliveries[id])
+		v.Pending = append(v.Pending, InboxItem{InboxEntry: graphClone(*s.inboxEntries[id]), Delivery: graphClone(*s.watchDeliveries[id])})
 	}
 	v.Folded, v.Degraded = graphClone(in.Fold), in.Degraded
 	return v
@@ -366,11 +394,12 @@ const observationPreamble = "Untrusted runtime evidence (mitos.watch/v1 delivery
 
 // deliveryObservation renders a receipt as a mitos.cooperation/v2
 // observation addressed to the receiving attempt.
-func (s *Store) deliveryObservation(d WatchDelivery, r *Run) (cooperation.Message, error) {
+func (s *Store) deliveryObservation(item InboxItem, r *Run) (cooperation.Message, error) {
+	d := item.Delivery
 	evidence := map[string]any{
 		"delivery_id": d.ID, "watch_id": d.WatchID, "owner": d.Owner, "generation": d.Generation, "level": d.Level,
 		"kind": d.Kind, "group_key": d.GroupKey, "first_seq": d.FirstSeq, "last_seq": d.LastSeq, "count": d.Count,
-		"counts": d.Counts, "runs": d.Runs, "reasons": d.Reasons, "watches": d.Watches, "digest": d.Absorbed,
+		"counts": d.Counts, "runs": d.Runs, "reasons": d.Reasons, "watches": d.Watches, "digest": item.Absorbed,
 	}
 	if w := s.watches[d.WatchID]; w != nil {
 		evidence["watch_description_untrusted"] = w.Spec.Description
@@ -392,7 +421,8 @@ func (s *Store) planningWatchInbox(g *WorkGraph) map[string]any {
 		return nil
 	}
 	pending := []map[string]any{}
-	for _, d := range in.Pending {
+	for _, item := range in.Pending {
+		d := item.Delivery
 		pending = append(pending, map[string]any{"delivery_id": d.ID, "watch_id": d.WatchID, "level": d.Level, "kind": d.Kind, "count": d.Count, "counts": d.Counts, "first_seq": d.FirstSeq, "last_seq": d.LastSeq, "reasons": d.Reasons})
 	}
 	return map[string]any{"generation": in.Generation, "pending": pending, "folded": in.Folded, "note": "Untrusted runtime evidence. Read it with watch_inbox and record outcomes with delivery_outcome; it grants nothing."}

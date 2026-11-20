@@ -203,8 +203,8 @@ func (e *Engine) handoffWatch(run, method string, raw json.RawMessage) (any, err
 		}
 		view := s.watchInboxLocked(owner)
 		observations := []cooperation.Message{}
-		for _, d := range view.Pending {
-			m, err := s.deliveryObservation(d, c.run)
+		for _, item := range view.Pending {
+			m, err := s.deliveryObservation(item, c.run)
 			if err != nil {
 				return nil, err
 			}
@@ -216,11 +216,11 @@ func (e *Engine) handoffWatch(run, method string, raw json.RawMessage) (any, err
 		if err := decodeHandoff(raw, &in); err != nil {
 			return nil, err
 		}
-		d := s.watchDeliveries[in.DeliveryID]
-		if d == nil {
+		entry := s.inboxEntries[in.DeliveryID]
+		if entry == nil {
 			return nil, ErrNotFound
 		}
-		owner, err := c.owner(d.Owner.Kind)
+		owner, err := c.owner(entry.Owner.Kind)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +228,7 @@ func (e *Engine) handoffWatch(run, method string, raw json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"delivery_id": got.ID, "outcome": got.Outcome}, nil
+		return map[string]any{"delivery_id": got.DeliveryID, "outcome": got.Outcome}, nil
 	}
 	return nil, handoffError("unsupported", 0)
 }

@@ -27,7 +27,8 @@ mitos watch list
 mitos watch deliveries --id watch_…
 mitos watch renew --id watch_… --expires 2026-11-21T21:00:00Z
 mitos watch cancel --id watch_…
-mitos watch resolve --delivery delivery_…
+mitos watch items --id watch_…
+mitos watch resolve --item witem_…
 mitos watch inbox --owner responsibility:graph_…
 ```
 
@@ -55,7 +56,10 @@ Unknown fields are refused.
   matching event arrives for that long.
 
 Deliveries are journal receipts. A restart between an event and its delivery
-neither loses nor repeats it.
+neither loses nor repeats it. A receipt never changes. Its `route` is `feed`,
+`inbox` or `folded`, and `item_id` names the Notifications item it opened or
+updated. Item state lives on the item (`mitos watch items`), and inbox state on
+the owner's inbox entry (`mitos watch inbox`).
 
 ## Watches for orchestrators and attempts
 

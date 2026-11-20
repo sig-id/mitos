@@ -162,17 +162,26 @@ func TestEscalationsCoalesceIntoOneOperatorItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := s.OperatorWatchItems()
-	if len(items) != 1 || items[0].Count != 2 || items[0].Updates != 1 {
+	if len(items) != 1 || items[0].Count != 2 || len(items[0].Deliveries) != 2 {
 		t.Fatalf("repeated escalation opened a second item: %+v", items)
 	}
+	// Both receipts stay separate records that name the one item.
+	got := deliveries(t, s, w.ID)
+	if len(got) != 2 || got[0].ItemID != items[0].ID || got[1].ItemID != items[0].ID || got[0].Route != "feed" || got[0].Count != 1 {
+		t.Fatalf("receipts lost their identity in the item: %+v", got)
+	}
+	first := items[0].ID
 	// After repeat_interval_ms a new item replaces the still-open one.
 	evidence(t, s, r.ID, "note")
 	if err := s.EvaluateWatches(now.Add(2 * time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	items = s.OperatorWatchItems()
-	if len(items) != 1 || items[0].Supersedes == "" || items[0].Count != 1 {
+	if len(items) != 1 || items[0].Supersedes != first || items[0].Count != 1 {
 		t.Fatalf("repeat interval did not supersede the item: %+v", items)
+	}
+	if all, _ := s.WatchItems(w.ID); len(all) != 2 || all[1].ID != first || all[1].State != "superseded" {
+		t.Fatalf("superseded item not kept: %+v", all)
 	}
 	if err := s.ResolveWatchItem(items[0].ID); err != nil {
 		t.Fatal(err)
@@ -187,7 +196,6 @@ func TestEscalationsCoalesceIntoOneOperatorItem(t *testing.T) {
 	if items = s.OperatorWatchItems(); len(items) != 1 || items[0].Supersedes != "" {
 		t.Fatalf("escalation after resolution did not open a fresh item: %+v", items)
 	}
-	_ = w
 }
 
 func TestWatchLeaseExpiryReportsWaitingCount(t *testing.T) {
@@ -306,7 +314,7 @@ func TestWatchDeliverySnapshotsAreDetachedFromTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, receipts := s.OperatorWatchItems(), deliveries(t, s, w.ID)
-	if len(items) != 1 || len(receipts) != 1 || items[0].ID != receipts[0].ID {
+	if len(items) != 1 || len(receipts) != 1 || items[0].Deliveries[0] != receipts[0].ID {
 		t.Fatalf("items %+v receipts %+v", items, receipts)
 	}
 	// A coalescing delivery mutates the stored item's Counts in place; the
@@ -315,14 +323,14 @@ func TestWatchDeliverySnapshotsAreDetachedFromTheStore(t *testing.T) {
 	if err := s.EvaluateWatches(now.Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if items[0].Counts["note"] != 1 || items[0].Count != 1 || items[0].Updates != 0 {
+	if items[0].Counts["note"] != 1 || items[0].Count != 1 || len(items[0].Deliveries) != 1 {
 		t.Fatalf("item snapshot aliases live store state: %+v", items[0])
 	}
 	if receipts[0].Counts["note"] != 1 {
 		t.Fatalf("receipt snapshot aliases live store state: %+v", receipts[0])
 	}
 	fresh := s.OperatorWatchItems()
-	if len(fresh) != 1 || fresh[0].Count != 2 || fresh[0].Updates != 1 || fresh[0].Counts["note"] != 2 {
+	if len(fresh) != 1 || fresh[0].Count != 2 || len(fresh[0].Deliveries) != 2 || fresh[0].Counts["note"] != 2 {
 		t.Fatalf("coalescing update did not land: %+v", fresh[0])
 	}
 }

@@ -60,8 +60,10 @@ type Store struct {
 	watches                map[string]*Watch
 	watchDeliveries        map[string]*WatchDelivery
 	watchOrder             map[string][]string
-	watchItems             map[string]string
+	watchItems             map[string]*WatchItem
+	watchOpenItems         map[string]string
 	watchInboxes           map[string]*watchInbox
+	inboxEntries           map[string]*InboxEntry
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord

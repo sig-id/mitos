@@ -14,7 +14,9 @@ Requirements are targets until gates W1–W4 record evidence. Rationale is in
 | Watch | A durable, leased subscription evaluated by the runtime over the journal |
 | Owner | The responsibility or operator that receives a watch's deliveries |
 | Group | The events of one watch, within one group key, that are delivered together |
-| Delivery | One graded, receipted notice to an owner, referencing contributing events |
+| Delivery | One immutable, graded receipt for an owner, referencing contributing events and recording where it was routed |
+| Inbox item | A delivery queued in a responsibility's or attempt's inbox, pending until the owner records its outcome |
+| Operator item | A Notifications item opened by one delivery and updated by later ones for the same watch and group key |
 | Triage | The decision-model role that selects a delivery level for a group |
 
 ## 1. Watch record
@@ -119,9 +121,17 @@ events.
 | `wake` | Appended to the inbox and wakes the owner through its wait registration |
 | `escalate` | `wake`, plus an operator item in the Notifications surface |
 
-For operator-owned watches, `digest` and `notify` deliveries go to the watch's
-delivery feed, and `wake` and `escalate` deliveries open Notifications items. For
-other owners, `escalate` deliveries also open Notifications items.
+Every delivery is a receipt with one route: `feed` (the operator's delivery feed),
+`inbox` (an inbox item for a responsibility or attempt), or `folded` (counted into
+that owner's digest and never queued). A delivery may also open or update an operator
+item and records that item's ID. The receipt never changes after it is written. Item
+state (open, resolved, superseded) and inbox state (pending, outcome) are separate
+records, keyed by their own ID and by delivery ID respectively, and they are written
+in the same journal record as the receipt.
+
+For operator-owned watches, every delivery goes to the delivery feed, and `wake` and
+`escalate` deliveries also open or update operator items. For other owners, `escalate`
+deliveries also open or update operator items.
 
 **Wait registration.** A responsibility is dormant between planning rounds: no
 session waits on it. Its wait registration is the graph trigger, the same durable
@@ -142,7 +152,7 @@ the journal. This is separate from the interactive workspace's responsibility no
   single `watch_degraded` notice, exempt from the capacity, records each fold episode.
 - `wake` and `escalate` deliveries keep queueing up to 128 receipts. Beyond that they
   fold too, but they still wake their owner.
-- Any queued delivery carries the pending digest and clears it.
+- Any inbox item carries the pending digest and clears it.
 - A digest that nothing has carried is delivered after the owner's shortest
   `interval_ms`.
 
@@ -238,8 +248,9 @@ outcomes, and triage calls used.
 
 - HTTP: `POST /api/watches`, `GET /api/watches/{id}`, `POST /api/watches/{id}/renew`,
   `POST /api/watches/{id}/cancel`, `GET /api/watches/{id}/deliveries`,
-  `POST /api/deliveries/{id}/resolve` (closes an open Notifications item), and
-  `POST /api/deliveries/{id}/outcome` (W4). All require the `Mitos-API-Version`
+  `GET /api/watches/{id}/items`, `POST /api/watch-items/{id}/resolve` (closes an
+  open operator item), and `POST /api/deliveries/{id}/outcome` (W4; settles an inbox
+  item). All require the `Mitos-API-Version`
   header. Unknown request fields are refused.
 - `GET /api/watch-inboxes/{responsibility|attempt}/{id}`: an owner's pending
   deliveries and digest, read-only.
@@ -247,7 +258,7 @@ outcomes, and triage calls used.
   `watch_renew`, `watch_cancel`, `watch_inbox`, `delivery_outcome`. Their scope is
   clamped to the caller's graph. Only the current orchestrator generation acts for
   the responsibility, and any attempt may own watches for itself.
-- CLI: `mitos watch create|list|show|renew|cancel|deliveries|resolve|inbox`.
+- CLI: `mitos watch create|list|show|renew|cancel|deliveries|items|resolve|inbox`.
 
 ## 7. Out of scope for v1
 
