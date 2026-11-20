@@ -17,6 +17,7 @@ import (
 
 	"mitos/internal/agentcli"
 	"mitos/internal/compute"
+	"mitos/internal/fleet"
 	"mitos/internal/harness"
 )
 
@@ -42,6 +43,12 @@ func mcpPlanRules(plan json.RawMessage) []string {
 		Operations []struct {
 			Kind string `json:"kind"`
 			Task string `json:"task"`
+			Spec *struct {
+				ID    string `json:"id"`
+				Brief struct {
+					Ownership fleet.Ownership `json:"ownership"`
+				} `json:"brief"`
+			} `json:"spec"`
 		} `json:"operations"`
 		Accept []struct {
 			Task string `json:"task"`
@@ -56,6 +63,19 @@ func mcpPlanRules(plan json.RawMessage) []string {
 		// records worker reviews in the top-level accept list instead.
 		if op.Kind == "accept" {
 			problems = append(problems, fmt.Sprintf("operation accept on %s is operator-only: review workers in the top-level accept list with task and rationale", op.Task))
+		}
+		// Ownership's literal form is stateless, so the same refusal the
+		// graph would raise on applying the spec is raised here, naming the
+		// offending entry; only dispatch-time claim conflicts need store
+		// state and stay post-hoc.
+		if (op.Kind == "add" || op.Kind == "supersede") && op.Spec != nil {
+			if err := op.Spec.Brief.Ownership.Validate(); err != nil {
+				ref := op.Spec.ID
+				if ref == "" {
+					ref = op.Task
+				}
+				problems = append(problems, fmt.Sprintf("operation %s %s: %v — owned paths are literal workspace-relative directory prefixes like \"src/module\" (no globs, absolute paths, .., trailing or duplicate separators; each path once), leases are unique bounded resource names", op.Kind, ref, err))
+			}
 		}
 	}
 	return problems

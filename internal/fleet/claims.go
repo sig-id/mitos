@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"errors"
+	"fmt"
 	"path"
 	"path/filepath"
 	"slices"
@@ -22,13 +23,13 @@ func (o Ownership) Validate() error {
 	seen := map[string]bool{}
 	for _, p := range o.Paths {
 		if p == "" || len(p) > 1024 || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") || strings.ContainsAny(p, "\\*?[\x00\n\r") || seen["path:"+p] {
-			return errors.New("owned paths must be unique literal workspace-relative prefixes")
+			return fmt.Errorf("owned path %q must be a unique literal workspace-relative prefix", p)
 		}
 		seen["path:"+p] = true
 	}
 	for _, name := range o.Leases {
 		if name == "" || len(name) > 128 || strings.TrimSpace(name) != name || strings.ContainsAny(name, "\x00\n\r\t") || seen["lease:"+name] {
-			return errors.New("leases require unique bounded resource names")
+			return fmt.Errorf("lease %q must be a unique bounded resource name", name)
 		}
 		seen["lease:"+name] = true
 	}
