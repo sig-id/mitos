@@ -91,8 +91,8 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		}
 		// Withheld networks stay withheld. An unrestricted posture is mediated:
 		// the worker sandbox gets its own network namespace whose only egress
-		// is this allowlisted relay, so host listeners — including the
-		// loopback operator API — stay unreachable. Failing to start the relay
+		// is this allowlisted relay, so host listeners – including the
+		// loopback operator API – stay unreachable. Failing to start the relay
 		// fails closed instead of sharing the host network.
 		if confinement.NetMode == compute.NetUnrestricted {
 			egressEndpoint = filepath.Join(s.Dir(), "egress", "model.sock")
@@ -292,10 +292,21 @@ func (e *Engine) Workspace(path string) (string, error) {
 	if err != nil {
 		return "", errors.New("workspace does not exist; choose an existing project directory")
 	}
-	allowed := Within(e.Root, path)
+	// Compare against resolved roots: on platforms with symlinked temp or
+	// home prefixes (for example /var on macOS), the workspace is resolved
+	// while the root itself may still carry the unresolved spelling.
+	root := e.Root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	allowed := Within(root, path)
 	if !allowed && e.Desk != nil {
 		for _, project := range e.Desk.Projects() {
-			if Within(project.Directory, path) {
+			dir := project.Directory
+			if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+				dir = resolved
+			}
+			if Within(dir, path) {
 				allowed = true
 				break
 			}

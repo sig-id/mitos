@@ -78,24 +78,34 @@ func setupHash(data []byte) string { sum := sha256.Sum256(data); return hex.Enco
 func readInstructions(root *os.Root) (name, document, digest string, exists bool, err error) {
 	name = "AGENTS.md"
 	digest = "missing"
-	upper, uerr := root.Lstat("AGENTS.md")
-	lower, lerr := root.Lstat("agents.md")
-	if uerr == nil && lerr == nil && !os.SameFile(upper, lower) {
+	// Match the exact on-disk spelling through directory entries: on
+	// case-insensitive filesystems Lstat resolves either casing to the
+	// same file, which would silently rewrite agents.md as AGENTS.md.
+	upper, lower := false, false
+	dir, derr := root.Open(".")
+	if derr == nil {
+		entries, _ := dir.ReadDir(-1)
+		dir.Close()
+		for _, entry := range entries {
+			switch entry.Name() {
+			case "AGENTS.md":
+				upper = true
+			case "agents.md":
+				lower = true
+			}
+		}
+	} else if !errors.Is(derr, os.ErrNotExist) {
+		err = derr
+		return
+	}
+	if upper && lower {
 		err = errors.New("both AGENTS.md and agents.md exist; consolidate them before editing setup")
 		return
 	}
-	if uerr != nil && !errors.Is(uerr, os.ErrNotExist) {
-		err = uerr
+	if !upper && !lower {
 		return
 	}
-	if lerr != nil && !errors.Is(lerr, os.ErrNotExist) {
-		err = lerr
-		return
-	}
-	if uerr != nil && lerr != nil {
-		return
-	}
-	if uerr != nil {
+	if !upper {
 		name = "agents.md"
 	}
 	f, e := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"golang.org/x/sys/unix"
 	"modernc.org/sqlite"
 )
 
@@ -218,7 +217,7 @@ func RestoreStore(source, destination string) error {
 	}
 	// Atomically publish only if the destination is still absent. Never replace
 	// a directory created by another process while verification was running.
-	if err = unix.Renameat2(unix.AT_FDCWD, stage, unix.AT_FDCWD, abs, unix.RENAME_NOREPLACE); err != nil {
+	if err = renameNoReplace(stage, abs); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(abs))

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"mitos/internal/agentcli"
+	"mitos/internal/procsys"
 )
 
 type SetupMessage struct {
@@ -287,7 +288,7 @@ func (e *Engine) runSetupAssistant(ctx context.Context, cancel context.CancelFun
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = io.Discard
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = procsys.Child(true)
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
 			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

@@ -67,8 +67,16 @@ func TestProjectSetupLowercaseAndSymlink(t *testing.T) {
 	if _, err = e.SaveInstructions(req.ProjectID, InstructionsEdit{FileHash: setup.FileHash, Sections: &SetupSections{Context: "Context"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(e.Root, "AGENTS.md")); !os.IsNotExist(err) {
-		t.Fatal("created duplicate uppercase file")
+	// Verify by directory entries: on case-insensitive filesystems
+	// os.Stat resolves either spelling to the same file.
+	entries, err := os.ReadDir(e.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "AGENTS.md" {
+			t.Fatal("created duplicate uppercase file")
+		}
 	}
 	if err = os.Remove(path); err != nil {
 		t.Fatal(err)

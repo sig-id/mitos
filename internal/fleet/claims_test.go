@@ -1,12 +1,28 @@
 package fleet
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOwnershipValidationAndOverlap(t *testing.T) {
 	for _, p := range []string{"../outside", "/absolute", "src/../other", "src/*", "src/", ""} {
-		if (Ownership{Paths: []string{p}}).Validate() == nil {
+		err := (Ownership{Paths: []string{p}}).Validate()
+		if err == nil {
 			t.Errorf("accepted %q", p)
+			continue
 		}
+		// The refusal names the offending entry so both the operator and an
+		// in-session orchestrator can correct it in one step.
+		if p != "" && !strings.Contains(err.Error(), p) {
+			t.Errorf("refusal %q does not name %q", err, p)
+		}
+	}
+	if err := (Ownership{Paths: []string{"src", "src"}}).Validate(); err == nil || !strings.Contains(err.Error(), "src") {
+		t.Errorf("duplicate path: %v", err)
+	}
+	if err := (Ownership{Leases: []string{"db", "db"}}).Validate(); err == nil || !strings.Contains(err.Error(), "db") {
+		t.Errorf("duplicate lease: %v", err)
 	}
 	held := []Claim{{RunID: "one", Workspace: "/repo", Ownership: Ownership{Paths: []string{"src"}, Leases: []string{"database:test"}}}}
 	for _, test := range []struct {

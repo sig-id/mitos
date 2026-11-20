@@ -340,9 +340,16 @@ func (s *Store) readyRunsLocked(activeIDs []string) ([]ReadyRun, error) {
 					return nil, err
 				}
 				r = s.runs[t.CurrentRunID]
-			} else if err := s.commit(r.ID, "effect", "frozen_definition_unavailable", change{Status: "failed", Stage: "Exact definition unavailable", Summary: "This legacy admission lacks a durable exact definition body. Submit a new request with an available definition."}); err != nil {
-				return nil, err
 			} else {
+				summary := "This legacy admission lacks a durable exact definition body. Submit a new request with an available definition."
+				if r.GraphAttempt != nil {
+					// A graph attempt repeats its admitted brief on every retry, so
+					// an unfreezable structured section can only be replaced.
+					summary = "This graph task's admitted brief carries typed structured work without a durable definition body. Replace the task; retries repeat the same brief."
+				}
+				if err := s.commit(r.ID, "effect", "frozen_definition_unavailable", change{Status: "failed", Stage: "Exact definition unavailable", Summary: summary}); err != nil {
+					return nil, err
+				}
 				continue
 			}
 		}

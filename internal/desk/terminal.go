@@ -13,6 +13,9 @@ import (
 	"time"
 
 	"mitos/internal/agentcli"
+	"mitos/internal/procsys"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/creack/pty"
 )
@@ -20,14 +23,29 @@ import (
 const maxOutput = 16 << 20
 
 type terminal struct {
-	file    *os.File
+	file *os.File
+	// pin keeps the pty library's original wrapper alive: its finalizer
+	// would close the shared master fd once the poller wrapper took it over.
+	pin     *os.File
 	pid     int
 	inputMu sync.Mutex
 	seen    map[string]bool
 	keys    []string
 }
 
-func (t *terminal) stop() { killSession(t.pid); _ = t.file.Close() }
+func (t *terminal) stop() {
+	killSession(t.pid)
+	t.closeMaster()
+}
+
+// closeMaster closes both descriptors of the shared master: the poller's
+// duplicate and the pty library's original. Only the last close tears the
+// master down and delivers its hang-up, so closing both keeps that signal
+// prompt instead of waiting for the pinned wrapper's finalizer.
+func (t *terminal) closeMaster() {
+	_ = t.file.Close()
+	_ = t.pin.Close()
+}
 
 func (m *Manager) StartAgent(project string, request agentcli.Request, serverURL string) (Session, error) {
 	p, err := m.Project(project)
@@ -270,18 +288,36 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	}
 	binary, _ := os.Executable()
 	cmd.Env = append(cmd.Env, "MITOS_COORDINATION="+instructions, "MITOS_BIN="+binary, "MITOS_SCRATCH="+scratch, "MITOS_ORCHESTRATOR_ID="+s.OrchestratorID, "MITOS_WORKSPACE="+s.Workspace)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = procsys.Child(false)
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.Rows, Cols: s.Cols})
 	if err != nil {
 		return m.startFailedLocked(s.ID, err)
 	}
-	if err = syscall.SetNonblock(int(f.Fd()), true); err != nil {
+	// Make the master nonblocking, then hand the runtime poller its own
+	// descriptor: on platforms where a plainly opened ptmx is not pollable
+	// (kqueue on macOS), reads would surface EAGAIN instead of waiting, so
+	// the copy loop would mistake terminal silence for failure and stop the
+	// session. The duplicate carries its own fd number so the poller
+	// registration never collides with the pty library's wrapper, and it is
+	// created atomically with close-on-exec: exec.Command relies on
+	// FD_CLOEXEC to keep children from inheriting other sessions' masters,
+	// and a plain dup would clear that flag. Both descriptors share one open
+	// file description; the pinned original keeps it alive.
+	fd := int(f.Fd())
+	if err = syscall.SetNonblock(fd, true); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = f.Close()
 		_ = cmd.Wait()
 		return m.startFailedLocked(s.ID, err)
 	}
-	t := &terminal{file: f, pid: cmd.Process.Pid, seen: map[string]bool{}}
+	pollFd, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = f.Close()
+		_ = cmd.Wait()
+		return m.startFailedLocked(s.ID, err)
+	}
+	t := &terminal{file: os.NewFile(uintptr(pollFd), f.Name()), pin: f, pid: cmd.Process.Pid, seen: map[string]bool{}}
 	m.live[s.ID] = t
 	stored, _ := m.sessionLocked(s.ID)
 	stored.Status, stored.PID = "running", cmd.Process.Pid
@@ -336,10 +372,10 @@ func (m *Manager) waitTerminal(id string, cmd *exec.Cmd, t *terminal) {
 	select {
 	case readErr = <-readDone:
 	case <-time.After(300 * time.Millisecond):
-		_ = t.file.Close()
+		t.closeMaster()
 		readErr = <-readDone
 	}
-	_ = t.file.Close()
+	t.closeMaster()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.live, id)
