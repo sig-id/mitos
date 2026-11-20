@@ -2,6 +2,7 @@ package studio
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,30 @@ func (p *agentOutputPreview) Write(b []byte) (int, error) {
 		p.text = append(p.text, b...)
 	}
 	return n, nil
+}
+
+// activitySink fans public activity records out to the saved artifact and the
+// live preview. Its lock is shared by every producer of one attempt: the MCP
+// server's request handlers and the CLI's JSON event stream.
+type activitySink struct {
+	mu      sync.Mutex
+	writers []io.Writer
+}
+
+func newActivitySink(writers ...io.Writer) *activitySink {
+	return &activitySink{writers: writers}
+}
+
+func (s *activitySink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var err error
+	for _, w := range s.writers {
+		if _, werr := w.Write(p); werr != nil && err == nil {
+			err = werr
+		}
+	}
+	return len(p), err
 }
 
 type GraphRunOutput struct {

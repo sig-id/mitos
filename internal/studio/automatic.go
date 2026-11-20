@@ -755,7 +755,10 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	preview, closePreview := e.beginAgentOutput(r.ID)
 	defer closePreview()
 	var activity bytes.Buffer
-	options.Activity = io.MultiWriter(&activity, preview.activity)
+	// The MCP server's handlers and the CLI's event stream render activity
+	// from different goroutines; one lock keeps the shared sink race-free.
+	records := newActivitySink(&activity, preview.activity)
+	options.Activity = records
 	command := compute.Command{Argv: args, Directory: dir, NativeEnv: agentEnv, Interact: func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 		if b.Runtime == "claude" {
 			return harness.RunClaude(ctx, broker, stream, io.MultiWriter(output, preview), guestDir, prompt, options)
@@ -796,7 +799,13 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 				return argErr
 			}
 			mcpCommand = func(resume bool) compute.Command {
-				cmd := compute.Command{Argv: mcp.arguments(native.Executable, cliArgs, resume), Directory: dir, NativeEnv: agentEnv, Stdout: preview}
+				// JSON event mode: the CLI's own progress (assistant text, shell
+				// commands, file edits) streams into the live preview and the
+				// rendered log while the process works, instead of one reply
+				// after it exits.
+				rendered := &printOutput{}
+				mcp.rendered, mcp.stream = rendered, harness.NewPiEventStream(io.MultiWriter(preview, rendered), records)
+				cmd := compute.Command{Argv: mcp.arguments(native.Executable, cliArgs, resume), Directory: dir, NativeEnv: agentEnv, Stdout: mcp.stream}
 				if resume {
 					cmd.Input = mcp.continuationInput()
 				} else {

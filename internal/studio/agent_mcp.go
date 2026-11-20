@@ -83,6 +83,12 @@ type agentMCP struct {
 	// session is the CLI's native conversation ID: Pi takes --session-id on
 	// the first run and --session to continue it.
 	session string
+	// stream renders the CLI's JSON event stream into the live preview, the
+	// rendered attempt log, and public activity records; nil for adapters
+	// without JSON event mode.
+	stream *harness.PiEventStream
+	// rendered collects the human-readable log of the current process.
+	rendered *printOutput
 
 	serial int
 	logs   printOutput
@@ -204,12 +210,23 @@ func (a *agentMCP) continuationInput() []byte {
 }
 
 // run waits for the CLI, once continued if it exited without a terminal tool
-// call. Stdout is only the execution log; nothing is parsed from it.
+// call. In JSON event mode the saved log is the rendered activity, never the
+// raw event stream; stdout is only the execution log, nothing is parsed from
+// it after the fact.
 func (a *agentMCP) run(ctx context.Context, session compute.Session, next func() (compute.Session, error), preview io.Writer) ([]byte, error) {
 	resumed := false
 	for {
 		<-session.Done()
 		output, err := session.Result()
+		if a.stream != nil {
+			a.stream.Flush()
+			// The rendered activity is the saved log; the raw capture (which
+			// mixes in stderr) only survives when the CLI died before rendering
+			// anything, so a startup failure keeps its explanation.
+			if rendered := a.rendered.Bytes(); len(rendered) > 0 {
+				output = rendered
+			}
+		}
 		a.logs.Write(output)
 		if err != nil {
 			return a.logs.Bytes(), err

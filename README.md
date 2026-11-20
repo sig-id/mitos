@@ -300,8 +300,13 @@ MCP servers are never inherited. The attempt ends with a terminal tool:
 accepted, so a refused plan is corrected inside the same session).
 `operator_question` and `command_approval` carry the blocking operator
 decisions. The endpoint and its per-attempt bearer token are revoked when the
-attempt ends. Print CLIs without an adapter — and any run under bubblewrap,
-whose egress relay cannot carry HTTP routes — keep the text-frame protocol.
+attempt ends. Print CLIs without an adapter – and any run under bubblewrap,
+whose egress relay cannot carry HTTP routes – keep the text-frame protocol.
+
+Pi runs in JSON event mode on this path, so its own progress – assistant text,
+shell commands and file edits – streams into the work view's live activity and
+the saved execution log while the attempt works, instead of a single reply
+after the process exits. Reasoning deltas stay private.
 
 ## Cost statistics
 

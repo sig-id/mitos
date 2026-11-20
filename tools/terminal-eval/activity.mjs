@@ -19,6 +19,8 @@ try{
    {kind:'command',id:'c2',command:'npm test',status:'failed',exit_code:1},
    {kind:'message',id:'m2',text:'The report is readable. One test needs attention; I’m checking it now.'},
    {kind:'tool',id:'t1',name:'github / get_pull_request',status:'running'},
+   {kind:'tool',id:'t2',tool:'result_submit',status:'completed'},
+   {kind:'tool',id:'t3',status:'completed'},
    {kind:'message',id:'m3',text:'{"task_id":"internal-id","artifacts":["nested-payload"]}'},
   ];
   const text='Unclassified raw output\n'+records.map(v=>JSON.stringify({mitos_activity:1,...v})).join('\n')+'\n<script>window.injected=true</script>\n{"mitos_activity":1,"kind":"message","delta":"partial';
@@ -26,7 +28,9 @@ try{
   document.querySelector('#data').append(window.MitosGraphOutput.render(JSON.stringify([{task_id:'internal-id',run:{artifacts:['nested-payload']}}]),{name:'dependency-inputs.json'}));
  });
  assert.equal(await page.locator('.graph-agent-message').count(),2,'message completion must replace streamed text');
- assert.equal(await page.locator('.graph-tool-row').count(),4,'start and completion must share a row');
+ assert.equal(await page.locator('.graph-tool-row').count(),6,'start and completion must share a row');
+ assert.ok((await page.locator('#feed').innerText()).includes('result_submit'),'the MCP server names its tools with a tool field');
+ assert.ok((await page.locator('#feed').innerText()).includes('t3'),'a nameless record falls back to its id instead of rendering empty text');
  assert.equal(await page.locator('.graph-tool-row[open]').count(),0);
  assert.equal(await page.locator('.graph-tool-row.failed').count(),1);
  assert.equal(await page.locator('.graph-tool-row.running').count(),1);

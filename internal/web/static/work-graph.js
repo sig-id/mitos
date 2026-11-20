@@ -523,7 +523,7 @@
     if(activityVisible(section)){
      const output=await request(path);if(!active())return;
      const at=Date.parse(output.updated_at)>0?output.updated_at:run.updated_at;
-     status.textContent=!output.available?'Activity capture is unavailable for this attempt.':output.live?(output.text?'Working · Updated '+elapsed(at)+' ago':run.status==='queued'?'Waiting to start…':'Waiting for the agent…'):'Agent activity';
+     status.textContent=!output.available?(output.live?'Waiting for the agent’s first captured output…':'Activity capture is unavailable for this attempt.'):output.live?(output.text?'Working · Updated '+elapsed(at)+' ago':run.status==='queued'?'Waiting to start…':'Waiting for the agent…'):'Agent activity';
      if(output.live&&output.available&&Date.now()-Date.parse(at)>120000)status.textContent+=' · Waiting for an update';
      const signature=JSON.stringify([output.text,output.activity,output.live,output.truncated,output.activity_truncated]);
      if(signature!==previous){
