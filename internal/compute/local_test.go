@@ -198,3 +198,31 @@ func TestPrepareMaterializesSourceWithoutChangingIt(t *testing.T) {
 		t.Fatalf("provider-owned baseline was lost: %v", err)
 	}
 }
+
+func TestLocalSeparatesStdoutAndStderrWriters(t *testing.T) {
+	local, _, handle := prepared(t)
+	var stdout, stderr strings.Builder
+	session, err := local.Start(context.Background(), handle, Command{
+		Argv:   []string{"/bin/sh", "-c", "echo rendered-progress; echo CLI-diagnostic >&2"},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-session.Done()
+	captured, err := session.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "rendered-progress\n" {
+		t.Fatalf("stdout writer: %q", got)
+	}
+	if got := stderr.String(); got != "CLI-diagnostic\n" {
+		t.Fatalf("stderr writer: %q", got)
+	}
+	// The combined session capture keeps both streams for the saved log.
+	if !strings.Contains(string(captured), "rendered-progress") || !strings.Contains(string(captured), "CLI-diagnostic") {
+		t.Fatalf("session capture lost a stream: %q", captured)
+	}
+}

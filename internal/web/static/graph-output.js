@@ -41,7 +41,10 @@
    }
    if(!['command','tool','file'].includes(v.kind))continue;
    message=null;
-   const name=String(v.command||v.name||''),key=v.kind+':'+(v.id||name)+(v.kind==='file'?':'+name:'');
+   // The per-attempt MCP server names its tools with a "tool" field; the
+   // app-server adapters use "command" or "name". A record without any
+   // name falls back to its id instead of rendering an empty row.
+   const name=String(v.command||v.name||v.tool||v.id||'unknown'),key=v.kind+':'+(v.id||name)+(v.kind==='file'?':'+name:'');
    let entry=byID.get(key);
    if(!entry||(!v.id&&v.status==='running')){entry={kind:v.kind,key:hash(key)+(!v.id?':'+entries.length:'')};entries.push(entry);byID.set(key,entry)}
    Object.assign(entry,{name,status:v.status,exit:v.exit_code});

@@ -27,12 +27,11 @@
  }
  function suggestedTiers(agent,environment,configuredModel){
   const models=environment?.models||[];
+  // 'Agent default' is the default selection: the harness uses its own
+  // configured model unless the operator explicitly picks one of the
+  // detected models. Only a previously configured model preselects.
   return Object.fromEntries(TIERS.map(t=>{
-   const compatible=models.filter(m=>!m.efforts||m.efforts.includes(t));
-   const alias={low:'haiku',medium:'sonnet',high:'opus'}[t];
-   const preferred=(agent?.id==='claude'&&compatible.find(m=>m.id===alias))||
-    compatible.find(m=>m.default)||compatible[0]||models.find(m=>m.default)||models[0];
-   const model=configuredModel||preferred?.id||'';
+   const model=configuredModel||'';
    const efforts=models.find(m=>m.id===model)?.efforts;
    return [t,{model,effort:(agent?.id!=='amp'||model)&&agent?.capabilities.reasoning_efforts?.includes(t)&&(!efforts||efforts.includes(t))?t:''}];
   }));
@@ -141,6 +140,7 @@
     };
     const modelRows=el('div');modelRows.className='execution-tier-list';row.append(modelRows);
     if(env&&!env.models?.length)modelRows.append(el('small','Model list unavailable. Use the agent default or enter a model ID.'));
+    else if(env?.models?.length)modelRows.append(el('small',env.models.length+' configured model'+(env.models.length===1?'':'s')+' detected. Leave a tier on Agent default to use the harness default model.'));
     for(const t of TIERS)modelRows.append(tierFields(h,t,env?.models||[],agent?.capabilities.reasoning_efforts||[]));
     const allowed=el('input');allowed.type='checkbox';allowed.checked=policy.allowed_harnesses.includes(h.id);
     const workerLabel=el('label');workerLabel.className='execution-worker-toggle';workerLabel.append(allowed,'Allow workers to use this harness');row.append(workerLabel);

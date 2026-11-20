@@ -36,6 +36,10 @@ type MCPFiles struct {
 	// server's tools stay declared to the model: a plain-name-only list
 	// leaves every MCP tool undeclared, whatever its exposure.
 	ToolsPattern string
+	// JSONStream reports whether the CLI starts in JSON event mode, so its
+	// stdout streams structured progress the host renders as a live preview
+	// instead of one final reply after the process exits.
+	JSONStream bool
 }
 
 // SupportsMCPHTTP reports whether the CLI has an HTTP MCP adapter and can be
@@ -71,10 +75,12 @@ func MCPHTTP(id string, config MCPConfig) (MCPFiles, error) {
 		// --no-mcp would drop the server; --no-extensions together with
 		// -e builtin:mcp loads only the built-in MCP support. The --tools
 		// allowlist gains the mitos pattern: without an mcp__ entry it
-		// leaves every MCP tool undeclared, whatever its exposure.
-		Add:          []string{"-e", "builtin:mcp"},
+		// leaves every MCP tool undeclared, whatever its exposure. JSON mode
+		// streams progress events the host renders as the live preview.
+		Add:          []string{"-e", "builtin:mcp", "--mode", "json"},
 		Drop:         []string{"--no-mcp", "--no-session"},
 		ToolsPattern: "mcp__" + mcpServerName + "__*",
+		JSONStream:   true,
 	}, nil
 }
 

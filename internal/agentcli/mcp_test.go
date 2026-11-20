@@ -53,10 +53,14 @@ func TestMCPHTTPAdaptsPiAndRefusesOthers(t *testing.T) {
 	if !strings.Contains(joined, "--no-extensions") || !strings.Contains(joined, "-e builtin:mcp") || !strings.Contains(joined, "--tools read,bash,mcp__mitos__*") {
 		t.Fatalf("arguments: %v", adjusted)
 	}
-	// A withheld allowlist becomes the server's tools alone.
+	// A withheld allowlist becomes the server's tools alone. JSON event mode
+	// streams the CLI's own progress to the host for the live preview.
 	none := files.ApplyArguments([]string{"--print", "--no-extensions", "--no-tools"})
-	if strings.Join(none, " ") != "--print --no-extensions --tools mcp__mitos__* -e builtin:mcp" {
+	if strings.Join(none, " ") != "--print --no-extensions --tools mcp__mitos__* -e builtin:mcp --mode json" {
 		t.Fatalf("no-tools arguments: %v", none)
+	}
+	if !files.JSONStream {
+		t.Fatal("the pi adapter must select JSON event mode for a live preview")
 	}
 
 	if SupportsMCPHTTP("opencode") {
