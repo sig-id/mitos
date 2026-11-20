@@ -115,9 +115,17 @@ type GraphYield struct {
 // GraphContinuation tells a continued attempt why it was resumed and how its
 // proposals were reviewed.
 type GraphContinuation struct {
-	Reason     string            `json:"reason"` // yield or escalation
+	Reason     string            `json:"reason"` // yield, judgment_refused or escalation
 	Proposals  []ProposalOutcome `json:"proposals,omitempty"`
 	Escalation *GraphEscalation  `json:"escalation,omitempty"`
+	Refusal    *JudgmentRefusal  `json:"refusal,omitempty"`
+}
+
+// JudgmentRefusal carries a refused kernel judgment back to the proposer as
+// feedback, so the refusal is a correction rather than a dead end.
+type JudgmentRefusal struct {
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
 }
 type ProposalOutcome struct {
 	ID        string `json:"id"`

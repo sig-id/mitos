@@ -185,6 +185,13 @@ func (s *Store) resolveChoiceWithAutomation(id string, resolution decision.Resol
 			return reject("checkpoint recovery is no longer available", err)
 		}
 	}
+	if r.HeldJudgment != nil && r.HeldJudgment.DecisionID == d.ID {
+		// A kernel judgment card: the choice settles the held submission
+		// through the kernel, not through the retry/cancel/rewind actions.
+		resolution.Resolver = principal.ID
+		resolution.ResolvedAt = time.Now().UTC()
+		return s.settleJudgmentChoice(id, resolution.DecisionID, resolution.Choice, resolution, command)
+	}
 	resolution.Resolver = principal.ID
 	resolution.ResolvedAt = time.Now().UTC()
 	status := "cancelled"

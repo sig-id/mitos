@@ -61,7 +61,10 @@ Proposals are refused with a typed failure when:
   (`invalid_proposal_traits`), or no permitted harness could run it, including an
   unpermitted `harness` override (`proposal_unroutable`).
 - the proposer's own task is `context` or `review` work and the proposal is
-  blocking (`proposal_blocking_not_permitted`); follow-up proposals remain allowed.
+  blocking: the submission is judgment-gated rather than silently refused
+  (`proposal_blocking_not_permitted` when refused; otherwise it is held with
+  `held=kernel_judgment` in the receipt and the attempt parks with the decision);
+  follow-up proposals remain allowed.
 - the task would exceed 4 proposals across its attempts (`proposal_limit_exceeded`),
   or 2 yields (`yield_limit_exceeded`), or the proposed tasks exceed the graph's
   remaining task allowance (`proposal_over_budget`).

@@ -73,24 +73,35 @@ func (s *Store) GraphSummaries(project, after string, limit int, states ...strin
 }
 
 type GraphNodeView struct {
-	Execution         *ExecutionView `json:"execution,omitempty"`
-	BlockedReason     string         `json:"blocked_reason,omitempty"`
-	HumanRequests     int            `json:"human_requests,omitempty"`
-	ReviewingRequests int            `json:"reviewing_requests,omitempty"`
-	DecisionSetup     bool           `json:"decision_setup,omitempty"`
-	Summary           string         `json:"summary,omitempty"`
-	Stage             string         `json:"stage,omitempty"`
-	PendingRequests   int            `json:"pending_requests,omitempty"`
-	CreatedAt         time.Time      `json:"created_at"`
-	State             string         `json:"state"`
-	Executor          string         `json:"executor,omitempty"`
-	Settled           bool           `json:"settled"`
-	Waiting           []string       `json:"waiting,omitempty"`
+	Execution         *ExecutionView     `json:"execution,omitempty"`
+	BlockedReason     string             `json:"blocked_reason,omitempty"`
+	HumanRequests     int                `json:"human_requests,omitempty"`
+	ReviewingRequests int                `json:"reviewing_requests,omitempty"`
+	DecisionSetup     bool               `json:"decision_setup,omitempty"`
+	Judgment          *GraphJudgmentView `json:"judgment,omitempty"`
+	Summary           string             `json:"summary,omitempty"`
+	Stage             string             `json:"stage,omitempty"`
+	PendingRequests   int                `json:"pending_requests,omitempty"`
+	CreatedAt         time.Time          `json:"created_at"`
+	State             string             `json:"state"`
+	Executor          string             `json:"executor,omitempty"`
+	Settled           bool               `json:"settled"`
+	Waiting           []string           `json:"waiting,omitempty"`
 }
 type GraphView struct {
 	Graph      WorkGraph                `json:"graph"`
 	Nodes      map[string]GraphNodeView `json:"nodes"`
 	ObservedAt time.Time                `json:"observed_at"`
+}
+
+// GraphJudgmentView surfaces a pending kernel judgment on a node without the
+// held submission: the workflow view shows the work as needing a call.
+type GraphJudgmentView struct {
+	ID     string `json:"id"`
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
+	Mode   string `json:"mode"`
+	State  string `json:"state"`
 }
 
 func (s *Store) graphDisplayState(g *WorkGraph, m *GraphMember) string {
@@ -202,6 +213,9 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 			n.Summary = r.Summary
 			n.Stage = r.Stage
 			n.BlockedReason = r.BlockedReason
+			if j := r.HeldJudgment; j != nil && j.State == "pending" {
+				n.Judgment = &GraphJudgmentView{ID: j.ID, Code: j.Code, Detail: j.Detail, Mode: j.Mode, State: j.State}
+			}
 		}
 		requests := s.graphPendingRequests(m.CurrentRunID)
 		for _, request := range requests {
