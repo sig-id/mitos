@@ -278,3 +278,53 @@ func TestMCPPlanRulesRefuseOperatorOnlyOperations(t *testing.T) {
 		t.Fatalf("clean plan refused: %v", problems)
 	}
 }
+
+// Ownership's literal rule is stateless, so the refusal the graph would
+// raise only after the attempt ended (fleet.Ownership.Validate through
+// resolveGraphSpec) is raised here and the orchestrator corrects the spec
+// in its own session instead of spending another orchestrator call.
+func TestMCPPlanRulesRefuseInvalidOwnership(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		plan string
+		want []string
+	}{
+		{
+			"duplicate paths",
+			`{"operations":[{"kind":"add","spec":{"id":"t2","brief":{"ownership":{"paths":["src","src"]}}}}],"accept":[],"complete":false,"result":{},"explanation":"e"}`,
+			[]string{"add", "t2", "src"},
+		},
+		{
+			"glob path",
+			`{"operations":[{"kind":"add","spec":{"id":"t3","brief":{"ownership":{"paths":["docs/*"]}}}}],"accept":[],"complete":false,"result":{},"explanation":"e"}`,
+			[]string{"docs/*"},
+		},
+		{
+			"absolute path on supersede",
+			`{"operations":[{"kind":"supersede","task":"task_1","spec":{"id":"t4","brief":{"ownership":{"paths":["/repo/src"]}}},"rationale":"r"}],"accept":[],"complete":false,"result":{},"explanation":"e"}`,
+			[]string{"supersede", "t4", "/repo/src"},
+		},
+		{
+			"supersede without a spec reference names the task",
+			`{"operations":[{"kind":"supersede","task":"task_9","spec":{"brief":{"ownership":{"leases":["db","db"]}}},"rationale":"r"}],"accept":[],"complete":false,"result":{},"explanation":"e"}`,
+			[]string{"supersede", "task_9", "db"},
+		},
+	} {
+		problems := mcpPlanRules([]byte(test.plan))
+		if len(problems) != 1 {
+			t.Fatalf("%s: problems: %v", test.name, problems)
+		}
+		for _, want := range test.want {
+			if !strings.Contains(problems[0], want) {
+				t.Fatalf("%s: refusal %q does not mention %q", test.name, problems[0], want)
+			}
+		}
+		if !strings.Contains(problems[0], "workspace-relative") {
+			t.Fatalf("%s: refusal lacks the correction guidance: %q", test.name, problems[0])
+		}
+	}
+	clean := `{"operations":[{"kind":"add","spec":{"id":"t2","brief":{"ownership":{"paths":["src","docs/api"],"leases":["database:test"]}}}},{"kind":"add","spec":{}}],"accept":[],"complete":false,"result":{},"explanation":"e"}`
+	if problems := mcpPlanRules([]byte(clean)); len(problems) != 0 {
+		t.Fatalf("clean ownership refused: %v", problems)
+	}
+}
