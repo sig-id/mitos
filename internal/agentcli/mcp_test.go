@@ -38,8 +38,10 @@ func TestMCPHTTPAdaptsPiAndRefusesOthers(t *testing.T) {
 		t.Fatalf("timeout: %d", server.Timeout)
 	}
 
-	// Print arguments keep the tool allowlist; --no-mcp and --no-session make
-	// way for the built-in MCP support and the native session continuation.
+	// Print arguments keep the tool allowlist, amended with the server's
+	// pattern: a plain-name-only --tools list leaves MCP tools undeclared,
+	// whatever their exposure. --no-mcp and --no-session make way for the
+	// built-in MCP support and the native session continuation.
 	base := []string{"--print", "--no-session", "--no-extensions", "--no-mcp", "--tools", "read,bash"}
 	adjusted := files.ApplyArguments(base)
 	joined := strings.Join(adjusted, " ")
@@ -48,8 +50,13 @@ func TestMCPHTTPAdaptsPiAndRefusesOthers(t *testing.T) {
 			t.Fatalf("argument kept: %s in %v", missing, adjusted)
 		}
 	}
-	if !strings.Contains(joined, "--no-extensions") || !strings.Contains(joined, "-e builtin:mcp") || !strings.Contains(joined, "--tools read,bash") {
+	if !strings.Contains(joined, "--no-extensions") || !strings.Contains(joined, "-e builtin:mcp") || !strings.Contains(joined, "--tools read,bash,mcp__mitos__*") {
 		t.Fatalf("arguments: %v", adjusted)
+	}
+	// A withheld allowlist becomes the server's tools alone.
+	none := files.ApplyArguments([]string{"--print", "--no-extensions", "--no-tools"})
+	if strings.Join(none, " ") != "--print --no-extensions --tools mcp__mitos__* -e builtin:mcp" {
+		t.Fatalf("no-tools arguments: %v", none)
 	}
 
 	if SupportsMCPHTTP("opencode") {

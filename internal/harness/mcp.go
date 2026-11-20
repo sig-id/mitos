@@ -53,6 +53,10 @@ type MCPOptions struct {
 	// OutputSchema marks an orchestrator attempt: plan_submit replaces
 	// report_submit and carries this schema.
 	OutputSchema json.RawMessage
+	// PlanRules adds policy checks for plan_submit beyond the schema, so a
+	// plan Mitos would refuse after the attempt is refused in-session and
+	// corrected without another process. Only used with OutputSchema.
+	PlanRules func(json.RawMessage) []string
 	// AllowCommand lists command_approval, which needs the command.run grant.
 	AllowCommand bool
 	// MaxTurns bounds every Mitos tool call plus the submission. Zero is
@@ -348,6 +352,11 @@ func (s *MCPServer) terminalSubmit(ctx context.Context, name string, arguments j
 	}
 	if problems := schemaProblems(json.RawMessage(s.options.OutputSchema), plan); len(problems) > 0 {
 		return nil, mcpRefusal("plan_submit was refused, the plan does not match the schema: %s", strings.Join(problems, "; "))
+	}
+	if s.options.PlanRules != nil {
+		if problems := s.options.PlanRules(arguments); len(problems) > 0 {
+			return nil, mcpRefusal("plan_submit was refused: %s", strings.Join(problems, "; "))
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, mcpRefusal("attempt context ended: %v", err)
