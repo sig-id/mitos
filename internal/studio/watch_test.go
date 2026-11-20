@@ -327,6 +327,34 @@ func TestWatchDeliverySnapshotsAreDetachedFromTheStore(t *testing.T) {
 	}
 }
 
+func TestContinuousUpdatesDoNotPostponeDeliveryPastInterval(t *testing.T) {
+	s := testStore(t)
+	r := createRun(t, s)
+	spec := runWatch(r.ID, []string{"observation_failed", "note"}, watch.Notify, 60000)
+	spec.Grouping.IntervalMS = 1000
+	w := mustWatch(t, s, spec)
+	now := time.Now()
+	// A must-deliver rule delivers the first group immediately, before wait_ms.
+	evidence(t, s, r.ID, "observation_failed")
+	if err := s.EvaluateWatches(now); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, s, w.ID); len(got) != 1 {
+		t.Fatalf("rule group was not delivered immediately: %+v", got)
+	}
+	// Updates that continue afterwards deliver at interval_ms, not once per
+	// wait_ms, even though the newest entry is far younger than wait_ms.
+	evidence(t, s, r.ID, "note")
+	evidence(t, s, r.ID, "note")
+	if err := s.EvaluateWatches(now.Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, w.ID)
+	if len(got) != 2 || got[0].Counts["note"] != 2 {
+		t.Fatalf("continuous updates were postponed past interval_ms: %+v", got)
+	}
+}
+
 func TestProjectWatchMatchesRunsByBriefProject(t *testing.T) {
 	s := testStore(t)
 	brief := testBrief(".")

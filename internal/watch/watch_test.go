@@ -86,6 +86,14 @@ func TestDueBoundsWaitIntervalAndStarvation(t *testing.T) {
 	if g.Due(delivered.Add(9*time.Second), delivered, p) || !g.Due(delivered.Add(10*time.Second), delivered, p) {
 		t.Fatal("continuous updates postponed delivery past interval_ms")
 	}
+	// A wait_ms longer than interval_ms must not stretch a continuing group's
+	// cadence to once per wait_ms: after the first delivery only interval_ms
+	// applies (spec 09: continuous updates MUST NOT postpone past interval_ms).
+	long := Grouping{WaitMS: 60000, IntervalMS: 1000, MaxEvents: 256, RepeatIntervalMS: 60000}
+	stream := Group{Entries: []Entry{{Seq: 1, At: delivered.Add(time.Second), Kind: "x", Level: Notify}}}
+	if stream.Due(delivered.Add(999*time.Millisecond), delivered, long) || !stream.Due(delivered.Add(time.Second), delivered, long) {
+		t.Fatal("wait_ms postponed a continuing group past interval_ms")
+	}
 	g.Entries = append(g.Entries, Entry{Seq: 9, At: delivered.Add(4 * time.Second), Kind: "x", Level: Notify})
 	if !g.Due(delivered.Add(4*time.Second), delivered, p) {
 		t.Fatal("a full group is not due immediately")

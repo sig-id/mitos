@@ -273,8 +273,9 @@ type Group struct {
 
 // Due reports whether a group should be delivered at now. A group is first
 // delivered wait_ms after its oldest entry, then at most once per interval_ms
-// while events continue; continuous arrivals cannot postpone it further. A
-// full group, or one holding a wake/escalate rule, is due immediately.
+// while events continue; wait_ms never postpones a continuing group past
+// interval_ms (spec 09: no starvation). A full group, or one holding a
+// wake/escalate rule, is due immediately.
 func (g Group) Due(now, lastDelivered time.Time, p Grouping) bool {
 	if len(g.Entries) == 0 {
 		return false
@@ -291,6 +292,5 @@ func (g Group) Due(now, lastDelivered time.Time, p Grouping) bool {
 	if lastDelivered.IsZero() {
 		return !now.Before(oldest.Add(time.Duration(p.WaitMS) * time.Millisecond))
 	}
-	return !now.Before(lastDelivered.Add(time.Duration(p.IntervalMS)*time.Millisecond)) &&
-		!now.Before(oldest.Add(time.Duration(p.WaitMS)*time.Millisecond))
+	return !now.Before(lastDelivered.Add(time.Duration(p.IntervalMS) * time.Millisecond))
 }
