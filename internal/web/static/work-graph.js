@@ -335,9 +335,21 @@
    if(prerequisite)box.append(node('p','Resolve the missing input or approval setup before resuming. More time alone will repeat the wait. Saved work and conversations are preserved.'),approvalSettings());
    if(!prerequisite&&(expired||exhausted))box.append(node('p','The goal is unfinished. Resume with more resources to keep this workflow, its agents, completed steps and saved work.'),node('p','Review any reported failure before continuing. Saved agent conversations and workspace changes are reused when available.'));
    if(waiting){box.append(node('p',snapshot.nodes[waiting].decision_setup?'Configure the Decisions API and approval boundaries so routine requests can be reviewed automatically.':title(graph.members[waiting])+' has a request that needs your input.'));const controls=node('div',undefined,'actions');if(snapshot.nodes[waiting].decision_setup)controls.append(approvalSettings());controls.append(button('Review request',()=>selectNode(waiting,'output')));box.append(controls);}
-   for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.';item.append(node('strong',title(graph.members[id])),node('p',summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
+   for(const id of failures){const item=node('div',undefined,'graph-attention-item'),summary=snapshot.nodes[id].summary||'This attempt stopped without a recorded explanation.',stage=snapshot.nodes[id].stage;item.append(node('strong',title(graph.members[id])),node('p',stage&&stage!==summary?stage+' – '+summary:summary),node('p',failureHelp(summary),'muted'),button('Inspect failed attempt',()=>selectNode(id,'output')));box.append(item)}
    const reasons={orchestrator_proposal_missing:'The orchestrator did not save a work proposal.',orchestrator_proposal_invalid:'The orchestrator returned an unreadable proposal.',orchestrator_proposal_stale_or_rejected:'The orchestrator’s proposal did not match the current work.',orchestrator_execution_needs_review:'The orchestrator stopped before producing a verified proposal.',orchestrator_allowance_exhausted:'The planning allowance has been used.',orchestrator_context_limit:'The work exceeds the orchestrator’s context limit.'};
-   for(const error of errors)if(!failures.includes(error.orchestrator_task))box.append(node('p',reasons[error.error]||error.error.replaceAll('_',' ')),button('Inspect orchestrator',()=>selectNode(error.orchestrator_task||graph.root_task,'output')));
+   const pendingTriggers=(graph.triggers||[]).filter(t=>!t.outcome);
+   for(const error of errors){
+    if(failures.includes(error.orchestrator_task))continue;
+    const item=node('div',undefined,'graph-attention-item');
+    item.append(node('strong','Planning round stopped'),node('p',reasons[error.error]||error.error.replaceAll('_',' ')));
+    if(error.failures)item.append(node('p','Bounded replans used: '+error.failures+' of 2. The round is not retried again on its own.','muted'));
+    if(error.last_error)item.append(node('p','Last refusal sent to the next round: '+error.last_error,'muted'));
+    if(pendingTriggers.length)item.append(node('p',pendingTriggers.length+' outcome '+(pendingTriggers.length===1?'event is':'events are')+' waiting for a fresh planning round.','muted'));
+    const controls=node('div',undefined,'actions');
+    if(graph.status==='active'&&Date.parse(graph.limits.deadline)>Date.now())controls.append(button('Close errored round',()=>openAction('close-round',error.id)));
+    controls.append(button('Inspect orchestrator',()=>selectNode(error.orchestrator_task||graph.root_task,'output')));
+    item.append(controls);box.append(item);
+   }
    if(expired&&!failures.length){const earlier=Object.keys(graph.members).filter(id=>graph.members[id].replacement&&graph.members[id].state==='failed');if(earlier.length){const history=node('details');history.append(node('summary',earlier.length+' earlier failed assignments'));for(const id of earlier)history.append(node('p',snapshot.nodes[id]?.summary||title(graph.members[id])),button('Inspect '+title(graph.members[id]),()=>selectNode(id,'output')));box.append(history)}}
    const actions=node('div',undefined,'actions');actions.append(button('Read saved work',()=>openResult()));if(!waiting&&!graph.service_run_id)actions.append(button(prerequisite?'Resume after resolving prerequisite':'Resume with more resources',openResume,'primary'));if(expired||exhausted)actions.append(button('Start new work',()=>{compose();$('graph-prompt').value=graph.members[graph.root_task].spec.brief.intent;$('graph-prompt').focus()}));box.append(actions);return;
   }
@@ -461,6 +473,7 @@
    const execution=snapshot.nodes[selected]?.execution;if(execution){box.append(node('h4','Execution'),node('p',`${execution.harness_name} · ${execution.runtime}${execution.profile_id?' · '+execution.profile_id:''} (${execution.harness_source})`),node('p',`${execution.tier} tier · ${execution.model||'default model'}${execution.effort?' · '+execution.effort+' effort':''} (${execution.tier_source})`));if(execution.traits?.size)box.append(node('p',`Declared: ${execution.traits.nature} work · ${execution.traits.size} size · ${execution.traits.intelligence} intelligence · budget ${execution.budget.minutes} min / ${execution.budget.max_turns} turns`))}
    const schedule=m.spec.brief.scheduling||{},deps=schedule.deps||[];if(deps.length){const rule=schedule.join?.rule||'all';box.append(node('h4',rule==='any'?'Wait for any matching source':rule==='k_of_n'?`Wait for ${schedule.join.k} matching sources`:'Wait for all required sources'));for(const dep of deps){const waiting=snapshot.nodes[selected].waiting?.includes(dep.from)?' · waiting':'',condition=` · ${dep.guard||'terminal'}${dep.strength==='soft'?' · optional':''}`;if(dep.inbox){const i=dep.inbox;box.append(node('p',`MQTT inbox ${i.project}/${i.mailbox} · ${i.type}${i.correlation?' · '+i.correlation:''}${condition}${waiting}`,'graph-dependency-link'))}else{box.append(button((graph.members[dep.from]?title(graph.members[dep.from]):dep.from)+condition+waiting,()=>selectNode(dep.from),'graph-dependency-link'))}}}
    if(m.replacement)box.append(node('h4','Replacement'),button(title(graph.members[m.replacement]),()=>selectNode(m.replacement),'graph-dependency-link'));
+   if(m.yield){box.append(node('h4','Waiting on proposed work'));for(const pid of m.yield.proposals||[]){const p=(graph.proposals||{})[pid],detail=p&&proposalDetails.get(p.id),row=node('div',undefined,'graph-attention-item');const head=node('strong',detail?.rationale||'Proposal '+pid.slice(0,22));head.append(badge(p?.outcome==='accepted'?'accepted':p?.outcome==='rejected'?'cancelled':'planning'));row.append(head);if(p&&!detail&&graph.members[p.task_id])enrichProposal(p);if(p?.blocking||!p)row.append(node('p','Blocking: this attempt released its slot and resumes in the same conversation once the proposal is settled.','muted'));box.append(row)}}
    if(m.accepted)box.append(node('h4','Accepted result'),window.MitosFormat?window.MitosMarkdown.view(m.accepted.rationale):node('p',m.accepted.rationale),node('p',m.accepted.evidence,'muted'));
    const decision=Object.values(graph.decisions||{}).find(d=>d.task_id===selected);if(decision)renderDecision(box,decision);
    if(m.spec.kind==='scope'){
@@ -588,6 +601,7 @@
   box.append(node('p',orchestratorStatus(),'muted'));const latest=latestOrchestrator();if(latest)box.append(button('Latest orchestrator update',()=>selectNode(latest,'output')));
   const budgets=node('details',undefined,'graph-resource-budgets');budgets.dataset.readKey='goal-resource-budgets';budgets.append(node('summary','Resource budgets'),node('p',`${graph.attempts} of ${graph.limits.attempts} agent attempts allocated, including planning and retries.`),node('p','Workflow deadline: '+date(graph.limits.deadline)+'. Waiting time counts.'));if(graph.setup?.resources){const resources=graph.setup.resources;for(const [label,limit,unit]of [['Model tokens',resources.workflow?.tokens,'tokens'],['CPU per agent',resources.agent?.cpu_millicores,'millicores'],['Memory per agent',resources.agent?.memory_mib,'MiB']])budgets.append(node('p',label+': '+(limit?.mode==='limit'?`${limit.amount} ${unit}`:'No enforced cap')+'.'))}box.append(budgets);
   const members=workflowOrder().filter(id=>graph.members[id].spec.kind!=='scope'&&!graph.members[id].replacement),workers=members.filter(id=>kind(graph.members[id])!=='orchestrator');
+  renderProposals(box);
   box.append(node('h4','Assignments'));
   if(!workers.length)box.append(node('p',graph.policy.automatic?'The orchestrator is preparing the first assignments.':'This goal has no assignments yet.','muted'));
   for(const id of workers){const row=node('div',undefined,'graph-goal-assignment');row.append(button(title(graph.members[id]),()=>selectNode(id),'graph-dependency-link'),badge(displayState(id)));if(snapshot.nodes[id]?.pending_requests)row.append(node('span',snapshot.nodes[id].pending_requests+' pending request'+(snapshot.nodes[id].pending_requests===1?'':'s'),'muted'));box.append(row)}
@@ -604,6 +618,37 @@
  function renderPlanningHistory(box){
   box.append(node('p','The orchestrator plans the work and reviews agent results. Select a round to read its output.','muted'));
   for(const [i,id]of orchestratorRounds().entries()) {const m=graph.members[id],row=node('article',undefined,'graph-attempt-card'),head=node('div',undefined,'graph-attempt-heading');head.append(node('strong','Round '+(i+1)+' · '+title(m)),badge(displayState(id)));row.append(head,button('Read this round',()=>selectNode(id,'output')));box.append(row)}
+  renderProposals(box,{heading:'Proposed work',all:true});
+ }
+ function renderProposals(box,{heading='Proposed work awaiting review',all=false}={}){
+  const records=Object.values(graph.proposals||{}).filter(p=>all||!p.outcome).sort((a,b)=>((a.outcome?1:0)-(b.outcome?1:0))||a.trigger-b.trigger);
+  if(!records.length)return false;
+  box.append(node('h4',heading+' · '+records.length));
+  for(const p of records){
+   const row=node('div',undefined,'graph-attention-item'),proposer=graph.members[p.task_id],count=(p.tasks||[]).length;
+   const head=node('strong',(proposer?title(proposer):'A finished step')+' proposed new work');
+   head.append(badge(p.outcome==='accepted'?'accepted':p.outcome==='rejected'?'cancelled':'planning'));
+   row.append(head);
+   const detail=proposalDetails.get(p.id);
+   if(detail){
+    if(detail.rationale)row.append(node('p',detail.rationale));
+    if(detail.titles.length)row.append(node('p','Suggested: '+detail.titles.join(' · '),'muted'));
+   }else if(proposer&&p.run_id)enrichProposal(p);
+   const meta=[];if(p.blocking)meta.push('blocking: the proposer resumes when this is settled');meta.push(p.outcome||'awaiting orchestrator review');row.append(node('p',meta.join(' · '),'muted'));
+   const controls=node('div',undefined,'actions');
+   if(proposer)controls.append(button('Open proposer result',()=>selectNode(p.task_id,'output')));
+   for(const tid of p.tasks||[])if(graph.members[tid])controls.append(button(title(graph.members[tid]),()=>selectNode(tid)));
+   if(controls.children.length)row.append(controls);box.append(row);
+  }
+  return true;
+ }
+ const proposalDetails=new Map();
+ function enrichProposal(p){
+  proposalDetails.set(p.id,{rationale:'',titles:[]});
+  runDetail(graph.members[p.task_id],p.run_id).then(run=>{
+   const sub=(run?.result?.submission?.proposals||[]).find(x=>x.id===p.local);
+   if(sub)proposalDetails.set(p.id,{rationale:sub.rationale||'',titles:(sub.tasks||[]).map(t=>t.brief?.title).filter(Boolean)});
+  }).catch(()=>{});
  }
  function renderAttempts(box,m){
   if(!m.attempts?.length){box.append(node('p','No attempt has been scheduled for this assignment.','muted'));return}
@@ -619,12 +664,13 @@
  function openAction(type,target=graph.root_task){
   actionSnapshot=structuredClone(graph);actionType=type;actionTarget=target;const form=$('graph-action-form');form.reset();form.querySelector('.form-error').textContent='';const context=$('graph-action-context');context.replaceChildren();
   const accepting=type==='accept',m=graph.members[target];$('graph-evidence-label').hidden=!accepting;form.elements.evidence.required=accepting;
-  const titles={accept:m?.spec.kind==='scope'?'Review the result':'Review this step',cancel:target===graph.root_task?'Stop this work?':'Stop this step?',retry:'Retry this step?',replan:'Replace the orchestrator?', 'apply-decision':'Apply the selected changes?', 'dismiss-decision':'Dismiss this decision?'};
-  $('graph-action-title').textContent=titles[type];$('graph-action-submit').textContent={accept:'Accept result',cancel:'Stop work',retry:'Start another attempt',replan:'Replace orchestrator','apply-decision':'Apply changes','dismiss-decision':'Dismiss decision'}[type];
+  const titles={accept:m?.spec.kind==='scope'?'Review the result':'Review this step',cancel:target===graph.root_task?'Stop this work?':'Stop this step?',retry:'Retry this step?',replan:'Replace the orchestrator?', 'apply-decision':'Apply the selected changes?', 'dismiss-decision':'Dismiss this decision?', 'close-round':'Close this planning round?'};
+  $('graph-action-title').textContent=titles[type];$('graph-action-submit').textContent={accept:'Accept result',cancel:'Stop work',retry:'Start another attempt',replan:'Replace orchestrator','apply-decision':'Apply changes','dismiss-decision':'Dismiss decision','close-round':'Close round'}[type];
   if(accepting){context.append(node('p',m.spec.criteria||m.spec.brief.intent,'prose'));const list=node('div',undefined,'graph-review-list');for(const id of descendants(graph,target).filter(id=>id!==target)){const child=graph.members[id];if(!child.spec.required)continue;const row=node('div',title(child),'graph-review-item');row.append(node('span',obligationAccepted(graph,child)?'Accepted evidence available':labels[displayState(id)]||displayState(id)));if(child.current_run_id)row.append(link('Inspect result','/runs/'+encodeURIComponent(child.current_run_id)));list.append(row)}context.append(list);if(m.spec.kind==='scope')context.append(node('p','Accepting settles outstanding planning for this work and closes this scope. Confirm the evidence meets the goal and no further work is needed.','muted'));}
   else if(type==='cancel')context.append(node('p','Requests a stop for this work and its child steps. Saved output and history remain available.'));
   else if(type==='retry')context.append(node('p','Creates a new attempt with the same assignment. The previous attempt and its evidence remain in the graph.'));
   else if(type==='replan')context.append(node('p','A new orchestrator will read the current graph. Existing worker steps keep running.'));
+  else if(type==='close-round'){const x=Object.values(graph.expansions).find(e=>e.id===target);context.append(node('p','Closes this stopped planning round. Outcome events still waiting for planning then schedule a fresh round with a new orchestrator attempt, keeping every finished step.'));if(x?.last_error)context.append(node('p','This round stopped after: '+x.last_error,'muted'));if(x?.failures)context.append(node('p','It already used '+x.failures+' of its 2 bounded replans.','muted'));}
   else if(type==='apply-decision'){const d=graph.decisions[target];context.append(node('p',d.candidates?.[Number(d.answer?.choice)]?.explanation||'Apply the recorded model choice to the current graph.'));}
   else context.append(node('p','Retains the decision record and closes its outstanding planning obligation.'));
   $('graph-action-dialog').showModal();
@@ -645,6 +691,7 @@
      }
      operations.push({kind:'accept',task:target,evidence:form.elements.evidence.value.trim(),rationale});reads=allReads(g);
     }else if(actionType==='replan')operations=[{kind:'replace_orchestrator',rationale}];
+    else if(actionType==='close-round')operations=[{kind:'close_expansion',expansion:target,rationale}];
     else if(actionType==='dismiss-decision')operations=[{kind:'dismiss_decision',expansion:target,rationale}];
     else if(actionType==='retry')operations=[{kind:'retry',task:target}];
     else operations=[{kind:'cancel',task:target,rationale}];

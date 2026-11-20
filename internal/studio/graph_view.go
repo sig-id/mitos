@@ -79,6 +79,7 @@ type GraphNodeView struct {
 	ReviewingRequests int            `json:"reviewing_requests,omitempty"`
 	DecisionSetup     bool           `json:"decision_setup,omitempty"`
 	Summary           string         `json:"summary,omitempty"`
+	Stage             string         `json:"stage,omitempty"`
 	PendingRequests   int            `json:"pending_requests,omitempty"`
 	CreatedAt         time.Time      `json:"created_at"`
 	State             string         `json:"state"`
@@ -199,6 +200,7 @@ func (s *Store) GraphView(id, selected string) (GraphView, error) {
 		n := GraphNodeView{CreatedAt: g.CreatedAt, State: s.graphDisplayState(g, m), Settled: s.graphSettled(m)}
 		if r := s.runs[m.CurrentRunID]; r != nil {
 			n.Summary = r.Summary
+			n.Stage = r.Stage
 			n.BlockedReason = r.BlockedReason
 		}
 		requests := s.graphPendingRequests(m.CurrentRunID)
