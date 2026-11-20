@@ -98,13 +98,15 @@ func (p *printTurn) reply(ctx context.Context, last bool) (bool, error) {
 		// is a random token, so what follows it on the line is the payload.
 		if raw, ok := strings.CutPrefix(strings.TrimSpace(line), p.marker); ok {
 			if payload != "" {
-				return false, frameError{errors.New("multiple coordinated CLI responses"), ""}
+				return false, frameError{errors.New("multiple coordinated CLI responses"), p.output.String()}
 			}
 			payload = strings.TrimSpace(raw)
 		}
 	}
+	// The next invocation starts a fresh conversation, so the whole output is
+	// the rejected reply: without it, the CLI could not reframe its own work.
 	if payload == "" {
-		return false, frameError{errors.New("coding agent did not return a MITOS_REPLY frame"), ""}
+		return false, frameError{errors.New("coding agent did not return a MITOS_REPLY frame"), p.output.String()}
 	}
 	if err := DecodeGraphJSON([]byte(payload), &action); err != nil {
 		return false, frameError{fmt.Errorf("invalid coordinated CLI response: %w", err), payload}

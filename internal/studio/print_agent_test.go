@@ -129,7 +129,15 @@ func TestPrintAdapterRejectsInvalidFrames(t *testing.T) {
 			t.Fatal(frame)
 		}
 	}
-	p := newPrintTurn("", harness.CodexOptions{Tools: []harness.DynamicTool{{Name: "check"}}, ToolCall: func(string, json.RawMessage) (any, error) { return "receipt", nil }}, nil)
+	p := newPrintTurn("", harness.CodexOptions{Result: func(string) error { return nil }}, nil)
+	p.marker = "PREFIX"
+	p.output.Write([]byte("PREFIX {\"final\":\"ok\"}\nPREFIX {\"final\":\"extra\"}"))
+	_, err := p.reply(t.Context(), false)
+	var frame frameError
+	if !errors.As(err, &frame) || frame.rejected != "PREFIX {\"final\":\"ok\"}\nPREFIX {\"final\":\"extra\"}" {
+		t.Fatalf("multiple frames did not carry the rejected output: %q", frame.rejected)
+	}
+	p = newPrintTurn("", harness.CodexOptions{Tools: []harness.DynamicTool{{Name: "check"}}, ToolCall: func(string, json.RawMessage) (any, error) { return "receipt", nil }}, nil)
 	p.marker = "PREFIX"
 	p.output.Write([]byte(`PREFIX {"tool":"check","arguments":{}}`))
 	if _, err := p.reply(t.Context(), true); err == nil || len(p.history) != 0 {
@@ -231,6 +239,15 @@ func TestPrintAdapterResendsInvalidFrames(t *testing.T) {
 	}
 	if _, _, err = run(` nope`, ` nope`, ` nope`, ` {"final":"late"}`); err == nil || !strings.Contains(err.Error(), "invalid coordinated CLI response") {
 		t.Fatalf("third consecutive invalid reply was not fatal: %v", err)
+	}
+	// An unframed tool call is returned with the model's own output in the
+	// resend, so the next invocation can correct its framing, not redo work.
+	got, provider, err = run("\nI need to check: {\"tool\":\"probe\",\"arguments\":{}}", ` {"final":"framed"}`)
+	if err != nil || got != "framed" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if !strings.Contains(provider.inputs[0], `I need to check: {\"tool\":\"probe\"`) || !strings.Contains(provider.inputs[0], "did not return a MITOS_REPLY frame") {
+		t.Fatalf("unframed reply was not returned for resending: %q", provider.inputs)
 	}
 }
 
