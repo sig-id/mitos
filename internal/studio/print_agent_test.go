@@ -285,3 +285,154 @@ func TestPrintAdapterWorkerFinalNeedsASubmittedResult(t *testing.T) {
 		t.Fatalf("%v %v %q", done, err, got)
 	}
 }
+
+// The MCP variant: the fixture pi receives the Mitos tools as native tools
+// through the per-attempt streamable HTTP server, ends the attempt with the
+// terminal tools, and corrects a refused plan inside one session.
+func TestPrintAdapterMCPGoal(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 required for CLI fixture")
+	}
+	bin := t.TempDir()
+	script := `import base64, json, os, pathlib, sys, urllib.request
+
+class MCP:
+    def __init__(self):
+        cfg=json.load(open(os.path.join(os.environ['PI_CODING_AGENT_DIR'],'mcp.json')))
+        entry=cfg['mcpServers']['mitos']
+        self.url=entry['url']; self.auth=entry['headers']['Authorization']; self.sid=None; self.n=0
+    def post(self, body):
+        headers={'Content-Type':'application/json','Authorization':self.auth}
+        if self.sid: headers['Mcp-Session-Id']=self.sid
+        req=urllib.request.Request(self.url,data=json.dumps(body).encode(),headers=headers,method='POST')
+        with urllib.request.urlopen(req) as r:
+            session=r.headers.get('Mcp-Session-Id')
+            if session: self.sid=session
+            return r.status,r.read()
+    def call(self, method, params=None):
+        self.n+=1
+        status,body=self.post({'jsonrpc':'2.0','id':self.n,'method':method,'params':params or {}})
+        assert status==200,(status,body)
+        answer=json.loads(body)
+        assert 'error' not in answer,answer
+        return answer['result']
+    def tool(self, name, args):
+        result=self.call('tools/call',{'name':name,'arguments':args})
+        return bool(result.get('isError')),result['content'][0]['text']
+
+assert '--no-mcp' not in sys.argv and '-e' in sys.argv and 'builtin:mcp' in sys.argv,sys.argv
+mcp=MCP()
+init=mcp.call('initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'fixture','version':'1'}})
+assert init['serverInfo']['name']=='mitos',init
+status,_=mcp.post({'jsonrpc':'2.0','method':'notifications/initialized'})
+assert status==202,status
+tools=[t['name'] for t in mcp.call('tools/list')['tools']]
+prompt=sys.stdin.read()
+
+def spec(root):
+    return {'id':'work0','parent':root,'kind':'application','required':True,'acceptance':'operator',
+            'criteria':'Provide the answer','traits':{'nature':'','size':'small','intelligence':'low'},
+            'agent':None,'arguments':[],'context':'','harness':'',
+            'brief':{'title':'Compute answer','intent':'Write the answer.','app_id':'agent:mitos.engineer',
+                     'timeout_minutes':10,'ownership':{'paths':[],'leases':[]},
+                     'scheduling':{'pool':'interactive','priority':0,'deps':[],'join':{'rule':'all','k':0},'deadline':None},
+                     'structured':None}}
+
+if 'plan_submit' in prompt and 'report_submit' not in prompt:
+    assert 'MITOS_REPLY' not in prompt,'frame instructions leaked into the MCP prompt'
+    assert 'plan_submit' in tools and 'report_submit' not in tools,tools
+    state=json.JSONDecoder().raw_decode(prompt.split('\n## graph_state (')[1].split('\n',1)[1])[0]
+    workers=[e for e in state['journal'] if e['kind']=='application']
+    if not workers:
+        plan={'operations':[{'kind':'add','spec':spec(state['root_task'])}],'accept':[],'complete':False,
+              'result':{'title':'','markdown':'','source_tasks':[],'items':[]},'explanation':'Delegate the computation.'}
+        bad=json.loads(json.dumps(plan)); bad['operations']=[{'kind':'explode'}]; bad['complete']='yes'
+        failed,text=mcp.tool('plan_submit',bad)
+        assert failed and 'variants' in text and 'complete' in text,text
+        failed,text=mcp.tool('plan_submit',plan)
+        assert not failed,(failed,text)
+    else:
+        run=workers[-1]['run_id']
+        _,listing=mcp.tool('artifact_list',{'run_id':run,'cursor':0,'limit':32})
+        ref=next(a for a in json.loads(listing)['artifacts'] if a['role']=='report')
+        _,data=mcp.tool('artifact_read',{'run_id':run,'artifact_id':ref['id'],'offset':0,'limit':32768})
+        body=base64.b64decode(json.loads(data)['data']).decode()
+        assert body=='42\n',body
+        plan={'operations':[],'accept':[{'task':workers[-1]['task'],'rationale':'Worker delivered the requested answer.'}],
+              'complete':True,'result':{'title':'Answer','markdown':'The answer is 42.','source_tasks':[workers[-1]['task']],'items':[]},
+              'explanation':'Review the saved evidence.'}
+        failed,text=mcp.tool('plan_submit',plan)
+        assert not failed,(failed,text)
+else:
+    assert 'result_submit' in tools and 'report_submit' in tools and 'plan_submit' not in tools,tools
+    failed,text=mcp.tool('report_submit',{'report':'premature'})
+    assert failed and 'result_submit' in text,text
+    failed,text=mcp.tool('operator_question',{'question':'What is the requested answer?'})
+    assert not failed,text
+    answer=json.loads(text)['result']['answers']['question']['answers'][0]
+    assert answer=='42',answer
+    pathlib.Path('answer.txt').write_text(answer+'\n')
+    _,registered=mcp.tool('artifact_register',{'path':'answer.txt','role':'report'})
+    receipt=json.loads(registered)
+    failed,text=mcp.tool('result_submit',{'version':'mitos.handoff/v1','key':'answer','summary':'42',
+        'artifacts':[{'artifact_id':receipt['id'],'role':'report'}],'checks':[],'limitations':[],'unresolved_requests':[]})
+    assert not failed,text
+    failed,text=mcp.tool('report_submit',{'report':'The answer is '+answer+'.'})
+    assert not failed,text
+print('fixture turn complete')
+`
+	if err = os.WriteFile(filepath.Join(bin, "pi"), []byte("#!"+python+"\n"+script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	e, req := graphEngine(t, true)
+	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "print-adapter-mcp", ProjectID: req.ProjectID, Goal: "Compute and review the answer", Execution: defaultExecution("pi", "fixture/worker")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(30 * time.Second)
+	for time.Now().Before(until) {
+		if g, err = e.Store.Graph(g.ID); err != nil {
+			t.Fatal(err)
+		}
+		if g.Status == "accepted" {
+			break
+		}
+		for _, run := range e.Store.List() {
+			if d := run.Decision; d != nil && d.Resolution == nil && d.Source != nil && d.Source.Adapter == "pi" {
+				err = e.Store.ResolveChoice(run.ID, decision.Resolution{DecisionID: d.ID, Choice: "answer", Value: json.RawMessage(`"42"`), Via: "api"}, decision.LocalOperator(), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		for _, x := range g.Expansions {
+			if x.Error != "" {
+				for _, m := range g.Members {
+					if m.CurrentRunID != "" {
+						r, _ := e.Store.Get(m.CurrentRunID)
+						out, _ := e.Store.Artifact(r.ID, "output.txt")
+						t.Logf("%s: %s %s\n%s", r.AppName, r.Status, r.Summary, out)
+					}
+				}
+				t.Fatalf("orchestration: %s", x.Error)
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	if g.Result == nil || g.Status != "accepted" || g.Result.Markdown != "The answer is 42." {
+		t.Fatalf("incomplete: %+v", g)
+	}
+	for _, m := range g.Members {
+		if m.Spec.Brief.Title != "Compute answer" {
+			continue
+		}
+		body, err := e.Store.GraphRunFile(g.ID, m.Spec.ID, m.CurrentRunID, "answer.txt")
+		if err != nil || string(body) != "42\n" || m.Accepted == nil {
+			t.Fatalf("worker: %s %v", body, err)
+		}
+		return
+	}
+	t.Fatal("missing worker")
+}

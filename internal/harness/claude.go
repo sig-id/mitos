@@ -353,55 +353,19 @@ func claudeControl(ctx context.Context, b Broker, thread, workspace string, raw 
 	}
 	return map[string]any{"behavior": "allow", "updatedInput": input}, nil
 }
+
+// claudeMCP answers one SDK MCP message from Claude Code's control protocol
+// through the shared Mitos MCP handler. The terminal submission tools are
+// absent: Claude delivers its result through its own result frame.
 func claudeMCP(ctx context.Context, raw json.RawMessage, options CodexOptions) (any, error) {
-	var r struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		} `json:"params"`
+	answer := NewMCPServer(MCPOptions{Tools: options.Tools, ToolCall: options.ToolCall}).message(ctx, raw)
+	if answer.err != nil {
+		return nil, answer.err
 	}
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, err
+	if answer.notification {
+		return map[string]any{"jsonrpc": "2.0", "id": answer.id, "result": map[string]any{}}, nil
 	}
-	var result any
-	switch r.Method {
-	case "initialize":
-		result = map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "mitos", "version": "1"}}
-	case "notifications/initialized", "ping":
-		result = map[string]any{}
-	case "tools/list":
-		tools := []map[string]any{}
-		for _, t := range options.Tools {
-			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.InputSchema})
-		}
-		result = map[string]any{"tools": tools}
-	case "tools/call":
-		found := false
-		for _, t := range options.Tools {
-			if t.Name == r.Params.Name {
-				found = true
-			}
-		}
-		if !found || options.ToolCall == nil {
-			return nil, errors.New("tool is not granted")
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		value, err := options.ToolCall(r.Params.Name, r.Params.Arguments)
-		var encoded []byte
-		if err != nil {
-			encoded = []byte(err.Error())
-		} else {
-			encoded, _ = json.Marshal(value)
-		}
-		result = map[string]any{"content": []any{map[string]any{"type": "text", "text": string(encoded)}}, "isError": err != nil}
-	default:
-		return nil, errors.New("unsupported MCP method")
-	}
-	return map[string]any{"jsonrpc": "2.0", "id": r.ID, "result": result}, nil
+	return json.RawMessage(answer.response()), nil
 }
 
 func claudeControlKey(raw json.RawMessage, thread string) string {
