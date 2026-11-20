@@ -45,6 +45,19 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// unixSocketDir returns a temp directory whose paths fit every supported
+// platform's unix socket address limit: macOS allows 104 bytes of sun_path
+// and the standard test temp root is longer on some machines.
+func unixSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "mitos-egress-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func readStatus(t *testing.T, conn net.Conn) string {
 	t.Helper()
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
@@ -59,7 +72,7 @@ func readStatus(t *testing.T, conn net.Conn) string {
 
 // The relay admits only allowlisted model endpoints, and only over https.
 func TestEgressRelayEnforcesAllowlist(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "egress", "model.sock")
+	path := filepath.Join(unixSocketDir(t), "egress", "model.sock")
 	dialed := ""
 	upstream, server := net.Pipe()
 	relay, err := startEgressRelay(path, []string{"api.openai.com"}, func(addr string) (net.Conn, error) {
@@ -145,7 +158,7 @@ func TestEgressRelayEnforcesAllowlist(t *testing.T) {
 }
 
 func TestEgressRelayReplacesStaleSocket(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "model.sock")
+	path := filepath.Join(unixSocketDir(t), "model.sock")
 	if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +176,7 @@ func TestEgressRelayReplacesStaleSocket(t *testing.T) {
 
 // The loop forwarder forwards CONNECT heads verbatim to the relay socket.
 func TestEgressLoopForwardsTunnelsToRelaySocket(t *testing.T) {
-	relayPath := filepath.Join(t.TempDir(), "relay.sock")
+	relayPath := filepath.Join(unixSocketDir(t), "relay.sock")
 	received := make(chan string, 1)
 	listener, err := net.Listen("unix", relayPath)
 	if err != nil {

@@ -8,8 +8,9 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
+
+	"mitos/internal/procsys"
 )
 
 type runningJob struct {
@@ -187,7 +188,7 @@ func (m *Manager) executeJob(ctx context.Context, cancel context.CancelFunc, job
 	defer cancel()
 	cmd := exec.CommandContext(ctx, job.Command[0], job.Command[1:]...)
 	cmd.Dir = p.Directory
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = procsys.Child(true)
 	cmd.Cancel = func() error { killSession(cmd.Process.Pid); return nil }
 	cmd.WaitDelay = 2 * time.Second
 	f, err := os.OpenFile(m.outputPath(job.ID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)

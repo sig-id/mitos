@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// timeoutFor keeps cancellation subtests tight while allowing success paths
+// the extra first-exec cost some platforms charge for freshly written scripts.
+func timeoutFor(mode string) time.Duration {
+	if mode == "timeout" {
+		return 100 * time.Millisecond
+	}
+	return 5 * time.Second
+}
+
 func TestCommandTranscriberBoundsAndCancellation(t *testing.T) {
 	for _, mode := range []string{"transcript", "oversize", "failure", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
@@ -27,7 +36,7 @@ func TestCommandTranscriberBoundsAndCancellation(t *testing.T) {
 			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), timeoutFor(mode))
 			defer cancel()
 			text, err := (CommandTranscriber{Path: path}).Transcribe(ctx, []byte{0, 0}, "en")
 			if mode == "transcript" {

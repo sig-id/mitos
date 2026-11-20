@@ -147,7 +147,13 @@ func TestTopicsProgressiveDiscoveryAndRestart(t *testing.T) {
 func TestProjectDirectoryAndCrossProjectAuthor(t *testing.T) {
 	m, p := testManager(t)
 	outside := t.TempDir()
-	if opened, err := m.CreateProject("Outside root", outside); err != nil || opened.Directory != outside {
+	// Compare against the resolved spelling: project directories are
+	// canonicalized, and temp roots are symlinked on some platforms.
+	resolvedOutside, err := filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := m.CreateProject("Outside root", outside); err != nil || opened.Directory != resolvedOutside {
 		t.Fatal("local directory outside batch root rejected", opened, err)
 	}
 	dir := filepath.Join(p.Directory, "another")
@@ -170,6 +176,12 @@ func TestProjectDirectoryAndCrossProjectAuthor(t *testing.T) {
 func TestProjectDirectoryResolution(t *testing.T) {
 	m, _ := testManager(t)
 	directory := t.TempDir()
+	// The manager canonicalizes directories; temp roots are symlinked on
+	// some platforms, so deduplicated aliases carry the resolved spelling.
+	resolved, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	link := filepath.Join(m.root, "linked-project")
 	if err := os.Symlink(directory, link); err != nil {
 		t.Fatal(err)
@@ -180,7 +192,7 @@ func TestProjectDirectoryResolution(t *testing.T) {
 	}
 	for _, path := range []string{link, "linked-project", directory + "/"} {
 		alias, err := m.CreateProject("Same project", path)
-		if err != nil || alias.ID != opened.ID || alias.Directory != directory {
+		if err != nil || alias.ID != opened.ID || alias.Directory != resolved {
 			t.Fatal("directory alias not deduplicated", alias, err)
 		}
 	}

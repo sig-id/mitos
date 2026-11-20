@@ -29,8 +29,13 @@ See the [server use case and delivery path](spec/README.md#application-server-re
 
 ## Start
 
-Requires Go 1.26.11+, Git, and Bash on Linux. The first build downloads pinned Go
-dependencies. Serving the workspace needs no Node build, database service, or CDN;
+Requires Go 1.26.11+, Git, and Bash. Linux is the primary target;
+macOS (Apple Silicon) also builds and serves with the fixes in this tree:
+the workspace observer counts writes by rescanning, reads process trees and
+argv through sysctl, `mitos stop` identifies the server through lsof, and
+restore publishes with an exclusive rename; bubblewrap confinement remains
+Linux-only, and interactive coding CLIs must be installed on the Mac.
+The first build downloads pinned Go dependencies. Serving the workspace needs no Node build, database service, or CDN;
 browser assets are vendored.
 
 ```sh

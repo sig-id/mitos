@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,13 @@ func TestLocalProjectAndAgentOutsideDefaultWorkspace(t *testing.T) {
 	if err := bridge.Start(context.Background(), "codex", "Project agent", directory); err != nil {
 		t.Fatal("opened project's agent cannot connect", err)
 	}
-	if path, err := e.Workspace(directory); err != nil || path != directory {
+	// Runs carry the canonical workspace spelling; temp roots are
+	// symlinked on some platforms.
+	resolvedDir, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path, err := e.Workspace(directory); err != nil || path != resolvedDir {
 		t.Fatal("confirmed workspace rejected by task runner", path, err)
 	}
 	if _, err := e.Workspace(t.TempDir()); err == nil {
