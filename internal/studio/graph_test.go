@@ -507,3 +507,65 @@ func TestGraphPreviewAndReceiptsDoNotMutateInputs(t *testing.T) {
 		t.Fatal("receipt read leaked mutable state")
 	}
 }
+
+// A generated brief must not carry typed structured work: the structured
+// request path freezes the exact agent definition with its brief at admission,
+// and a graph assignment carrying a bare structured section could never claim.
+func TestGraphRejectsStructuredBriefs(t *testing.T) {
+	e, req := graphEngine(t, false)
+	g := createGraphTest(t, e, req)
+	spec := graphWorker("typed", g.RootTask)
+	spec.Brief.Structured = &StructuredWork{Key: "typed", Input: json.RawMessage(`{"q":1}`), ResultSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}`)}
+	if _, _, err := e.AmendGraph(proposal(g, "typed", GraphOperation{Kind: "add", Spec: &spec})); err == nil || !strings.Contains(err.Error(), "own request path") {
+		t.Fatalf("structured brief admitted: %v", err)
+	}
+	after, _ := e.Store.Graph(g.ID)
+	if !reflect.DeepEqual(g, after) {
+		t.Fatal("rejected spec leaked into the graph")
+	}
+	// Amendments of an admitted member are refused for the same reason.
+	admitted := graphWorker("plain", g.RootTask)
+	g, receipt := amendGraphTest(t, e, g, "plain", GraphOperation{Kind: "add", Spec: &admitted}, GraphOperation{Kind: "close_expansion", Expansion: "initial", Rationale: "work discovered"})
+	id := receipt.IDs["plain"]
+	edit := g.Members[id].Spec
+	edit.Brief.Structured = &StructuredWork{Key: "typed", Input: json.RawMessage(`{"q":1}`), ResultSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}`)}
+	if _, _, err := e.AmendGraph(proposal(g, "edit", GraphOperation{Kind: "amend", Task: id, Spec: &edit})); err == nil || !strings.Contains(err.Error(), "own request path") {
+		t.Fatalf("structured amendment admitted: %v", err)
+	}
+}
+
+// A graph attempt admitted before this rule with an unfreezable structured
+// section fails visibly and names the only remedy: retries repeat the brief.
+func TestGraphAttemptWithUnfreezableStructuredBriefFailsWithReplacementGuidance(t *testing.T) {
+	e, req := graphEngine(t, false)
+	g := createGraphTest(t, e, req)
+	spec := graphWorker("typed", g.RootTask)
+	g, receipt := amendGraphTest(t, e, g, "plan", GraphOperation{Kind: "add", Spec: &spec}, GraphOperation{Kind: "close_expansion", Expansion: "initial", Rationale: "work discovered"})
+	id := receipt.IDs["typed"]
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g, _ = e.Store.Graph(g.ID)
+	run, err := e.Store.Get(g.Members[id].CurrentRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Store.mu.Lock()
+	brief := e.Store.runs[run.ID].Brief
+	brief.Structured = &StructuredWork{}
+	e.Store.runs[run.ID].Brief = brief
+	e.Store.mu.Unlock()
+	if _, err = e.Store.ReadyRuns(nil); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := e.Store.Get(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "failed" || failed.Stage != "Exact definition unavailable" {
+		t.Fatalf("unfreezable graph attempt not failed visibly: %s %s", failed.Status, failed.Stage)
+	}
+	if !strings.Contains(failed.Summary, "Replace the task") {
+		t.Fatalf("failure summary does not name the graph remedy: %s", failed.Summary)
+	}
+}

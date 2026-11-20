@@ -51,6 +51,14 @@ func (e *Engine) resolveGraphSpec(g *WorkGraph, spec GraphSpec) (GraphSpec, *Gra
 	if spec.Brief.Execution != nil {
 		return spec, nil, graphError("execution policy belongs to the work, not a generated brief")
 	}
+	// Typed structured work is admitted only through its own request path,
+	// where the exact agent definition is frozen with the brief. A graph
+	// assignment that carried a structured section could never dispatch: its
+	// run would fail claiming with an unfreezable definition. Refuse it here
+	// so the proposal names the real problem instead of failing later.
+	if spec.Brief.Structured != nil {
+		return spec, nil, graphError("typed structured work is admitted by its own request path; describe a graph assignment in its title and intent")
+	}
 	if spec.Kind == "scope" {
 		if spec.Harness != "" || spec.Traits != nil {
 			return spec, nil, graphError("scope cannot select an executor or declare traits")
