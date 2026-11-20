@@ -3,6 +3,7 @@ package studio
 import (
 	"context"
 	crand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,33 @@ func agentMCPPath(confinementEnabled bool, runtime string) bool {
 // calls, and terminal submission tools. The text-frame protocol stays as
 // the fallback for CLIs without an adapter and confinements without an HTTP
 // route to the host.
+
+// mcpPlanRules refuses plans the graph would reject only after the attempt
+// ended, so the orchestrator corrects them inside its own session instead of
+// spending another orchestrator call on the same refusal.
+func mcpPlanRules(plan json.RawMessage) []string {
+	var decoded struct {
+		Operations []struct {
+			Kind string `json:"kind"`
+			Task string `json:"task"`
+		} `json:"operations"`
+		Accept []struct {
+			Task string `json:"task"`
+		} `json:"accept"`
+	}
+	if json.Unmarshal(plan, &decoded) != nil {
+		return []string{"the plan is not readable JSON"}
+	}
+	var problems []string
+	for _, op := range decoded.Operations {
+		// Accept operations carry operator authority only; the orchestrator
+		// records worker reviews in the top-level accept list instead.
+		if op.Kind == "accept" {
+			problems = append(problems, fmt.Sprintf("operation accept on %s is operator-only: review workers in the top-level accept list with task and rationale", op.Task))
+		}
+	}
+	return problems
+}
 
 // mcpDecisionThread identifies coordinated CLI decisions, as the text
 // protocol's "coordinated-cli" thread does.
@@ -88,6 +116,7 @@ func startAgentMCP(ctx context.Context, runtime string, broker harness.Broker, o
 		Result:       options.Result,
 		Decision:     decision,
 		OutputSchema: options.OutputSchema,
+		PlanRules:    mcpPlanRules,
 		AllowCommand: allowCommand,
 		MaxTurns:     options.MaxTurns,
 		Activity:     options.Activity,
@@ -161,7 +190,7 @@ func mcpPrompt(prompt string, options harness.CodexOptions) string {
 	}
 	text := prompt + "\n\nMitos coordinated CLI protocol (native tools)\nFollow the assignment in this workspace. Do not launch native subagents.\nThe Mitos tools are provided as native tools: " + strings.Join(names, ", ") + ". Call them as tools; their results arrive as tool results, never invented.\nFor an operator decision, call mcp__mitos__operator_question, or mcp__mitos__command_approval for one exact command line, and wait for the answer in the tool result.\nEnd the attempt by calling "
 	if len(options.OutputSchema) > 0 {
-		text += "mcp__mitos__plan_submit with the plan object, which must match the tool's input schema. A refused plan returns the reason as the tool result; correct it and submit again."
+		text += "mcp__mitos__plan_submit with the plan object, which must match the tool's input schema. Review accepted workers in the top-level accept list (task and rationale), never as accept operations. A refused plan returns the reason as the tool result; correct it and submit again."
 	} else {
 		text += "mcp__mitos__result_submit, then mcp__mitos__report_submit with your final Markdown report. report_submit is refused until result_submit has succeeded. The attempt ends when report_submit succeeds."
 	}

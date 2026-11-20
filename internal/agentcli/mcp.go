@@ -32,6 +32,10 @@ type MCPFiles struct {
 	Add []string
 	// Drop are arguments removed from the print arguments.
 	Drop []string
+	// ToolsPattern, when set, is folded into the --tools allowlist so the
+	// server's tools stay declared to the model: a plain-name-only list
+	// leaves every MCP tool undeclared, whatever its exposure.
+	ToolsPattern string
 }
 
 // SupportsMCPHTTP reports whether the CLI has an HTTP MCP adapter and can be
@@ -65,11 +69,12 @@ func MCPHTTP(id string, config MCPConfig) (MCPFiles, error) {
 	return MCPFiles{
 		Files: map[string][]byte{"mcp.json": append(body, '\n')},
 		// --no-mcp would drop the server; --no-extensions together with
-		// -e builtin:mcp loads only the built-in MCP support, and the plain
-		// --tools names keep the mitos tools declared (only an mcp__ entry
-		// would filter them away).
-		Add:  []string{"-e", "builtin:mcp"},
-		Drop: []string{"--no-mcp", "--no-session"},
+		// -e builtin:mcp loads only the built-in MCP support. The --tools
+		// allowlist gains the mitos pattern: without an mcp__ entry it
+		// leaves every MCP tool undeclared, whatever its exposure.
+		Add:          []string{"-e", "builtin:mcp"},
+		Drop:         []string{"--no-mcp", "--no-session"},
+		ToolsPattern: "mcp__" + mcpServerName + "__*",
 	}, nil
 }
 
@@ -78,11 +83,24 @@ func MCPHTTP(id string, config MCPConfig) (MCPFiles, error) {
 const mcpServerName = "mitos"
 
 // ApplyArguments adjusts print arguments for the MCP mode: the text
-// protocol's MCP flags are removed and the adapter's additions appended.
+// protocol's MCP flags are removed, the adapter's additions appended, and
+// the --tools allowlist gains the server's tool pattern. A --no-tools
+// allowlist becomes the pattern alone: no built-in tools, the server's only.
 func (f MCPFiles) ApplyArguments(args []string) []string {
-	out := make([]string, 0, len(args)+len(f.Add))
+	out := make([]string, 0, len(args)+len(f.Add)+2)
+	toolsValue := false // the next argument is the value of --tools
 	for _, arg := range args {
-		if !slices.Contains(f.Drop, arg) {
+		switch {
+		case slices.Contains(f.Drop, arg):
+		case arg == "--tools" && f.ToolsPattern != "":
+			out = append(out, arg)
+			toolsValue = true
+		case toolsValue:
+			out = append(out, arg+","+f.ToolsPattern)
+			toolsValue = false
+		case arg == "--no-tools" && f.ToolsPattern != "":
+			out = append(out, "--tools", f.ToolsPattern)
+		default:
 			out = append(out, arg)
 		}
 	}

@@ -265,3 +265,16 @@ func (d *mcpExitSession) OutputOffset() uint64    { return 0 }
 // independent of the fields they read.
 func brokerSocketPath(b *compute.ModelBroker) string { return b.Endpoint()[len("unix://"):] }
 func mcpToken(m *agentMCP) string                    { return strings.TrimPrefix(m.headers["Authorization"], "Bearer ") }
+
+// Operator-only operations are refused before delivery so the orchestrator
+// corrects the plan in-session instead of spending another call.
+func TestMCPPlanRulesRefuseOperatorOnlyOperations(t *testing.T) {
+	plan := []byte(`{"operations":[{"kind":"accept","task":"task_1","rationale":"r"},{"kind":"add","spec":{}}],"accept":[{"task":"task_1","rationale":"r"}],"complete":true,"result":{},"explanation":"e"}`)
+	problems := mcpPlanRules(plan)
+	if len(problems) != 1 || !strings.Contains(problems[0], "operator-only") || !strings.Contains(problems[0], "accept list") {
+		t.Fatalf("problems: %v", problems)
+	}
+	if problems := mcpPlanRules([]byte(`{"operations":[{"kind":"add","spec":{}}],"accept":[],"complete":false,"result":{},"explanation":"e"}`)); len(problems) != 0 {
+		t.Fatalf("clean plan refused: %v", problems)
+	}
+}

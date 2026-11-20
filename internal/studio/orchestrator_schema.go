@@ -66,9 +66,13 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 		return orchestratorObjectSchema(props)
 	case reflect.Slice:
 		return map[string]any{"type": "array", "items": orchestratorTypeSchema(t.Elem())}
+	case reflect.Map:
+		// A map is an object with a uniform value type, never a string: a
+		// schema that says string invites exactly what decoding refuses.
+		return map[string]any{"type": "object", "additionalProperties": orchestratorTypeSchema(t.Elem())}
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}
-	case reflect.Int, reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return map[string]any{"type": "integer"}
 	default:
 		return map[string]any{"type": "string"}
