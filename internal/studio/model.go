@@ -206,6 +206,7 @@ type change struct {
 	NativeThreadID         string                     `json:"native_thread_id,omitempty"`
 	SupervisorVerdict      *SupervisorVerdict         `json:"supervisor_verdict,omitempty"`
 	SupervisionIncident    *SupervisionIncident       `json:"supervision_incident,omitempty"`
+	Watch                  *watchChange               `json:"watch,omitempty"`
 	AgentRoute             *AgentRoute                `json:"agent_route,omitempty"`
 	ModelEvaluation        *ModelEvaluation           `json:"model_evaluation,omitempty"`
 	Cooperation            *CooperationRecord         `json:"cooperation,omitempty"`

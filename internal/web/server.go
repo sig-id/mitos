@@ -135,6 +135,7 @@ func New(engine *studio.Engine, demo bool) (*Server, error) {
 	s := &Server{engine: engine, templates: t, demo: demo, streamContext: streamContext, stopStreams: stopStreams}
 	mux := http.NewServeMux()
 	s.messagingRoutes(mux)
+	s.watchRoutes(mux)
 	s.graphRoutes(mux)
 	static, _ := fs.Sub(assets, "static")
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))

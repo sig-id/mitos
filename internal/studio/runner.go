@@ -256,8 +256,9 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	initialized = true
-	e.wg.Add(1)
+	e.wg.Add(2)
 	go e.dispatch()
+	go e.watchLoop()
 	return e, nil
 }
 func (e *Engine) Close() {

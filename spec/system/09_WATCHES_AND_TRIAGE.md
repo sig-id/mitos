@@ -31,7 +31,7 @@ unversioned form.
   "cursor": 18231,
   "condition": {
     "scope": {"project": "project_…", "graph": "graph_…"},
-    "types": ["evidence", "decision"],
+    "types": ["effect"],
     "kinds": ["verification_failed", "quiescent", "harness_session_recorded"]
   },
   "lease": {"expires_at": "2026-11-21T09:00:00Z", "max_renewals": 16},
@@ -56,7 +56,8 @@ unversioned form.
   cursor advances only in the same transaction that writes the delivery or digest
   receipt for those events, so no event is lost or delivered twice.
 - **Condition.** A closed filter on scope (project, graph, task, run, responsibility),
-  event `type`, and event `kind`. The scope MUST be within what the creator may read.
+  event `type` (`effect` or `decision`), and event `kind` (at most 32). At least one
+  scope field is required. The scope MUST be within what the creator may read.
   A watch cannot match events outside that scope, including after the creator's
   grant changes. Revocation ends the watch with a must-deliver notice. There are no
   expressions, regular expressions or free-text matches in v1.
@@ -68,7 +69,8 @@ unversioned form.
   A group opens on its first matching event, is first delivered after `wait_ms`
   (0–60000), and then at most once per `interval_ms` (1000–3600000) while events
   continue. `max_events` (1–256) closes a group early. Continuous updates MUST NOT
-  postpone delivery past `interval_ms` (no starvation), and a delivery MUST retain
+  postpone delivery past `interval_ms` (no starvation). A group holding a `wake` or
+  `escalate` must-deliver event is due immediately. A delivery MUST retain
   the identities of all contributing events (sequence range plus counts by kind).
   `repeat_interval_ms` (60000–86400000) bounds how often a new operator item is
   created for the same group key (§3).
@@ -108,6 +110,9 @@ events.
 | `notify` | Appended to the owner's inbox; no wake |
 | `wake` | Appended to the inbox and wakes the owner through its wait registration |
 | `escalate` | `wake`, plus an operator item in the Notifications surface |
+
+For operator-owned watches, `digest` and `notify` deliveries go to the watch's
+delivery feed, and `wake` and `escalate` deliveries open Notifications items.
 
 The responsibility inbox becomes a bounded queue of delivery receipts. When it
 reaches its capacity, further `notify` deliveries fold into the pending digest, and
@@ -202,10 +207,12 @@ outcomes, and triage calls used.
 
 - HTTP: `POST /api/watches`, `GET /api/watches/{id}`, `POST /api/watches/{id}/renew`,
   `POST /api/watches/{id}/cancel`, `GET /api/watches/{id}/deliveries`,
-  `POST /api/deliveries/{id}/outcome`. All require the `Mitos-API-Version` header.
+  `POST /api/deliveries/{id}/resolve` (closes an open Notifications item), and
+  `POST /api/deliveries/{id}/outcome` (W4). All require the `Mitos-API-Version`
+  header. Unknown request fields are refused.
 - Orchestrator tools (granted only): `watch_create`, `watch_renew`, `watch_cancel`,
   `delivery_outcome`. Their scope is clamped to the caller's responsibility.
-- CLI: `mitos watch create|list|renew|cancel|deliveries`.
+- CLI: `mitos watch create|list|show|renew|cancel|deliveries|resolve`.
 
 ## 7. Out of scope for v1
 
