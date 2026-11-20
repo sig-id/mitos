@@ -186,3 +186,77 @@ func TestModelBrokerRefusesUnusableConfiguration(t *testing.T) {
 		t.Fatal("closed broker still accepts connections")
 	}
 }
+
+func TestModelBrokerServesTheLocalRoute(t *testing.T) {
+	upstream, seen := recordingUpstream(t)
+	broker := testBroker(t, upstream.URL)
+	client := brokerClient(broker)
+
+	// Without a handler the local route is refused.
+	response, err := client.Post("http://broker/mitos/mcp", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("unattached local route answered %d", response.StatusCode)
+	}
+
+	var mu sync.Mutex
+	var received http.Header
+	broker.ServeLocal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		received = r.Header.Clone()
+		mu.Unlock()
+		io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{}}`)
+	}))
+	request, _ := http.NewRequest(http.MethodPost, "http://broker/mitos/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+	request.Header.Set("Content-Type", "application/json")
+	// The attempt's bearer token must reach the local handler untouched: it
+	// is the local route's own authentication, never a vendor credential.
+	request.Header.Set("Authorization", "Bearer mitos-attempt-token")
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "jsonrpc") {
+		t.Fatalf("local route: %d %s", response.StatusCode, body)
+	}
+	mu.Lock()
+	if received.Get("Authorization") != "Bearer mitos-attempt-token" {
+		t.Fatalf("local route credential altered: %v", received)
+	}
+	mu.Unlock()
+
+	// Vendor routes are unchanged, and the local route never reaches one.
+	if _, err = client.Get("http://broker/anthropic/v1/messages"); err != nil {
+		t.Fatal(err)
+	}
+	for _, recorded := range seen() {
+		if strings.Contains(recorded.uri, "mitos") {
+			t.Fatalf("local route forwarded upstream: %s", recorded.uri)
+		}
+	}
+	if _, err = client.Post("http://broker/mitos", "application/json", strings.NewReader(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen()) != 1 {
+		t.Fatal("local traffic reached a vendor upstream")
+	}
+
+	// Detaching revokes the route.
+	broker.ServeLocal(nil)
+	response, err = client.Post("http://broker/mitos/mcp", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("detached local route answered %d", response.StatusCode)
+	}
+	if BrokerLocalURL("/mcp") != "http://"+EgressLoopAddr+"/mitos/mcp" {
+		t.Fatal(BrokerLocalURL("/mcp"))
+	}
+}

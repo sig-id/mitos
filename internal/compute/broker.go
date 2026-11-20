@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,6 +53,18 @@ var modelVendors = map[string]modelVendor{
 // credential that reaches a vendor is the one the broker adds.
 var clientCredentialHeaders = []string{"Authorization", "Proxy-Authorization", "X-Api-Key", "Cookie", "Chatgpt-Account-Id", "Openai-Organization", "Openai-Project"}
 
+// BrokerLocalRoute is the first path segment the broker serves itself,
+// instead of forwarding to a vendor: the per-attempt Mitos MCP server the
+// coordinated print CLIs receive their tools through (issue #101). No
+// credential is added to it; the attempt's own bearer token authenticates.
+const BrokerLocalRoute = "mitos"
+
+// BrokerLocalURL is the loopback URL a brokered workload uses for the local
+// route at path, for example "/mcp".
+func BrokerLocalURL(path string) string {
+	return "http://" + EgressLoopAddr + "/" + BrokerLocalRoute + path
+}
+
 // BrokerBaseURL is the base URL a brokered workload uses for a vendor API.
 func BrokerBaseURL(vendor string) string { return "http://" + EgressLoopAddr + "/" + vendor }
 
@@ -61,6 +74,8 @@ type ModelBroker struct {
 	listener net.Listener
 	server   *http.Server
 	routes   map[string]*httputil.ReverseProxy
+	localMu  sync.RWMutex
+	local    http.Handler
 }
 
 // StartModelBroker serves the vendors in keys (vendor name to API key) on a
@@ -172,12 +187,33 @@ func (b *ModelBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vendor, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if vendor == BrokerLocalRoute {
+		b.localMu.RLock()
+		local := b.local
+		b.localMu.RUnlock()
+		if local == nil {
+			http.Error(w, "mitos broker: no local route is served for this attempt", http.StatusForbidden)
+			return
+		}
+		// The local route is served as received: the attempt's bearer token
+		// stays in the Authorization header and no vendor credential is added.
+		local.ServeHTTP(w, r)
+		return
+	}
 	proxy, ok := b.routes[vendor]
 	if !ok || rest == "" {
 		http.Error(w, "mitos broker: no brokered model API at this path", http.StatusForbidden)
 		return
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// ServeLocal attaches a handler under the /mitos path segment, ahead of any
+// vendor route. Passing nil detaches it.
+func (b *ModelBroker) ServeLocal(handler http.Handler) {
+	b.localMu.Lock()
+	defer b.localMu.Unlock()
+	b.local = handler
 }
 
 // Endpoint is the broker's address in launch-spec form.

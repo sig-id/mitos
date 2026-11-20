@@ -311,7 +311,12 @@ for agents, it runs Codex and Claude Code as the only enforcing layer, with the
 harness sandbox off and a workspace mounted read-only for roles without write
 grants. Network access is withheld except for the model API, which the harness
 reaches through a per-attempt credential broker that holds the API key outside
-the sandbox.
+the sandbox. The broker also serves a per-attempt local route at `/mitos`:
+coordinated print CLIs with an HTTP MCP adapter receive the Mitos tools as
+native model tools from a streamable HTTP MCP server there, ending the attempt
+with a terminal `report_submit`/`plan_submit` tool call instead of text reply
+frames; CLIs without an adapter, and confinements without an HTTP route to the
+host, keep the framed text protocol.
 Strict unattended operation requires demonstrated authority, observation, acceptance,
 and recovery guarantees, not a configuration label.
 

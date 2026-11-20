@@ -190,36 +190,47 @@ func (e frameError) record() json.RawMessage {
 }
 
 func (p *printTurn) decision(ctx context.Context, action printAction) error {
+	answer, err := cliDecision(ctx, p.broker, "coordinated-cli", p.marker, action.Question, action.Approval)
+	if err != nil {
+		return err
+	}
+	record, _ := json.Marshal(map[string]any{"question": action.Question, "approval": action.Approval, "answer": json.RawMessage(answer)})
+	p.history = append(p.history, record)
+	return nil
+}
+
+// cliDecision submits one operator decision for a coordinated CLI through its
+// bound agent session and blocks until the operator answers. The envelope ID
+// is the turn identity, so each request is a distinct durable decision.
+func cliDecision(ctx context.Context, broker harness.Broker, thread, turn, question, approval string) (string, error) {
 	method := "item/tool/requestUserInput"
-	params := map[string]any{"threadId": "coordinated-cli", "turnId": p.marker}
-	if action.Question != "" {
-		params["questions"] = []harness.Question{{ID: "question", Question: action.Question}}
+	params := map[string]any{"threadId": thread, "turnId": turn}
+	if question != "" {
+		params["questions"] = []harness.Question{{ID: "question", Question: question}}
 	} else {
 		method = "item/commandExecution/requestApproval"
-		params["command"] = action.Approval
+		params["command"] = approval
 	}
-	raw, _ := json.Marshal(map[string]any{"id": p.marker, "method": method, "params": params})
-	d, err := p.broker.Submit(ctx, raw)
+	raw, _ := json.Marshal(map[string]any{"id": turn, "method": method, "params": params})
+	d, err := broker.Submit(ctx, raw)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if d.State == "pending" {
-		d, err = harness.Wait(ctx, p.broker, d.RequestID)
+		d, err = harness.Wait(ctx, broker, d.RequestID)
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if d.State != "accepted" || len(d.Body) == 0 || d.Digest == "" {
-		return errors.New("operator answer is unavailable")
+		return "", errors.New("operator answer is unavailable")
 	}
 	// Deliver verifies the digest and current authorization before the
 	// adapter adds the resolved answer to the host-owned conversation.
-	if err = p.broker.Deliver(ctx, d.RequestID, d.Digest, "applied"); err != nil {
-		return err
+	if err = broker.Deliver(ctx, d.RequestID, d.Digest, "applied"); err != nil {
+		return "", err
 	}
-	record, _ := json.Marshal(map[string]any{"question": action.Question, "approval": action.Approval, "answer": d.Body})
-	p.history = append(p.history, record)
-	return nil
+	return string(d.Body), nil
 }
 
 type nextCommandProvider interface {

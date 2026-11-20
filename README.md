@@ -286,6 +286,23 @@ build newer than 0.6.0, with the fixes for
 can see, such as a Nix store path. A wrapper that installs the harness into the
 operator's home at first run cannot work inside the sandbox.
 
+### Native tools for coordinated print CLIs
+
+Coordinated print CLIs receive the Mitos tools as native model tools through a
+per-attempt MCP server speaking streamable HTTP, instead of prose envelopes on
+stdout. Pi is served this way whenever its confinement leaves an HTTP route to
+the host: under Nucleus the endpoint rides the same per-attempt model broker
+at `http://127.0.0.1:3128/mitos/mcp`, and an unconfined Pi gets a per-attempt
+loopback listener plus a per-attempt agent directory, so the operator's own
+MCP servers are never inherited. The attempt ends with a terminal tool:
+`report_submit` (workers, gated on a successful `result_submit`) or
+`plan_submit` (orchestrators, validated against the plan schema before it is
+accepted, so a refused plan is corrected inside the same session).
+`operator_question` and `command_approval` carry the blocking operator
+decisions. The endpoint and its per-attempt bearer token are revoked when the
+attempt ends. Print CLIs without an adapter — and any run under bubblewrap,
+whose egress relay cannot carry HTTP routes — keep the text-frame protocol.
+
 ## Cost statistics
 
 Codex and Claude Code attempts report their token usage, including the split

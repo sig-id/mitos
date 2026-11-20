@@ -20,6 +20,11 @@ func newSessionID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
+// NewSessionID mints a native conversation ID an adapter can assign itself,
+// such as Pi's --session-id, so a continuation resumes exactly that
+// conversation.
+func NewSessionID() string { return newSessionID() }
+
 // Exact IDs avoid silently continuing another worker's most recent conversation.
 func (r *Registry) ValidateSessionID(agent, reference string) error {
 	a, err := r.adapter(agent)

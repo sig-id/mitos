@@ -703,8 +703,10 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		development = false
 	}
 	var launch compute.LaunchSpec
+	var modelBroker *compute.ModelBroker
 	if e.agentNucleus {
-		modelBroker, brokerErr := compute.StartModelBroker(nucleusBrokerSocket(e.Store.Dir(), r.ID), map[string]string{brokerVendor: brokerKey})
+		var brokerErr error
+		modelBroker, brokerErr = compute.StartModelBroker(nucleusBrokerSocket(e.Store.Dir(), r.ID), map[string]string{brokerVendor: brokerKey})
 		if brokerErr != nil {
 			return brokerErr
 		}
@@ -761,30 +763,68 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 		return harness.RunCodex(ctx, broker, stream, strings.NewReader(""), io.MultiWriter(output, preview), guestDir, prompt, options)
 	}}
 	var turns *printTurn
+	var mcp *agentMCP
+	var mcpCommand func(bool) compute.Command
 	var turnCommand func([]byte) compute.Command
 	if agentcli.PrintRuntime(b.Runtime) {
 		cliArgs, argErr := agentcli.PrintArguments(b.Runtime, b.Model, b.Effort, authority.Granted)
 		if argErr != nil {
 			return argErr
 		}
-		turns = newPrintTurn(prompt, options, broker)
-		turns.allowCommand = authority.Granted("command.run")
-		input, inputErr := turns.input()
-		if inputErr != nil {
-			return inputErr
-		}
-		turnCommand = func(input []byte) compute.Command {
-			cmd := compute.Command{Argv: append([]string{native.Executable}, cliArgs...), Directory: dir, NativeEnv: agentEnv}
-			if b.Runtime == "cline" {
-				cmd.Interact = func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
-					return harness.RunClineACP(ctx, stream, io.MultiWriter(&turns.output, output), dir, string(input), b.Model, authority.Granted)
-				}
-			} else {
-				cmd.Input, cmd.Stdout = input, &turns.output
+		if agentMCPPath(e.confinement.Enabled(), b.Runtime) {
+			// Native tools over the per-attempt MCP server: one CLI process,
+			// structured tool calls, terminal submission tools. Bubblewrap has
+			// no HTTP route to the host, so it keeps the text protocol.
+			mcp, argErr = startAgentMCP(ctx, b.Runtime, broker, options, authority.Granted("command.run"), modelBroker)
+			if argErr != nil {
+				return argErr
 			}
-			return cmd
+			defer mcp.close()
+			config := ""
+			if e.agentNucleus {
+				config = envValue(agentEnv, "PI_CODING_AGENT_DIR")
+			} else {
+				// An unconfined Pi would otherwise read the operator's own
+				// mcp.json; build a per-attempt agent directory instead.
+				var envEntry string
+				if config, envEntry, argErr = piAttemptConfig(native.Env, base); argErr != nil {
+					return argErr
+				}
+				agentEnv = append(agentEnv, envEntry)
+			}
+			if argErr = mcp.writeFiles(config); argErr != nil {
+				return argErr
+			}
+			mcpCommand = func(resume bool) compute.Command {
+				cmd := compute.Command{Argv: mcp.arguments(native.Executable, cliArgs, resume), Directory: dir, NativeEnv: agentEnv, Stdout: preview}
+				if resume {
+					cmd.Input = mcp.continuationInput()
+				} else {
+					cmd.Input = []byte(mcpPrompt(prompt, options))
+				}
+				return cmd
+			}
+			command = mcpCommand(false)
+		} else {
+			turns = newPrintTurn(prompt, options, broker)
+			turns.allowCommand = authority.Granted("command.run")
+			input, inputErr := turns.input()
+			if inputErr != nil {
+				return inputErr
+			}
+			turnCommand = func(input []byte) compute.Command {
+				cmd := compute.Command{Argv: append([]string{native.Executable}, cliArgs...), Directory: dir, NativeEnv: agentEnv}
+				if b.Runtime == "cline" {
+					cmd.Interact = func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+						return harness.RunClineACP(ctx, stream, io.MultiWriter(&turns.output, output), dir, string(input), b.Model, authority.Granted)
+					}
+				} else {
+					cmd.Input, cmd.Stdout = input, &turns.output
+				}
+				return cmd
+			}
+			command = turnCommand(input)
 		}
-		command = turnCommand(input)
 	}
 	session, err := e.agentProvider.Start(ctx, handle, command)
 	if err != nil {
@@ -800,9 +840,18 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	// output and changes before returning the transition error.
 	var output []byte
 	var runErr error
-	if turns != nil && stageErr == nil {
+	switch {
+	case mcp != nil && stageErr == nil:
+		next, ok := e.agentProvider.(nextCommandProvider)
+		if !ok {
+			return errors.New("provider cannot continue a coordinated CLI attempt")
+		}
+		output, runErr = mcp.run(ctx, session, func() (compute.Session, error) {
+			return next.Next(ctx, session, mcpCommand(true))
+		}, preview)
+	case turns != nil && stageErr == nil:
 		output, runErr = turns.run(ctx, e.agentProvider, session, turnCommand, preview)
-	} else {
+	default:
 		<-session.Done()
 		output, runErr = session.Result()
 	}

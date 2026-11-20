@@ -1,0 +1,267 @@
+package studio
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"mitos/internal/agentcli"
+	"mitos/internal/compute"
+	"mitos/internal/harness"
+)
+
+// agentMCPPath is tested here against the selection made in automatic.go.
+func TestAgentMCPPathSelection(t *testing.T) {
+	if !agentMCPPath(false, "pi") {
+		t.Fatal("unconfined pi should use the MCP path")
+	}
+	for runtime, confined := range map[string]bool{"pi": true, "opencode": false, "codex": false, "gemini": false} {
+		if agentMCPPath(confined, runtime) {
+			t.Fatalf("%s (confined=%v) selected the MCP path", runtime, confined)
+		}
+	}
+}
+
+func testMCPOptions() harness.CodexOptions {
+	return harness.CodexOptions{
+		Tools:    []harness.DynamicTool{{Name: "result_submit", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		ToolCall: func(string, json.RawMessage) (any, error) { return map[string]string{"ok": "1"}, nil },
+		Result:   func(string) error { return nil },
+	}
+}
+
+func TestAgentMCPLoopbackEndpointLifecycle(t *testing.T) {
+	mcp, err := startAgentMCP(context.Background(), "pi", nil, testMCPOptions(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mcp.close()
+	if !strings.HasPrefix(mcp.url, "http://127.0.0.1:") || !strings.HasSuffix(mcp.url, "/mcp") {
+		t.Fatalf("endpoint %q", mcp.url)
+	}
+	request, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-06-18"}})
+	response, err := http.Post(mcp.url, "application/json", strings.NewReader(string(request)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	// The per-attempt token is required.
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("endpoint answered without the attempt token: %d %s", response.StatusCode, body)
+	}
+	// The adapter's configuration carries the URL and the bearer token.
+	var decoded map[string]any
+	if json.Unmarshal(mcp.files.Files["mcp.json"], &decoded) != nil {
+		t.Fatal(mcp.files.Files["mcp.json"])
+	}
+	entry := decoded["mcpServers"].(map[string]any)["mitos"].(map[string]any)
+	if entry["url"] != mcp.url || !strings.HasPrefix(entry["headers"].(map[string]any)["Authorization"].(string), "Bearer ") {
+		t.Fatalf("mcp.json: %v", entry)
+	}
+	mcp.close()
+	if _, err = http.Post(mcp.url, "application/json", strings.NewReader(string(request))); err == nil {
+		t.Fatal("endpoint still serving after revocation")
+	}
+}
+
+func TestAgentMCPAttachesToTheModelBrokerLocalRoute(t *testing.T) {
+	broker, err := compute.StartModelBroker(filepath.Join(t.TempDir(), "b.sock"), map[string]string{compute.BrokerVendorAnthropic: "sk-ant-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer broker.Close()
+	mcp, err := startAgentMCP(context.Background(), "pi", nil, testMCPOptions(), false, broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mcp.close()
+	if mcp.url != compute.BrokerLocalURL("/mcp") {
+		t.Fatalf("endpoint %q", mcp.url)
+	}
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", brokerSocketPath(broker))
+	}}}
+	probe, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{"protocolVersion": "2025-06-18"}})
+	request, _ := http.NewRequest(http.MethodPost, mcp.url, strings.NewReader(string(probe)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+mcpToken(mcp))
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "mitos") {
+		t.Fatalf("local route: %d %s", response.StatusCode, body)
+	}
+	// Closing the attempt revokes the route ahead of the broker's own close.
+	mcp.close()
+	request, _ = http.NewRequest(http.MethodPost, mcp.url, strings.NewReader(string(probe)))
+	request.Header.Set("Content-Type", "application/json")
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("detached route answered %d", response.StatusCode)
+	}
+}
+
+func TestPiAttemptConfigIsolatesTheAgentDirectory(t *testing.T) {
+	host := t.TempDir()
+	dir := filepath.Join(host, ".pi", "agent")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"settings.json": `{"defaultProvider":"zai","defaultModel":"glm-5.3","packages":["npm:x"]}`,
+		"models.json":   `{"providers":{"zai":{"apiKey":"k"}}}`,
+		"auth.json":     `{"zai":{"type":"api_key","key":"zai"}}`,
+		"mcp.json":      `{"mcpServers":{"personal":{"url":"https://example.com"}}}`,
+	} {
+		if writeErr := os.WriteFile(filepath.Join(dir, name), []byte(body), 0600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	base := t.TempDir()
+	config, env, err := piAttemptConfig([]string{"HOME=" + host}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config != filepath.Join(base, "home", ".pi", "agent") || env != "PI_CODING_AGENT_DIR="+config {
+		t.Fatalf("%q %q", config, env)
+	}
+	for _, name := range []string{"settings.json", "models.json", "auth.json"} {
+		if _, statErr := os.Stat(filepath.Join(config, name)); statErr != nil {
+			t.Fatalf("operator %s not kept: %v", name, statErr)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(config, "mcp.json")); !os.IsNotExist(statErr) {
+		t.Fatal("operator MCP servers leaked into the attempt")
+	}
+}
+
+func TestAgentMCPArgumentsAndPrompt(t *testing.T) {
+	mcp, err := startAgentMCP(context.Background(), "pi", nil, testMCPOptions(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mcp.close()
+	print := []string{"--print", "--no-session", "--no-extensions", "--no-mcp", "--tools", "read"}
+	first := mcp.arguments("/usr/bin/pi", print, false)
+	resume := mcp.arguments("/usr/bin/pi", print, true)
+	joined := strings.Join(first, " ")
+	if strings.Contains(joined, "--no-mcp") || strings.Contains(joined, "--no-session") || !strings.Contains(joined, "--session-id "+mcp.session) {
+		t.Fatalf("first run: %v", first)
+	}
+	if !strings.Contains(strings.Join(resume, " "), "--session "+mcp.session) || strings.Contains(strings.Join(resume, " "), "--session-id") {
+		t.Fatalf("resume: %v", resume)
+	}
+	worker := mcpPrompt("Do the work.", testMCPOptions())
+	if strings.Contains(worker, "MITOS_REPLY") || !strings.Contains(worker, "mcp__mitos__result_submit") || !strings.Contains(worker, "mcp__mitos__report_submit") {
+		t.Fatalf("worker prompt: %s", worker)
+	}
+	orchestrator := mcpPrompt("Plan.", harness.CodexOptions{OutputSchema: json.RawMessage(`{"type":"object"}`)})
+	if !strings.Contains(orchestrator, "mcp__mitos__plan_submit") || strings.Contains(orchestrator, "report_submit") {
+		t.Fatalf("orchestrator prompt: %s", orchestrator)
+	}
+	if continuation := string(mcp.continuationInput()); !strings.Contains(continuation, "report_submit") {
+		t.Fatalf("continuation: %s", continuation)
+	}
+	if _, err = startAgentMCP(context.Background(), "opencode", nil, testMCPOptions(), false, nil); err == nil {
+		t.Fatal("opencode started an MCP endpoint")
+	}
+}
+
+func TestAgentMCPRunContinuesOnceThenFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Without a terminal submission the CLI is told once to continue; a
+	// second exit without one fails like the text protocol does.
+	mcp := &agentMCP{server: harness.NewMCPServer(harness.MCPOptions{Terminal: true}), session: agentcli.NewSessionID(), close: func() {}}
+	first := &mcpExitSession{output: []byte("first exit\n")}
+	output, err := mcp.run(ctx, first, func() (compute.Session, error) {
+		return &mcpExitSession{output: []byte("second exit\n")}, nil
+	}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "result_submission_missing") || !strings.Contains(string(output), "second exit") {
+		t.Fatalf("run: %v %s", err, output)
+	}
+	// A finished attempt returns as soon as the process exits.
+	finished := harness.NewMCPServer(harness.MCPOptions{Terminal: true, Result: func(string) error { return nil }})
+	if _, callErr := finishedMessage(finished); callErr != nil {
+		t.Fatal(callErr)
+	}
+	mcp = &agentMCP{server: finished, session: agentcli.NewSessionID(), close: func() {}}
+	if output, err = mcp.run(ctx, &mcpExitSession{output: []byte("done\n")}, func() (compute.Session, error) {
+		t.Fatal("continuation after a terminal submission")
+		return nil, nil
+	}, io.Discard); err != nil || !strings.Contains(string(output), "done") {
+		t.Fatalf("finished run: %v %s", err, output)
+	}
+}
+
+// finishedMessage drives one terminal submission through the streamable HTTP
+// transport so the server records a finished attempt.
+func finishedMessage(server *harness.MCPServer) (string, error) {
+	token := harness.NewMCPToken()
+	handler := server.StreamableHTTP(token)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer listener.Close()
+	httpServer := &http.Server{Handler: handler}
+	go func() { _ = httpServer.Serve(listener) }()
+	defer httpServer.Close()
+	session := ""
+	call := func(body string) (string, error) {
+		request, err := http.NewRequest(http.MethodPost, "http://"+listener.Addr().String()+"/mcp", strings.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+token)
+		if session != "" {
+			request.Header.Set("Mcp-Session-Id", session)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return "", err
+		}
+		defer response.Body.Close()
+		if next := response.Header.Get("Mcp-Session-Id"); next != "" {
+			session = next
+		}
+		text, _ := io.ReadAll(response.Body)
+		return string(text), nil
+	}
+	if _, err = call(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`); err != nil {
+		return "", err
+	}
+	return call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"report_submit","arguments":{"report":"done"}}}`)
+}
+
+type mcpExitSession struct {
+	output []byte
+}
+
+func (d *mcpExitSession) ID() string              { return "done" }
+func (d *mcpExitSession) PID() int                { return 0 }
+func (d *mcpExitSession) Done() <-chan struct{}   { ch := make(chan struct{}); close(ch); return ch }
+func (d *mcpExitSession) Result() ([]byte, error) { return d.output, nil }
+func (d *mcpExitSession) OutputOffset() uint64    { return 0 }
+
+// brokerSocketPath and mcpToken are thin wrappers keeping the test helpers
+// independent of the fields they read.
+func brokerSocketPath(b *compute.ModelBroker) string { return b.Endpoint()[len("unix://"):] }
+func mcpToken(m *agentMCP) string                    { return strings.TrimPrefix(m.headers["Authorization"], "Bearer ") }
