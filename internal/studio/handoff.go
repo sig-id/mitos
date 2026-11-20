@@ -38,17 +38,17 @@ type ResultArtifact struct {
 type ResultCheck struct {
 	Name     string   `json:"name"`
 	Outcome  string   `json:"outcome"`
-	Evidence []string `json:"evidence"`
+	Evidence []string `json:"evidence,omitempty"`
 }
 type ResultSubmission struct {
 	Version            string           `json:"version"`
 	Key                string           `json:"key"`
 	Summary            string           `json:"summary"`
-	Artifacts          []ResultArtifact `json:"artifacts"`
-	Checks             []ResultCheck    `json:"checks"`
-	Limitations        []string         `json:"limitations"`
-	UnresolvedRequests []string         `json:"unresolved_requests"`
-	Proposals          []ResultProposal `json:"proposals"`
+	Artifacts          []ResultArtifact `json:"artifacts,omitempty"`
+	Checks             []ResultCheck    `json:"checks,omitempty"`
+	Limitations        []string         `json:"limitations,omitempty"`
+	UnresolvedRequests []string         `json:"unresolved_requests,omitempty"`
+	Proposals          []ResultProposal `json:"proposals,omitempty"`
 }
 
 // ResultProposal asks the orchestrator for new work as part of ending an
@@ -61,7 +61,7 @@ type ResultProposal struct {
 	Rationale string      `json:"rationale"`
 	Blocking  bool        `json:"blocking"`
 	Tasks     []GraphSpec `json:"tasks"`
-	Artifacts []string    `json:"artifacts"`
+	Artifacts []string    `json:"artifacts,omitempty"`
 }
 type ResultReceipt struct {
 	ID         string           `json:"id"`
@@ -171,7 +171,7 @@ func HandoffTools() []harness.DynamicTool {
 		{"artifact_list", "List retained artifacts for your run or an explicitly granted producer run. Use cursor 0 and limit 1..32. Large artifacts remain discoverable.", reflect.TypeFor[ArtifactList]()},
 		{"artifact_read", "Read exact bytes (base64 data), at offset with limit 1..32768. next_offset is null only at EOF. A 2 MiB cumulative retrieval budget applies per attempt; this is not a token budget.", reflect.TypeFor[ArtifactRead]()},
 		{"artifact_search", "Search a literal UTF-8 query (1..256 bytes), returning byte offsets. Use cursor 0 and limit 1..32; follow next_cursor even when no matches are returned.", reflect.TypeFor[ArtifactSearch]()},
-		{"result_submit", "Submit one immutable typed result with version mitos.handoff/v1, an idempotency key, <=2 KiB summary, registered artifact IDs, checks (passed/failed/not_run), limitations and unresolved request IDs. Submission is not acceptance. This ends your attempt's work. Do not spawn subagents: to delegate, add proposals (unique id, rationale, 1-8 application task specs in the orchestrator add shape, optional registered artifact IDs as evidence). A blocking proposal means you yield: stop after submitting; you are resumed in this conversation with the accepted results or the rejection rationale. Non-blocking proposals are follow-up work you noticed; the result is otherwise final. Use an empty list when you need nothing.", reflect.TypeFor[ResultSubmission]()},
+		{"result_submit", "Submit one immutable typed result with version mitos.handoff/v1, an idempotency key, <=2 KiB summary, registered artifact IDs, checks (passed/failed/not_run), limitations and unresolved request IDs. Evidence lists (artifacts, checks, evidence IDs) are optional: omit them or send an empty list when none. Submission is not acceptance. This ends your attempt's work. Do not spawn subagents: to delegate, add proposals (unique id, rationale, 1-8 application task specs in the orchestrator add shape, optional registered artifact IDs as evidence; omit the artifacts field when none). Blocking is only accepted from task natures that may yield: a review or context nature gets its blocking proposals refused and must send blocking=false follow-ups instead. A blocking proposal means you yield: stop after submitting; you are resumed in this conversation with the accepted results or the rejection rationale. Non-blocking proposals are follow-up work you noticed; the result is otherwise final. Omit proposals or send an empty list when you need nothing.", reflect.TypeFor[ResultSubmission]()},
 	}
 	out := []harness.DynamicTool{}
 	for _, spec := range specs {

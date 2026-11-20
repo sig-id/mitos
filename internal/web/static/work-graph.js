@@ -444,7 +444,7 @@
  $('graph-fit').onclick=fit; $('graph-zoom-in').onclick=()=>setZoom(zoom+.15); $('graph-zoom-out').onclick=()=>setZoom(zoom-.15);
  function setLayout(list) { listMode=list; $('graph-viewport').hidden=list; $('graph-list-view').hidden=!list; $('graph-mode-map').setAttribute('aria-pressed',String(!list)); $('graph-mode-list').setAttribute('aria-pressed',String(list)); document.querySelector('.graph-map-controls').hidden=list; }
  $('graph-mode-map').onclick=()=>setLayout(false); $('graph-mode-list').onclick=()=>setLayout(true);
- async function selectNode(id, tab) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select(workView==='work'&&wideReader.matches?'work':'workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=''; selectedTab=tab||(graph.members[id].spec.kind==='scope'?'progress':graph.members[id].current_run_id?'output':'details'); detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); renderInspector(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
+ async function selectNode(id, tab, attempt) { if (!id || !graph.members[id]) return;window.MitosProjectNav.select(workView==='work'&&wideReader.matches?'work':'workflow');closeResult();if(graph.members[id].replacement){showHistory=true;$('graph-show-history').checked=true} selected=id; selectedAttempt=attempt||''; selectedTab=tab||(graph.members[id].spec.kind==='scope'?'progress':graph.members[id].current_run_id?'output':'details'); detailSignature=''; epoch++; updateURL(); renderTree(); $('graph-inspector').hidden=false; renderMap(); renderInspector(); await refreshSelected(); if (matchMedia('(max-width:900px)').matches) scrollWorkTo($('graph-inspector')); }
  function captureReader(){
   if(!renderedReaderKey)return;
   const box=$('graph-node-detail');readerStates.set(renderedReaderKey,{scroll:$('graph-inspector').scrollTop,artifacts:Object.fromEntries([...box.querySelectorAll('[aria-label="Output artifact"]')].map(select=>[select.dataset.runId,select.value])),open:Object.fromEntries([...box.querySelectorAll('details[data-read-key]')].map(d=>[d.dataset.readKey,d.open]))});
@@ -636,7 +636,7 @@
    }else if(proposer&&p.run_id)enrichProposal(p);
    const meta=[];if(p.blocking)meta.push('blocking: the proposer resumes when this is settled');meta.push(p.outcome||'awaiting orchestrator review');row.append(node('p',meta.join(' · '),'muted'));
    const controls=node('div',undefined,'actions');
-   if(proposer)controls.append(button('Open proposer result',()=>selectNode(p.task_id,'output')));
+   if(proposer)controls.append(button('Open proposer result',()=>selectNode(p.task_id,'output',p.run_id)));
    for(const tid of p.tasks||[])if(graph.members[tid])controls.append(button(title(graph.members[tid]),()=>selectNode(tid)));
    if(controls.children.length)row.append(controls);box.append(row);
   }
@@ -647,7 +647,11 @@
   proposalDetails.set(p.id,{rationale:'',titles:[]});
   runDetail(graph.members[p.task_id],p.run_id).then(run=>{
    const sub=(run?.result?.submission?.proposals||[]).find(x=>x.id===p.local);
-   if(sub)proposalDetails.set(p.id,{rationale:sub.rationale||'',titles:(sub.tasks||[]).map(t=>t.brief?.title).filter(Boolean)});
+   if(!sub)return;
+   proposalDetails.set(p.id,{rationale:sub.rationale||'',titles:(sub.tasks||[]).map(t=>t.brief?.title).filter(Boolean)});
+   // A stalled or finished workflow stops polling new snapshots, so the
+   // enriched row must invalidate the render signature itself.
+   detailSignature='';renderInspector();
   }).catch(()=>{});
  }
  function renderAttempts(box,m){

@@ -3,6 +3,7 @@ package studio
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -44,16 +45,20 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 					}
 				}
 			}
-			variants = append(variants, orchestratorObjectSchema(props))
+			// Operation fields are allowlisted per kind by validation; only the
+			// discriminator itself is schema-required.
+			variants = append(variants, orchestratorObjectSchema(props, []string{"kind"}))
 		}
 		return map[string]any{"anyOf": variants}
 	}
 	switch t.Kind() {
 	case reflect.Struct:
 		props := map[string]any{}
+		required := []string{}
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
-			name := strings.Split(f.Tag.Get("json"), ",")[0]
+			tag := strings.Split(f.Tag.Get("json"), ",")
+			name := tag[0]
 			// Project identity and workspace are runtime bindings, not model choices.
 			// ProjectLimits belongs only to recurring workflow services.
 			if t == reflect.TypeFor[Brief]() && (name == "execution" || name == "project_limits" || name == "workspace" || name == "project_id") {
@@ -61,9 +66,15 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 			}
 			if f.IsExported() && name != "-" && name != "" {
 				props[name] = orchestratorTypeSchema(f.Type)
+				// omitempty marks a field the wire contract accepts as absent;
+				// requiring it in the advertised schema bounces reasonable calls
+				// (for example a proposal without evidence artifact IDs).
+				if !slices.Contains(tag, "omitempty") {
+					required = append(required, name)
+				}
 			}
 		}
-		return orchestratorObjectSchema(props)
+		return orchestratorObjectSchema(props, required)
 	case reflect.Slice:
 		return map[string]any{"type": "array", "items": orchestratorTypeSchema(t.Elem())}
 	case reflect.Map:
@@ -79,11 +90,7 @@ func orchestratorTypeSchema(t reflect.Type) map[string]any {
 	}
 }
 
-func orchestratorObjectSchema(props map[string]any) map[string]any {
-	keys := []string{}
-	for key := range props {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return map[string]any{"type": "object", "additionalProperties": false, "required": keys, "properties": props}
+func orchestratorObjectSchema(props map[string]any, required []string) map[string]any {
+	sort.Strings(required)
+	return map[string]any{"type": "object", "additionalProperties": false, "required": required, "properties": props}
 }
