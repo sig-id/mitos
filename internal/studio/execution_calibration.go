@@ -138,7 +138,7 @@ func (s *Store) ExecutionCalibration(project string) ([]CalibrationGroup, error)
 }
 
 // countCompletedActions counts each completed model action once. Activity
-// records log tool, command and file actions twice — running, then completed —
+// records log tool, command and file actions twice – running, then completed –
 // and interactive runtimes also log messages; only completed non-message
 // records count, matching the harness model-step limit's semantics.
 func countCompletedActions(activity []byte) int {

@@ -91,8 +91,8 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		}
 		// Withheld networks stay withheld. An unrestricted posture is mediated:
 		// the worker sandbox gets its own network namespace whose only egress
-		// is this allowlisted relay, so host listeners — including the
-		// loopback operator API — stay unreachable. Failing to start the relay
+		// is this allowlisted relay, so host listeners – including the
+		// loopback operator API – stay unreachable. Failing to start the relay
 		// fails closed instead of sharing the host network.
 		if confinement.NetMode == compute.NetUnrestricted {
 			egressEndpoint = filepath.Join(s.Dir(), "egress", "model.sock")

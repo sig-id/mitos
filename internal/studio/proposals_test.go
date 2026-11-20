@@ -111,10 +111,12 @@ func TestProposalSchemaFollowsGrant(t *testing.T) {
 		return nil
 	}
 	has := func(s map[string]any) bool {
-		_, prop := s["properties"].(map[string]any)["proposals"]
-		required := slices.Contains(s["required"].([]any), any("proposals"))
-		if prop != required {
-			t.Fatal("schema property and required list disagree")
+		props, _ := s["properties"].(map[string]any)
+		_, prop := props["proposals"]
+		// An advertised field is optional in the required list exactly when
+		// the wire contract marks it omitempty; proposals is such a field.
+		if required := slices.Contains(s["required"].([]any), any("proposals")); required {
+			t.Fatal("proposals must stay an optional list")
 		}
 		return prop
 	}
@@ -459,4 +461,73 @@ func TestYieldLimit(t *testing.T) {
 	}
 	// Follow-up proposals remain available after the yield cap.
 	callHandoff(t, e, a, token, "result_submit", submission("follow-up", ResultProposal{ID: "dig", Rationale: "r", Tasks: []GraphSpec{proposedTask("dig")}, Artifacts: []string{}}))
+}
+
+// The advertised result_submit schema must not require evidence the wire
+// contract accepts as absent: a proposal without artifact IDs, or a result
+// without checks, is valid and must not bounce at client-side validation.
+func TestHandoffSchemaKeepsOptionalEvidenceOptional(t *testing.T) {
+	for _, tool := range grantedHandoffTools(AuthorityReceipt{Capabilities: []CapabilityReceipt{{Name: ProposalCapability, Granted: true}}}) {
+		if tool.Name != "result_submit" {
+			continue
+		}
+		var schema struct {
+			Required   []string `json:"required"`
+			Properties map[string]struct {
+				Items struct {
+					Required   []string `json:"required"`
+					Properties map[string]struct {
+						Items struct {
+							Required []string `json:"required"`
+						} `json:"items"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		for _, optional := range []string{"artifacts", "checks", "limitations", "unresolved_requests", "proposals"} {
+			if _, advertised := schema.Properties[optional]; !advertised {
+				t.Fatalf("result_submit no longer advertises %s", optional)
+			}
+			if slices.Contains(schema.Required, optional) {
+				t.Fatalf("result_submit requires optional list %s", optional)
+			}
+		}
+		proposal := schema.Properties["proposals"].Items
+		if slices.Contains(proposal.Required, "artifacts") {
+			t.Fatal("proposal evidence must stay optional")
+		}
+		check := schema.Properties["checks"].Items
+		if slices.Contains(check.Properties["evidence"].Items.Required, "evidence") {
+			t.Fatal("check evidence must stay optional")
+		}
+		if !slices.Contains(check.Required, "name") || !slices.Contains(proposal.Required, "tasks") {
+			t.Fatal("semantically required fields must stay required")
+		}
+		return
+	}
+	t.Fatal("result_submit missing")
+}
+
+// A submission that omits every optional list is accepted and journaled.
+func TestResultSubmissionWithoutOptionalLists(t *testing.T) {
+	e, r, a, token := handoffFixture(t)
+	grantProposals(t, e, r.ID, true)
+	raw := json.RawMessage(`{"version":"` + HandoffVersion + `","key":"bare","summary":"Findings only"}`)
+	out, err := e.HandoffCall(a.ID, token, "result_submit", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := out.(map[string]any)["id"].(string); !strings.HasPrefix(id, "result_") {
+		t.Fatal("receipt missing", out)
+	}
+	stored, err := e.Store.Get(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Result == nil || stored.Result.Submission.Summary != "Findings only" {
+		t.Fatal("bare submission not stored")
+	}
 }

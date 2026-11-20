@@ -166,8 +166,8 @@ func (e *Engine) selectAgentRuntime(b *AgentBinding) error {
 	return &agentPrerequisiteError{summary: fmt.Sprintf("No installed runtime provides the features %s requires (%s). Install a compatible coding agent.", b.Definition.ID, strings.Join(m.Runtime.Requires, ", "))}
 }
 
-// runtimePinned reports whether the runtime was chosen explicitly — a harness
-// rule, task harness choice or the orchestrator setting — rather than a worker
+// runtimePinned reports whether the runtime was chosen explicitly – a harness
+// rule, task harness choice or the orchestrator setting – rather than a worker
 // default; implicit defaults may fall back to a compatible installed runtime
 // instead of refusing.
 func runtimePinned(b *AgentBinding) bool {

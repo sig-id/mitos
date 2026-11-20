@@ -134,9 +134,9 @@ func journalBytes(g *WorkGraph) int {
 	return len(raw)
 }
 
-// compactJournal bounds the journal twice: at the fixed entry boundary, and —
+// compactJournal bounds the journal twice: at the fixed entry boundary, and –
 // because multibyte or heavily escaped summaries can inflate entries well
-// before that boundary is reached — at a serialized byte budget. Compaction
+// before that boundary is reached – at a serialized byte budget. Compaction
 // absorbs the oldest entries into a marker while keeping the newest entries
 // verbatim, so prompts remain cache-stable outside these compaction points.
 func compactJournal(g *WorkGraph) {
