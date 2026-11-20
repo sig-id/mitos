@@ -8,8 +8,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"mitos/internal/decision"
+	"mitos/internal/fleet"
 )
 
 // judgmentFixture prepares a graph worker attempt whose task carries a
@@ -419,5 +421,61 @@ func TestJudgmentRecoveryRefusesEndedAttempts(t *testing.T) {
 	run, _ := e.Store.Get(r.ID)
 	if run.HeldJudgment != nil || len(run.KernelJudgments) != 1 || run.KernelJudgments[0].State != "refused" || run.KernelJudgments[0].Reason != "attempt_ended_before_decision" {
 		t.Fatal("ended attempt judgment:", run.HeldJudgment, run.KernelJudgments)
+	}
+}
+
+func TestJudgmentRefuseDefersUntilHarvestFinishes(t *testing.T) {
+	e, r, a, token, g := judgmentFixture(t, nil)
+	if _, err := submit(t, e, a, token, blockingSubmission("yield")); err != nil {
+		t.Fatal(err)
+	}
+	// The operator refuses while the worker's execution is still open.
+	e.Store.mu.Lock()
+	claim := fleet.Claim{ID: newID("claim"), RunID: r.ID, Workspace: r.Brief.Workspace, AcquiredAt: time.Now().UTC()}
+	if err := e.Store.commit(r.ID, "effect", "fixture_claim", change{Claim: &claim}); err != nil {
+		e.Store.mu.Unlock()
+		t.Fatal(err)
+	}
+	e.Store.mu.Unlock()
+	run, _ := e.Store.Get(r.ID)
+	if err := e.Store.Resolve(r.ID, run.Decision.ID, "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	// The decision is journaled but the attempt stays nonterminal so the
+	// worker can finish saving its output and workspace.
+	run, _ = e.Store.Get(r.ID)
+	if run.Status != "parked" || run.Result != nil || len(run.KernelJudgments) != 1 || run.KernelJudgments[0].State != "refused" {
+		t.Fatal("refused run left the parked state:", run.Status, run.KernelJudgments)
+	}
+	if err := e.Store.SaveArtifact(r.ID, "report.md", []byte("final report")); err != nil {
+		t.Fatal("harvest rejected on a refused-but-open attempt:", err)
+	}
+	if err := e.Store.RecordWorkspace(r.ID, "workspace_harvested", "Saved agent output.", WorkspaceRecord{Mode: "copy", BaselineCommit: strings.Repeat("a", 40), Fingerprint: strings.Repeat("b", 64), ChangedFiles: 1}); err != nil {
+		t.Fatal("workspace record rejected on a refused-but-open attempt:", err)
+	}
+	graph, _ := e.Store.Graph(g.ID)
+	if m := graph.Members[r.TaskID]; m.CurrentRunID != r.ID {
+		t.Fatal("member requeued before harvest finished")
+	}
+	// The completion path finalizes the refusal: cancelled attempt, released
+	// claim, and a requeued member with the feedback continuation.
+	if err := e.Store.Complete(r.ID, "Judgment refused", false); err != nil {
+		t.Fatal(err)
+	}
+	run, _ = e.Store.Get(r.ID)
+	if run.Status != "cancelled" || run.Claim == nil || run.Claim.ReleasedAt == nil {
+		t.Fatal("refusal not finalized:", run.Status, run.Claim)
+	}
+	graph, _ = e.Store.Graph(g.ID)
+	m := graph.Members[r.TaskID]
+	if m.State != "queued" || m.ContinueFrom != r.ID || m.Continuation == nil || m.Continuation.Reason != "judgment_refused" || m.Proposed != 1 {
+		t.Fatal("feedback continuation not queued:", m.State, m.Continuation, m.Proposed)
+	}
+	if err := e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	graph, _ = e.Store.Graph(g.ID)
+	if m = graph.Members[r.TaskID]; m.CurrentRunID == "" || m.CurrentRunID == r.ID {
+		t.Fatal("continuation attempt not queued after finalization")
 	}
 }

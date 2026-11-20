@@ -920,6 +920,12 @@ func (s *Store) Complete(id, summary string, verified bool) error {
 		}
 		return nil // already waiting; the resolution finishes the run
 	}
+	if refusedJudgmentPending(r) != nil {
+		// The judgment refused while this execution was still finishing. The
+		// harvest is saved; now the refusal outcome applies: the attempt ends
+		// cancelled and the member is requeued with the reason as feedback.
+		return s.finalizeRefusedJudgmentLocked(id, time.Now().UTC())
+	}
 	if requiresHandoff(r) {
 		if err := s.resultIntegrity(r); err != nil {
 			return err

@@ -461,39 +461,91 @@ func (s *Store) applyHeldJudgmentLocked(r *Run, j KernelJudgment, resolution dec
 	return s.finishHeldRunLocked(r.ID, in.Summary)
 }
 
-// refuseHeldJudgmentLocked refuses the held submission with the current
-// semantics, spends its proposals against the task budget, and requeues the
-// member for a continuation that returns the reason to the proposer.
+// refuseHeldJudgmentLocked journals the refused judgment and its card
+// resolution. The refusal semantics - a cancelled attempt and a continuation
+// that returns the reason to the proposer - are finalized by
+// finalizeRefusedJudgmentLocked once the worker has finished harvesting: an
+// open execution must stay nonterminal so its output and workspace can be
+// saved, and the replacement attempt needs a harvested, claim-released
+// predecessor. The card records the operator's choice; an apply that could no
+// longer proceed still refuses, with the reason on the judgment receipt.
 func (s *Store) refuseHeldJudgmentLocked(r *Run, j KernelJudgment, resolution decision.Resolution, command *DeviceCommandRecord, now time.Time) error {
-	var gc *graphChange
-	if old := s.graphs[j.GraphID]; old != nil {
-		g := graphClone(*old)
-		if m := g.Members[r.TaskID]; m != nil && m.CurrentRunID == r.ID {
-			m.Proposed += j.Proposals // the refused proposals are spent
-			m.ContinueFrom = r.ID
-			m.Continuation = &GraphContinuation{Reason: "judgment_refused", Refusal: &JudgmentRefusal{Code: j.Code, Detail: j.Detail}}
-			m.CurrentRunID = ""
-			m.State = "queued"
-			m.FactRevision++
-			if root := g.Members[g.RootTask]; root != nil && root.Sealed {
-				root.Sealed = false
-			}
-			g.Triggers = append(g.Triggers, GraphTrigger{Seq: s.seq + 1, TaskID: r.TaskID, RunID: r.ID, Kind: "judgment_refused"})
-			g.Cursor = s.seq + 1
-			g.Revision++
-			g.UpdatedAt = now
-			gc = &graphChange{Graph: g}
-			s.projectGraph(gc, old)
-		}
-	}
 	refused := j
 	refused.State, refused.Submission = "refused", nil
-	if refused.Reason == "" {
+	if refused.Reason == "" && resolution.Choice != "apply" {
 		refused.Reason = "operator_refused"
 	}
-	// The card records the operator's choice; an apply that could no longer
-	// proceed still refuses, with the reason on the judgment receipt.
-	return s.commit(r.ID, "effect", "judgment_refused", change{Graph: gc, Judgment: &refused, Resolution: &resolution, Choice: resolution.Choice, DecisionApplied: true, ResultRunID: r.ID, DeviceCommand: command, Status: "cancelled", Stage: "Judgment refused", Summary: j.Detail})
+	if err := s.commit(r.ID, "effect", "judgment_refused", change{Judgment: &refused, Resolution: &resolution, Choice: resolution.Choice, DecisionApplied: true, ResultRunID: r.ID, DeviceCommand: command, Stage: "Judgment refused", Summary: j.Detail}); err != nil {
+		return err
+	}
+	if r.Claim != nil && r.Claim.ReleasedAt == nil {
+		return nil // execution still open; Complete or reconcile finalizes
+	}
+	return s.finalizeRefusedJudgmentLocked(r.ID, now)
+}
+
+// refusedJudgmentPending reports a refusal whose decision is journaled but
+// whose attempt has not yet taken the cancelled-and-requeued outcome.
+func refusedJudgmentPending(r *Run) *KernelJudgment {
+	if r.Result != nil || r.Decision == nil || r.Decision.Resolution == nil || r.Status != "parked" {
+		return nil
+	}
+	for i := len(r.KernelJudgments) - 1; i >= 0; i-- {
+		if r.KernelJudgments[i].DecisionID == r.Decision.ID && r.KernelJudgments[i].State == "refused" {
+			return &r.KernelJudgments[i]
+		}
+	}
+	return nil
+}
+
+// refusalGraphChangeLocked requeues the member for a continuation that
+// returns the refusal to the proposer, and spends the refused proposals
+// against the task budget. Caller holds the store lock.
+func (s *Store) refusalGraphChangeLocked(r *Run, j *KernelJudgment, now time.Time) *graphChange {
+	old := s.graphs[j.GraphID]
+	if old == nil {
+		return nil
+	}
+	g := graphClone(*old)
+	m := g.Members[r.TaskID]
+	if m == nil || m.CurrentRunID != r.ID {
+		return nil // the task moved on; nothing to requeue
+	}
+	m.Proposed += j.Proposals // the refused proposals are spent
+	m.ContinueFrom = r.ID
+	m.Continuation = &GraphContinuation{Reason: "judgment_refused", Refusal: &JudgmentRefusal{Code: j.Code, Detail: j.Detail}}
+	m.CurrentRunID = ""
+	m.State = "queued"
+	m.FactRevision++
+	if root := g.Members[g.RootTask]; root != nil && root.Sealed {
+		root.Sealed = false
+	}
+	g.Triggers = append(g.Triggers, GraphTrigger{Seq: s.seq + 1, TaskID: r.TaskID, RunID: r.ID, Kind: "judgment_refused"})
+	g.Cursor = s.seq + 1
+	g.Revision++
+	g.UpdatedAt = now
+	gc := &graphChange{Graph: g}
+	s.projectGraph(gc, old)
+	return gc
+}
+
+// finalizeRefusedJudgmentLocked applies the refusal outcome: the attempt ends
+// cancelled with its evidence preserved, its claim is released, and the member
+// is requeued for the feedback continuation. Caller holds the store lock.
+func (s *Store) finalizeRefusedJudgmentLocked(id string, now time.Time) error {
+	r := s.runs[id]
+	j := refusedJudgmentPending(r)
+	if j == nil {
+		return nil
+	}
+	var claim *fleet.Claim
+	if r.Claim != nil && r.Claim.ReleasedAt == nil {
+		copyClaim := *r.Claim
+		copyClaim.ReleasedAt = &now
+		copyClaim.ReleaseReason = "execution_stopped_and_harvest_finished"
+		claim = &copyClaim
+	}
+	return s.commit(id, "effect", "judgment_refusal_finalized", change{Graph: s.refusalGraphChangeLocked(r, j, now), Claim: claim, Status: "cancelled", Stage: "Judgment refused", Summary: j.Detail})
 }
 
 func withRefusalReason(j KernelJudgment, reason string) KernelJudgment {
@@ -552,18 +604,26 @@ func (s *Store) recoverKernelJudgments() error {
 	return nil
 }
 
-// reconcileHeldJudgments finishes parked runs whose judgment applied after
-// their execution had already stopped, so an accepted yield cannot wedge.
+// reconcileHeldJudgments finishes parked runs whose judgment settled after
+// their execution had already stopped: an applied judgment completes the run
+// so an accepted yield cannot wedge, and a refused judgment whose execution
+// claim is released (for example after a crash or claim release) finally
+// takes its cancelled-and-requeued outcome.
 func (s *Store) reconcileHeldJudgments() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.runs {
-		if r.Status != "parked" || r.Result == nil || r.Decision == nil || r.Decision.Choice != "apply" {
+		if r.Status != "parked" {
 			continue
 		}
-		if r.Claim != nil && r.Claim.ReleasedAt == nil {
+		if r.Result != nil && r.Decision != nil && r.Decision.Choice == "apply" {
+			if r.Claim == nil || r.Claim.ReleasedAt != nil {
+				_ = s.finishHeldRunLocked(r.ID, r.Result.Submission.Summary)
+			}
 			continue
 		}
-		_ = s.finishHeldRunLocked(r.ID, r.Result.Submission.Summary)
+		if refusedJudgmentPending(r) != nil && (r.Claim == nil || r.Claim.ReleasedAt != nil) {
+			_ = s.finalizeRefusedJudgmentLocked(r.ID, time.Now().UTC())
+		}
 	}
 }
