@@ -296,6 +296,37 @@ func TestEngineLoopDeliversWithoutExplicitEvaluation(t *testing.T) {
 	t.Fatal("engine loop never delivered the group")
 }
 
+func TestWatchDeliverySnapshotsAreDetachedFromTheStore(t *testing.T) {
+	s := testStore(t)
+	r := createRun(t, s)
+	w := mustWatch(t, s, runWatch(r.ID, []string{"note"}, watch.Escalate, 0))
+	now := time.Now()
+	evidence(t, s, r.ID, "note")
+	if err := s.EvaluateWatches(now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	items, receipts := s.OperatorWatchItems(), deliveries(t, s, w.ID)
+	if len(items) != 1 || len(receipts) != 1 || items[0].ID != receipts[0].ID {
+		t.Fatalf("items %+v receipts %+v", items, receipts)
+	}
+	// A coalescing delivery mutates the stored item's Counts in place; the
+	// snapshots already handed out must not follow it.
+	evidence(t, s, r.ID, "note")
+	if err := s.EvaluateWatches(now.Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if items[0].Counts["note"] != 1 || items[0].Count != 1 || items[0].Updates != 0 {
+		t.Fatalf("item snapshot aliases live store state: %+v", items[0])
+	}
+	if receipts[0].Counts["note"] != 1 {
+		t.Fatalf("receipt snapshot aliases live store state: %+v", receipts[0])
+	}
+	fresh := s.OperatorWatchItems()
+	if len(fresh) != 1 || fresh[0].Count != 2 || fresh[0].Updates != 1 || fresh[0].Counts["note"] != 2 {
+		t.Fatalf("coalescing update did not land: %+v", fresh[0])
+	}
+}
+
 func TestProjectWatchMatchesRunsByBriefProject(t *testing.T) {
 	s := testStore(t)
 	brief := testBrief(".")

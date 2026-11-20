@@ -3,6 +3,7 @@ package studio
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -523,6 +524,15 @@ func (s *Store) Watch(id string) (WatchView, error) {
 	return s.watchView(w), nil
 }
 
+// cloneDelivery copies a receipt under the store lock, detaching the Counts
+// map a later coalescing delivery mutates in place, so serialization outside
+// the lock never shares state with the watch loop.
+func cloneDelivery(d *WatchDelivery) WatchDelivery {
+	out := *d
+	out.Counts = maps.Clone(d.Counts)
+	return out
+}
+
 // WatchDeliveries returns a watch's receipts, newest first.
 func (s *Store) WatchDeliveries(id string, limit int) ([]WatchDelivery, error) {
 	s.mu.Lock()
@@ -533,7 +543,7 @@ func (s *Store) WatchDeliveries(id string, limit int) ([]WatchDelivery, error) {
 	ids := s.watchOrder[id]
 	out := []WatchDelivery{}
 	for i := len(ids) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, *s.watchDeliveries[ids[i]])
+		out = append(out, cloneDelivery(s.watchDeliveries[ids[i]]))
 	}
 	return out, nil
 }
@@ -555,7 +565,7 @@ func (s *Store) OperatorWatchItems() []WatchItem {
 			continue
 		}
 		w := s.watches[d.WatchID]
-		out = append(out, WatchItem{WatchDelivery: *d, Description: w.Spec.Description, ProjectID: w.Spec.Condition.Scope.Project})
+		out = append(out, WatchItem{WatchDelivery: cloneDelivery(d), Description: w.Spec.Description, ProjectID: w.Spec.Condition.Scope.Project})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
 	return out
