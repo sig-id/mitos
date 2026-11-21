@@ -355,6 +355,29 @@ func TestContinuousUpdatesDoNotPostponeDeliveryPastInterval(t *testing.T) {
 	}
 }
 
+func TestKernelJudgmentHoldCreatesNoWatchItem(t *testing.T) {
+	e, r, a, token, _ := judgmentFixture(t, nil)
+	s := e.Store
+	plain := mustWatch(t, s, runWatch(r.ID, nil, watch.Notify, 0))
+	urgent := mustWatch(t, s, runWatch(r.ID, nil, watch.Escalate, 0))
+	if _, err := submit(t, e, a, token, blockingSubmission("watch")); err != nil {
+		t.Fatal(err)
+	}
+	// The judgment already has its operator card: the hold's notice reaches the
+	// owner at notify and opens no second Notifications item, even for watches
+	// whose default is escalate (spec 09 §3).
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := append(deliveries(t, s, urgent.ID), deliveries(t, s, plain.ID)...)
+	if len(got) != 1 || got[0].Level != watch.Notify || !reflect.DeepEqual(got[0].Reasons, []string{"judgment_parked"}) {
+		t.Fatalf("judgment hold was not delivered once at notify: %+v", got)
+	}
+	if items := s.OperatorWatchItems(); len(items) != 0 {
+		t.Fatalf("judgment hold opened a second operator item: %+v", items)
+	}
+}
+
 func TestProjectWatchMatchesRunsByBriefProject(t *testing.T) {
 	s := testStore(t)
 	brief := testBrief(".")

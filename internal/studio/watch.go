@@ -266,6 +266,12 @@ func (s *Store) observeWatches(f watch.Fact) {
 		if !ok {
 			continue
 		}
+		// A kernel-judgment hold already has its operator card, so its notice
+		// stays at notify: neither the watch default nor an overlapping watch
+		// may raise it into a second Notifications item (spec 09 §3).
+		if f.Reason == "judgment_parked" {
+			level = watch.Notify
+		}
 		key := w.Spec.Grouping.GroupKey(f)
 		g := w.Groups[key]
 		if g == nil {
