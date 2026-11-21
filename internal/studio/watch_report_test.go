@@ -42,7 +42,9 @@ func TestDeliveryOutcomesAndMarks(t *testing.T) {
 	}
 
 	// An owner outcome settles the delivery; the same one repeats, a different
-	// one is refused.
+	// one is refused. The outcome and the operator's calibration mark are
+	// independent records (spec 09 §5): both can sit on one delivery, written
+	// in either order.
 	got, err := s.RecordDeliveryMark(id, "acted", "")
 	if err != nil {
 		t.Fatal(err)
@@ -56,12 +58,17 @@ func TestDeliveryOutcomesAndMarks(t *testing.T) {
 	if _, err = s.RecordDeliveryMark(id, "dismissed", ""); err == nil {
 		t.Fatal("second outcome accepted")
 	}
-	// The operator's calibration mark applies to any delivered group.
-	if _, err = s.RecordDeliveryMark(id, "", "needless_wake"); err == nil {
-		t.Fatal("mark beside an outcome accepted")
+	if _, err = s.RecordDeliveryMark(id, "", "needless_wake"); err != nil {
+		t.Fatalf("mark beside an outcome refused: %v", err)
+	}
+	if _, err = s.RecordDeliveryMark(id, "", "should_have_woken"); err == nil {
+		t.Fatal("second mark accepted")
+	}
+	if got, err = s.RecordDeliveryMark(id, "acted", ""); err != nil || got.Outcome != "acted" || got.Mark != "needless_wake" {
+		t.Fatalf("idempotent outcome after mark: %v %+v", err, got)
 	}
 
-	// A second delivery takes the mark instead.
+	// A second delivery takes the mark first, then its outcome.
 	evidence(t, s, r.ID, "note")
 	evaluate(t, s, time.Now().Add(2*time.Second))
 	ds = deliveries(t, s, w.ID)
@@ -71,7 +78,10 @@ func TestDeliveryOutcomesAndMarks(t *testing.T) {
 	if _, err = s.RecordDeliveryMark(ds[0].ID, "", "should_have_woken"); err != nil {
 		t.Fatal(err)
 	}
-	if view, _ := s.WatchDeliveries(w.ID, 10); view[0].Mark != "should_have_woken" || view[1].Outcome != "acted" {
+	if _, err = s.RecordDeliveryMark(ds[0].ID, "deferred", ""); err != nil {
+		t.Fatalf("outcome beside a mark refused: %v", err)
+	}
+	if view, _ := s.WatchDeliveries(w.ID, 10); view[0].Mark != "should_have_woken" || view[0].Outcome != "deferred" || view[1].Outcome != "acted" || view[1].Mark != "needless_wake" {
 		t.Fatalf("joined views %+v", view)
 	}
 }
@@ -110,7 +120,9 @@ func TestWatchReportSurvivesReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := createRun(t, s)
-	w := mustWatch(t, s, runWatch(r.ID, []string{"note"}, watch.Notify, 0))
+	// A wake-level watch, so the replayed mark also rebuilds the derived
+	// wake-precision counts.
+	w := mustWatch(t, s, runWatch(r.ID, []string{"note"}, watch.Wake, 0))
 	evidence(t, s, r.ID, "note")
 	_ = s.EvaluateWatches(time.Now().Add(time.Second))
 	ds := deliveries(t, s, w.ID)
@@ -118,6 +130,10 @@ func TestWatchReportSurvivesReplay(t *testing.T) {
 		t.Fatalf("deliveries %+v", ds)
 	}
 	if _, err = s.RecordDeliveryMark(ds[0].ID, "dismissed", ""); err != nil {
+		t.Fatal(err)
+	}
+	// The independent mark rides the same delivery through a separate record.
+	if _, err = s.RecordDeliveryMark(ds[0].ID, "", "needless_wake"); err != nil {
 		t.Fatal(err)
 	}
 	before, err := s.WatchReport(w.ID)
@@ -140,8 +156,8 @@ func TestWatchReportSurvivesReplay(t *testing.T) {
 	if string(a) != string(b) {
 		t.Fatalf("replay changed the report:\n%s\n%s", a, b)
 	}
-	if after.Outcomes["dismissed"] != 1 {
-		t.Fatalf("replay lost the outcome: %+v", after)
+	if after.Outcomes["dismissed"] != 1 || after.Marks["needless_wake"] != 1 || after.NeedlessWake != 1 {
+		t.Fatalf("replay lost the outcome or mark: %+v", after)
 	}
 }
 

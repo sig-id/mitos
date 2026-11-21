@@ -128,9 +128,11 @@ and at most one operator mark (`should_have_woken` or `needless_wake`). Owners
 settle their own deliveries: an orchestrator or attempt uses the
 `delivery_outcome` tool (fenced on the current generation), and the operator uses
 `POST /api/deliveries/{id}/outcome` for operator-owned watches. Operator marks are
-calibration evidence and apply to any delivered or digested group. Repeating the
-same value is idempotent; a different one is refused. The records never change a
-receipt, and the runtime never tunes thresholds from them.
+calibration evidence and apply to any delivered or digested group. The two
+records are independent: one delivery can carry both, written in either order,
+and each field is written at most once — repeating its value is idempotent, a
+different one is refused. The records never change a receipt, and the runtime
+never tunes thresholds from them.
 
 `mitos watch report --id WATCH_ID` (or `GET /api/watches/{id}/report`) shows the
 calibration state of one watch: delivery counts by level and by level source,

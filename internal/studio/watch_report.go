@@ -45,13 +45,27 @@ func (s *Store) applyDeliveryMark(e Event, m *watchMark) error {
 		(m.Outcome == "") == (m.Mark == "") {
 		return errors.New("mark needs exactly one outcome or mark value")
 	}
-	if prior := s.watchMarks[m.DeliveryID]; prior != nil {
-		if prior.Outcome != m.Outcome || prior.Mark != m.Mark {
+	// The owner outcome and the operator mark are independent records (spec 09
+	// §5): each field is written at most once, in either order, and both can
+	// sit on one delivery.
+	prior := s.watchMarks[m.DeliveryID]
+	if prior == nil {
+		prior = &WatchMark{DeliveryID: m.DeliveryID}
+		s.watchMarks[m.DeliveryID] = prior
+	}
+	if m.Outcome != "" {
+		if prior.Outcome != "" && prior.Outcome != m.Outcome {
+			return errors.New("conflicting outcome for a delivery")
+		}
+		prior.Outcome = m.Outcome
+	}
+	if m.Mark != "" {
+		if prior.Mark != "" && prior.Mark != m.Mark {
 			return errors.New("conflicting mark for a delivery")
 		}
-		return nil
+		prior.Mark = m.Mark
 	}
-	s.watchMarks[m.DeliveryID] = &WatchMark{DeliveryID: m.DeliveryID, Outcome: m.Outcome, Mark: m.Mark, At: e.At}
+	prior.At = e.At
 	return nil
 }
 
@@ -62,8 +76,10 @@ func (s *Store) applyDeliveryMark(e Event, m *watchMark) error {
 // deliveries take an outcome here; responsibility and attempt owners settle
 // their own deliveries through the granted delivery_outcome tool, which fences
 // on the current orchestrator generation. A mark is operator calibration
-// evidence and applies to any delivery. Repeating the same value is
-// idempotent; a different one is refused.
+// evidence and applies to any delivery. The two records are independent
+// (spec 09 §5): one delivery can carry both, written in either order. Each
+// field is written at most once; repeating its value is idempotent and a
+// different one is refused.
 func (s *Store) RecordDeliveryMark(deliveryID, outcome, mark string) (WatchDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,10 +101,13 @@ func (s *Store) RecordDeliveryMark(deliveryID, outcome, mark string) (WatchDeliv
 		return WatchDelivery{}, errors.New("mark must be should_have_woken or needless_wake")
 	}
 	if prior := s.watchMarks[deliveryID]; prior != nil {
-		if prior.Outcome != outcome || prior.Mark != mark {
-			return WatchDelivery{}, errMarkConflict(prior)
+		if outcome != "" && prior.Outcome != "" && prior.Outcome != outcome ||
+			mark != "" && prior.Mark != "" && prior.Mark != mark {
+			return WatchDelivery{}, errMarkConflict(prior, outcome, mark)
 		}
-		return cloneDeliveryWithMarks(s, d), nil
+		if outcome != "" && prior.Outcome == outcome || mark != "" && prior.Mark == mark {
+			return cloneDeliveryWithMarks(s, d), nil
+		}
 	}
 	m := watchMark{DeliveryID: deliveryID, Outcome: outcome, Mark: mark}
 	if err := s.commit("", "effect", "watch_delivery_mark", change{Watch: &watchChange{Mark: &m}}); err != nil {
@@ -97,8 +116,8 @@ func (s *Store) RecordDeliveryMark(deliveryID, outcome, mark string) (WatchDeliv
 	return cloneDeliveryWithMarks(s, s.watchDeliveries[deliveryID]), nil
 }
 
-func errMarkConflict(prior *WatchMark) error {
-	if prior.Outcome != "" {
+func errMarkConflict(prior *WatchMark, outcome, mark string) error {
+	if outcome != "" && prior.Outcome != "" {
 		return fmt.Errorf("%w: delivery already has outcome %s", ErrConflict, prior.Outcome)
 	}
 	return fmt.Errorf("%w: delivery already has mark %s", ErrConflict, prior.Mark)

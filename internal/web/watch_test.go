@@ -130,9 +130,16 @@ func TestWatchOutcomeAndReportAPI(t *testing.T) {
 	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"outcome":"dismissed"}`, false); res.Code != 409 {
 		t.Fatalf("second outcome: %d", res.Code)
 	}
+	// The operator mark is an independent record on the same delivery.
+	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"mark":"needless_wake"}`, false); res.Code != 200 || !strings.Contains(res.Body.String(), `"mark":"needless_wake"`) {
+		t.Fatalf("mark beside outcome: %d %s", res.Code, res.Body.String())
+	}
+	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"mark":"should_have_woken"}`, false); res.Code != 409 {
+		t.Fatalf("second mark: %d", res.Code)
+	}
 
 	report := request(server, "GET", "/api/watches/"+w.ID+"/report", "", false)
-	if report.Code != 200 || !strings.Contains(report.Body.String(), `"outcomes":{"acted":1}`) {
+	if report.Code != 200 || !strings.Contains(report.Body.String(), `"outcomes":{"acted":1}`) || !strings.Contains(report.Body.String(), `"marks":{"needless_wake":1}`) {
 		t.Fatalf("report: %d %s", report.Code, report.Body.String())
 	}
 	if res := request(server, "GET", "/api/watches/watch_none/report", "", false); res.Code != 404 {
