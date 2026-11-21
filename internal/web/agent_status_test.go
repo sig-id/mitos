@@ -37,7 +37,7 @@ func TestAgentStatusEndpointRecordsSessionReports(t *testing.T) {
 	w = deskRequest(s, "POST", "/api/sessions/"+session.ID+"/agent-status", map[string]any{
 		"state": "retry_scheduled", "error": "429: usage limit reached", "http_code": 429,
 		"attempt": 2, "max_attempts": 3, "model": "zai/glm-5.3", "retry_in_seconds": 45,
-		"usage": map[string]any{"model": "zai/glm-5.3", "input_tokens": 900, "output_tokens": 80},
+		"usage": map[string]any{"zai/glm-5.3": map[string]any{"input_tokens": 900, "output_tokens": 80}},
 	})
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
@@ -46,7 +46,7 @@ func TestAgentStatusEndpointRecordsSessionReports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Retry == nil || stored.Retry.Status != "scheduled" || stored.Retry.Attempt != 2 || stored.AgentError == nil || stored.AgentError.Code != 429 || stored.Usage == nil || stored.Usage.InputTokens != 900 {
+	if stored.Retry == nil || stored.Retry.Status != "scheduled" || stored.Retry.Attempt != 2 || stored.AgentError == nil || stored.AgentError.Code != 429 || stored.Usage["zai/glm-5.3"].InputTokens != 900 {
 		t.Fatal("endpoint report not stored on the session", stored.Retry, stored.AgentError, stored.Usage)
 	}
 	w = deskRequest(s, "POST", "/api/sessions/"+session.ID+"/agent-status", map[string]any{"state": "explode"})

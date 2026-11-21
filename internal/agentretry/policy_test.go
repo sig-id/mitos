@@ -37,7 +37,7 @@ func TestValidateRejectsUnsafePolicies(t *testing.T) {
 			t.Fatalf("policy %+v passed validation", p)
 		}
 	}
-	if err := (Policy{MaxAttempts: 2, FallbackModels: []string{"zai/glm-5.3-flash"}}).Validate(); err != nil {
+	if err := (Policy{MaxAttempts: 2, FallbackModels: []string{"zai/glm-5.3-flash", "openrouter/anthropic/claude-sonnet"}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
 }

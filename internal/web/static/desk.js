@@ -243,7 +243,7 @@
         else if (r && r.status === 'switched') parts.push(`Retry budget exhausted; switched model${r.next_model ? ` to ${r.next_model}` : ''}`);
         else if (r) parts.push(`Retries exhausted${r.model ? ` on ${r.model}` : ''}; needs operator attention`);
         else if (s.agent_error) parts.push(`Model error${s.agent_error.http_code ? ` HTTP ${s.agent_error.http_code}` : ''}: ${s.agent_error.message.slice(0, 140)}`);
-        if (s.model_usage) parts.push(`${tokens(s.model_usage.input_tokens)} in / ${tokens(s.model_usage.output_tokens)} out tokens${s.model_usage.model ? ` on ${s.model_usage.model}` : ''}`);
+        if (s.model_usage) for (const [model, u] of Object.entries(s.model_usage).sort()) parts.push(`${tokens(u.input_tokens)} in / ${tokens(u.output_tokens)} out tokens on ${model}`);
         const note = $('agent-status');
         note.textContent = parts.join(' · ');
         note.hidden = !parts.length;

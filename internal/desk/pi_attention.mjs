@@ -70,14 +70,21 @@ export default function (pi) {
   let timer, stopped = false, busy = false, notices = [], seen = new Set();
   let failure = null;         // {code, message, attemptsMade, retryAfterMs, fallbackIndex}
   let retryTimer = null;      // scheduled recovery timer
-  let usage = null;           // cumulative {model, input, cacheRead, cacheWrite, output}
+  let usageByModel = {};      // cumulative per model: {input, cacheRead, cacheWrite, output}
   const request = async (path, body) => {
     const r = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', 'Mitos-API-Version': '1' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(4000) });
     if (!r.ok) throw new Error('Mitos attention unavailable'); return r.json();
   };
   const report = (body) => request(`/api/sessions/${session}/agent-status`, body).catch(() => {});
   const currentModel = (ctx) => ctx && ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : '';
-  const usageBody = () => usage ? { usage: { model: usage.model, input_tokens: usage.input, cached_input_tokens: usage.cacheRead, cache_write_tokens: usage.cacheWrite, output_tokens: usage.output } } : {};
+  const usageBody = () => {
+    const entries = Object.entries(usageByModel);
+    if (!entries.length) return {};
+    const usage = {};
+    for (const [model, v] of entries) usage[model] = { input_tokens: v.input, cached_input_tokens: v.cacheRead, cache_write_tokens: v.cacheWrite, output_tokens: v.output };
+    return { usage };
+  };
+
 
   function clearFailure() {
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
@@ -100,7 +107,11 @@ export default function (pi) {
       return;
     }
     if (decision.action === 'switch') {
-      const [provider, id] = String(decision.model).split('/');
+      // Split at the first slash only: model ids may themselves contain
+      // slashes (openrouter/anthropic/claude-sonnet).
+      const cut = String(decision.model).indexOf('/');
+      const provider = cut > 0 ? String(decision.model).slice(0, cut) : '';
+      const id = cut > 0 ? String(decision.model).slice(cut + 1) : '';
       const model = provider && id && ctx.modelRegistry ? ctx.modelRegistry.find(provider, id) : undefined;
       if (model && await pi.setModel(model)) {
         report({ state: 'model_switched', error: failure.message, http_code: failure.code, attempt: 0, max_attempts: policy.max_attempts, model: currentModel(ctx), next_model: decision.model, ...usageBody() });
@@ -127,13 +138,16 @@ export default function (pi) {
     const message = event.message;
     if (!message || message.role !== 'assistant') return;
     const u = message.usage;
-    if (u && (u.input || u.output || u.cacheRead || u.cacheWrite)) {
-      usage = {
-        model: currentModel(ctx),
-        input: (usage?.input || 0) + (u.input || 0),
-        cacheRead: (usage?.cacheRead || 0) + (u.cacheRead || 0),
-        cacheWrite: (usage?.cacheWrite || 0) + (u.cacheWrite || 0),
-        output: (usage?.output || 0) + (u.output || 0),
+    const label = currentModel(ctx);
+    if (label && u && (u.input || u.output || u.cacheRead || u.cacheWrite)) {
+      // Counters stay attributed to the model that consumed them, so a
+      // fallback or operator switch never relabels earlier usage.
+      const prior = usageByModel[label] || { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+      usageByModel[label] = {
+        input: prior.input + (u.input || 0),
+        cacheRead: prior.cacheRead + (u.cacheRead || 0),
+        cacheWrite: prior.cacheWrite + (u.cacheWrite || 0),
+        output: prior.output + (u.output || 0),
       };
     }
     if (message.stopReason === 'error') {
@@ -147,10 +161,8 @@ export default function (pi) {
       report({ state: 'error', error: failure.message, http_code: failure.code, model: currentModel(ctx), ...usageBody() });
       return;
     }
-    if (failure) {
+    if (failure || Object.keys(usageByModel).length) {
       clearFailure();
-      report({ state: 'healthy', model: currentModel(ctx), ...usageBody() });
-    } else if (usage) {
       report({ state: 'healthy', model: currentModel(ctx), ...usageBody() });
     }
   });

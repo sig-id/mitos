@@ -455,8 +455,11 @@ func cloneSession(s Session) Session {
 		s.Retry = &r
 	}
 	if s.Usage != nil {
-		u := *s.Usage
-		s.Usage = &u
+		usage := make(map[string]ModelUsage, len(s.Usage))
+		for model, u := range s.Usage {
+			usage[model] = u
+		}
+		s.Usage = usage
 	}
 	return s
 }

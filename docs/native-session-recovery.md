@@ -50,7 +50,7 @@ OS-level guarantee.
 Adapters report through `POST /api/sessions/{session}/agent-status` with a
 bounded body: `state` (`healthy`, `retry_scheduled`, `model_switched`,
 `retry_exhausted`, `error`), the failing message and HTTP code, attempt
-counters, the scheduled delay, and cumulative token usage. Reports are
+counters, the scheduled delay, and cumulative per-model token usage. Reports are
 telemetry from inside the agent process, never session status or completion
 claims. They are accepted for stopped sessions so shutdown races do not
 discard final evidence, and they persist across restarts with the session.
@@ -59,8 +59,10 @@ The workspace terminal view shows the live position beside the connection
 status: scheduled retries with their model and time, model switches after an
 exhausted budget, terminal model errors, and cumulative token usage. The
 session JSON exposes the same evidence as `agent_error`, `retry_state`, and
-`model_usage`. Estimated dollar costs remain scoped to coordinated runs;
-native-session usage is reported per session as token counts.
+`model_usage`, a per-model map so consumption stays attributed to the model
+that produced it across fallback or operator switches. Estimated dollar costs
+remain scoped to coordinated runs; native-session usage is reported per
+session as token counts.
 
 ## Operator commands and fan-out
 

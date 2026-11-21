@@ -2,6 +2,7 @@ package desk
 
 import (
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -179,20 +180,22 @@ func TestAgentStatusReportsRecordRetriesErrorsAndUsage(t *testing.T) {
 	if v.Retry == nil || v.Retry.Status != "switched" || v.Retry.NextModel != "zai/glm-5.3-flash" || v.AgentError == nil {
 		t.Fatal("model_switched report must keep the last error and record the switch", v.Retry, v.AgentError)
 	}
-	usage := &ModelUsage{Model: "zai/glm-5.3", InputTokens: 1200, OutputTokens: 300}
+	usage := map[string]ModelUsage{"zai/glm-5.3": {InputTokens: 1200, OutputTokens: 300}}
 	if err := m.AgentStatus(s.ID, AgentStatusReport{State: "retry_exhausted", Error: "429: limit", HTTPCode: 429, Attempt: 3, MaxAttempts: 3, Model: "zai/glm-5.3", Usage: usage}); err != nil {
 		t.Fatal(err)
 	}
 	v, _ = m.Session(s.ID)
-	if v.Retry == nil || v.Retry.Status != "exhausted" || v.Usage == nil || v.Usage.InputTokens != 1200 {
+	if v.Retry == nil || v.Retry.Status != "exhausted" || v.Usage["zai/glm-5.3"].InputTokens != 1200 {
 		t.Fatal("retry_exhausted report not recorded with usage", v.Retry, v.Usage)
 	}
-	if err := m.AgentStatus(s.ID, AgentStatusReport{State: "healthy", Usage: usage}); err != nil {
+	// A later model's usage merges per model instead of relabeling the totals.
+	extended := map[string]ModelUsage{"zai/glm-5.3": {InputTokens: 1200, OutputTokens: 300}, "openai/gpt-5.3-codex-spark": {InputTokens: 60, OutputTokens: 12}}
+	if err := m.AgentStatus(s.ID, AgentStatusReport{State: "healthy", Usage: extended}); err != nil {
 		t.Fatal(err)
 	}
 	v, _ = m.Session(s.ID)
-	if v.AgentError != nil || v.Retry != nil || v.Usage == nil {
-		t.Fatal("healthy report must clear error and retry state while keeping usage", v.AgentError, v.Retry, v.Usage)
+	if v.AgentError != nil || v.Retry != nil || v.Usage["zai/glm-5.3"].InputTokens != 1200 || v.Usage["openai/gpt-5.3-codex-spark"].InputTokens != 60 {
+		t.Fatal("healthy report must clear recovery state and keep per-model usage", v.AgentError, v.Retry, v.Usage)
 	}
 }
 
@@ -208,7 +211,15 @@ func TestAgentStatusRejectsInvalidReports(t *testing.T) {
 		{State: "retry_scheduled", Attempt: 101},
 		{State: "error", HTTPCode: 999},
 		{State: "error", Model: "two words"},
-		{State: "healthy", Usage: &ModelUsage{Model: "m", InputTokens: -1}},
+		{State: "healthy", Usage: map[string]ModelUsage{"m": {InputTokens: -1}}},
+		{State: "healthy", Usage: map[string]ModelUsage{"bad model": {InputTokens: 1}}},
+		{State: "healthy", Usage: func() map[string]ModelUsage {
+			m := map[string]ModelUsage{}
+			for i := 0; i < 17; i++ {
+				m[fmt.Sprintf("p/m%d", i)] = ModelUsage{}
+			}
+			return m
+		}()},
 	} {
 		if err := m.AgentStatus(s.ID, report); err == nil {
 			t.Fatalf("report %+v accepted", report)

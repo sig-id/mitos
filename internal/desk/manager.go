@@ -343,7 +343,17 @@ func (m *Manager) AgentStatus(id string, report AgentStatusReport) error {
 		s.Retry = nil
 	}
 	if report.Usage != nil {
-		s.Usage = report.Usage
+		merged := map[string]ModelUsage{}
+		for model, usage := range s.Usage {
+			merged[model] = usage
+		}
+		for model, usage := range report.Usage {
+			if usage.UpdatedAt.IsZero() {
+				usage.UpdatedAt = now
+			}
+			merged[model] = usage
+		}
+		s.Usage = merged
 	}
 	if err := m.saveLocked(); err != nil {
 		return err
@@ -374,9 +384,11 @@ func validateAgentStatusReport(report AgentStatusReport) error {
 			return errors.New("agent status model name is invalid")
 		}
 	}
-	if report.Usage != nil {
-		u := report.Usage
-		if len(u.Model) > 128 || strings.ContainsAny(u.Model, " \t\r\n\x00") {
+	if len(report.Usage) > 16 {
+		return errors.New("agent status reports too many usage models")
+	}
+	for model, u := range report.Usage {
+		if len(model) > 128 || strings.ContainsAny(model, " \t\r\n\x00") {
 			return errors.New("agent status usage model is invalid")
 		}
 		if u.InputTokens < 0 || u.CachedInputTokens < 0 || u.CacheWriteTokens < 0 || u.OutputTokens < 0 || u.InputTokens > 1e15 || u.OutputTokens > 1e15 {
