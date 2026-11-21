@@ -99,6 +99,29 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("GET /api/watches/{id}/report", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Store.WatchReport(r.PathValue("id"))
+		if err != nil {
+			watchError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /api/deliveries/{id}/outcome", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Outcome string `json:"outcome"` // acted, dismissed or deferred; the owner settles its own delivery
+			Mark    string `json:"mark"`    // should_have_woken or needless_wake; operator calibration
+		}
+		if !watchBody(w, r, &in) {
+			return
+		}
+		v, err := s.engine.Store.RecordDeliveryMark(r.PathValue("id"), in.Outcome, in.Mark)
+		if err != nil {
+			watchError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
 	mux.HandleFunc("POST /api/watch-items/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.engine.Store.ResolveWatchItem(r.PathValue("id")); err != nil {
 			watchError(w, err)

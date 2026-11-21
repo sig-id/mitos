@@ -18,7 +18,7 @@ import (
 
 func watchClient(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos watch <create|list|show|renew|cancel|deliveries|items|triage|resolve|inbox> [flags]\nUse create --file watch.json (mitos.watch/v1; operator, responsibility or attempt owner).\nUse show, renew --expires RFC3339, cancel, deliveries, items or triage with --id WATCH_ID.\nUse resolve --item ITEM_ID to close an open Notifications item.\nUse inbox --owner responsibility:GRAPH_ID or attempt:RUN_ID to read an owner's pending deliveries.")
+		fmt.Println("mitos watch <create|list|show|renew|cancel|deliveries|items|triage|resolve|inbox|outcome|report> [flags]\nUse create --file watch.json (mitos.watch/v1; operator, responsibility or attempt owner).\nUse show, renew --expires RFC3339, cancel, deliveries, items, triage or report with --id WATCH_ID.\nUse resolve --item ITEM_ID to close an open Notifications item.\nUse inbox --owner responsibility:GRAPH_ID or attempt:RUN_ID to read an owner's pending deliveries.\nUse outcome --delivery DELIVERY_ID --outcome acted|dismissed|deferred, or --mark should_have_woken|needless_wake.")
 		return nil
 	}
 	action := args[0]
@@ -32,6 +32,9 @@ func watchClient(args []string) error {
 	id := f.String("id", "", "Watch ID")
 	item := f.String("item", "", "Notifications item ID (resolve)")
 	owner := f.String("owner", "", "Owner as responsibility:GRAPH_ID or attempt:RUN_ID (inbox)")
+	delivery := f.String("delivery", "", "Delivery ID (outcome)")
+	outcome := f.String("outcome", "", "Owner outcome: acted, dismissed or deferred (outcome)")
+	mark := f.String("mark", "", "Operator mark: should_have_woken or needless_wake (outcome)")
 	expires := f.String("expires", "", "New lease expiry, RFC3339, at most 24 hours away (renew)")
 	limit := f.Int("limit", 50, "Maximum deliveries to list (1–500)")
 	server := f.String("server", "", "Expected home server identity")
@@ -114,6 +117,21 @@ func watchClient(args []string) error {
 			return errors.New("inbox requires --owner responsibility:GRAPH_ID or attempt:RUN_ID")
 		}
 		path = "/api/watch-inboxes/" + url.PathEscape(kind) + "/" + url.PathEscape(ownerID)
+	case "outcome":
+		if *delivery == "" || (*outcome == "") == (*mark == "") {
+			return errors.New("outcome requires --delivery and exactly one of --outcome or --mark")
+		}
+		if *outcome != "" {
+			body, _ = json.Marshal(map[string]string{"outcome": *outcome})
+		} else {
+			body, _ = json.Marshal(map[string]string{"mark": *mark})
+		}
+		method, path = "POST", "/api/deliveries/"+url.PathEscape(*delivery)+"/outcome"
+	case "report":
+		if err := needID(); err != nil {
+			return err
+		}
+		path += "/" + url.PathEscape(*id) + "/report"
 	default:
 		return fmt.Errorf("unknown watch operation %q", action)
 	}

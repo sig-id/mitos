@@ -66,10 +66,16 @@ type WatchDelivery struct {
 	ItemID     string         `json:"item_id,omitempty"`
 	// Source says where Level came from: a rule, the watch default, an
 	// accepted triage answer, or a fallback to the default (Fallback says why).
-	Source   string    `json:"source"`
-	Fallback string    `json:"fallback,omitempty"`
-	TriageID string    `json:"triage_id,omitempty"`
-	At       time.Time `json:"at"`
+	Source   string `json:"source"`
+	Fallback string `json:"fallback,omitempty"`
+	TriageID string `json:"triage_id,omitempty"`
+	// Outcome and Mark are calibration records attached after delivery (spec 09
+	// §5), joined into this view: the owner outcome the delivery_outcome tool
+	// settled, or the outcome or mark recorded over the API. The stored receipt
+	// never changes.
+	Outcome string    `json:"outcome,omitempty"`
+	Mark    string    `json:"mark,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 const (
@@ -116,6 +122,7 @@ type watchChange struct {
 	End        *watchEnd        `json:"end,omitempty"`
 	Resolve    *watchResolve    `json:"resolve,omitempty"`
 	Outcome    *watchOutcome    `json:"outcome,omitempty"`
+	Mark       *watchMark       `json:"mark,omitempty"`
 	Triage     *TriageRequest   `json:"triage,omitempty"`
 	Triaged    *triageOutcome   `json:"triaged,omitempty"`
 }
@@ -145,6 +152,7 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.triageRequests = map[string]*TriageRequest{}
 		s.triagePending = map[string]string{}
 		s.triageUsed = map[string]int{}
+		s.watchMarks = map[string]*WatchMark{}
 	}
 	if w := c.Create; w != nil {
 		if s.watches[w.ID] != nil {
@@ -180,6 +188,11 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 	}
 	if o := c.Outcome; o != nil {
 		if err := s.applyDeliveryOutcome(e, o); err != nil {
+			return err
+		}
+	}
+	if m := c.Mark; m != nil {
+		if err := s.applyDeliveryMark(e, m); err != nil {
 			return err
 		}
 	}
@@ -731,7 +744,8 @@ func cloneDelivery(d *WatchDelivery) WatchDelivery {
 	return out
 }
 
-// WatchDeliveries returns a watch's receipts, newest first.
+// WatchDeliveries returns a watch's receipts, newest first, with the
+// outcome and mark each collected.
 func (s *Store) WatchDeliveries(id string, limit int) ([]WatchDelivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -741,7 +755,7 @@ func (s *Store) WatchDeliveries(id string, limit int) ([]WatchDelivery, error) {
 	ids := s.watchOrder[id]
 	out := []WatchDelivery{}
 	for i := len(ids) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, cloneDelivery(s.watchDeliveries[ids[i]]))
+		out = append(out, cloneDeliveryWithMarks(s, s.watchDeliveries[ids[i]]))
 	}
 	return out, nil
 }

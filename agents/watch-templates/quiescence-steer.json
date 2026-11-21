@@ -1,0 +1,18 @@
+{
+  "template": "quiescence-steer",
+  "rationale": "A steer quiescence edge means a child is idle and waiting for a decision only the orchestrator can make. The quiescent kind carries both steer and block edges: block edges are must-deliver at wake whatever the condition says, and steer edges match the condition here.",
+  "create": {
+    "owner": "responsibility",
+    "description": "children waiting on a quiescence steer edge",
+    "condition": {
+      "scope": {},
+      "types": ["effect"],
+      "kinds": ["quiescent"]
+    },
+    "grouping": {"by": ["run_id"], "wait_ms": 0, "interval_ms": 60000, "max_events": 16, "repeat_interval_ms": 3600000},
+    "lease_ms": 14400000,
+    "max_renewals": 16,
+    "max_silence_ms": 900000,
+    "default_level": "wake"
+  }
+}

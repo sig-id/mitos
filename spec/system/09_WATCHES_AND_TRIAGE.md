@@ -273,16 +273,30 @@ An operator may mark a delivered or digested group as `should_have_woken` or
 `needless_wake`. These records are evidence for tuning triage thresholds for a
 specific application and model, and the runtime MUST NOT adjust thresholds
 automatically from them. A watch report exposes counts by level, fallback reasons,
-outcomes, and triage calls used.
+outcomes, and triage calls used, plus the derived wake precision (one minus the
+share of marked wake deliveries marked `needless_wake`) and fallback rate (the
+share of graded groups delivered by fallback). Both ratios are absent, not zero,
+until their denominators exist. The report is read at
+`GET /api/watches/{id}/report` and `mitos watch report --id`.
+
+Default watch templates for adaptive orchestrators ship in the agent library
+(`agents/watch-templates`). A template is an authoring input to the granted
+`watch_create` tool, not a capability: it names no scope (the runtime clamps it to
+the creator's graph) and grants nothing. The first set covers child terminal
+states, verification failures and quiescence `steer` edges.
 
 ## 6. Interfaces
 
 - HTTP: `POST /api/watches`, `GET /api/watches/{id}`, `POST /api/watches/{id}/renew`,
   `POST /api/watches/{id}/cancel`, `GET /api/watches/{id}/deliveries`,
   `GET /api/watches/{id}/items`, `GET /api/watches/{id}/triage`,
+  `GET /api/watches/{id}/report` (the calibration report),
   `POST /api/watch-items/{id}/resolve` (closes an
-  open operator item), and `POST /api/deliveries/{id}/outcome` (W4; settles an inbox
-  item). All require the `Mitos-API-Version`
+  open operator item), and `POST /api/deliveries/{id}/outcome`, which records
+  either an owner outcome (`acted`, `dismissed` or `deferred`; operator-owned
+  deliveries over the API, responsibility and attempt owners through the granted
+  tool) or an operator mark (`should_have_woken` or `needless_wake`; any
+  delivery). All require the `Mitos-API-Version`
   header. Unknown request fields are refused.
 - `GET /api/watch-inboxes/{responsibility|attempt}/{id}`: an owner's pending
   deliveries and digest, read-only.
@@ -290,11 +304,14 @@ outcomes, and triage calls used.
   `watch_renew`, `watch_cancel`, `watch_inbox`, `delivery_outcome`. Their scope is
   clamped to the caller's graph. Only the current orchestrator generation acts for
   the responsibility, and any attempt may own watches for itself.
-- CLI: `mitos watch create|list|show|renew|cancel|deliveries|items|triage|resolve|inbox`.
+- CLI: `mitos watch create|list|show|renew|cancel|deliveries|items|triage|resolve|inbox|outcome|report`.
 
 ## 7. Out of scope for v1
 
 Predicate (Noul) and Score questions; expression conditions; capability-declared
 watches in manifests; triage-selected steering or stopping; cross-project watches;
 external sources (WebSocket, MQTT topics) other than journalled service inputs.
-W4 defines which of these are admitted next.
+W4 decided the first and the third ([ADR 0009 amendment](../ADRs/0009_WATCHES_AND_TRIAGE.md)):
+Predicate and Score stay out until watch-report calibration evidence justifies a
+second acceptance rule, and watches stay runtime records an owner creates through
+the granted tool, never manifest declarations.

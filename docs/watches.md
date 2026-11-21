@@ -3,8 +3,9 @@
 A watch tells you when runtime events in a project, graph, task or run need your
 attention. The runtime evaluates it over the journal; nothing runs in a workspace.
 The contract is [spec 09](../spec/system/09_WATCHES_AND_TRIAGE.md). This release
-implements gates W1–W3: watches owned by the operator, by an adaptive graph's
-responsibility, or by one attempt, with optional decision-model triage.
+implements gates W1–W4: watches owned by the operator, by an adaptive graph's
+responsibility, or by one attempt, with optional decision-model triage, delivery
+outcomes and the calibration report.
 
 ## Create one
 
@@ -30,6 +31,9 @@ mitos watch cancel --id watch_…
 mitos watch items --id watch_…
 mitos watch resolve --item witem_…
 mitos watch inbox --owner responsibility:graph_…
+mitos watch outcome --delivery delivery_… --outcome acted
+mitos watch outcome --delivery delivery_… --mark needless_wake
+mitos watch report --id watch_…
 ```
 
 The HTTP API is under `/api/watches` and needs the `Mitos-API-Version` header.
@@ -116,4 +120,35 @@ Add a `triage` block to let a decision model choose the level for each group:
   `fallback`) and its `fallback` reason. `mitos watch triage --id WATCH_ID` (or
   `GET /api/watches/{id}/triage`) lists the requests with their answers.
 - **Must-deliver events.** These are never triaged.
+
+## Outcomes, marks and the report
+
+A delivery accepts at most one owner outcome (`acted`, `dismissed` or `deferred`)
+and at most one operator mark (`should_have_woken` or `needless_wake`). Owners
+settle their own deliveries: an orchestrator or attempt uses the
+`delivery_outcome` tool (fenced on the current generation), and the operator uses
+`POST /api/deliveries/{id}/outcome` for operator-owned watches. Operator marks are
+calibration evidence and apply to any delivered or digested group. The two
+records are independent: one delivery can carry both, written in either order,
+and each field is written at most once — repeating its value is idempotent, a
+different one is refused. The records never change a receipt, and the runtime
+never tunes thresholds from them.
+
+`mitos watch report --id WATCH_ID` (or `GET /api/watches/{id}/report`) shows the
+calibration state of one watch: delivery counts by level and by level source,
+fallback reasons, outcomes, marks, triage calls used by request state, and two
+derived ratios. **Wake precision** is one minus the share of marked wake
+deliveries marked `needless_wake`; **fallback rate** is the share of graded groups
+delivered by fallback. Both are omitted, not zero, until their denominators
+exist, so an empty report cannot look calibrated.
+
+## Default templates
+
+`agents/watch-templates` ships three ready-made `watch_create` inputs for adaptive
+orchestrators: **child-terminal-states** (children finishing, failing or being
+cancelled, at `notify`), **verification-failures** (`verification_failed` at
+`wake`) and **quiescence-steer** (`quiescent` steer edges at `wake`, with a
+15-minute silence switch). A template leaves its scope empty; the runtime clamps
+it to the creator's graph. The default orchestrator instructions point at them
+when `watch.manage` is granted.
 

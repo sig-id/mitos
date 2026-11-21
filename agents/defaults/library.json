@@ -1,7 +1,7 @@
 {
   "profile": "agent-library-bundle/v1",
   "id": "mitos.defaults",
-  "revision": 6,
+  "revision": 7,
   "agents": [
     {
       "id": "mitos.generalist",
@@ -40,7 +40,7 @@
     },
     {
       "id": "mitos.orchestrator",
-      "revision": 5,
+      "revision": 6,
       "path": "orchestrator/agent.json"
     }
   ]

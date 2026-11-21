@@ -25,13 +25,20 @@ type triageProvider struct {
 	choice watch.Level
 	conf   float64
 	prob   float64
+	refuse bool
 	bodies []string
 }
 
 func (p *triageProvider) answer(choice watch.Level, confidence, probability float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.choice, p.conf, p.prob = choice, confidence, probability
+	p.choice, p.conf, p.prob, p.refuse = choice, confidence, probability, false
+}
+
+func (p *triageProvider) refusing() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refuse = true
 }
 
 func (p *triageProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +53,10 @@ func (p *triageProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.bodies = append(p.bodies, string(raw))
+	if p.refuse {
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "triage-v1", "answers": map[string]any{"action": map[string]any{"type": "refusal", "reason": "not enough evidence"}}})
+		return
+	}
 	offered := body.Questions["action"].Criteria
 	probabilities := map[string]float64{}
 	for level := range offered {

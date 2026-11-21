@@ -85,9 +85,33 @@ Costs: a new journal record family, a condition vocabulary that must stay closed
 and an owner-delivery path that does not exist today. Triage budgets add a third
 decision allowance beside routing and supervision.
 
-This ADR widens ADR 0003's profile only by reusing Choice for a new role. Predicate
-(Noul) and Score remain excluded until W4 defines their mappings; W1–W3 ship with
-Choice only.
+This ADR widens ADR 0003's profile only by reusing Choice for a new role. W1–W3
+shipped with Choice only; the W4 amendment below settles the rest.
+
+### W4 amendment (2026-11-21): outcomes, calibration and the remaining questions
+
+Gate W4 records owner and operator outcomes, exposes the watch report, and
+ships default watch templates for adaptive orchestrators. It also decides the
+two questions this ADR left open:
+
+- **Predicate (Noul) and Score stay out of the triage profile.** The asymmetric
+  acceptance rule is defined on a Choice answer's confidence and probability
+  pair. A Noul predicate answers with a boolean and Score with a scalar, so
+  neither carries the pair the rule needs, and adapting them would mean a
+  second, unproven acceptance rule. There is no calibration evidence yet: the
+  watch report that W4 adds (`mitos watch report`) is the instrument that would
+  justify revisiting this, application by application.
+- **Capability-declared watches in manifests stay out.** A watch is a durable,
+  leased resource an owner creates, renews and cancels; declaring one in a
+  manifest would freeze its lease and scope at admission and leave nobody
+  accountable for renewal. The shipped default templates
+  (`agents/watch-templates`) give adaptive orchestrators the same starting
+  points through the granted `watch_create` tool, which the responsibility
+  owns and can end. Manifests may request the `watch.manage` capability; they
+  still cannot pre-create watches.
+
+Both decisions are revisitable through a new ADR amendment once watch reports
+exist for real applications.
 
 ## Alternatives
 

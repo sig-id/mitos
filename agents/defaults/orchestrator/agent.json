@@ -1,7 +1,7 @@
 {
   "profile": "agent-definition/v2",
   "id": "mitos.orchestrator",
-  "revision": 5,
+  "revision": 6,
   "name": "Orchestrator",
   "description": "Turn a goal and evolving evidence into bounded work, selecting or creating agent roles as needed.",
   "kind": "orchestrator",
@@ -22,7 +22,7 @@
   },
   "instructions": {
     "path": "instructions.md",
-    "sha256": "096b9ae61bc7b424da56b737f21c11375c5d63e5c2879e49456972ee5aed9c35"
+    "sha256": "32bc3a06f581292af5eef8458414105ff3ec3006044cc6ef8ae70f6f3f9a7470"
   },
   "runtime": {
     "requires": [

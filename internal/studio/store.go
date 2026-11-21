@@ -68,6 +68,7 @@ type Store struct {
 	triagePending          map[string]string // watch\x00group -> pending request
 	triageUsed             map[string]int    // allowance key -> requests
 	triageLive             map[string]bool   // requests dispatched by this process; not journalled
+	watchMarks             map[string]*WatchMark
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord
