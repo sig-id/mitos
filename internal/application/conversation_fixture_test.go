@@ -84,7 +84,7 @@ func TestPersonalNegotiationConfinementAndConsistency(t *testing.T) {
 	}
 	for _, race := range []string{"registration", "restart", "coordinator_replacement", "preferences"} {
 		t.Run(race, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := fixtureDir(t)
 			data := filepath.Join(dir, "runtime")
 			workspace := filepath.Join(dir, "workspace")
 			bin := filepath.Join(dir, "bin")
@@ -147,6 +147,12 @@ func TestPersonalNegotiationConfinementAndConsistency(t *testing.T) {
 					t.Fatal(err)
 				}
 				p := &fixtureProcess{cmd: cmd, log: log}
+				defer func() {
+					if t.Failed() {
+						raw, _ := os.ReadFile(log.Name())
+						t.Logf("authority log:\n%s", raw[max(0, len(raw)-6000):])
+					}
+				}()
 				conversationWait(t, "authority startup", func() bool {
 					req, _ := http.NewRequest("GET", "http://"+operator+"/api/capabilities", nil)
 					req.Header.Set("Mitos-API-Version", "1")
