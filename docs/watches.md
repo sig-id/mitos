@@ -3,8 +3,8 @@
 A watch tells you when runtime events in a project, graph, task or run need your
 attention. The runtime evaluates it over the journal; nothing runs in a workspace.
 The contract is [spec 09](../spec/system/09_WATCHES_AND_TRIAGE.md). This release
-implements gates W1 and W2: watches owned by the operator, by an adaptive graph's
-responsibility, or by one attempt, without triage.
+implements gates W1–W3: watches owned by the operator, by an adaptive graph's
+responsibility, or by one attempt, with optional decision-model triage.
 
 ## Create one
 
@@ -88,7 +88,32 @@ Agents use the `watch_create`, `watch_renew`, `watch_cancel`, `watch_inbox` and
 capability; the default orchestrator definition requests it. Deliveries arrive as
 `mitos.cooperation/v2` `observation` messages marked as untrusted evidence.
 
-## Not yet available
+## Triage
 
-Decision-model triage is gate W3. The runtime refuses `triage` instead of ignoring
-it.
+Add a `triage` block to let a decision model choose the level for each group:
+
+```json
+"triage": {"instructions": "Wake only when the failure changes which task should run next.", "max_calls": 32}
+```
+
+- **Provider.** Triage uses the decision provider the owner already has. For a graph
+  owner, that is the graph's `decision_application`, or else the project policy's
+  provider. Operator watches use the project policy's provider. The provider's
+  `min_confidence` and `min_probability` are the thresholds, and its timeout is
+  capped at 30 seconds.
+- **Allowance.** Set `limits.triage_calls` on the graph, or `triage_calls` in the
+  project agent policy for operator watches. Saving the policy refills it.
+  `max_calls` narrows one watch's share for its whole life. When an allowance runs
+  out, you get one `watch_degraded` notice, and groups keep arriving at the default
+  level.
+- **Levels.** The model may always raise the level. It may lower it below
+  `default_level` only when both thresholds are met. `escalate` is offered only with
+  `"allow_escalate": true`.
+- **Failures.** Every failure delivers at `default_level`. That covers a refusal, a
+  timeout, an invalid answer, a missing provider or credential, and a request still
+  pending at restart (`outcome_unknown`).
+- **Audit.** Each delivery records its `source` (`rule`, `default`, `triage` or
+  `fallback`) and its `fallback` reason. `mitos watch triage --id WATCH_ID` (or
+  `GET /api/watches/{id}/triage`) lists the requests with their answers.
+- **Must-deliver events.** These are never triaged.
+

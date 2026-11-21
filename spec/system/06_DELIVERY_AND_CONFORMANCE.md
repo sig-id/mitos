@@ -414,7 +414,8 @@ its creator's grant no longer covers its scope.
 
 ### W3 – Triage
 
-Add the triage role to the shared decision service with its own policy and budget.
+Add the triage role to the shared decision service. It uses the owner's existing
+decision provider and has its own budget.
 Implement the `level` Choice question, the bounded projection, asymmetric
 acceptance, fallback to the default level, and persistence before dispatch and
 before the receipt. Tests MUST cover each fallback reason, a pending request at

@@ -177,19 +177,15 @@ type InboxEntry struct {
 // entry, degraded notice and graph wake registration its routing implies, as
 // one journal record.
 func (s *Store) commitWatchDelivery(kind string, w *Watch, d *WatchDelivery, end *watchEnd, now time.Time) error {
-	routed, gc, err := s.routeDelivery(*d, w, now)
-	if err != nil {
-		return err
-	}
-	c := change{Watch: &watchChange{Deliveries: routed, End: end}, Graph: gc}
-	return s.commit("", "effect", kind, c)
+	return s.commitWatchRecord(kind, w, []WatchDelivery{*d}, watchChange{End: end}, now)
 }
 
 // routeDelivery decides where a receipt goes. The operator's receipts go to
 // the delivery feed. A responsibility's or attempt's receipt is queued in its
 // inbox or folded into its digest, and a responsibility's wake registers a
 // graph trigger. Wake and escalate also open or update a Notifications item.
-func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time) ([]routedDelivery, *graphChange, error) {
+// in is the owner's inbox as the record's earlier deliveries leave it.
+func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time, in *watchInbox) ([]routedDelivery, *graphChange, error) {
 	o := d.Owner
 	rd := routedDelivery{}
 	if o.Kind == watch.OwnerOperator {
@@ -199,7 +195,6 @@ func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time) ([]route
 		return []routedDelivery{rd}, nil, nil
 	}
 	d.Generation = s.ownerGeneration(o)
-	in := s.inbox(o)
 	pending := len(in.Pending)
 	out := []routedDelivery{}
 	switch {
@@ -208,7 +203,7 @@ func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time) ([]route
 	case d.Kind == "group" && d.Level == watch.Notify && pending >= ownerInboxCapacity:
 		d.Route = routeFolded
 		if !in.Degraded {
-			n := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: o, Kind: "degraded", Level: watch.Notify, Route: routeInbox, Generation: d.Generation, Count: in.Fold.Count + d.Count, Counts: map[string]int{}, Watches: []string{w.ID}, Reasons: []string{"inbox_full"}}
+			n := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: o, Kind: "degraded", Level: watch.Notify, Source: watch.SourceRule, Route: routeInbox, Generation: d.Generation, Count: in.Fold.Count + d.Count, Counts: map[string]int{}, Watches: []string{w.ID}, Reasons: []string{"inbox_full"}}
 			for k, v := range in.Fold.Counts {
 				n.Counts[k] += v
 			}
@@ -309,7 +304,7 @@ func (s *Store) flushDigests(now time.Time) error {
 		if w == nil {
 			continue
 		}
-		d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: in.Owner, Kind: "digest", Level: watch.Digest, FirstSeq: in.Fold.FirstSeq, LastSeq: in.Fold.LastSeq, Count: in.Fold.Count, Counts: graphClone(in.Fold.Counts), Watches: []string{w.ID}}
+		d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: in.Owner, Kind: "digest", Level: watch.Digest, Source: watch.SourceRule, FirstSeq: in.Fold.FirstSeq, LastSeq: in.Fold.LastSeq, Count: in.Fold.Count, Counts: graphClone(in.Fold.Counts), Watches: []string{w.ID}}
 		if err := s.commitWatchDelivery("watch_digest_delivered", w, &d, nil, now); err != nil {
 			return err
 		}

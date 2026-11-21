@@ -18,7 +18,7 @@ import (
 
 func watchClient(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos watch <create|list|show|renew|cancel|deliveries|items|resolve|inbox> [flags]\nUse create --file watch.json (mitos.watch/v1; operator, responsibility or attempt owner).\nUse show, renew --expires RFC3339, cancel, deliveries or items with --id WATCH_ID.\nUse resolve --item ITEM_ID to close an open Notifications item.\nUse inbox --owner responsibility:GRAPH_ID or attempt:RUN_ID to read an owner's pending deliveries.")
+		fmt.Println("mitos watch <create|list|show|renew|cancel|deliveries|items|triage|resolve|inbox> [flags]\nUse create --file watch.json (mitos.watch/v1; operator, responsibility or attempt owner).\nUse show, renew --expires RFC3339, cancel, deliveries, items or triage with --id WATCH_ID.\nUse resolve --item ITEM_ID to close an open Notifications item.\nUse inbox --owner responsibility:GRAPH_ID or attempt:RUN_ID to read an owner's pending deliveries.")
 		return nil
 	}
 	action := args[0]
@@ -98,6 +98,11 @@ func watchClient(args []string) error {
 			return err
 		}
 		path += "/" + url.PathEscape(*id) + "/items"
+	case "triage":
+		if err := needID(); err != nil {
+			return err
+		}
+		path += "/" + url.PathEscape(*id) + "/triage"
 	case "resolve":
 		if *item == "" {
 			return errors.New("resolve requires --item")

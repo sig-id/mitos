@@ -40,7 +40,7 @@ before paging. We adopt these instead of inventing per-line and summary modes.
 
 1. **A watch is a runtime record**, `mitos.watch/v1`: an owner, a journal-sequence
    cursor, a closed deterministic condition, a lease, a grouping policy, an
-   optional maximum silence and an optional triage policy. The runtime evaluates
+   optional maximum silence and optional triage instructions. The runtime evaluates
    it over the journal. Watches never run author code.
 2. **Absence and terminal states are delivered by rule.** Run termination, `block`
    quiescence, `blocked_on_human`, `observation_failed`, supervision incidents,

@@ -64,6 +64,10 @@ type Store struct {
 	watchOpenItems         map[string]string
 	watchInboxes           map[string]*watchInbox
 	inboxEntries           map[string]*InboxEntry
+	triageRequests         map[string]*TriageRequest
+	triagePending          map[string]string // watch\x00group -> pending request
+	triageUsed             map[string]int    // allowance key -> requests
+	triageLive             map[string]bool   // requests dispatched by this process; not journalled
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord

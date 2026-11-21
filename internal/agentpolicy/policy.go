@@ -25,7 +25,10 @@ type Policy struct {
 	DecisionApplication string                             `json:"decision_application,omitempty"`
 	Fallback            string                             `json:"fallback"` // human, investigate
 	MaxCalls            int                                `json:"max_calls"`
-	Rules               []Rule                             `json:"rules"`
+	// TriageCalls is the watch triage allowance for this project's
+	// operator-owned watches, per policy revision (spec 09 §4).
+	TriageCalls int    `json:"triage_calls,omitempty"`
+	Rules       []Rule `json:"rules"`
 }
 
 func Default() Policy {
@@ -35,7 +38,7 @@ func (p Policy) Validate() error {
 	if err := p.Supervision.Validate(); err != nil {
 		return err
 	}
-	if p.Revision < 0 || (p.Autonomy != "manual" && p.Autonomy != "delegated" && p.Autonomy != "decision") || (p.Fallback != "human" && p.Fallback != "investigate") || p.MaxCalls < 1 || p.MaxCalls > 64 || len(p.Guidance) > 8000 || strings.ContainsRune(p.Guidance, 0) || len(p.DecisionApplication) > 100 || len(p.Rules) > 64 {
+	if p.Revision < 0 || (p.Autonomy != "manual" && p.Autonomy != "delegated" && p.Autonomy != "decision") || (p.Fallback != "human" && p.Fallback != "investigate") || p.MaxCalls < 1 || p.MaxCalls > 64 || p.TriageCalls < 0 || p.TriageCalls > 4096 || len(p.Guidance) > 8000 || strings.ContainsRune(p.Guidance, 0) || len(p.DecisionApplication) > 100 || len(p.Rules) > 64 {
 		return errors.New("invalid agent policy")
 	}
 	if p.DecisionProvider != nil {
