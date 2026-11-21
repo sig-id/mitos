@@ -93,8 +93,11 @@ Bridge resume/fork is not yet supported; ordinary native sessions remain availab
 
 Installed interactive agent terminals are separate executors. **Sessions & earlier
 work → New native session** retains their assignment, coordination inbox, reports,
-and replacement workflow. Submitted session reports require explicit human review;
-that acceptance covers the saved report, not unverified repository changes.
+and replacement workflow. Native sessions recover transient model-provider
+failures automatically under a [project retry policy](docs/native-session-recovery.md);
+retries, model switches, terminal model errors and token usage are reported on the
+session and shown beside the terminal. Submitted session reports require explicit
+human review; that acceptance covers the saved report, not unverified repository changes.
 
 **Services** activates project applications on request or on an interval. **Resources**
 shows workspace and execution information. **Inbox** collects pending report reviews,

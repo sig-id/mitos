@@ -98,7 +98,20 @@ func (m *Manager) startAgentLocked(p Project, request agentcli.Request, installa
 		return Session{}, errors.New("choose an agent that can receive orchestrator instructions")
 	}
 	if installation.Kind == "agent" && installation.Capabilities.InitialPrompt {
-		request.Prompt = sessionContext(p, request.Role) + "\nOperator objective:\n" + originalPrompt
+		if strings.HasPrefix(originalPrompt, "/") {
+			// A leading slash is a native CLI command, for example a pi /goal
+			// fleet brief. Wrapped context would break command parsing, so the
+			// command is delivered verbatim; coordination context remains
+			// available through MITOS_COORDINATION and the desk CLI.
+			request.Prompt = originalPrompt
+		} else {
+			role := request.Role
+			if role == "" {
+				role = "agent"
+			}
+			orchestrator := m.resolveOrchestratorLocked(p, role, request.Assignment, sessionFilter{}, "")
+			request.Prompt = sessionContext(p, role, orchestrator) + "\nOperator objective:\n" + originalPrompt
+		}
 	}
 	if request.Assignment != nil && request.Assignment.TaskID != "" && m.storage != nil {
 		task, err := m.workLocked(request.Assignment.TaskID)
@@ -270,6 +283,11 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	// These are trusted operator terminals: use the operator's normal CLI config.
 	// Unlike batch providers, this path makes no confinement or oracle claims.
 	cmd.Env = append(launch.Env, "TERM=xterm-256color", "COLORTERM=truecolor", "TMPDIR="+scratch, "GIT_TRACE2_EVENT="+filepath.Join(scratch, "git.jsonl"), "GIT_TRACE2_EVENT_BRIEF=1", "MITOS_PROJECT_ID="+project, "MITOS_SESSION_ID="+s.ID, "MITOS_URL="+serverURL)
+	// The retry policy travels through the environment so native harness
+	// adapters can execute bounded recovery for transient model failures.
+	if encoded, err := effectiveRetryPolicy(p).Encode(); err == nil {
+		cmd.Env = append(cmd.Env, "MITOS_RETRY_POLICY="+encoded)
+	}
 	if options.Continuation != nil {
 		cmd.Env = append(cmd.Env, "MITOS_PARENT_SESSION_ID="+options.Continuation.SourceID, "MITOS_HANDOVER="+options.Continuation.ContextPath)
 	}
@@ -282,7 +300,7 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 	instructions := filepath.Join(m.dir, s.ID+".md")
 	text := fmt.Sprintf("# Mitos project %s\n\nRole: %s. Working directory: %s.\nUse mitos desk topics to discover relevant topics; read details with mitos desk topic ID.\nUse mitos desk post --topic ID --revision N --body TEXT, follow --topic ID, and jobs.\nUse mitos desk build -- ARGS for a coordinated Cargo build. Builds serialize; joining is explicit with mitos desk join JOB_ID. A joined result does not automatically validate your later edits.\nUse mitos desk resources to inspect the shared directory and current process activity.\nCoordinate shared-file and Git changes through topics. CLI commands outside managed jobs are cooperative and are not intercepted.\nThe orchestrator maintains the plan, publishes topic summaries, and asks the operator for choices outside the brief. It has no additional runtime permissions.\n", p.Name, role, s.Workspace)
 	text += "\nFleet tools: mitos desk agents, inspect-agent --agent ID, sessions, start-session --agent ID --prompt TEXT, send-prompt --prompt TEXT SESSION_ID, and stop-session SESSION_ID. Use --goal ID --task ID --handoff-topic TOPIC_ID on start-session to retain assignment lineage. Native CLI sub-agents are separate from Mitos sessions.\nUse the topic board to report completion with evidence, blockers, or requests for more agents. Before handing off, write your own continuation prompt in a topic: objective, current state, evidence, remaining work, and relevant files. Pass that topic to the next session; a topic reference does not inject its content automatically.\nUse mitos desk resume-session, fork-session, and handover-session with --mode native or context. Use --handoff-topic ID to snapshot your handoff notes. A task-bound handover stops and settles the source before starting its replacement; legacy unbound handovers start the replacement first. A fork leaves the source running. Read MITOS_HANDOVER when present. Record your exact native conversation ID with mitos desk link-session --native-session ID SESSION_ID when it is not already recorded.\nMitos currently supplies fleet tools, not an autonomous scheduler. Terminal prompts are input bytes and are not proof that an agent accepted a direction.\n"
-	text = sessionContext(p, role) + "\nActual session workspace: " + s.Workspace + "\nOrchestrator: " + s.OrchestratorID + "\n\n" + text
+	text = sessionContext(p, role, s.OrchestratorID) + "\nActual session workspace: " + s.Workspace + "\nOrchestrator: " + s.OrchestratorID + "\n\n" + text
 	if err = os.WriteFile(instructions, []byte(text), 0600); err != nil {
 		return m.startFailedLocked(s.ID, err)
 	}
