@@ -184,7 +184,8 @@ func (s *Store) commitWatchDelivery(kind string, w *Watch, d *WatchDelivery, end
 // the delivery feed. A responsibility's or attempt's receipt is queued in its
 // inbox or folded into its digest, and a responsibility's wake registers a
 // graph trigger. Wake and escalate also open or update a Notifications item.
-func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time) ([]routedDelivery, *graphChange, error) {
+// in is the owner's inbox as the record's earlier deliveries leave it.
+func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time, in *watchInbox) ([]routedDelivery, *graphChange, error) {
 	o := d.Owner
 	rd := routedDelivery{}
 	if o.Kind == watch.OwnerOperator {
@@ -194,7 +195,6 @@ func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time) ([]route
 		return []routedDelivery{rd}, nil, nil
 	}
 	d.Generation = s.ownerGeneration(o)
-	in := s.inbox(o)
 	pending := len(in.Pending)
 	out := []routedDelivery{}
 	switch {

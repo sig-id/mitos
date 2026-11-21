@@ -379,3 +379,26 @@ func TestTriageAndOrchestratorCallsAreSeparateAllowances(t *testing.T) {
 		t.Fatalf("triage charged OrchestratorCalls: %d -> %d", g.OrchestratorCalls, after.OrchestratorCalls)
 	}
 }
+
+func TestDegradedNoticeAbsorbsEventsFoldedInTheSameRecord(t *testing.T) {
+	e, g, helper, _ := triageGraph(t, 0)
+	s := e.Store
+	mustWatch(t, s, ownedWatch(responsibility(g), g.ID, []string{"early"}, watch.Digest))
+	late := triagedWatch(g, []string{"late"})
+	late.DefaultLevel = watch.Digest
+	mustWatch(t, s, late)
+	now := time.Now()
+	evidence(t, s, helper, "early")
+	triage(t, e, now.Add(100*time.Millisecond))
+	if in := s.WatchInbox(responsibility(g)); in.Folded.Count != 1 {
+		t.Fatalf("fixture: fold %+v", in.Folded)
+	}
+	// The exhausted allowance folds the group and queues the degraded notice
+	// in one record; the notice must carry both folded events.
+	evidence(t, s, helper, "late")
+	triage(t, e, now.Add(200*time.Millisecond))
+	in := s.WatchInbox(responsibility(g))
+	if len(in.Pending) != 1 || in.Pending[0].Delivery.Kind != "degraded" || in.Pending[0].Absorbed == nil || in.Pending[0].Absorbed.Count != 2 || in.Folded.Receipts != 0 {
+		t.Fatalf("events lost between fold and notice: pending %+v folded %+v", in.Pending, in.Folded)
+	}
+}

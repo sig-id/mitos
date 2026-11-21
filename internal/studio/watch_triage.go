@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -337,20 +338,64 @@ func (s *Store) abandonTriage(watchID string) {
 }
 
 // commitWatchRecord routes deliveries and commits them with wc in one record.
-// At most one graph wake is written per record.
+// Each delivery is routed against the owner's inbox as the earlier ones in
+// the record will leave it, so a later inbox item absorbs what an earlier one
+// folded. At most one graph wake is written per record.
 func (s *Store) commitWatchRecord(kind string, w *Watch, ds []WatchDelivery, wc watchChange, now time.Time) error {
 	var gc *graphChange
+	staged := map[string]*watchInbox{}
 	for _, d := range ds {
-		routed, g, err := s.routeDelivery(d, w, now)
+		var in *watchInbox
+		if d.Owner.Kind != watch.OwnerOperator {
+			in = staged[d.Owner.Key()]
+			if in == nil {
+				in = s.stagedInbox(d.Owner)
+				staged[d.Owner.Key()] = in
+			}
+		}
+		routed, g, err := s.routeDelivery(d, w, now, in)
 		if err != nil {
 			return err
 		}
 		if gc == nil {
 			gc = g
 		}
+		if in != nil {
+			for _, rd := range routed {
+				stageInbox(in, rd, s.watches[rd.Delivery.WatchID].Spec.Grouping.IntervalMS, now)
+			}
+		}
 		wc.Deliveries = append(wc.Deliveries, routed...)
 	}
 	return s.commit("", "effect", kind, change{Watch: &wc, Graph: gc})
+}
+
+// stagedInbox copies an owner's inbox for routing a batch; the store's inbox
+// changes only when the record is applied.
+func (s *Store) stagedInbox(o watch.Owner) *watchInbox {
+	in := &watchInbox{Owner: o}
+	if cur := s.watchInboxes[o.Key()]; cur != nil {
+		*in = *cur
+		in.Pending = slices.Clone(cur.Pending)
+		in.Fold = graphClone(cur.Fold)
+	}
+	return in
+}
+
+// stageInbox mirrors applyInbox on a staged copy.
+func stageInbox(in *watchInbox, rd routedDelivery, interval int64, at time.Time) {
+	switch rd.Delivery.Route {
+	case routeInbox:
+		in.Pending = append(in.Pending, rd.Delivery.ID)
+		if rd.Inbox.Absorbed != nil {
+			in.Fold = WatchFold{}
+		}
+		if rd.Delivery.Kind == "degraded" {
+			in.Degraded = true
+		}
+	case routeFolded:
+		in.Fold.add(&rd.Delivery, interval, at)
+	}
 }
 
 // TriageRequests lists a watch's triage records, newest first.
