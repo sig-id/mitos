@@ -179,7 +179,7 @@ func HandoffTools() []harness.DynamicTool {
 		schema, _ := json.Marshal(orchestratorTypeSchema(spec.typ))
 		out = append(out, harness.DynamicTool{Type: "function", Name: spec.name, Description: spec.description, InputSchema: schema})
 	}
-	return out
+	return append(out, watchHandoffTools()...)
 }
 func decodeHandoff(raw json.RawMessage, v any) error {
 	if len(raw) > 1<<20 {
@@ -249,6 +249,8 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 			return nil, err
 		}
 		return map[string]any{"id": receipt.ID, "run_id": receipt.RunID, "revision": receipt.Revision, "seq": receipt.Seq, "at": receipt.At, "digest": receipt.Digest, "proposal_ids": receipt.ProposalIDs}, nil
+	case "watch_create", "watch_renew", "watch_cancel", "watch_inbox", "delivery_outcome":
+		return e.handoffWatch(run, method, raw)
 	case "artifact_list":
 		var in ArtifactList
 		if err := decodeHandoff(raw, &in); err != nil {

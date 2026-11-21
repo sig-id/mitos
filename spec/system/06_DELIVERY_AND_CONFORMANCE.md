@@ -401,7 +401,8 @@ only operator-owned watches.
 Admit responsibility and attempt owners with scope clamped to the creator's grant.
 Deliver responsibility-owned watches to the owning orchestrator, and attempt-owned
 watches to that attempt, as cooperation `observation` messages. Wake a dormant owner
-through its wait registration.
+through its wait registration, which is the graph trigger written in the receipt's
+journal record ([09 §3](09_WATCHES_AND_TRIAGE.md#3-delivery-levels-and-sinks)).
 Fence deliveries and acknowledgements by responsibility generation. Replace the
 hard inbox limit with folding into a digest plus `watch_degraded`. Add the granted
 `watch_*` and `delivery_outcome` tools with scope clamped to the caller's

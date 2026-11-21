@@ -38,7 +38,8 @@ boundary). Preferences are empty so a definition is portable across eligible nat
 runtimes. These names are target adapter capabilities, not claims about current CLIs.
 
 Capability requests use `workspace.read/write`, `artifact.read/write`, `command.run`,
-`network.read`, `graph.read/propose`, and `agent.specialize`. They are admission inputs,
+`network.read`, `graph.read/propose`, `agent.specialize`, and `watch.manage` (the
+`watch_*` and `delivery_outcome` tools, scoped to the attempt's graph). They are admission inputs,
 not permissions granted by the file. `command.run` can have effects and requires an
 appropriate execution profile; a review prompt is not a command sandbox. Required
 context is supplied by admission; optional context is selected from authorized input

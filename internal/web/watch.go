@@ -11,9 +11,17 @@ import (
 	"mitos/internal/watch"
 )
 
-// watchRoutes expose operator watches (spec 09 §6). Responsibility and attempt
-// owners, and their granted tools, arrive with owner delivery.
+// watchRoutes expose watches (spec 09 §6). The operator creates watches for
+// any owner; responsibility and attempt owners act through granted tools.
 func (s *Server) watchRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/watch-inboxes/{kind}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		owner := watch.Owner{Kind: r.PathValue("kind"), ID: r.PathValue("id")}
+		if owner.Kind != watch.OwnerResponsibility && owner.Kind != watch.OwnerAttempt {
+			writeJSON(w, 400, map[string]string{"error": "owner kind must be responsibility or attempt"})
+			return
+		}
+		writeJSON(w, 200, s.engine.Store.WatchInbox(owner))
+	})
 	mux.HandleFunc("POST /api/watches", func(w http.ResponseWriter, r *http.Request) {
 		var spec watch.Spec
 		if !watchBody(w, r, &spec) {
@@ -75,12 +83,20 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, v)
 	})
-	mux.HandleFunc("POST /api/deliveries/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/watches/{id}/items", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Store.WatchItems(r.PathValue("id"))
+		if err != nil {
+			watchError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("POST /api/watch-items/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.engine.Store.ResolveWatchItem(r.PathValue("id")); err != nil {
 			watchError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]string{"item_state": "resolved"})
+		writeJSON(w, 200, map[string]string{"state": "resolved"})
 	})
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"mitos/internal/apiversion"
@@ -17,7 +18,7 @@ import (
 
 func watchClient(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
-		fmt.Println("mitos watch <create|list|show|renew|cancel|deliveries|resolve> [flags]\nUse create --file watch.json (mitos.watch/v1, operator owner).\nUse show, renew --expires RFC3339, cancel or deliveries with --id WATCH_ID.\nUse resolve --delivery DELIVERY_ID to close an open Notifications item.")
+		fmt.Println("mitos watch <create|list|show|renew|cancel|deliveries|items|resolve|inbox> [flags]\nUse create --file watch.json (mitos.watch/v1; operator, responsibility or attempt owner).\nUse show, renew --expires RFC3339, cancel, deliveries or items with --id WATCH_ID.\nUse resolve --item ITEM_ID to close an open Notifications item.\nUse inbox --owner responsibility:GRAPH_ID or attempt:RUN_ID to read an owner's pending deliveries.")
 		return nil
 	}
 	action := args[0]
@@ -29,7 +30,8 @@ func watchClient(args []string) error {
 	endpoint := f.String("url", base, "Local Mitos HTTP URL")
 	file := f.String("file", "", "Watch specification JSON file (create)")
 	id := f.String("id", "", "Watch ID")
-	delivery := f.String("delivery", "", "Delivery ID (resolve)")
+	item := f.String("item", "", "Notifications item ID (resolve)")
+	owner := f.String("owner", "", "Owner as responsibility:GRAPH_ID or attempt:RUN_ID (inbox)")
 	expires := f.String("expires", "", "New lease expiry, RFC3339, at most 24 hours away (renew)")
 	limit := f.Int("limit", 50, "Maximum deliveries to list (1–500)")
 	server := f.String("server", "", "Expected home server identity")
@@ -91,11 +93,22 @@ func watchClient(args []string) error {
 			return err
 		}
 		path += fmt.Sprintf("/%s/deliveries?limit=%d", url.PathEscape(*id), *limit)
-	case "resolve":
-		if *delivery == "" {
-			return errors.New("resolve requires --delivery")
+	case "items":
+		if err := needID(); err != nil {
+			return err
 		}
-		method, path = "POST", "/api/deliveries/"+url.PathEscape(*delivery)+"/resolve"
+		path += "/" + url.PathEscape(*id) + "/items"
+	case "resolve":
+		if *item == "" {
+			return errors.New("resolve requires --item")
+		}
+		method, path = "POST", "/api/watch-items/"+url.PathEscape(*item)+"/resolve"
+	case "inbox":
+		kind, ownerID, ok := strings.Cut(*owner, ":")
+		if !ok || ownerID == "" {
+			return errors.New("inbox requires --owner responsibility:GRAPH_ID or attempt:RUN_ID")
+		}
+		path = "/api/watch-inboxes/" + url.PathEscape(kind) + "/" + url.PathEscape(ownerID)
 	default:
 		return fmt.Errorf("unknown watch operation %q", action)
 	}

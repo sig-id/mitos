@@ -60,7 +60,10 @@ type Store struct {
 	watches                map[string]*Watch
 	watchDeliveries        map[string]*WatchDelivery
 	watchOrder             map[string][]string
-	watchItems             map[string]string
+	watchItems             map[string]*WatchItem
+	watchOpenItems         map[string]string
+	watchInboxes           map[string]*watchInbox
+	inboxEntries           map[string]*InboxEntry
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord
@@ -225,6 +228,11 @@ func (s *Store) apply(e Event) error {
 	if c.Graph != nil {
 		if err := s.applyGraph(e, c.Graph); err != nil {
 			return err
+		}
+		// A watch wake writes its graph trigger and its receipt in one record;
+		// that record is a watch event and is never itself observed by watches.
+		if c.Watch != nil {
+			return s.applyWatch(e, c.Watch)
 		}
 		if e.RunID == "" {
 			// Graph-level events carry no run, so the graph itself scopes the
@@ -600,6 +608,7 @@ func (s *Store) apply(e Event) error {
 		return err
 	}
 	s.observeWatches(s.runFact(e, r, c))
+	s.settleAttemptWatches(e, r)
 	return nil
 }
 

@@ -14,7 +14,9 @@ Requirements are targets until gates W1–W4 record evidence. Rationale is in
 | Watch | A durable, leased subscription evaluated by the runtime over the journal |
 | Owner | The responsibility or operator that receives a watch's deliveries |
 | Group | The events of one watch, within one group key, that are delivered together |
-| Delivery | One graded, receipted notice to an owner, referencing contributing events |
+| Delivery | One immutable, graded receipt for an owner, referencing contributing events and recording where it was routed |
+| Inbox item | A delivery queued in a responsibility's or attempt's inbox, pending until the owner records its outcome |
+| Operator item | A Notifications item opened by one delivery and updated by later ones for the same watch and group key |
 | Triage | The decision-model role that selects a delivery level for a group |
 
 ## 1. Watch record
@@ -26,7 +28,7 @@ unversioned form.
 {
   "version": "mitos.watch/v1",
   "id": "watch_…",
-  "owner": {"kind": "responsibility", "id": "responsibility_…"},
+  "owner": {"kind": "responsibility", "id": "graph_…"},
   "description": "integration failures in the payments graph",
   "cursor": 18231,
   "condition": {
@@ -43,10 +45,18 @@ unversioned form.
 ```
 
 - **Owner.** A responsibility, an attempt, or the operator. Watches MUST NOT belong
-  to a session. A responsibility's watches survive orchestrator replacement, and every
-  delivery binds the responsibility generation current when it is written. An attempt's
-  watches are clamped to that attempt's grant and end when the attempt settles,
-  whatever their lease. This mirrors agent-owned monitors that stop with their agent.
+  to a session. A responsibility is an adaptive graph's supervisory responsibility,
+  addressed by the graph ID (the same address as its mailbox); its generation is the
+  graph's orchestrator generation. A defined graph has no orchestrator and admits no
+  responsibility owner. An attempt is one graph run. A responsibility's watches survive
+  orchestrator replacement, and every delivery binds the responsibility generation
+  current when it is written. An attempt's watches are clamped to that attempt's grant
+  and end when the attempt settles (completes, fails or is cancelled), whatever their
+  lease. This mirrors agent-owned monitors that stop with their agent.
+- **Grant.** A responsibility or attempt owner may watch only its own graph. The
+  runtime records that grant on the watch and clamps the scope to it: an unset project
+  or graph is filled from the grant, and a conflicting value is refused. Closing the
+  graph (accepted, cancelled or failed) revokes the grant.
 - **Multiplicity.** Owners and watches are one-to-many, and watches and events are
   many-to-many. An owner holds at most 32 active watches, and the operator at most 256.
   When an event matches several watches of the same owner, the owner receives it once.
@@ -111,21 +121,56 @@ events.
 | `wake` | Appended to the inbox and wakes the owner through its wait registration |
 | `escalate` | `wake`, plus an operator item in the Notifications surface |
 
-For operator-owned watches, `digest` and `notify` deliveries go to the watch's
-delivery feed, and `wake` and `escalate` deliveries open Notifications items.
+Every delivery is a receipt with one route: `feed` (the operator's delivery feed),
+`inbox` (an inbox item for a responsibility or attempt), or `folded` (counted into
+that owner's digest and never queued). A delivery may also open or update an operator
+item and records that item's ID. The receipt never changes after it is written. Item
+state (open, resolved, superseded) and inbox state (pending, outcome) are separate
+records, keyed by their own ID and by delivery ID respectively, and they are written
+in the same journal record as the receipt.
 
-The responsibility inbox becomes a bounded queue of delivery receipts. When it
-reaches its capacity, further `notify` deliveries fold into the pending digest, and
-a single `watch_degraded` notice records the fold. `wake` and `escalate` deliveries
-still wake their owner, carrying the folded count. The previous hard "inbox is full"
-error MUST NOT apply to watch deliveries.
+For operator-owned watches, every delivery goes to the delivery feed, and `wake` and
+`escalate` deliveries also open or update operator items. For other owners, `escalate`
+deliveries also open or update operator items.
+
+**Wait registration.** A responsibility is dormant between planning rounds: no
+session waits on it. Its wait registration is the graph trigger, the same durable
+record that run outcomes use to reopen planning. A `wake` or `escalate` delivery
+writes a graph trigger in the same journal record as its receipt. The kernel opens
+the next planning round from that trigger and classifies it when the round's plan is
+applied. A wake is therefore never lost to a restart or to orchestrator replacement,
+and it is applied once. The planning round's context ends with a compact summary of
+the pending deliveries: counts by level, the digest totals, and as many of the
+newest receipts (at most eight) as the context limit leaves room for. The summary
+never prevents a planning round from starting; the complete receipts stay available
+through `watch_inbox`. An attempt owner is live while it owns watches, because they
+end when it settles. For an attempt, a wake is the inbox append, which the attempt
+reads with `watch_inbox`. The S4 task-input wait applies only to structured-worker
+attempts and does not carry watch deliveries.
+
+Each responsibility and attempt owner has a bounded inbox of delivery receipts in
+the journal. This is separate from the interactive workspace's responsibility notes.
+- `digest` deliveries are always folded into the pending digest.
+- When the inbox holds 64 queued receipts, further `notify` deliveries fold too. A
+  single `watch_degraded` notice, exempt from the capacity, records each fold episode.
+- `wake` and `escalate` deliveries keep queueing up to 128 receipts. Beyond that they
+  fold too, but they still wake their owner.
+- Any inbox item carries the pending digest and clears it.
+- A digest that nothing has carried is delivered after the shortest `interval_ms`
+  among the watches folded into it. The digest keeps that interval, so it is still
+  delivered after those watches end.
+
+The previous hard "inbox is full" error MUST NOT apply to watch deliveries.
 
 The owner receives deliveries as `mitos.cooperation/v2` `observation` messages
 bound to responsibility, generation, watch, sequence range and level. Delivered text
 is evidence. It MUST be presented as untrusted data, and it cannot carry
-instructions, grants or tool calls. A session that has been replaced cannot
-acknowledge a delivery addressed to a later generation, and a stale acknowledgement
-is rejected.
+instructions, grants or tool calls. The runtime renders receipt fields itself and
+places the author's description in a field marked untrusted. Reading deliveries
+writes nothing. A delivery is acknowledged by recording its outcome. For a
+responsibility, the acknowledgement must carry the current orchestrator generation:
+a replaced orchestrator's acknowledgement is rejected as stale. Repeating the same
+outcome is idempotent, and a different second outcome is rejected.
 
 Operator items are bounded the way kernel judgments bound operator cards. An
 `escalate` delivery for a watch and group key that already has an open operator item
@@ -207,12 +252,17 @@ outcomes, and triage calls used.
 
 - HTTP: `POST /api/watches`, `GET /api/watches/{id}`, `POST /api/watches/{id}/renew`,
   `POST /api/watches/{id}/cancel`, `GET /api/watches/{id}/deliveries`,
-  `POST /api/deliveries/{id}/resolve` (closes an open Notifications item), and
-  `POST /api/deliveries/{id}/outcome` (W4). All require the `Mitos-API-Version`
+  `GET /api/watches/{id}/items`, `POST /api/watch-items/{id}/resolve` (closes an
+  open operator item), and `POST /api/deliveries/{id}/outcome` (W4; settles an inbox
+  item). All require the `Mitos-API-Version`
   header. Unknown request fields are refused.
-- Orchestrator tools (granted only): `watch_create`, `watch_renew`, `watch_cancel`,
-  `delivery_outcome`. Their scope is clamped to the caller's responsibility.
-- CLI: `mitos watch create|list|show|renew|cancel|deliveries|resolve`.
+- `GET /api/watch-inboxes/{responsibility|attempt}/{id}`: an owner's pending
+  deliveries and digest, read-only.
+- Agent tools, granted by the `watch.manage` capability only: `watch_create`,
+  `watch_renew`, `watch_cancel`, `watch_inbox`, `delivery_outcome`. Their scope is
+  clamped to the caller's graph. Only the current orchestrator generation acts for
+  the responsibility, and any attempt may own watches for itself.
+- CLI: `mitos watch create|list|show|renew|cancel|deliveries|items|resolve|inbox`.
 
 ## 7. Out of scope for v1
 
