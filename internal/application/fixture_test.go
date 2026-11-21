@@ -49,6 +49,19 @@ func (p *fixtureProcess) stop() {
 	}
 	_ = p.log.Close()
 }
+
+// fixtureDir is a short per-test directory. t.TempDir embeds the test name,
+// which can push the runtime's Unix socket paths past the kernel's sun_path
+// limit (108 bytes on Linux), so the authority fails to start.
+func fixtureDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "mitos-fx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 func fixtureAddress(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -136,7 +149,7 @@ func runIndependentApplicationCrashMatrix(t *testing.T, remoteWorker bool, point
 	}
 	for _, point := range points {
 		t.Run(point, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := fixtureDir(t)
 			data := filepath.Join(dir, "runtime")
 			workspace := filepath.Join(dir, "workspace")
 			bin := filepath.Join(dir, "bin")

@@ -38,6 +38,10 @@ func StartEgressRelay(path string, allowed []string) (*EgressRelay, error) {
 	return startEgressRelay(path, allowed, nil)
 }
 
+// maxSocketPath is the smallest sun_path size among supported hosts (macOS,
+// 104 bytes including the terminator; Linux allows 108).
+const maxSocketPath = 104
+
 func startEgressRelay(path string, allowed []string, dial egressDialer) (*EgressRelay, error) {
 	if !filepath.IsAbs(path) || len(allowed) == 0 {
 		return nil, errors.New("egress relay needs an absolute socket path and allowlist")
@@ -51,6 +55,10 @@ func startEgressRelay(path string, allowed []string, dial egressDialer) (*Egress
 	}
 	listener, err := net.Listen("unix", path)
 	if err != nil {
+		if len(path) >= maxSocketPath {
+			// The kernel's bind error (EINVAL) does not name the cause.
+			return nil, fmt.Errorf("egress socket path is %d bytes, beyond the %d-byte Unix socket limit; use a shorter data directory: %w", len(path), maxSocketPath-1, err)
+		}
 		return nil, err
 	}
 	if err = os.Chmod(path, 0o600); err != nil {
