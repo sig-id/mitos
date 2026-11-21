@@ -8,7 +8,7 @@
   const api=window.MitosConnection.request;
   const endpoint=s=>`/api/projects/${project}/${s}`, terminal=s=>`/workspace?project=${project}&session=${s.id}&view=terminal`;
   const button=(text,fn)=>{const b=el('button',text);b.type='button';b.onclick=()=>Promise.resolve().then(fn).catch(fail);return b;};
-  let snapshot, signature='', graphSignature='', profileRevision=0, selectedAssignment='', alive=true, reviewDraft=null, setupKey='', setupPayload='', outputDraft='', outputStatus='';
+  let snapshot, signature='', graphSignature='', profileRevision=0, selectedAssignment='', alive=true, reviewDraft=null, setupKey='', setupPayload='', outputDraft='', outputStatus='', profileRetryPolicy=null;
   const reviewKey=id=>`mitos:review:${project}:${id}`;
   function reviewed(draft){
     if(!draft)return null;
@@ -18,6 +18,10 @@
   function showProfile(draft=null){
     if(!snapshot)return;
     const f=$('profile-form'), p=draft?(reviewed(draft)?.profile||draft.profile):snapshot.profile;
+    // The form edits guidance and launch limits only; carry the configured
+    // retry policy through so saving the form cannot silently revert
+    // recovery settings to the defaults.
+    profileRetryPolicy=p.retry_policy||null;
     reviewDraft=draft;profileRevision=draft?draft.base_revision:p.revision;
     $('profile-dialog-title').textContent=draft?'Review context & set a goal':'Project profile';
     $('profile-introduction').textContent=draft?'Continue to the final launch step when you are ready.':'Changes apply to this project’s agents.';
@@ -30,6 +34,7 @@
   if($('return-to-setup'))$('return-to-setup').onclick=()=>$('tab-coordination').click();
   async function submit(form,fn){form.addEventListener('submit',async e=>{e.preventDefault();const b=form.querySelector('[type=submit]'),error=form.querySelector('.form-error');b.disabled=true;error.textContent='';try{await fn(Object.fromEntries(new FormData(form)));}catch(e){error.textContent=e.message;}finally{b.disabled=false;}});}
   submit($('profile-form'),async value=>{
+    if(profileRetryPolicy)value.retry_policy=profileRetryPolicy;
     value.temp_paths=value.temp_paths.split('\n').map(s=>s.trim()).filter(Boolean);
     value.max_agents=Number(value.max_agents);value.min_free_mb=Number(value.min_free_mb);
     if(reviewDraft){sessionStorage.setItem(reviewKey(reviewDraft.id),JSON.stringify({profile:value,revision:profileRevision}));$('profile-dialog').close();render();return;}
