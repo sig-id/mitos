@@ -372,9 +372,6 @@ func (s *Store) CreateWatch(spec watch.Spec) (Watch, error) {
 
 func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, error) {
 	now := time.Now().UTC()
-	if err := spec.Validate(now); err != nil {
-		return Watch{}, err
-	}
 	grant, err := s.ownerGrant(spec.Owner)
 	if err != nil {
 		return Watch{}, err
@@ -389,6 +386,10 @@ func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, err
 		if *f.field == "" {
 			*f.field = f.value
 		}
+	}
+	// Validate after clamping: an owner watch may leave its scope to the grant.
+	if err := spec.Validate(now); err != nil {
+		return Watch{}, err
 	}
 	if !scope.Within(grant) {
 		return Watch{}, errors.New("condition.scope must stay within the owner's graph")

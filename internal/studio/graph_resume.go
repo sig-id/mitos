@@ -237,17 +237,13 @@ func (s *Store) refreshResumedOrchestrator(g *WorkGraph, m *GraphMember) (bool, 
 	context["instruction"] = orchestratorInstructions
 	context["execution_policy"] = graphExecution(g)
 	context["plan_prefix"] = map[string]any{"bytes": prefixBytes, "sha256": prefixSHA}
-	delete(context, "watch_inbox")
-	if watchInbox := s.planningWatchInbox(g); watchInbox != nil {
-		context["watch_inbox"] = watchInbox
-	}
-	raw, err := json.Marshal(context)
-	if err != nil {
-		return false, err
-	}
 	limit := graphContextLimit(g)
 	if g.Policy.Automatic {
 		limit = orchestratorPlanLimit
+	}
+	raw, err := s.withWatchInbox(context, g, limit)
+	if err != nil {
+		return false, err
 	}
 	if len(raw) > limit {
 		return false, graphError("resumed orchestrator context exceeds its limit")

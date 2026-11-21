@@ -103,6 +103,12 @@ func TestOwnerScopeIsClampedToItsGraph(t *testing.T) {
 	if w.Grant.Graph != g.ID || w.Grant.Project != g.ProjectID {
 		t.Fatalf("grant not recorded: %+v", w.Grant)
 	}
+	// An operator may leave an owner watch's scope to the owner's grant.
+	open := scopedWatch(watch.Scope{}, nil, watch.Notify)
+	open.Owner = responsibility(g)
+	if w = mustWatch(t, s, open); w.Spec.Condition.Scope.Graph != g.ID || w.Spec.Condition.Scope.Project != g.ProjectID {
+		t.Fatalf("an unset scope was not filled from the grant: %+v", w.Spec.Condition.Scope)
+	}
 	wide := scopedWatch(watch.Scope{Project: g.ProjectID}, nil, watch.Notify)
 	wide.Owner = responsibility(g)
 	if w = mustWatch(t, s, wide); w.Spec.Condition.Scope.Graph != g.ID {
@@ -347,6 +353,50 @@ func TestDigestLevelFoldsAndFlushesAtInterval(t *testing.T) {
 	}
 	if got := deliveries(t, s, w.ID); len(got) != 2 {
 		t.Fatalf("receipts %+v", got)
+	}
+}
+
+func TestDigestFlushesAfterItsLastWatchEnds(t *testing.T) {
+	e, g, _, helper := ownerGraph(t)
+	s := e.Store
+	w := mustWatch(t, s, ownedWatch(responsibility(g), g.ID, []string{"note"}, watch.Digest))
+	evidence(t, s, helper, "note")
+	now := time.Now()
+	evaluate(t, s, now.Add(100*time.Millisecond))
+	if err := s.CancelWatch(w.ID); err != nil {
+		t.Fatal(err)
+	}
+	evaluate(t, s, now.Add(5*time.Second))
+	in := s.WatchInbox(responsibility(g))
+	if len(in.Pending) != 1 || in.Pending[0].Delivery.Kind != "digest" || in.Pending[0].Delivery.Count != 1 || in.Folded.Receipts != 0 {
+		t.Fatalf("folded events stranded after the last watch ended: %+v", in)
+	}
+}
+
+func TestPlanningInboxSummaryFitsTheContextBudget(t *testing.T) {
+	e, g, _, helper := ownerGraph(t)
+	s := e.Store
+	notify := ownedWatch(responsibility(g), g.ID, nil, watch.Notify)
+	notify.Grouping.By = []string{"kind"}
+	mustWatch(t, s, notify)
+	for i := range ownerInboxCapacity {
+		evidence(t, s, helper, fmt.Sprintf("signal_%03d_%s", i, strings.Repeat("x", 53)))
+	}
+	evaluate(t, s, time.Now().Add(time.Second))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	limit := graphContextLimit(&g)
+	for _, filler := range []int{0, limit / 2, limit - 600, limit - 120} {
+		raw, err := s.withWatchInbox(map[string]any{"graph_id": g.ID, "facts": strings.Repeat("f", filler)}, &g, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) > limit {
+			t.Fatalf("filler %d: a full inbox pushed the context to %d bytes, limit %d", filler, len(raw), limit)
+		}
+		if filler < limit/2 && !strings.Contains(string(raw), `"recent"`) {
+			t.Fatalf("filler %d: the summary dropped receipts that fit: %s", filler, raw)
+		}
 	}
 }
 

@@ -140,7 +140,10 @@ writes a graph trigger in the same journal record as its receipt. The kernel ope
 the next planning round from that trigger and classifies it when the round's plan is
 applied. A wake is therefore never lost to a restart or to orchestrator replacement,
 and it is applied once. The planning round's context ends with a compact summary of
-the pending deliveries. An attempt owner is live while it owns watches, because they
+the pending deliveries: counts by level, the digest totals, and as many of the
+newest receipts (at most eight) as the context limit leaves room for. The summary
+never prevents a planning round from starting; the complete receipts stay available
+through `watch_inbox`. An attempt owner is live while it owns watches, because they
 end when it settles. For an attempt, a wake is the inbox append, which the attempt
 reads with `watch_inbox`. The S4 task-input wait applies only to structured-worker
 attempts and does not carry watch deliveries.
@@ -153,8 +156,9 @@ the journal. This is separate from the interactive workspace's responsibility no
 - `wake` and `escalate` deliveries keep queueing up to 128 receipts. Beyond that they
   fold too, but they still wake their owner.
 - Any inbox item carries the pending digest and clears it.
-- A digest that nothing has carried is delivered after the owner's shortest
-  `interval_ms`.
+- A digest that nothing has carried is delivered after the shortest `interval_ms`
+  among the watches folded into it. The digest keeps that interval, so it is still
+  delivered after those watches end.
 
 The previous hard "inbox is full" error MUST NOT apply to watch deliveries.
 
