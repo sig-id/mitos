@@ -109,6 +109,16 @@ export default function (pi) {
     failure = null;
   }
 
+  // A scheduled recovery that will not run must not leave the persisted
+  // retry_scheduled state advertising a retry that never comes: report the
+  // cancellation so the manager clears retry state while the provider-error
+  // evidence stays recorded.
+  function cancelRecovery(ctx) {
+    if (!failure) return;
+    report({ state: 'error', error: failure.message, http_code: failure.code, model: currentModel(ctx), ...usageBody() });
+    clearFailure();
+  }
+
   async function recover(ctx) {
     const decision = decide(policy, failure);
     if (decision.action === 'retry') {
@@ -119,7 +129,7 @@ export default function (pi) {
       retryTimer = setTimeout(() => {
         retryTimer = null;
         if (stopped || !failure || failure !== pending) return;
-        if (!ctx.isIdle()) { clearFailure(); return; } // the operator took over
+        if (!ctx.isIdle()) { cancelRecovery(ctx); return; } // the operator took over
         pi.sendMessage({ customType: 'mitos-retry', content: `Automatic retry ${next} of ${policy.max_attempts} after a transient model-provider failure (HTTP ${failure.code}). Continue the interrupted work from where the last attempt stopped; do not restart completed steps.`, display: true }, { deliverAs: 'steer', triggerTurn: true });
       }, decision.delayMs);
       return;
@@ -137,7 +147,7 @@ export default function (pi) {
         failure.fallbackIndex += 1;
         retryTimer = setTimeout(() => {
           retryTimer = null;
-          if (stopped || !failure || !ctx.isIdle()) { if (failure) clearFailure(); return; }
+          if (stopped || !failure || !ctx.isIdle()) { if (failure) cancelRecovery(ctx); return; }
           pi.sendMessage({ customType: 'mitos-retry', content: `The previous model exhausted its retry budget, so Mitos switched this session to ${decision.model}. Continue the interrupted work from where the last attempt stopped; do not restart completed steps.`, display: true }, { deliverAs: 'steer', triggerTurn: true });
         }, backoffMs(policy, 1));
         return;
@@ -151,7 +161,7 @@ export default function (pi) {
   }
 
   pi.on('session_start', () => { stopped = false; seen.clear(); clearInterval(timer); timer = setInterval(() => refresh().catch(() => {}), 1000); refresh().catch(() => {}); });
-  pi.on('session_shutdown', () => { stopped = true; clearInterval(timer); clearFailure(); });
+  pi.on('session_shutdown', (_event, ctx) => { stopped = true; clearInterval(timer); cancelRecovery(ctx); });
   pi.on('message_end', async (event, ctx) => {
     const message = event.message;
     if (!message || message.role !== 'assistant') return;

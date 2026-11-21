@@ -39,7 +39,9 @@ Semantics:
 - Errors without an HTTP code, and non-transient codes, are surfaced to the
   operator without automatic retry. Operator aborts (Escape/interrupt) are
   never retried.
-- A scheduled retry is dropped if the operator takes over the terminal first.
+- A scheduled retry is dropped if the operator takes over the terminal first,
+  and the drop is reported so persisted retry state clears while the
+  provider-error evidence remains.
 
 Retries steer a visible continuation message into the session; recovery never
 runs hidden. The policy is guidance executed in the agent process, not an

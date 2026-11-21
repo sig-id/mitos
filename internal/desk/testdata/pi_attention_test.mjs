@@ -58,7 +58,8 @@ const retryServer=createServer(async(req,res)=>{res.setHeader('Content-Type','ap
 await new Promise(r=>retryServer.listen(0,'127.0.0.1',r));
 process.env.MITOS_URL=`http://127.0.0.1:${retryServer.address().port}`;
 process.env.MITOS_RETRY_POLICY=JSON.stringify({backoff_seconds:1,backoff_multiplier:1,max_attempts:2,fallback_models:['zai/glm-5.3-flash'],transient_codes:[429,503]});
-const retryCtx={model:{provider:'zai',id:'glm-5.3'},modelRegistry:{find:(provider,id)=>({provider,id})},isIdle:()=>true};
+let operatorBusy=false;
+const retryCtx={model:{provider:'zai',id:'glm-5.3'},modelRegistry:{find:(provider,id)=>({provider,id})},isIdle:()=>!operatorBusy};
 extension({on:(name,fn)=>retryEvents[name]=fn,sendMessage:(body,options)=>retryMessages.push({body,options}),setModel:async model=>{switchedTo=`${model.provider}/${model.id}`;return true;}});
 try{
   retryEvents.session_start();
@@ -100,6 +101,18 @@ try{
   // bucket and never relabels the original model's totals.
   await retryEvents.message_end({message:{role:'assistant',stopReason:'stopReasonNone',usage:{input:50,output:10}}},{...retryCtx,model:{provider:'zai',id:'glm-5.3-flash'}});
   await wait(()=>reports.some(r=>r.state==='healthy'&&r.usage&&r.usage['zai/glm-5.3']?.input_tokens===100&&r.usage['zai/glm-5.3-flash']?.input_tokens===50));
+  // An operator turn that spans the backoff window cancels the scheduled
+  // retry: a cancellation report clears the persisted retry_scheduled state
+  // while keeping the provider error, and no retry steer is delivered.
+  operatorBusy=true;
+  await retryEvents.message_end({message:{role:'assistant',stopReason:'error',errorMessage:'429: usage limit'}},retryCtx);
+  await retryEvents.agent_settled({aborted:false},retryCtx);
+  await wait(()=>reports.some(r=>r.state==='retry_scheduled'&&r.http_code===429));
+  const steersBeforeCancel=retryMessages.length;
+  await new Promise(r=>setTimeout(r,1300)); // backoff timer fires mid-operator-turn
+  await wait(()=>{const sched=reports.map(r=>r.state).lastIndexOf('retry_scheduled');return sched>=0&&reports.slice(sched+1).some(r=>r.state==='error'&&r.http_code===429);});
+  assert.equal(retryMessages.length,steersBeforeCancel,'cancelled retry must not steer');
+  operatorBusy=false;
   // Serialized reports preserve emission order even when an early request is
   // slow: the error state must be persisted before the scheduled retry.
   assert.ok(reports.findIndex(r=>r.state==='error'&&r.http_code===429)<reports.findIndex(r=>r.state==='retry_scheduled'),'reports reordered');
