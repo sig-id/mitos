@@ -14,6 +14,46 @@ type Project struct {
 	Directory string         `json:"directory"`
 	CreatedAt time.Time      `json:"created_at"`
 }
+type AgentError struct {
+	Code    int       `json:"http_code,omitempty"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+}
+
+type RetryState struct {
+	Status      string     `json:"status"` // scheduled, switched, or exhausted
+	Attempt     int        `json:"attempt"`
+	MaxAttempts int        `json:"max_attempts"`
+	Model       string     `json:"model,omitempty"`
+	NextModel   string     `json:"next_model,omitempty"`
+	RetryAt     *time.Time `json:"retry_at,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type ModelUsage struct {
+	Model             string    `json:"model"`
+	InputTokens       int64     `json:"input_tokens"`
+	CachedInputTokens int64     `json:"cached_input_tokens"`
+	CacheWriteTokens  int64     `json:"cache_write_tokens"`
+	OutputTokens      int64     `json:"output_tokens"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// AgentStatusReport is the bounded status a native session's harness adapter
+// reports. It is telemetry from inside the agent process, not a trust claim:
+// the fields describe the harness's own model calls and recovery decisions.
+type AgentStatusReport struct {
+	State          string      `json:"state"` // healthy, retry_scheduled, model_switched, retry_exhausted, error
+	Error          string      `json:"error,omitempty"`
+	HTTPCode       int         `json:"http_code,omitempty"`
+	Attempt        int         `json:"attempt,omitempty"`
+	MaxAttempts    int         `json:"max_attempts,omitempty"`
+	RetryInSeconds int         `json:"retry_in_seconds,omitempty"`
+	Model          string      `json:"model,omitempty"`
+	NextModel      string      `json:"next_model,omitempty"`
+	Usage          *ModelUsage `json:"usage,omitempty"`
+}
+
 type Session struct {
 	Bridge             bool                 `json:"bridge,omitempty"`
 	TaskID             string               `json:"task_id,omitempty"`
@@ -35,6 +75,9 @@ type Session struct {
 	ProfileID          string               `json:"profile_id,omitempty"`
 	NamePending        bool                 `json:"name_pending,omitempty"`
 	Scratch            string               `json:"scratch,omitempty"`
+	AgentError         *AgentError          `json:"agent_error,omitempty"`
+	Retry              *RetryState          `json:"retry_state,omitempty"`
+	Usage              *ModelUsage          `json:"model_usage,omitempty"`
 	ID                 string               `json:"id"`
 	ProjectID          string               `json:"project_id"`
 	Name               string               `json:"name"`

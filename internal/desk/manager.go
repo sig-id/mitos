@@ -306,6 +306,85 @@ func (m *Manager) Session(id string) (Session, error) {
 	}
 	return cloneSession(*s), nil
 }
+
+// AgentStatus records one harness-reported status update from a native
+// session. Reports are bounded telemetry: they never change session status,
+// never launch processes, and are accepted for stopped sessions so shutdown
+// races do not discard final evidence.
+func (m *Manager) AgentStatus(id string, report AgentStatusReport) error {
+	if err := validateAgentStatusReport(report); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, err := m.sessionLocked(id)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	switch report.State {
+	case "healthy":
+		s.AgentError, s.Retry = nil, nil
+	case "retry_scheduled":
+		if report.Error != "" {
+			s.AgentError = &AgentError{Code: report.HTTPCode, Message: report.Error, At: now}
+		}
+		retryAt := now.Add(time.Duration(report.RetryInSeconds) * time.Second)
+		s.Retry = &RetryState{Status: "scheduled", Attempt: report.Attempt, MaxAttempts: report.MaxAttempts, Model: report.Model, RetryAt: &retryAt, UpdatedAt: now}
+	case "model_switched":
+		s.Retry = &RetryState{Status: "switched", Attempt: report.Attempt, MaxAttempts: report.MaxAttempts, Model: report.Model, NextModel: report.NextModel, UpdatedAt: now}
+	case "retry_exhausted":
+		if report.Error != "" {
+			s.AgentError = &AgentError{Code: report.HTTPCode, Message: report.Error, At: now}
+		}
+		s.Retry = &RetryState{Status: "exhausted", Attempt: report.Attempt, MaxAttempts: report.MaxAttempts, Model: report.Model, UpdatedAt: now}
+	case "error":
+		s.AgentError = &AgentError{Code: report.HTTPCode, Message: report.Error, At: now}
+		s.Retry = nil
+	}
+	if report.Usage != nil {
+		s.Usage = report.Usage
+	}
+	if err := m.saveLocked(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAgentStatusReport(report AgentStatusReport) error {
+	switch report.State {
+	case "healthy", "retry_scheduled", "model_switched", "retry_exhausted", "error":
+	default:
+		return errors.New("unknown agent status state")
+	}
+	if len(report.Error) > 2000 || strings.ContainsRune(report.Error, 0) {
+		return errors.New("agent status error text exceeds 2000 bytes")
+	}
+	if report.Attempt < 0 || report.Attempt > 100 || report.MaxAttempts < 0 || report.MaxAttempts > 100 {
+		return errors.New("agent status attempt counts out of range")
+	}
+	if report.RetryInSeconds < 0 || report.RetryInSeconds > 86400 {
+		return errors.New("agent status retry delay out of range")
+	}
+	if report.HTTPCode < 0 || report.HTTPCode > 599 {
+		return errors.New("agent status HTTP code out of range")
+	}
+	for _, model := range []string{report.Model, report.NextModel} {
+		if len(model) > 128 || strings.ContainsAny(model, " \t\r\n\x00") {
+			return errors.New("agent status model name is invalid")
+		}
+	}
+	if report.Usage != nil {
+		u := report.Usage
+		if len(u.Model) > 128 || strings.ContainsAny(u.Model, " \t\r\n\x00") {
+			return errors.New("agent status usage model is invalid")
+		}
+		if u.InputTokens < 0 || u.CachedInputTokens < 0 || u.CacheWriteTokens < 0 || u.OutputTokens < 0 || u.InputTokens > 1e15 || u.OutputTokens > 1e15 {
+			return errors.New("agent status usage counters out of range")
+		}
+	}
+	return nil
+}
 func (m *Manager) outputPath(id string) string { return filepath.Join(m.dir, id+".output") }
 func (m *Manager) ReadOutput(id string, offset int64) (Output, error) {
 	m.mu.Lock()

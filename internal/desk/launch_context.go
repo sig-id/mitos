@@ -18,6 +18,47 @@ import (
 //go:embed pi_attention.mjs
 var piAttention []byte
 
+// sessionFilter excludes sessions that must not be adopted as orchestrator:
+// the launching session itself and the source of a handover continuation.
+type sessionFilter struct {
+	selfID         string
+	handoverSource string
+}
+
+func handoverSourceOf(s *Session) string {
+	if s.Continuation != nil && s.Continuation.Kind == "handover" {
+		return s.Continuation.SourceID
+	}
+	return ""
+}
+
+// resolveOrchestratorLocked determines the orchestrator a session reports
+// to: an assignment names the requesting parent directly, otherwise agents
+// adopt the project's active orchestrator. A non-empty current value is kept.
+func (m *Manager) resolveOrchestratorLocked(p Project, role string, assignment *agentcli.Assignment, filter sessionFilter, current string) string {
+	if assignment != nil && assignment.RequestedBy != "" && assignment.RequestedBy != "operator" {
+		if parent, err := m.sessionLocked(assignment.RequestedBy); err == nil {
+			if parent.Role == "orchestrator" {
+				return parent.ID
+			}
+			return parent.OrchestratorID
+		}
+	}
+	if role != "agent" || current != "" {
+		return current
+	}
+	for i := range m.state.Sessions {
+		old := &m.state.Sessions[i]
+		if old.ID == filter.selfID || old.ID == filter.handoverSource {
+			continue
+		}
+		if old.ProjectID == p.ID && old.Role == "orchestrator" && activeSession(*old) {
+			return old.ID
+		}
+	}
+	return current
+}
+
 func (m *Manager) prepareSessionContextLocked(p Project, s *Session, launch *agentcli.Launch) error {
 	profile := effectiveProfile(p)
 	s.PolicyRevision = profile.Revision
@@ -37,27 +78,7 @@ func (m *Manager) prepareSessionContextLocked(p Project, s *Session, launch *age
 			return errors.New("project agent limit reached; finish or stop an agent before launching another")
 		}
 	}
-	if s.Assignment != nil && s.Assignment.RequestedBy != "" && s.Assignment.RequestedBy != "operator" {
-		parent, err := m.sessionLocked(s.Assignment.RequestedBy)
-		if err == nil {
-			if parent.Role == "orchestrator" {
-				s.OrchestratorID = parent.ID
-			} else {
-				s.OrchestratorID = parent.OrchestratorID
-			}
-		}
-	}
-	if s.Role == "agent" && s.OrchestratorID == "" {
-		for _, old := range m.state.Sessions {
-			if s.Continuation != nil && s.Continuation.Kind == "handover" && old.ID == s.Continuation.SourceID {
-				continue
-			}
-			if old.ID != s.ID && old.ProjectID == p.ID && old.Role == "orchestrator" && activeSession(old) {
-				s.OrchestratorID = old.ID
-				break
-			}
-		}
-	}
+	s.OrchestratorID = m.resolveOrchestratorLocked(p, s.Role, s.Assignment, sessionFilter{selfID: s.ID, handoverSource: handoverSourceOf(s)}, s.OrchestratorID)
 	if s.Role == "orchestrator" {
 		s.OrchestratorID = ""
 	}

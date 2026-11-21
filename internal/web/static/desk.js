@@ -229,7 +229,29 @@
   if (!project) return;
 
   let term, focusTerminal, offset = 0, alive = true, ready = false, inputChain = Promise.resolve(), inputBroken = false;
+  let agentStatusTimer;
   if (session) {
+    // Harness-reported model health beside the connection status: scheduled
+    // retries, terminal provider errors, and cumulative token usage. These are
+    // reports from inside the agent process, not the session's own status.
+    const tokens = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : `${n}`;
+    const refreshAgentStatus = async () => {
+      try {
+        const s = await api(`/api/sessions/${session}`), parts = [];
+        const r = s.retry_state;
+        if (r && r.status === 'scheduled') parts.push(`Auto-retry ${r.attempt}/${r.max_attempts}${r.retry_at ? ` at ${new Date(r.retry_at).toLocaleTimeString()}` : ''}${r.model ? ` on ${r.model}` : ''}`);
+        else if (r && r.status === 'switched') parts.push(`Retry budget exhausted; switched model${r.next_model ? ` to ${r.next_model}` : ''}`);
+        else if (r) parts.push(`Retries exhausted${r.model ? ` on ${r.model}` : ''}; needs operator attention`);
+        else if (s.agent_error) parts.push(`Model error${s.agent_error.http_code ? ` HTTP ${s.agent_error.http_code}` : ''}: ${s.agent_error.message.slice(0, 140)}`);
+        if (s.model_usage) parts.push(`${tokens(s.model_usage.input_tokens)} in / ${tokens(s.model_usage.output_tokens)} out tokens${s.model_usage.model ? ` on ${s.model_usage.model}` : ''}`);
+        const note = $('agent-status');
+        note.textContent = parts.join(' · ');
+        note.hidden = !parts.length;
+        if (!['running','starting','stopping'].includes(s.status)) clearInterval(agentStatusTimer);
+      } catch {}
+    };
+    agentStatusTimer = setInterval(refreshAgentStatus, 5000);
+    refreshAgentStatus();
     term = new Terminal({cols:Number($('terminal').dataset.cols),rows:Number($('terminal').dataset.rows),fontSize:15,fontFamily:'"Liberation Mono", Consolas, monospace',lineHeight:1.35,cursorBlink:!matchMedia('(prefers-reduced-motion: reduce)').matches,scrollback:10000,theme:{background:'#14171b',foreground:'#d8dee9',cursor:'#aac5ff',selectionBackground:'#334864'},allowProposedApi:false});
     const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open($('terminal'));
     const keyButtons = [...document.querySelectorAll('[data-terminal-key]')];
@@ -411,7 +433,7 @@
       };
       socket.onerror=()=>socket.close();
     }
-    output(); window.addEventListener('pagehide',()=>{alive=false;clearTimeout(outputRetry);clearTimeout(outputWatchdog);clearTimeout(resizeTimer);terminalObserver.disconnect();window.removeEventListener('resize',resize);outputSocket?.close();term.dispose();});
+    output(); window.addEventListener('pagehide',()=>{alive=false;clearTimeout(outputRetry);clearTimeout(outputWatchdog);clearTimeout(resizeTimer);clearInterval(agentStatusTimer);terminalObserver.disconnect();window.removeEventListener('resize',resize);outputSocket?.close();term.dispose();});
   }
   document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('[data-tab]').forEach(tab=>{ const active=tab===b;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));$(`view-${tab.dataset.tab}`).hidden=!active; });

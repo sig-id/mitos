@@ -217,6 +217,14 @@ func (s *Server) deskRoutes(mux *http.ServeMux) {
 		err := m.Prompt(r.PathValue("session"), b.Key, b.Text, b.Bracketed)
 		deskResult(w, map[string]bool{"accepted": err == nil}, err)
 	})
+	mux.HandleFunc("POST /api/sessions/{session}/agent-status", func(w http.ResponseWriter, r *http.Request) {
+		var b desk.AgentStatusReport
+		if err := deskJSON(r, &b); err != nil {
+			deskResult(w, nil, err)
+			return
+		}
+		deskResult(w, map[string]bool{"recorded": true}, m.AgentStatus(r.PathValue("session"), b))
+	})
 	mux.HandleFunc("POST /api/sessions/{session}/resize", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
 			Rows uint16 `json:"rows"`
