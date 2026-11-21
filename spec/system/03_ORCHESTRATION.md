@@ -52,6 +52,30 @@ work types. A decision provider is optional in every policy. Deterministic facts
 such as dependency readiness, queue capacity, deadlines, and authenticated authority
 MUST be evaluated by code rather than repeatedly delegated to a model.
 
+### Judgment-shaped kernel rules
+
+Kernel admission rules are of two classes. Deterministic invariants - digests and
+immutability, authentication and authority, schema validity, budgets, allowances,
+deadlines, and compare-and-set fencing - MUST be evaluated by code and fail closed;
+delegating them would be unsafe and non-reproducible. Judgment-shaped rules encode
+a policy-of-thumb about work shape (for example, that a review or context nature
+should not yield on follow-up work) rather than a safety fact. A judgment-shaped
+rule MUST NOT end as a silent synchronous refusal: when it triggers, the kernel
+records exactly one bounded decision with two candidates, apply or refuse, each
+with the kernel's rationale, and routes it to the graph's configured decision
+application when one is registered, or to the operator otherwise.
+
+The affected submission is held, not lost: the attempt parks with the decision
+pending, and nothing proceeds while it does. The conservative default while
+pending, and whenever a decision cannot be made, is the current refusal semantics;
+a decision changes the outcome, never the default. On apply, the original intent
+proceeds unchanged. On refuse, the refusal applies and its reason is returned to
+the proposer as feedback on the next continuation rather than as a dead end.
+Judgment receipts MUST be journaled next to the affected work, decide one
+submission digest once (an applied judgment permits only that digest; a refused
+one is not re-asked), and count against the graph's decision allowance so a
+flailing proposer cannot flood the operator.
+
 ### Planning and typed decisions
 
 Planning generates fully specified candidate amendments. It MAY use an agent,
@@ -137,7 +161,8 @@ explicit deterministic handling even when a model proposes their recovery.
 The runtime MUST persist a orchestrator cursor, trigger identity, pending expansion
 obligations, candidate/decision receipts, durable waits, and remaining allowance.
 Relevant task outcomes, accepted artifacts, failures, decisions, and service inputs
-can wake it. Event consumption and expansion/wait registration MUST follow the
+can wake it. [Watches](09_WATCHES_AND_TRIAGE.md) declare that relevance and own the
+grouping, delivery levels and wake receipts. Event consumption and expansion/wait registration MUST follow the
 no-loss receipt contract. Duplicate delivery cannot create duplicate tasks or calls.
 Coalescing MUST retain contributing event identities and a bounded durable window;
 it MUST NOT discard unresolved work or cause starvation under continuous updates.

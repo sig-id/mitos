@@ -126,6 +126,10 @@ progress checks, and health probes SHOULD be combined where available. Steering
 MUST target current identity and a known interaction mode. Ambiguous prompts require
 refusal; sent input is not proof of applied action.
 
+Quiescence edges are journal evidence that [watches](09_WATCHES_AND_TRIAGE.md) can
+match. A `block` edge is delivered to every watch whose scope contains it, whatever
+the watch's condition.
+
 ## Knowledge and metrics
 
 Records establish runtime facts; artifacts are work products; knowledge contains

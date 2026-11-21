@@ -8,6 +8,7 @@ import (
 
 	"mitos/agents"
 	"mitos/internal/compute"
+	"mitos/internal/decision"
 )
 
 func libraryAgent(t *testing.T, id string) agents.Definition {
@@ -272,11 +273,50 @@ func TestContextWorkCannotYield(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ceiling is judgment-gated: without a decision application the kernel
+	// holds the blocking submission for the operator instead of refusing it.
 	raw, _ := json.Marshal(submission("yield", ResultProposal{ID: "dig", Rationale: "r", Blocking: true, Tasks: []GraphSpec{proposedTask("dig")}, Artifacts: []string{}}))
-	if _, err = e.HandoffCall(a.ID, token, "result_submit", raw); handoffCode(err) != "proposal_blocking_not_permitted" {
-		t.Fatal("context work yielded", err)
+	out, err := e.HandoffCall(a.ID, token, "result_submit", raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	callHandoff(t, e, a, token, "result_submit", submission("follow-up", ResultProposal{ID: "dig", Rationale: "r", Tasks: []GraphSpec{proposedTask("dig")}, Artifacts: []string{}}))
+	held, _ := out.(map[string]any)
+	if held["held"] != "kernel_judgment" || held["code"] != "proposal_blocking_not_permitted" {
+		t.Fatal("context yield not held for a judgment:", held)
+	}
+	run, _ := e.Store.Get(r.ID)
+	if run.Status != "parked" || run.Decision == nil {
+		t.Fatal("held attempt did not park with a decision")
+	}
+	if err = e.Store.Resolve(r.ID, run.Decision.ID, "refuse"); err != nil {
+		t.Fatal(err)
+	}
+	// After the refusal the conservative semantics apply, with the reason as
+	// feedback for the proposer on its continuation.
+	if _, err = e.HandoffCall(a.ID, token, "result_submit", raw); handoffCode(err) != "proposal_blocking_not_permitted" {
+		t.Fatal("context work yielded after refusal", err)
+	}
+	if err = e.reconcileGraphs(); err != nil {
+		t.Fatal(err)
+	}
+	g2, _ := e.Store.Graph(r.GraphAttempt.GraphID)
+	m := g2.Members[r.TaskID]
+	if m.CurrentRunID == "" || m.CurrentRunID == r.ID {
+		t.Fatal("refusal did not requeue the member for a continuation")
+	}
+	continuation, _ := e.Store.Get(m.CurrentRunID)
+	if continuation.GraphAttempt == nil || continuation.GraphAttempt.Continuation == nil || continuation.GraphAttempt.Continuation.Reason != "judgment_refused" {
+		t.Fatal("continuation attempt lacks the refusal feedback", continuation.GraphAttempt.Continuation)
+	}
+	if err = e.Store.Transition(continuation.ID, "fixture_continuation", "running", "Running", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	grantProposals(t, e, continuation.ID, true)
+	b, token2, err := e.Store.CreateBoundAgentSession("codex", "Handoff", e.Root, r.ProjectID, "", continuation.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	callHandoff(t, e, b, token2, "result_submit", submission("follow-up", ResultProposal{ID: "dig", Rationale: "r", Tasks: []GraphSpec{proposedTask("dig")}, Artifacts: []string{}}))
 }
 
 func TestV1ExecutionPolicyIsRefused(t *testing.T) {

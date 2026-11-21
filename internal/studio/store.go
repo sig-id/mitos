@@ -15,6 +15,7 @@ import (
 	"mitos/internal/messaging"
 	"mitos/internal/service"
 	"mitos/internal/structuredworker"
+	"mitos/internal/watch"
 	"mitos/internal/workpool"
 	"os"
 	"path/filepath"
@@ -56,6 +57,17 @@ type Store struct {
 	systemConfiguration    SystemConfiguration
 	supervisorVerdicts     map[string]SupervisorVerdict
 	supervisionIncidents   map[string]SupervisionIncident
+	watches                map[string]*Watch
+	watchDeliveries        map[string]*WatchDelivery
+	watchOrder             map[string][]string
+	watchItems             map[string]*WatchItem
+	watchOpenItems         map[string]string
+	watchInboxes           map[string]*watchInbox
+	inboxEntries           map[string]*InboxEntry
+	triageRequests         map[string]*TriageRequest
+	triagePending          map[string]string // watch\x00group -> pending request
+	triageUsed             map[string]int    // allowance key -> requests
+	triageLive             map[string]bool   // requests dispatched by this process; not journalled
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord
@@ -221,9 +233,21 @@ func (s *Store) apply(e Event) error {
 		if err := s.applyGraph(e, c.Graph); err != nil {
 			return err
 		}
+		// A watch wake writes its graph trigger and its receipt in one record;
+		// that record is a watch event and is never itself observed by watches.
+		if c.Watch != nil {
+			return s.applyWatch(e, c.Watch)
+		}
 		if e.RunID == "" {
+			// Graph-level events carry no run, so the graph itself scopes the
+			// fact; without this observation a project- or graph-scoped watch
+			// would never see them.
+			s.observeWatches(s.graphFact(e, c.Graph))
 			return nil
 		}
+	}
+	if c.Watch != nil {
+		return s.applyWatch(e, c.Watch)
 	}
 	if c.Message != nil {
 		if err := s.applyMessage(e, c.Message); err != nil {
@@ -244,6 +268,11 @@ func (s *Store) apply(e Event) error {
 			s.supervisionIncidents = map[string]SupervisionIncident{}
 		}
 		s.supervisionIncidents[c.SupervisionIncident.ID] = graphClone(*c.SupervisionIncident)
+		f := watch.Fact{Seq: e.Seq, At: e.At, Project: c.SupervisionIncident.ProjectID, Type: e.Type, Kind: e.Kind}
+		if e.Kind == "supervision_incident_opened" {
+			f.Rule, f.Reason = watch.Escalate, "supervision_incident"
+		}
+		s.observeWatches(f)
 	}
 	if c.SupervisorVerdict != nil || c.SupervisionIncident != nil {
 		return nil
@@ -441,6 +470,24 @@ func (s *Store) apply(e Event) error {
 	if c.Result != nil {
 		r.Result = c.Result
 	}
+	if c.Judgment != nil {
+		if c.Judgment.State == "pending" {
+			r.HeldJudgment = c.Judgment
+		} else {
+			r.HeldJudgment = nil
+			replaced := false
+			for i := range r.KernelJudgments {
+				if r.KernelJudgments[i].ID == c.Judgment.ID {
+					r.KernelJudgments[i] = *c.Judgment
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				r.KernelJudgments = append(r.KernelJudgments, *c.Judgment)
+			}
+		}
+	}
 	if c.HandoffBytes != 0 {
 		r.HandoffBytes = c.HandoffBytes
 	}
@@ -561,7 +608,12 @@ func (s *Store) apply(e Event) error {
 	if err := s.applyContinuous(e, c); err != nil {
 		return err
 	}
-	return s.applyServiceDelivery(e, c)
+	if err := s.applyServiceDelivery(e, c); err != nil {
+		return err
+	}
+	s.observeWatches(s.runFact(e, r, c))
+	s.settleAttemptWatches(e, r)
+	return nil
 }
 
 // commit requires mu. Publish to readers only after the record is synced.
@@ -886,6 +938,27 @@ func (s *Store) Complete(id, summary string, verified bool) error {
 	}
 	if r.Brief.Structured != nil && !s.admittedPrincipalAllowedLocked(r.PrincipalID, runTenant(r)) {
 		return ErrForbidden
+	}
+	if held := r.HeldJudgment; held != nil && held.State == "pending" {
+		// The submission is held for a judgment; the attempt parks instead of
+		// completing, and the decision records the outcome.
+		if r.Status != "parked" {
+			return ErrConflict
+		}
+		if r.Claim != nil && r.Claim.ReleasedAt == nil {
+			copyClaim := *r.Claim
+			at := time.Now().UTC()
+			copyClaim.ReleasedAt = &at
+			copyClaim.ReleaseReason = "execution_stopped_and_harvest_finished"
+			return s.commit(id, "effect", "judgment_awaited", change{Claim: &copyClaim, Stage: "Waiting for a judgment", Summary: "The result is held for a kernel judgment; evidence is preserved."})
+		}
+		return nil // already waiting; the resolution finishes the run
+	}
+	if refusedJudgmentPending(r) != nil {
+		// The judgment refused while this execution was still finishing. The
+		// harvest is saved; now the refusal outcome applies: the attempt ends
+		// cancelled and the member is requeued with the reason as feedback.
+		return s.finalizeRefusedJudgmentLocked(id, time.Now().UTC())
 	}
 	if requiresHandoff(r) {
 		if err := s.resultIntegrity(r); err != nil {

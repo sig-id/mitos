@@ -173,6 +173,10 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		cancel()
 		return nil, err
 	}
+	if err = s.recoverKernelJudgments(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if err = s.recoverDecisionRequests(); err != nil {
 		cancel()
 		return nil, err
@@ -252,8 +256,9 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 		return nil, err
 	}
 	initialized = true
-	e.wg.Add(1)
+	e.wg.Add(2)
 	go e.dispatch()
+	go e.watchLoop()
 	return e, nil
 }
 func (e *Engine) Close() {
@@ -532,6 +537,7 @@ func (e *Engine) dispatch() {
 				continue
 			}
 			e.reconcileDecisions()
+			e.Store.reconcileHeldJudgments()
 			e.mu.Lock()
 			active := make([]string, 0, len(e.cancel))
 			for id := range e.cancel {

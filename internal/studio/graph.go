@@ -36,7 +36,7 @@ func validGraphKey(v string) bool {
 	return len(v) > 0 && len(v) <= 128 && !strings.ContainsAny(v, "\x00\n\r")
 }
 func validateGraphLimits(l GraphLimits, now time.Time) error {
-	if l.Tasks < 1 || l.Tasks > 512 || l.Amendments < 1 || l.Amendments > 2048 || l.Attempts < 1 || l.Attempts > 2048 || l.Retries < 0 || l.Retries > 16 || l.Expansions < 1 || l.Expansions > 256 || l.OrchestratorCalls < 1 || l.OrchestratorCalls > 256 || l.Depth < 1 || l.Depth > 32 || l.Fanout < 1 || l.Fanout > 128 || !l.Deadline.After(now) || l.Deadline.After(now.Add(30*24*time.Hour)) {
+	if l.Tasks < 1 || l.Tasks > 512 || l.Amendments < 1 || l.Amendments > 2048 || l.Attempts < 1 || l.Attempts > 2048 || l.Retries < 0 || l.Retries > 16 || l.Expansions < 1 || l.Expansions > 256 || l.OrchestratorCalls < 1 || l.OrchestratorCalls > 256 || l.Depth < 1 || l.Depth > 32 || l.Fanout < 1 || l.Fanout > 128 || l.TriageCalls < 0 || l.TriageCalls > 4096 || !l.Deadline.After(now) || l.Deadline.After(now.Add(30*24*time.Hour)) {
 		return graphError("finite task, attempt, expansion, orchestrator, depth, fanout and deadline limits are required")
 	}
 	return nil

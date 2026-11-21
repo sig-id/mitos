@@ -83,6 +83,8 @@ type Run struct {
 	PrincipalID         string                 `json:"principal_id,omitempty"`
 	HandoffProtocol     string                 `json:"handoff_protocol,omitempty"` // Frozen at attempt creation; absent in pre-contract history.
 	Result              *ResultReceipt         `json:"result,omitempty"`
+	HeldJudgment        *KernelJudgment        `json:"held_judgment,omitempty"`    // Pending judgment-gated rule holding this attempt's submission.
+	KernelJudgments     []KernelJudgment       `json:"kernel_judgments,omitempty"` // Settled judgment receipts, oldest first.
 	ReviewRuns          []string               `json:"review_runs,omitempty"`
 	HandoffBytes        int64                  `json:"handoff_bytes,omitempty"`
 	BlockedReason       string                 `json:"blocked_reason,omitempty"`
@@ -197,12 +199,14 @@ type change struct {
 	AuthorityEpoch         string                     `json:"authority_epoch,omitempty"`
 	ExpiredRequestKeys     []string                   `json:"expired_request_keys,omitempty"`
 	Result                 *ResultReceipt             `json:"result,omitempty"`
+	Judgment               *KernelJudgment            `json:"judgment,omitempty"`
 	HandoffBytes           int64                      `json:"handoff_bytes,omitempty"`
 	BlockedReason          string                     `json:"blocked_reason,omitempty"`
 	SystemConfiguration    *SystemConfiguration       `json:"system_configuration,omitempty"`
 	NativeThreadID         string                     `json:"native_thread_id,omitempty"`
 	SupervisorVerdict      *SupervisorVerdict         `json:"supervisor_verdict,omitempty"`
 	SupervisionIncident    *SupervisionIncident       `json:"supervision_incident,omitempty"`
+	Watch                  *watchChange               `json:"watch,omitempty"`
 	AgentRoute             *AgentRoute                `json:"agent_route,omitempty"`
 	ModelEvaluation        *ModelEvaluation           `json:"model_evaluation,omitempty"`
 	Cooperation            *CooperationRecord         `json:"cooperation,omitempty"`

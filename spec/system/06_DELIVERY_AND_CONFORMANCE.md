@@ -374,3 +374,63 @@ through [#7](https://github.com/sig-id/mitos/issues/7) and the operational docs
 ([agent decisions](../../docs/agent-decisions.md), [independent supervision](../../docs/independent-supervision.md)).
 Each new implementation PR must keep reporting its validated capabilities and
 remaining substrate limitations.
+
+## Watch and triage delivery gates
+
+[Watches and triage](09_WATCHES_AND_TRIAGE.md) is a target contract. Implement the
+gates in order. W1 and W2 are deterministic and require no decision provider.
+A passing triage call alone establishes none of these gates. Delivery is tracked in
+issue [#111](https://github.com/sig-id/mitos/issues/111).
+
+### W1 – Watch records and deterministic delivery
+
+Persist `mitos.watch/v1` records, lifecycle events and delivery receipts in the
+journal. Advance the cursor only in the receipt transaction. Implement the closed
+condition, leases and expiry, grouping without starvation,
+`max_silence`, must-deliver events, digests, and operator-owned watches delivered to
+Notifications. Tests MUST cover restart between match and receipt (no loss and no
+duplicates), replay producing identical deliveries, continuous updates not
+postponing delivery past `interval_ms`, lease expiry reporting its count,
+a crashed run delivering its terminal state to a watch whose condition did not match
+it, one owner with overlapping watches receiving each event once at the highest
+level, and repeated escalations coalescing into one open operator item. W1 admits
+only operator-owned watches.
+
+### W2 – Owner delivery and wake
+
+Admit responsibility and attempt owners with scope clamped to the creator's grant.
+Deliver responsibility-owned watches to the owning orchestrator, and attempt-owned
+watches to that attempt, as cooperation `observation` messages. Wake a dormant owner
+through its wait registration, which is the graph trigger written in the receipt's
+journal record ([09 §3](09_WATCHES_AND_TRIAGE.md#3-delivery-levels-and-sinks)).
+Fence deliveries and acknowledgements by responsibility generation. Replace the
+hard inbox limit with folding into a digest plus `watch_degraded`. Add the granted
+`watch_*` and `delivery_outcome` tools with scope clamped to the caller's
+responsibility. Tests MUST race a delivery against orchestrator replacement and
+restart (no lost wake and no duplicate application), reject stale acknowledgements,
+show that delivered text cannot invoke tools or change grants, end attempt-owned
+watches when the attempt settles, and end a watch with a must-deliver notice when
+its creator's grant no longer covers its scope.
+
+### W3 – Triage
+
+Add the triage role to the shared decision service. It uses the owner's existing
+decision provider and has its own budget.
+Implement the `level` Choice question, the bounded projection, asymmetric
+acceptance, fallback to the default level, and persistence before dispatch and
+before the receipt. Tests MUST cover each fallback reason, a pending request at
+restart delivering at the default with `outcome_unknown`, an exhausted allowance
+producing one `watch_degraded` notice, renewal or orchestrator replacement not
+replenishing `max_calls`, triage and `OrchestratorCalls` exhaustion leaving each
+other's consumers unaffected, must-deliver events making no triage call,
+and an adversarial evidence summary unable to lower a level below the default
+without meeting the thresholds.
+
+### W4 – Outcomes, calibration and first adopters
+
+Record owner and operator outcomes and expose the watch report. Ship default watch
+templates for adaptive orchestrators covering child terminal states, verification
+failures and quiescence `steer` edges. Decide, through an ADR amendment, whether
+Predicate (Noul) and Score enter the provider profile for triage and
+capability-declared watches. Evidence MUST include at least one live run reporting
+wake precision and fallback rates.

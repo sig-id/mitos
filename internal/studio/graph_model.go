@@ -22,15 +22,19 @@ const GraphProfile = "work-graph/v1"
 const graphMaxBytes = 2 << 20
 
 type GraphLimits struct {
-	Tasks             int       `json:"tasks"`
-	Amendments        int       `json:"amendments"`
-	Attempts          int       `json:"attempts"`
-	Retries           int       `json:"retries"`
-	Expansions        int       `json:"expansions"`
-	OrchestratorCalls int       `json:"orchestrator_calls"`
-	Depth             int       `json:"depth"`
-	Fanout            int       `json:"fanout"`
-	Deadline          time.Time `json:"deadline"`
+	Tasks             int `json:"tasks"`
+	Amendments        int `json:"amendments"`
+	Attempts          int `json:"attempts"`
+	Retries           int `json:"retries"`
+	Expansions        int `json:"expansions"`
+	OrchestratorCalls int `json:"orchestrator_calls"`
+	// TriageCalls is the watch triage allowance shared by the graph's
+	// responsibility and attempts (spec 09 §4). It never charges, and is never
+	// charged by, OrchestratorCalls.
+	TriageCalls int       `json:"triage_calls,omitempty"`
+	Depth       int       `json:"depth"`
+	Fanout      int       `json:"fanout"`
+	Deadline    time.Time `json:"deadline"`
 }
 type GraphPolicy struct {
 	Automatic               bool     `json:"automatic,omitempty"`
@@ -115,9 +119,17 @@ type GraphYield struct {
 // GraphContinuation tells a continued attempt why it was resumed and how its
 // proposals were reviewed.
 type GraphContinuation struct {
-	Reason     string            `json:"reason"` // yield or escalation
+	Reason     string            `json:"reason"` // yield, judgment_refused or escalation
 	Proposals  []ProposalOutcome `json:"proposals,omitempty"`
 	Escalation *GraphEscalation  `json:"escalation,omitempty"`
+	Refusal    *JudgmentRefusal  `json:"refusal,omitempty"`
+}
+
+// JudgmentRefusal carries a refused kernel judgment back to the proposer as
+// feedback, so the refusal is a correction rather than a dead end.
+type JudgmentRefusal struct {
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
 }
 type ProposalOutcome struct {
 	ID        string `json:"id"`

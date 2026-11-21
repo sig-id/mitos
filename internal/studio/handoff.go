@@ -4,6 +4,7 @@ package studio
 // Natural language output is evidence only; it is never parsed as a submission.
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mitos/internal/cooperation"
 	"mitos/internal/harness"
@@ -171,14 +172,14 @@ func HandoffTools() []harness.DynamicTool {
 		{"artifact_list", "List retained artifacts for your run or an explicitly granted producer run. Use cursor 0 and limit 1..32. Large artifacts remain discoverable.", reflect.TypeFor[ArtifactList]()},
 		{"artifact_read", "Read exact bytes (base64 data), at offset with limit 1..32768. next_offset is null only at EOF. A 2 MiB cumulative retrieval budget applies per attempt; this is not a token budget.", reflect.TypeFor[ArtifactRead]()},
 		{"artifact_search", "Search a literal UTF-8 query (1..256 bytes), returning byte offsets. Use cursor 0 and limit 1..32; follow next_cursor even when no matches are returned.", reflect.TypeFor[ArtifactSearch]()},
-		{"result_submit", "Submit one immutable typed result with version mitos.handoff/v1, an idempotency key, <=2 KiB summary, registered artifact IDs, checks (passed/failed/not_run), limitations and unresolved request IDs. Evidence lists (artifacts, checks, evidence IDs) are optional: omit them or send an empty list when none. Submission is not acceptance. This ends your attempt's work. Do not spawn subagents: to delegate, add proposals (unique id, rationale, 1-8 application task specs in the orchestrator add shape, optional registered artifact IDs as evidence; omit the artifacts field when none). Blocking is only accepted from task natures that may yield: a review or context nature gets its blocking proposals refused and must send blocking=false follow-ups instead. A blocking proposal means you yield: stop after submitting; you are resumed in this conversation with the accepted results or the rejection rationale. Non-blocking proposals are follow-up work you noticed; the result is otherwise final. Omit proposals or send an empty list when you need nothing.", reflect.TypeFor[ResultSubmission]()},
+		{"result_submit", "Submit one immutable typed result with version mitos.handoff/v1, an idempotency key, <=2 KiB summary, registered artifact IDs, checks (passed/failed/not_run), limitations and unresolved request IDs. Evidence lists (artifacts, checks, evidence IDs) are optional: omit them or send an empty list when none. Submission is not acceptance. This ends your attempt's work. Do not spawn subagents: to delegate, add proposals (unique id, rationale, 1-8 application task specs in the orchestrator add shape, optional registered artifact IDs as evidence; omit the artifacts field when none). Blocking is judgment-gated for task natures that normally may not yield (review, context): such a submission is either held for a decision (the response has held=kernel_judgment: stop after submitting; you resume in this conversation with the outcome) or refused with the reason (then resubmit with blocking=false to record the follow-up work). A blocking proposal means you yield: stop after submitting; you are resumed in this conversation with the accepted results or the rejection rationale. Non-blocking proposals are follow-up work you noticed; the result is otherwise final. Omit proposals or send an empty list when you need nothing.", reflect.TypeFor[ResultSubmission]()},
 	}
 	out := []harness.DynamicTool{}
 	for _, spec := range specs {
 		schema, _ := json.Marshal(orchestratorTypeSchema(spec.typ))
 		out = append(out, harness.DynamicTool{Type: "function", Name: spec.name, Description: spec.description, InputSchema: schema})
 	}
-	return out
+	return append(out, watchHandoffTools()...)
 }
 func decodeHandoff(raw json.RawMessage, v any) error {
 	if len(raw) > 1<<20 {
@@ -237,9 +238,19 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 		}
 		receipt, err := e.Store.submitResult(run, in)
 		if err != nil {
+			var required *judgmentRequired
+			if errors.As(err, &required) {
+				return e.judgeSubmission(run, in, required)
+			}
+			var held *heldJudgment
+			if errors.As(err, &held) {
+				return map[string]any{"held": "kernel_judgment", "judgment": held.judgment.ID, "code": held.judgment.Code, "detail": held.judgment.Detail, "note": "The submission is held for a judgment, not refused. Stop after submitting; this attempt continues with the judgment outcome."}, nil
+			}
 			return nil, err
 		}
 		return map[string]any{"id": receipt.ID, "run_id": receipt.RunID, "revision": receipt.Revision, "seq": receipt.Seq, "at": receipt.At, "digest": receipt.Digest, "proposal_ids": receipt.ProposalIDs}, nil
+	case "watch_create", "watch_renew", "watch_cancel", "watch_inbox", "delivery_outcome":
+		return e.handoffWatch(run, method, raw)
 	case "artifact_list":
 		var in ArtifactList
 		if err := decodeHandoff(raw, &in); err != nil {
