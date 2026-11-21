@@ -23,7 +23,9 @@ try{
 // Retry-policy scenarios: transient failures retry and steer, retry-after is
 // honored and clamped, non-transient failures surface, bursts exhaust into
 // fallback models, and success reports cumulative usage.
-import {parseHTTPCode,parseRetryAfterMs,decide,normalizePolicy} from '../pi_attention.mjs';
+import {parseHTTPCode,parseRetryAfterMs,decide,normalizePolicy,utf8Truncate} from '../pi_attention.mjs';
+assert.ok(new TextEncoder().encode(utf8Truncate('429: '+'错'.repeat(1000),2000)).length<=2000);
+assert.equal(utf8Truncate('short',2000),'short');
 assert.equal(parseHTTPCode('429: {"code":"1308"}'),429);
 assert.equal(parseHTTPCode('OpenAI API error (401): {"code":"invalid_api_key"}'),401);
 assert.equal(parseHTTPCode('no code'),0);
@@ -39,11 +41,19 @@ assert.equal(decide(decidedPolicy,{code:429,attemptsMade:2,retryAfterMs:0,fallba
 assert.equal(decide(decidedPolicy,{code:429,attemptsMade:2,retryAfterMs:0,fallbackIndex:1}).action,'surface');
 
 const retryEvents={},retryMessages=[];const reports=[];
-let switchedTo=null;
+let switchedTo=null,slowFirst429Error=true;
 const retryServer=createServer(async(req,res)=>{res.setHeader('Content-Type','application/json');
   if(req.method==='GET'){res.end('[]');return;}
   let body='';for await(const b of req)body+=b;
-  if(req.url.endsWith('/agent-status'))reports.push(JSON.parse(body));
+  if(req.url.endsWith('/agent-status')){
+    const parsed=JSON.parse(body);
+    // Delay the first transient-error report specifically: message_end emits
+    // it and agent_settled immediately emits retry_scheduled, so without
+    // client-side serialization the scheduled state persists first and the
+    // late error report then clears it.
+    if(slowFirst429Error&&parsed.state==='error'&&parsed.http_code===429){slowFirst429Error=false;await new Promise(r=>setTimeout(r,150));}
+    reports.push(parsed);
+  }
   res.end('{}');});
 await new Promise(r=>retryServer.listen(0,'127.0.0.1',r));
 process.env.MITOS_URL=`http://127.0.0.1:${retryServer.address().port}`;
@@ -52,10 +62,15 @@ const retryCtx={model:{provider:'zai',id:'glm-5.3'},modelRegistry:{find:(provide
 extension({on:(name,fn)=>retryEvents[name]=fn,sendMessage:(body,options)=>retryMessages.push({body,options}),setModel:async model=>{switchedTo=`${model.provider}/${model.id}`;return true;}});
 try{
   retryEvents.session_start();
-  // Non-transient failure surfaces immediately with no retry.
-  await retryEvents.message_end({message:{role:'assistant',stopReason:'error',errorMessage:'401: invalid key'}},retryCtx);
+  // Non-transient failure surfaces immediately with no retry. A multibyte
+  // body proves the byte-bounded truncation keeps the report acceptable.
+  const multibyte='401: '+'密钥无效'.repeat(600);
+  await retryEvents.message_end({message:{role:'assistant',stopReason:'error',errorMessage:multibyte}},retryCtx);
   await retryEvents.agent_settled({aborted:false},retryCtx);
   await wait(()=>reports.some(r=>r.state==='error'&&r.http_code===401));
+  const surfaced=reports.find(r=>r.state==='error'&&r.http_code===401);
+  assert.ok(new TextEncoder().encode(surfaced.error).length<=2000,'multibyte error exceeds the byte limit');
+  assert.ok(surfaced.error.startsWith('401: '));
   assert.equal(retryMessages.length,0);
   // A success clears the failure and reports cumulative usage.
   await retryEvents.message_end({message:{role:'assistant',stopReason:'stopReasonNone',usage:{input:100,output:20,cacheRead:5,cacheWrite:0}}},retryCtx);
@@ -85,6 +100,9 @@ try{
   // bucket and never relabels the original model's totals.
   await retryEvents.message_end({message:{role:'assistant',stopReason:'stopReasonNone',usage:{input:50,output:10}}},{...retryCtx,model:{provider:'zai',id:'glm-5.3-flash'}});
   await wait(()=>reports.some(r=>r.state==='healthy'&&r.usage&&r.usage['zai/glm-5.3']?.input_tokens===100&&r.usage['zai/glm-5.3-flash']?.input_tokens===50));
+  // Serialized reports preserve emission order even when an early request is
+  // slow: the error state must be persisted before the scheduled retry.
+  assert.ok(reports.findIndex(r=>r.state==='error'&&r.http_code===429)<reports.findIndex(r=>r.state==='retry_scheduled'),'reports reordered');
   // Operator aborts are never retried.
   await retryEvents.message_end({message:{role:'assistant',stopReason:'error',errorMessage:'503: unavailable'}},retryCtx);
   await retryEvents.agent_settled({aborted:true},retryCtx);

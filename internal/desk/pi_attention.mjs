@@ -13,6 +13,17 @@ export function parseHTTPCode(message) {
   return 0;
 }
 
+// Bound a string to the status API's UTF-8 byte limit. Character slicing is
+// not enough: multibyte provider messages must not make every report fail
+// validation and lose the model-health evidence entirely.
+export function utf8Truncate(text, limit) {
+  const bytes = new TextEncoder().encode(String(text ?? ''));
+  if (bytes.length <= limit) return new TextDecoder().decode(bytes);
+  let cut = limit;
+  while (cut > 0 && (bytes[cut] & 0xc0) === 0x80) cut--; // keep the last code point whole
+  return new TextDecoder().decode(bytes.slice(0, cut));
+}
+
 export function parseRetryAfterMs(message) {
   const match = /retry[-_ ]?after["']?\s*[:=]\s*"?(\d{1,8})/i.exec(message || '');
   return match ? Number(match[1]) * 1000 : 0;
@@ -75,7 +86,14 @@ export default function (pi) {
     const r = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', 'Mitos-API-Version': '1' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(4000) });
     if (!r.ok) throw new Error('Mitos attention unavailable'); return r.json();
   };
-  const report = (body) => request(`/api/sessions/${session}/agent-status`, body).catch(() => {});
+  // Reports serialize in emission order: a delayed earlier request must never
+  // land after a later one and make the manager clear retry state or regress
+  // cumulative usage.
+  let reportChain = Promise.resolve();
+  const report = (body) => {
+    reportChain = reportChain.then(() => request(`/api/sessions/${session}/agent-status`, body)).catch(() => {});
+    return reportChain;
+  };
   const currentModel = (ctx) => ctx && ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : '';
   const usageBody = () => {
     const entries = Object.entries(usageByModel);
@@ -153,7 +171,7 @@ export default function (pi) {
     if (message.stopReason === 'error') {
       failure = {
         code: parseHTTPCode(message.errorMessage),
-        message: String(message.errorMessage || 'model call failed').slice(0, 2000),
+        message: utf8Truncate(message.errorMessage || 'model call failed', 2000),
         attemptsMade: failure ? failure.attemptsMade + 1 : 1,
         retryAfterMs: parseRetryAfterMs(message.errorMessage),
         fallbackIndex: failure ? failure.fallbackIndex : 0,
