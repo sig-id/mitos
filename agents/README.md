@@ -45,6 +45,10 @@ appropriate execution profile; a review prompt is not a command sandbox. Require
 context is supplied by admission; optional context is selected from authorized input
 sources. Empty knowledge/skill lists deliberately avoid inventing installed resources.
 
+Default watch templates for adaptive orchestrators live in `watch-templates/`
+(see [their README](watch-templates/README.md)); they are `watch_create` inputs,
+not capabilities.
+
 ## Chief Wiggum adaptation
 
 Source: sibling repository `chief-wiggum`, revision

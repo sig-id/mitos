@@ -28,7 +28,7 @@ type Triage struct {
 // MaxTriageTimeoutMS bounds one triage request, whatever the provider allows.
 const MaxTriageTimeoutMS = 30000
 
-func (t Triage) validate() error {
+func (t Triage) Validate() error {
 	if strings.TrimSpace(t.Instructions) == "" || len(t.Instructions) > 4000 {
 		return errors.New("triage.instructions must be 1–4000 bytes")
 	}

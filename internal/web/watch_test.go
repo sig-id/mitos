@@ -82,3 +82,60 @@ func TestWatchInboxAPI(t *testing.T) {
 		t.Fatalf("session owner accepted: %d", res.Code)
 	}
 }
+
+func TestWatchOutcomeAndReportAPI(t *testing.T) {
+	server, engine := testServer(t)
+	run := seedPendingRun(t, engine)
+	body := fmt.Sprintf(`{"version":"mitos.watch/v1","owner":{"kind":"operator"},"description":"outcomes",
+		"condition":{"scope":{"run":%q},"kinds":["note"]},
+		"lease":{"expires_at":%q,"max_renewals":2},
+		"grouping":{"by":["run_id"],"wait_ms":0,"interval_ms":1000,"max_events":16,"repeat_interval_ms":60000},
+		"default_level":"notify"}`, run.ID, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+	created := request(server, "POST", "/api/watches", body, false)
+	if created.Code != 201 {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	var w studio.WatchView
+	if err := json.Unmarshal(created.Body.Bytes(), &w); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Store.RecordEvidence(run.ID, "note", "observed", map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Store.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	deliveries := request(server, "GET", "/api/watches/"+w.ID+"/deliveries", "", false)
+	if deliveries.Code != 200 || !strings.Contains(deliveries.Body.String(), `"id":"delivery_`) {
+		t.Fatalf("deliveries: %d %s", deliveries.Code, deliveries.Body.String())
+	}
+	var ds []studio.WatchDelivery
+	if err := json.Unmarshal(deliveries.Body.Bytes(), &ds); err != nil || len(ds) != 1 {
+		t.Fatalf("deliveries %v %s", err, deliveries.Body.String())
+	}
+	id := ds[0].ID
+
+	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"outcome":"acted","mark":"needless_wake"}`, false); res.Code != 400 {
+		t.Fatalf("outcome and mark together accepted: %d", res.Code)
+	}
+	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"outcome":"acted","extra":1}`, false); res.Code != 400 {
+		t.Fatalf("unknown field accepted: %d", res.Code)
+	}
+	if res := request(server, "POST", "/api/deliveries/delivery_none/outcome", `{"outcome":"acted"}`, false); res.Code != 404 {
+		t.Fatalf("missing delivery: %d", res.Code)
+	}
+	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"outcome":"acted"}`, false); res.Code != 200 || !strings.Contains(res.Body.String(), `"outcome":"acted"`) {
+		t.Fatalf("outcome: %d %s", res.Code, res.Body.String())
+	}
+	if res := request(server, "POST", "/api/deliveries/"+id+"/outcome", `{"outcome":"dismissed"}`, false); res.Code != 409 {
+		t.Fatalf("second outcome: %d", res.Code)
+	}
+
+	report := request(server, "GET", "/api/watches/"+w.ID+"/report", "", false)
+	if report.Code != 200 || !strings.Contains(report.Body.String(), `"outcomes":{"acted":1}`) {
+		t.Fatalf("report: %d %s", report.Code, report.Body.String())
+	}
+	if res := request(server, "GET", "/api/watches/watch_none/report", "", false); res.Code != 404 {
+		t.Fatalf("missing report: %d", res.Code)
+	}
+}

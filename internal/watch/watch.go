@@ -157,11 +157,11 @@ func (s Spec) Validate(now time.Time) error {
 		return errors.New("description must be 1–200 bytes")
 	}
 	if s.Triage != nil {
-		if err := s.Triage.validate(); err != nil {
+		if err := s.Triage.Validate(); err != nil {
 			return err
 		}
 	}
-	if err := s.Condition.validate(); err != nil {
+	if err := s.Condition.Validate(); err != nil {
 		return err
 	}
 	if err := ValidateExpiry(s.Lease.ExpiresAt, now); err != nil {
@@ -170,7 +170,7 @@ func (s Spec) Validate(now time.Time) error {
 	if s.Lease.MaxRenewals < 1 || s.Lease.MaxRenewals > 1024 {
 		return errors.New("lease.max_renewals must be 1–1024")
 	}
-	if err := s.Grouping.validate(); err != nil {
+	if err := s.Grouping.Validate(); err != nil {
 		return err
 	}
 	if s.MaxSilenceMS != 0 && (s.MaxSilenceMS < 60000 || s.MaxSilenceMS > 86400000) {
@@ -190,7 +190,7 @@ func ValidateExpiry(at, now time.Time) error {
 	return nil
 }
 
-func (c Condition) validate() error {
+func (c Condition) Validate() error {
 	if c.Scope.empty() {
 		return errors.New("condition.scope needs at least one of project, graph, task or run")
 	}
@@ -215,7 +215,7 @@ func (c Condition) validate() error {
 	return nil
 }
 
-func (g Grouping) validate() error {
+func (g Grouping) Validate() error {
 	if len(g.By) > 3 {
 		return errors.New("grouping.by takes at most three fields")
 	}

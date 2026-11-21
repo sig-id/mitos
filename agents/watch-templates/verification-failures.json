@@ -1,0 +1,17 @@
+{
+  "template": "verification-failures",
+  "rationale": "A verification failure invalidates the assumption the plan rests on and should start the next planning round at once. Workers record the verification_failed evidence kind; grouping by run keeps one item per failed child.",
+  "create": {
+    "owner": "responsibility",
+    "description": "verification failures in this graph",
+    "condition": {
+      "scope": {},
+      "types": ["effect"],
+      "kinds": ["verification_failed"]
+    },
+    "grouping": {"by": ["run_id"], "wait_ms": 0, "interval_ms": 10000, "max_events": 32, "repeat_interval_ms": 3600000},
+    "lease_ms": 14400000,
+    "max_renewals": 16,
+    "default_level": "wake"
+  }
+}

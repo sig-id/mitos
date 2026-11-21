@@ -1,0 +1,17 @@
+{
+  "template": "child-terminal-states",
+  "rationale": "Every child attempt that finishes, fails or is cancelled should reach the next planning round. The kinds list the terminal run effects; terminal rules (a parked run, a model decision parked, blocked_on_human, observation_failed) reach this watch anyway because must-deliver events bypass the condition.",
+  "create": {
+    "owner": "responsibility",
+    "description": "child attempts reaching a terminal state",
+    "condition": {
+      "scope": {},
+      "types": ["effect"],
+      "kinds": ["run_finished", "run_failed", "run_cancelled"]
+    },
+    "grouping": {"by": ["run_id"], "wait_ms": 2000, "interval_ms": 30000, "max_events": 64, "repeat_interval_ms": 3600000},
+    "lease_ms": 14400000,
+    "max_renewals": 16,
+    "default_level": "notify"
+  }
+}
