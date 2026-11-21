@@ -132,8 +132,7 @@ type Spec struct {
 	Grouping     Grouping  `json:"grouping"`
 	MaxSilenceMS int64     `json:"max_silence_ms,omitempty"`
 	DefaultLevel Level     `json:"default_level"`
-	// Triage is accepted from W3. Its presence is refused rather than ignored.
-	Triage any `json:"triage,omitempty"`
+	Triage       *Triage   `json:"triage,omitempty"`
 }
 
 // MaxLease bounds a lease from creation or renewal.
@@ -158,7 +157,9 @@ func (s Spec) Validate(now time.Time) error {
 		return errors.New("description must be 1–200 bytes")
 	}
 	if s.Triage != nil {
-		return errors.New("triage is not available yet; omit triage")
+		if err := s.Triage.validate(); err != nil {
+			return err
+		}
 	}
 	if err := s.Condition.validate(); err != nil {
 		return err
@@ -249,6 +250,9 @@ type Fact struct {
 	Kind    string    `json:"kind"`
 	Rule    Level     `json:"rule,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
+	// Summary is the runtime's one-line account of the event, bounded. Text
+	// that originated in worker output is untrusted evidence.
+	Summary string `json:"summary,omitempty"`
 }
 
 // InScope reports whether every set scope field matches the fact.
@@ -295,12 +299,13 @@ func (g Grouping) GroupKey(f Fact) string {
 
 // Entry is one admitted fact waiting in a group.
 type Entry struct {
-	Seq    int64     `json:"seq"`
-	At     time.Time `json:"at"`
-	Run    string    `json:"run,omitempty"`
-	Kind   string    `json:"kind"`
-	Level  Level     `json:"level"`
-	Reason string    `json:"reason,omitempty"`
+	Seq     int64     `json:"seq"`
+	At      time.Time `json:"at"`
+	Run     string    `json:"run,omitempty"`
+	Kind    string    `json:"kind"`
+	Level   Level     `json:"level"`
+	Reason  string    `json:"reason,omitempty"`
+	Summary string    `json:"summary,omitempty"`
 }
 
 // Group holds admitted facts for one group key until they are delivered.

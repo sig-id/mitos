@@ -32,6 +32,10 @@ type Watch struct {
 	LastDelivered map[string]time.Time    `json:"-"`
 	LastActivity  time.Time               `json:"-"`
 	Silent        bool                    `json:"-"`
+	// TriageCalls counts this watch's triage requests over its whole life;
+	// TriageDegraded records its single allowance-exhausted notice.
+	TriageCalls    int  `json:"triage_calls,omitempty"`
+	TriageDegraded bool `json:"triage_degraded,omitempty"`
 }
 
 // WatchDelivery is one immutable receipt: which events reached an owner, at
@@ -60,7 +64,12 @@ type WatchDelivery struct {
 	Generation int64          `json:"generation,omitempty"`
 	Trigger    int64          `json:"trigger,omitempty"`
 	ItemID     string         `json:"item_id,omitempty"`
-	At         time.Time      `json:"at"`
+	// Source says where Level came from: a rule, the watch default, an
+	// accepted triage answer, or a fallback to the default (Fallback says why).
+	Source   string    `json:"source"`
+	Fallback string    `json:"fallback,omitempty"`
+	TriageID string    `json:"triage_id,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 const (
@@ -107,6 +116,8 @@ type watchChange struct {
 	End        *watchEnd        `json:"end,omitempty"`
 	Resolve    *watchResolve    `json:"resolve,omitempty"`
 	Outcome    *watchOutcome    `json:"outcome,omitempty"`
+	Triage     *TriageRequest   `json:"triage,omitempty"`
+	Triaged    *triageOutcome   `json:"triaged,omitempty"`
 }
 type watchRenewal struct {
 	ID        string    `json:"id"`
@@ -131,6 +142,9 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.watchOpenItems = map[string]string{}
 		s.watchInboxes = map[string]*watchInbox{}
 		s.inboxEntries = map[string]*InboxEntry{}
+		s.triageRequests = map[string]*TriageRequest{}
+		s.triagePending = map[string]string{}
+		s.triageUsed = map[string]int{}
 	}
 	if w := c.Create; w != nil {
 		if s.watches[w.ID] != nil {
@@ -149,6 +163,16 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		w.Spec.Lease.ExpiresAt = r.ExpiresAt
 		w.Renewals++
 	}
+	if t := c.Triage; t != nil {
+		if err := s.applyTriageRequest(e, t); err != nil {
+			return err
+		}
+	}
+	if o := c.Triaged; o != nil {
+		if err := s.applyTriageOutcome(e, o); err != nil {
+			return err
+		}
+	}
 	for i := range c.Deliveries {
 		if err := s.applyWatchDelivery(e, &c.Deliveries[i]); err != nil {
 			return err
@@ -166,6 +190,7 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		}
 		at := e.At
 		w.State, w.EndedAt, w.Groups = end.State, &at, map[string]*watch.Group{}
+		s.abandonTriage(w.ID)
 	}
 	if r := c.Resolve; r != nil {
 		item := s.watchItems[r.ItemID]
@@ -224,6 +249,9 @@ func (s *Store) applyWatchDelivery(e Event, rd *routedDelivery) error {
 	}
 	if d.Kind == "silent" {
 		w.Silent = true
+	}
+	if d.Kind == "degraded" && slices.Contains(d.Reasons, triageExhausted) {
+		w.TriageDegraded = true
 	}
 	if err := s.applyWatchItem(e, &saved, rd.Item); err != nil {
 		return err
@@ -325,6 +353,7 @@ func (s *Store) runFact(e Event, r *Run, c change) watch.Fact {
 		}
 	}
 	f.Rule, f.Reason = watchRule(e, r, c)
+	f.Summary = factSummary(c.Summary, c.Stage)
 	return f
 }
 
@@ -357,7 +386,7 @@ func (s *Store) observeWatches(f watch.Fact) {
 			g = &watch.Group{Key: key}
 			w.Groups[key] = g
 		}
-		g.Entries = append(g.Entries, watch.Entry{Seq: f.Seq, At: f.At, Run: f.Run, Kind: f.Kind, Level: level, Reason: f.Reason})
+		g.Entries = append(g.Entries, watch.Entry{Seq: f.Seq, At: f.At, Run: f.Run, Kind: f.Kind, Level: level, Reason: f.Reason, Summary: f.Summary})
 		w.LastActivity, w.Silent = f.At, false
 	}
 }
@@ -467,10 +496,23 @@ func (s *Store) ResolveWatchItem(id string) error {
 }
 
 // EvaluateWatches ends expired leases, reports silence and delivers due groups
-// at now. Every decision is committed as a receipt; replay never re-evaluates.
+// at now without a decision provider: a triaged watch delivers at its default
+// with provider_unconfigured. The engine evaluates with its providers.
 func (s *Store) EvaluateWatches(now time.Time) error {
+	_, err := s.evaluateWatches(now, nil)
+	return err
+}
+
+// evaluateWatches commits every decision as a receipt; replay never
+// re-evaluates. It returns the triage requests it persisted, for the caller
+// to dispatch outside the store lock.
+func (s *Store) evaluateWatches(now time.Time, bind triageBinder) ([]triageDispatch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.settleStaleTriage(now); err != nil {
+		return nil, err
+	}
+	dispatches := []triageDispatch{}
 	ids := make([]string, 0, len(s.watches))
 	for id, w := range s.watches {
 		if w.State == "active" {
@@ -486,21 +528,21 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 		if !s.ownerGrantHolds(w) {
 			d := s.summaryDelivery(w, "revoked", watch.Notify)
 			if err := s.commitWatchDelivery("watch_revoked", w, &d, &watchEnd{ID: id, State: "revoked"}, now); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
 		if !now.Before(w.Spec.Lease.ExpiresAt) {
 			d := s.summaryDelivery(w, "expired", watch.Notify)
 			if err := s.commitWatchDelivery("watch_expired", w, &d, &watchEnd{ID: id, State: "expired"}, now); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
 		if w.Spec.MaxSilenceMS > 0 && !w.Silent && !now.Before(w.LastActivity.Add(time.Duration(w.Spec.MaxSilenceMS)*time.Millisecond)) {
 			d := s.summaryDelivery(w, "silent", watch.Notify)
 			if err := s.commitWatchDelivery("watch_silent", w, &d, nil, now); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		keys := make([]string, 0, len(w.Groups))
@@ -510,22 +552,43 @@ func (s *Store) EvaluateWatches(now time.Time) error {
 		sort.Strings(keys)
 		for _, key := range keys {
 			g := w.Groups[key]
-			if g == nil || !g.Due(now, w.LastDelivered[key], w.Spec.Grouping) {
+			if g == nil {
 				continue
 			}
-			d := s.groupDelivery(w, g)
-			if err := s.commitWatchDelivery("watch_delivered", w, &d, nil, now); err != nil {
-				return err
+			// Events a pending triage request holds wait for its outcome; the
+			// rest of the group is evaluated on its own.
+			pending := s.triageRequests[s.triagePending[w.ID+"\x00"+key]]
+			due := watch.Group{Key: key, Entries: unreserved(g.Entries, pending)}
+			if !due.Due(now, w.LastDelivered[key], w.Spec.Grouping) {
+				continue
+			}
+			if w.Spec.Triage == nil || hasRule(due.Entries) {
+				// Must-deliver events are never triaged.
+				d := s.groupDelivery(w, &due, nil)
+				if err := s.commitWatchDelivery("watch_delivered", w, &d, nil, now); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if pending != nil {
+				continue // one request per group at a time
+			}
+			dispatch, err := s.beginTriage(w, &due, now, bind)
+			if err != nil {
+				return nil, err
+			}
+			if dispatch != nil {
+				dispatches = append(dispatches, *dispatch)
 			}
 		}
 	}
-	return s.flushDigests(now)
+	return dispatches, s.flushDigests(now)
 }
 
 // summaryDelivery reports a lease or silence notice with the count of events
 // still waiting, at the rule level or the watch default if higher.
 func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level) WatchDelivery {
-	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: kind, Level: watch.Max(rule, w.Spec.DefaultLevel), Counts: map[string]int{}, Watches: []string{w.ID}}
+	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: kind, Level: watch.Max(rule, w.Spec.DefaultLevel), Source: watch.SourceRule, Counts: map[string]int{}, Watches: []string{w.ID}}
 	for _, g := range w.Groups {
 		for _, e := range g.Entries {
 			d.Count++
@@ -537,13 +600,20 @@ func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level) WatchDe
 
 // groupDelivery builds the receipt for a due group. Entries that the owner's
 // other watches also hold join this delivery at the highest level any of them
-// assigned, so the owner receives each event once.
-func (s *Store) groupDelivery(w *Watch, g *watch.Group) WatchDelivery {
-	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: "group", GroupKey: g.Key, Counts: map[string]int{}}
+// assigned, so the owner receives each event once. A triage grade replaces
+// this watch's default for the group; it never lowers another watch's level.
+func (s *Store) groupDelivery(w *Watch, g *watch.Group, grade *watch.Grade) WatchDelivery {
+	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: "group", GroupKey: g.Key, Source: watch.SourceDefault, Counts: map[string]int{}}
 	levels := map[int64]watch.Level{}
 	watches := map[string]bool{w.ID: true}
 	for _, e := range g.Entries {
 		levels[e.Seq] = e.Level
+		if grade != nil && e.Reason == "" {
+			levels[e.Seq] = grade.Level
+		}
+	}
+	if grade != nil {
+		d.Source, d.Fallback = grade.Source, grade.Reason
 	}
 	for _, other := range s.watches {
 		if other.ID == w.ID || other.State != "active" || other.Spec.Owner.Key() != w.Spec.Owner.Key() {
@@ -574,6 +644,9 @@ func (s *Store) groupDelivery(w *Watch, g *watch.Group) WatchDelivery {
 	slices.Sort(d.Seqs)
 	d.FirstSeq, d.LastSeq = d.Seqs[0], d.Seqs[len(d.Seqs)-1]
 	d.Runs, d.Reasons, d.Watches = sortedKeys(runs), sortedKeys(reasons), sortedKeys(watches)
+	if len(d.Reasons) > 0 {
+		d.Source, d.Fallback = watch.SourceRule, ""
+	}
 	return d
 }
 
@@ -725,7 +798,7 @@ func (e *Engine) watchLoop() {
 		case <-e.ctx.Done():
 			return
 		case now := <-tick.C:
-			if err := e.Store.EvaluateWatches(now.UTC()); err != nil && errors.Is(err, errJournalClosed) {
+			if err := e.evaluateWatches(e.ctx, now.UTC(), false); err != nil && errors.Is(err, errJournalClosed) {
 				return
 			}
 		}

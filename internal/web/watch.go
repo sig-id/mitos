@@ -91,6 +91,14 @@ func (s *Server) watchRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, 200, v)
 	})
+	mux.HandleFunc("GET /api/watches/{id}/triage", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.engine.Store.TriageRequests(r.PathValue("id"))
+		if err != nil {
+			watchError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
 	mux.HandleFunc("POST /api/watch-items/{id}/resolve", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.engine.Store.ResolveWatchItem(r.PathValue("id")); err != nil {
 			watchError(w, err)

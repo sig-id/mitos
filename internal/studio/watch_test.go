@@ -275,7 +275,7 @@ func TestWatchRules(t *testing.T) {
 	}
 }
 
-func TestWatchCreationRefusesUnsupportedOwnersAndTriage(t *testing.T) {
+func TestWatchCreationRefusesUnsupportedOwnersAndInvalidTriage(t *testing.T) {
 	s := testStore(t)
 	spec := runWatch("run_x", nil, watch.Notify, 0)
 	spec.Owner = watch.Owner{Kind: "responsibility", ID: "responsibility_1"}
@@ -283,9 +283,9 @@ func TestWatchCreationRefusesUnsupportedOwnersAndTriage(t *testing.T) {
 		t.Fatal("a responsibility owner without an active graph was accepted")
 	}
 	spec = runWatch("run_x", nil, watch.Notify, 0)
-	spec.Triage = map[string]any{"policy_ref": "p"}
+	spec.Triage = &watch.Triage{}
 	if _, err := s.CreateWatch(spec); err == nil {
-		t.Fatal("triage accepted before W3")
+		t.Fatal("triage without instructions accepted")
 	}
 }
 

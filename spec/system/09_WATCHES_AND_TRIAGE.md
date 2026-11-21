@@ -40,7 +40,7 @@ unversioned form.
   "grouping": {"by": ["run_id"], "wait_ms": 2000, "interval_ms": 60000, "max_events": 64, "repeat_interval_ms": 3600000},
   "max_silence_ms": 900000,
   "default_level": "notify",
-  "triage": {"policy_ref": "triage_policy_…", "instructions": "Wake only when the failure changes which task should run next."}
+  "triage": {"instructions": "Wake only when the failure changes which task should run next.", "max_calls": 32, "allow_escalate": false}
 }
 ```
 
@@ -187,13 +187,32 @@ range.
 ## 4. Triage
 
 Triage is optional. Without it, every matched group is delivered at `default_level`.
+A watch's `triage` block holds only the author's `instructions` (1–4000 bytes), an
+optional `max_calls`, and `allow_escalate`. The author chooses neither the provider
+nor the thresholds.
+
+**Provider.** Triage uses the owner's existing decision provider, the same one its
+other decisions use. For a responsibility or attempt, that is the graph's
+`decision_application`, or else the project policy's provider. For the operator, it
+is the project policy's provider (`decision_provider` or `decision_application`,
+falling back to the system provider). The provider's `min_confidence` and
+`min_probability` are the triage thresholds. Its `timeout_ms` is capped at 30000,
+and its runner `hooks` play no part. Without a configured provider, a group is
+delivered at `D` with `provider_unconfigured`, and no call is counted.
 
 **Question.** One Choice question per group, named `level`, using the shared
 decision service ([08 §5](08_AGENT_SESSIONS_AND_SUPERVISION.md#5-shared-decision-service))
 and the existing provider adapters ([05](05_INTERFACES_AND_INTEGRATIONS.md#decision-model-provider-profile)).
-The runtime offers `digest`, `notify` and `wake`, and offers `escalate` only when the
-owner's policy permits operator escalation. Triage is never invoked for
-must-deliver events.
+The runtime offers `digest`, `notify` and `wake`. It offers `escalate` only when the
+watch sets `allow_escalate` or its default is `escalate`. Escalate grants nothing that
+the author could not already get by setting `default_level`. Triage is never
+invoked for a group that holds a must-deliver event.
+
+**One question per group.** A request holds the events it was asked about. Until
+its outcome is recorded, no second request is opened for that group, and later
+routine events wait. A must-deliver event is still delivered at once, untriaged,
+together with the events that the request does not hold. The outcome delivers
+the held events that are still undelivered, and no others.
 
 **Projection.** Watch ID and description, the author's triage instructions (at most
 4000 bytes), group key, event counts by kind, sequence range, up to eight
@@ -206,9 +225,13 @@ from worker output are untrusted data.
 
 - If `A ≥ D`, deliver at `A`.
 - If `A < D`, deliver at `A` only when both the configured confidence and the selected
-  probability meet the triage policy's thresholds. Otherwise deliver at `D`.
-- Refusal, an invalid answer, a timeout, a provider error, a missing credential or an
-  exhausted allowance delivers at `D` and records the reason.
+  probability meet the provider's thresholds. Otherwise deliver at `D`
+  (`below_threshold`).
+- An answer outside the offered set is invalid.
+- Every failure delivers at `D` and records its reason: `refused`, `invalid_answer`,
+  `timeout`, `provider_error`, `credential_unavailable`, `allowance_exhausted`,
+  `outcome_unknown` or `provider_unconfigured`. The grading is a pure function of the
+  answer, the error, `D`, the offered set and the thresholds.
 
 Triage MUST NOT park, steer, stop, continue, approve or accept work. It selects only a
 level from the offered set.
@@ -216,18 +239,22 @@ level from the offered set.
 **Durability.** The runtime persists the triage request before dispatch and the
 outcome before the delivery receipt. Replay uses recorded outcomes and never calls
 models. A request that is still pending at restart is not resent: the group is
-delivered at `D` with `outcome_unknown`. Every delivery records whether its level
-came from a rule, the default, triage, or a fallback, and why.
+delivered at `D` with `outcome_unknown`. A call that outlives its deadline is
+recorded as a timeout. The outcome and its delivery are one journal record. Every
+delivery records its `source` (`rule`, `default`, `triage` or `fallback`), its
+`fallback` reason, and the `triage_id` it settled. Triage records are readable at
+`GET /api/watches/{id}/triage`.
 
 **Budget.** Triage draws on its own allowance:
 - A graph declares `Limits.TriageCalls` (0–4096) beside its other finite limits
   ([02](02_RUNTIME.md#attempts-dependencies-and-iteration)). Watches owned by that
   graph's responsibility and attempts share it.
-- Operator-owned watches use a project triage allowance from operator configuration.
+- Operator-owned watches use the project policy's `triage_calls` (0–4096). It is
+  counted per policy revision, so saving the policy is an explicit operator refill.
 - A watch may narrow its share with `max_calls` (1–1024). That limit covers the
   watch's whole life: renewal, orchestrator replacement and new attempts MUST NOT
   replenish it.
-- Each request is bounded by `timeout_ms` (1–30000).
+- Each request is bounded by the provider's `timeout_ms`, capped at 30000.
 
 Pending and failed requests count. When an allowance is exhausted, the watch emits
 one `watch_degraded` notice and continues untriaged at `D`. As with judgment-shaped
@@ -252,7 +279,8 @@ outcomes, and triage calls used.
 
 - HTTP: `POST /api/watches`, `GET /api/watches/{id}`, `POST /api/watches/{id}/renew`,
   `POST /api/watches/{id}/cancel`, `GET /api/watches/{id}/deliveries`,
-  `GET /api/watches/{id}/items`, `POST /api/watch-items/{id}/resolve` (closes an
+  `GET /api/watches/{id}/items`, `GET /api/watches/{id}/triage`,
+  `POST /api/watch-items/{id}/resolve` (closes an
   open operator item), and `POST /api/deliveries/{id}/outcome` (W4; settles an inbox
   item). All require the `Mitos-API-Version`
   header. Unknown request fields are refused.
@@ -262,7 +290,7 @@ outcomes, and triage calls used.
   `watch_renew`, `watch_cancel`, `watch_inbox`, `delivery_outcome`. Their scope is
   clamped to the caller's graph. Only the current orchestrator generation acts for
   the responsibility, and any attempt may own watches for itself.
-- CLI: `mitos watch create|list|show|renew|cancel|deliveries|items|resolve|inbox`.
+- CLI: `mitos watch create|list|show|renew|cancel|deliveries|items|triage|resolve|inbox`.
 
 ## 7. Out of scope for v1
 

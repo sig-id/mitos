@@ -61,6 +61,12 @@ func TestWatchAPIEscalationReachesNotifications(t *testing.T) {
 	if res := request(server, "POST", "/api/watches/"+w.ID+"/cancel", "", false); res.Code != 200 {
 		t.Fatalf("cancel: %d", res.Code)
 	}
+	if res := request(server, "GET", "/api/watches/"+w.ID+"/triage", "", false); res.Code != 200 || strings.TrimSpace(res.Body.String()) != "[]" {
+		t.Fatalf("triage records: %d %s", res.Code, res.Body.String())
+	}
+	if res := request(server, "POST", "/api/watches", strings.Replace(body, `"default_level"`, `"triage":{"policy_ref":"p","instructions":"x"},"default_level"`, 1), false); res.Code != 400 {
+		t.Fatalf("an unknown triage field was accepted: %d", res.Code)
+	}
 	if res := request(server, "GET", "/api/watches/missing", "", false); res.Code != 404 {
 		t.Fatalf("missing watch: %d", res.Code)
 	}

@@ -15,8 +15,17 @@ import (
 // attempt, both running.
 func ownerGraph(t *testing.T) (*Engine, WorkGraph, string, string) {
 	t.Helper()
+	return ownerGraphWith(t, nil)
+}
+
+// ownerGraphWith lets a test adjust the engine and graph request first.
+func ownerGraphWith(t *testing.T, adjust func(*Engine, *CreateGraph)) (*Engine, WorkGraph, string, string) {
+	t.Helper()
 	e, req := graphEngine(t, false)
 	req.Policy.OrchestratorApplication = "workspace-inventory"
+	if adjust != nil {
+		adjust(e, &req)
+	}
 	g := createGraphTest(t, e, req)
 	spec := graphWorker("helper", g.RootTask)
 	spec.Acceptance = "operator"
