@@ -15,6 +15,7 @@ import (
 	"mitos/internal/messaging"
 	"mitos/internal/service"
 	"mitos/internal/structuredworker"
+	"mitos/internal/watch"
 	"mitos/internal/workpool"
 	"os"
 	"path/filepath"
@@ -56,6 +57,10 @@ type Store struct {
 	systemConfiguration    SystemConfiguration
 	supervisorVerdicts     map[string]SupervisorVerdict
 	supervisionIncidents   map[string]SupervisionIncident
+	watches                map[string]*Watch
+	watchDeliveries        map[string]*WatchDelivery
+	watchOrder             map[string][]string
+	watchItems             map[string]string
 	agentRoutes            map[string]AgentRoute
 	modelEvaluations       map[string]ModelEvaluation
 	cooperation            map[string]CooperationRecord
@@ -222,8 +227,15 @@ func (s *Store) apply(e Event) error {
 			return err
 		}
 		if e.RunID == "" {
+			// Graph-level events carry no run, so the graph itself scopes the
+			// fact; without this observation a project- or graph-scoped watch
+			// would never see them.
+			s.observeWatches(s.graphFact(e, c.Graph))
 			return nil
 		}
+	}
+	if c.Watch != nil {
+		return s.applyWatch(e, c.Watch)
 	}
 	if c.Message != nil {
 		if err := s.applyMessage(e, c.Message); err != nil {
@@ -244,6 +256,11 @@ func (s *Store) apply(e Event) error {
 			s.supervisionIncidents = map[string]SupervisionIncident{}
 		}
 		s.supervisionIncidents[c.SupervisionIncident.ID] = graphClone(*c.SupervisionIncident)
+		f := watch.Fact{Seq: e.Seq, At: e.At, Project: c.SupervisionIncident.ProjectID, Type: e.Type, Kind: e.Kind}
+		if e.Kind == "supervision_incident_opened" {
+			f.Rule, f.Reason = watch.Escalate, "supervision_incident"
+		}
+		s.observeWatches(f)
 	}
 	if c.SupervisorVerdict != nil || c.SupervisionIncident != nil {
 		return nil
@@ -579,7 +596,11 @@ func (s *Store) apply(e Event) error {
 	if err := s.applyContinuous(e, c); err != nil {
 		return err
 	}
-	return s.applyServiceDelivery(e, c)
+	if err := s.applyServiceDelivery(e, c); err != nil {
+		return err
+	}
+	s.observeWatches(s.runFact(e, r, c))
+	return nil
 }
 
 // commit requires mu. Publish to readers only after the record is synced.
