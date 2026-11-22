@@ -1,6 +1,8 @@
 package compute
 
 import (
+	"mitos/internal/procsys"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -274,7 +276,7 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 		// the container cgroup, so a crashed server leaves nothing running.
 		// The signal follows the forking thread, an unlocked runtime thread
 		// that Go does not retire.
-		cmd.SysProcAttr.Pdeathsig = syscall.SIGKILL
+		procsys.SetParentDeathSignal(cmd.SysProcAttr)
 	}
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Cancel = func() error { return killGroup(s) }
