@@ -383,11 +383,13 @@ func (s *Store) graphFact(e Event, c *graphChange) watch.Fact {
 	return watch.Fact{Seq: e.Seq, At: e.At, Project: c.Graph.ProjectID, Graph: c.Graph.ID, Type: e.Type, Kind: e.Kind}
 }
 
-// agentRequestScopes attributes an agent request to the runs its fact
-// belongs to. An executing attempt's session is bound to its run, so the
-// question carries that run's project, graph, task and run, and attempt,
-// responsibility and project watches all see it (issue #130). An unbound
-// interactive session has only the review runs it opened.
+// agentRequestScopes attributes an agent request to the run its fact belongs
+// to, as exactly one fact per journal event: several facts would share one
+// sequence, and delivery deduplication would silently consume all but the
+// first-delivered group (issue #130). An executing attempt's session is bound
+// to its run, so the question carries that run's project, graph, task and run,
+// and attempt, responsibility and project watches all see it. An unbound
+// interactive session attributes to its first review run, deterministically.
 func (s *Store) agentRequestScopes(q *AgentRequest) []watch.Fact {
 	if a, ok := s.agentSessions[q.SessionID]; ok && a.RunID != "" {
 		if r := s.runs[a.RunID]; r != nil {
@@ -407,11 +409,13 @@ func (s *Store) agentRequestScopes(q *AgentRequest) []watch.Fact {
 			return []watch.Fact{f}
 		}
 	}
-	facts := make([]watch.Fact, 0, len(q.Runs))
-	for _, r := range q.Runs {
-		facts = append(facts, watch.Fact{Project: r.ProjectID, Run: r.ID})
+	if len(q.Runs) == 0 {
+		if a, ok := s.agentSessions[q.SessionID]; ok {
+			return []watch.Fact{{Project: a.ProjectID}}
+		}
+		return nil
 	}
-	return facts
+	return []watch.Fact{{Project: q.Runs[0].ProjectID, Run: q.Runs[0].ID}}
 }
 
 // agentRequestFacts projects agent request events into watch facts (spec 09
@@ -442,7 +446,10 @@ func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fac
 				// Routing decides: a classifier or policy revision can still
 				// land the request on an operator after ingest projected
 				// otherwise, and a failed automatic review falls back to one.
-				wake = c.AgentRoute.Route.Resolver == "human"
+				// A request already woken at ingest is not woken again: the
+				// two events share no sequence, so a second wake could not be
+				// deduplicated away.
+				wake = c.AgentRoute.Route.Resolver == "human" && !s.agentRequestNeedsHuman(&q)
 			}
 		}
 	case c.AgentRequest != nil && c.AgentRequest.Invalidated:
@@ -482,15 +489,17 @@ func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fac
 }
 
 // agentRequestNeedsHuman projects whether an ingested request blocks on a
-// human answer, exactly as requestReview projects it for the activity
-// surface. Caller holds the store lock.
+// human answer, exactly as the activity surface projects it, from the current
+// policy alone: at ingest no routing decision exists yet, so this is also the
+// shape a routing event compares against to wake only on a change. Caller
+// holds the store lock.
 func (s *Store) agentRequestNeedsHuman(q *AgentRequest) bool {
 	session, ok := s.agentSessions[q.SessionID]
 	if !ok {
 		// Without the session record nothing can answer automatically.
 		return true
 	}
-	route, _ := s.requestReview(session, *q)
+	route, _ := s.projectRequestRoute(session, *q, nil)
 	return route.Resolver == "human"
 }
 

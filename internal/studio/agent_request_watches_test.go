@@ -325,3 +325,82 @@ func containsReason(reasons []string, reason string) bool {
 	}
 	return false
 }
+
+const codexMultiQuestion = `{"id":9,"method":"item/tool/requestUserInput","params":{"threadId":"thread_1","turnId":"turn_9","itemId":"item_9","questions":[{"id":"one","question":"First answer?"},{"id":"two","question":"Second answer?"}]}}`
+
+// A request whose ingest projection already required a human is not woken
+// again when routing records the same human resolver: the two events share no
+// sequence, so a second wake could not be deduplicated away (issue #130
+// review).
+func TestRoutingDoesNotRepeatAnIngestWake(t *testing.T) {
+	s, r, g := watchAttemptRun(t)
+	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
+	session, token, err := s.CreateBoundAgentSession("codex", "Command approval", t.TempDir(), g.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An undelegated command approval needs a human by policy at ingest.
+	view, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexApproval))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, project.ID)
+	if len(got) != 1 || got[0].Level != watch.Wake || got[0].Reasons[0] != "agent_awaiting_answer" {
+		t.Fatalf("ingest wake missing: %+v", got)
+	}
+	e := &Engine{Store: s}
+	route, err := e.RouteAgentRequest(context.Background(), session.ID, token, view.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Route.Resolver != "human" {
+		t.Fatalf("expected a human resolver, got %+v", route.Route)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got = deliveries(t, s, project.ID); len(got) != 1 {
+		t.Fatalf("routing repeated the ingest wake: %+v", got)
+	}
+}
+
+// An unbound multi-question request is one fact per journal event, attributed
+// to its first review run: per-run facts would share one sequence, and a
+// run-grouped watch's first delivery would consume the others (issue #130
+// review).
+func TestUnboundMultiQuestionRequestIsOneRunGroup(t *testing.T) {
+	s, _, g := watchAttemptRun(t)
+	byRun := mustWatch(t, s, watch.Spec{
+		Version: watch.Version, Owner: watch.Owner{Kind: "operator"}, Description: "test watch",
+		Condition:    watch.Condition{Scope: watch.Scope{Project: g.ProjectID}},
+		Lease:        watch.Lease{ExpiresAt: time.Now().Add(time.Hour), MaxRenewals: 2},
+		Grouping:     watch.Grouping{By: []string{"run_id"}, WaitMS: 0, IntervalMS: 1000, MaxEvents: 64, RepeatIntervalMS: 60000},
+		DefaultLevel: watch.Digest,
+	})
+	session, token, err := s.CreateBoundAgentSession("codex", "Operator session", t.TempDir(), g.ProjectID, "", "", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := routeAgentTestRequest(t, s, session, token, codexMultiQuestion)
+	if len(view.RunIDs) != 2 {
+		t.Fatalf("expected two review runs, got %+v", view.RunIDs)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// One wake for the whole request, in one run group; the second question's
+	// group must not have been silently consumed.
+	got := deliveries(t, s, byRun.ID)
+	if len(got) != 1 || got[0].Level != watch.Wake || got[0].Reasons[0] != "agent_awaiting_answer" {
+		t.Fatalf("wake delivery: %+v", got)
+	}
+	if len(got[0].Runs) != 1 || got[0].Runs[0] != view.RunIDs[0] {
+		t.Fatalf("wake attribution: %+v", got[0].Runs)
+	}
+	if v, _ := s.Watch(byRun.ID); v.Pending != 0 {
+		t.Fatalf("undelivered groups remain: %+v", v.Groups)
+	}
+}
