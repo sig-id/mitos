@@ -75,7 +75,8 @@ func (h *History) Load(ctx context.Context, commit, fingerprint string) (Snapsho
 			bytesRequested += obj.file.Bytes
 			count++
 		}
-		raw, err := gitInput(ctx, h.Base, h.Directory, strings.NewReader(ids.String()), "cat-file", "--batch")
+		// Each object adds its hash, type, decimal size and two newlines.
+		raw, err := gitInput(ctx, h.Base, h.Directory, strings.NewReader(ids.String()), bytesRequested+128*int64(count), "cat-file", "--batch")
 		if err != nil {
 			return Snapshot{}, err
 		}

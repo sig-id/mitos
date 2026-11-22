@@ -104,6 +104,21 @@ func TestPlainDirectoryIgnoreRulesBoundsAndSymlinkIntake(t *testing.T) {
 	}
 }
 
+func TestPatchOutputLimitTracksApprovedWorkspace(t *testing.T) {
+	for _, tc := range []struct {
+		limits Limits
+		want   int64
+	}{
+		{Limits{}, 256 << 20},
+		{Limits{Bytes: 256 << 20, Files: 10000}, 1 << 30},
+		{MaxWorkflowLimits, 2 << 30},
+	} {
+		if got := tc.limits.patchOutputLimit(); got != tc.want {
+			t.Errorf("patch output limit for %+v = %d, want %d", tc.limits, got, tc.want)
+		}
+	}
+}
+
 func TestHarvestBinaryDeletesModesAndReconstruction(t *testing.T) {
 	source := t.TempDir()
 	put(t, source, "remove", "old")

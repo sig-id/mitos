@@ -129,7 +129,7 @@ func (h *History) commit(ctx context.Context, snapshot Snapshot, parent, message
 		blobs = append(blobs, strings.NewReader(fmt.Sprintf("blob\ndata %d\n", len(file.Data))), bytes.NewReader(file.Data), strings.NewReader("\n"))
 	}
 	blobs = append(blobs, strings.NewReader("done\n"))
-	if _, err := gitInput(ctx, h.Base, h.Directory, io.MultiReader(blobs...), "fast-import", "--quiet", "--done"); err != nil {
+	if _, err := gitInput(ctx, h.Base, h.Directory, io.MultiReader(blobs...), defaultGitOutputLimit, "fast-import", "--quiet", "--done"); err != nil {
 		return "", err
 	}
 	if _, err := git(ctx, h.Base, h.Directory, index.Bytes(), "update-index", "-z", "--index-info"); err != nil {
@@ -150,6 +150,12 @@ func (h *History) commit(ctx context.Context, snapshot Snapshot, parent, message
 	return strings.TrimSpace(string(commit)), nil
 }
 
+// Git binary patches encode both the forward and reverse change in base85.
+// Keep the standard allocation's 4:1 patch allowance for expanded workspaces.
+func (l Limits) patchOutputLimit() int64 {
+	return max(defaultGitOutputLimit, 4*l.Effective().Bytes)
+}
+
 func (h *History) Harvest(ctx context.Context, before Snapshot) (Harvest, error) {
 	after, err := CaptureResult(ctx, filepath.Join(h.Base, "workspace"), h.Limits.Effective())
 	if err != nil {
@@ -159,7 +165,7 @@ func (h *History) Harvest(ctx context.Context, before Snapshot) (Harvest, error)
 	if err != nil {
 		return Harvest{}, err
 	}
-	patch, err := git(ctx, h.Base, h.Directory, nil, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", h.BaselineCommit, commit, "--")
+	patch, err := gitInput(ctx, h.Base, h.Directory, nil, h.Limits.patchOutputLimit(), "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", h.BaselineCommit, commit, "--")
 	if err != nil {
 		return Harvest{}, err
 	}
