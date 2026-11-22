@@ -124,6 +124,23 @@ func (s *Store) submitJudgedResult(run string, in ResultSubmission, judgment *Ke
 	return graphClone(receipt), nil
 }
 
+// SubmittedResult returns the run's immutable result when it was submitted for
+// the task's current revision (issue #127): the work itself is finished, so
+// only the wrap-up can have been cut short.
+func (s *Store) SubmittedResult(run string) (ResultReceipt, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r := s.runs[run]
+	if r == nil || r.Result == nil {
+		return ResultReceipt{}, false
+	}
+	t := s.tasks[r.TaskID]
+	if t == nil || r.Result.Revision != t.Revision {
+		return ResultReceipt{}, false
+	}
+	return *r.Result, true
+}
+
 // verifySubmissionEvidence checks artifact references, checks, limitations and
 // request references against the attempt's current verified evidence.
 func (s *Store) verifySubmissionEvidence(r *Run, in ResultSubmission, refs map[string]bool) error {

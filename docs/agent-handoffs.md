@@ -28,6 +28,14 @@ successful candidate. Acceptance additionally checks current revisions, exact
 producer run, integrity and request settlement. Its receipt binds `result_id`.
 An orchestrator still returns the independently validated `OrchestratorPlan`.
 
+Once a submission is recorded, the attempt's remaining time budget is only a
+bounded wrap-up window (60 seconds). When the window or the attempt's own
+deadline ends the session, the run settles with the submitted result instead of
+failing finished work and holding a worker slot for wrap-up; `deadline_after_submit`
+evidence records the submission sequence and how long after it the budget ended.
+A restart in the same window recovers to the same settled state
+(`restart_after_submit`).
+
 ## Proposals and yield
 
 Native subagents are disabled in both harnesses. A worker that needs

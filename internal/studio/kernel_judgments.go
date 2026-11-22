@@ -157,6 +157,9 @@ func (e *Engine) judgeSubmission(run string, in ResultSubmission, req *judgmentR
 			if err != nil {
 				return nil, err
 			}
+			// The judged submission is recorded; only a bounded wrap-up
+			// remains (issue #127).
+			e.noteResultSubmitted(run)
 			return map[string]any{"id": receipt.ID, "run_id": receipt.RunID, "revision": receipt.Revision, "seq": receipt.Seq, "at": receipt.At, "digest": receipt.Digest, "proposal_ids": receipt.ProposalIDs, "judgment": map[string]any{"id": j.ID, "state": "applied", "resolver": j.Resolver}}, nil
 		case "refuse":
 			return nil, judgmentRefusal(req.code, req.detail)
