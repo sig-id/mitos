@@ -206,9 +206,10 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			}
 		} else if !r.Sample && (r.Status == "running" || (r.Status == "queued" && r.Claim != nil && r.Claim.ReleasedAt == nil)) {
 			// A restart between submission and completion settles the already
-			// submitted result instead of parking a retry that would redo
-			// finished work (issue #127).
-			if e.collectSubmittedResult(r.ID, "restart_after_submit", time.Time{}) {
+			// submitted result — after persisting its leftover workspace
+			// changes — instead of parking a retry that would redo finished
+			// work (issue #127).
+			if e.recoverSubmittedAttempt(r) {
 				continue
 			}
 			if err = s.interruptExecution(r); err != nil {
@@ -727,12 +728,12 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		_ = e.Store.blockAgentPrerequisite(r.ID, prerequisite.Error())
 		return
 	}
-	if e.budgetExpired(ctx, r.ID) {
+	if end, expired := e.budgetEnd(ctx, r.ID); expired {
 		// The attempt's time ran out. When it had already submitted its result
-		// the deadline only cut the wrap-up short, so the result is collected
-		// instead of failing finished work (issue #127).
-		deadline, _ := ctx.Deadline()
-		if e.collectSubmittedResult(r.ID, "deadline_after_submit", deadline) {
+		// and the failure is that ending itself — not a wrap-up failure such as
+		// harvesting or saving artifacts, which must stay visible — the result
+		// is collected instead of failing finished work (issue #127).
+		if budgetEndedSession(err) && e.collectSubmittedResult(r.ID, "deadline_after_submit", end) {
 			return
 		}
 		message = "The time limit was reached. Review the output and try again with a longer limit."

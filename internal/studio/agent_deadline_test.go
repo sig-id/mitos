@@ -2,10 +2,13 @@ package studio
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"mitos/internal/compute"
+	workspacefs "mitos/internal/workspace"
 )
 
 func submittedRun(t *testing.T, s *Store, app Application) (Run, string) {
@@ -108,7 +111,16 @@ func TestSubmissionGraceStopsWrapupAndCollectsResult(t *testing.T) {
 		finished, _ := s.Get(r.ID)
 		settled <- finished
 	}()
-	// The submission arms the grace window; the deadline itself is far away.
+	// The submission arms the grace window once the attempt is underway, as it
+	// would from the agent's result_submit during the session; the deadline
+	// itself is far away.
+	for i := 0; i < 500; i++ {
+		current, err := s.Get(r.ID)
+		if err == nil && runEvidence(current, "workspace_prepared") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	e.noteResultSubmitted(r.ID)
 	select {
 	case finished := <-settled:
@@ -124,12 +136,41 @@ func TestSubmissionGraceStopsWrapupAndCollectsResult(t *testing.T) {
 	cancel()
 }
 
-// A restart between submission and deadline recovers to the same settled state
-// instead of parking a retry that would redo finished work (issue #127).
+// A restart between submission and completion recovers to the same settled
+// state — including the harvested workspace changes a downstream attempt
+// continues from — instead of parking a retry that would redo finished work
+// (issue #127).
 func TestRestartAfterSubmitRecoversSettledResult(t *testing.T) {
 	app := executionApp(t, `sleep 30 & wait`)
 	s := testStore(t)
 	r, root := submittedRun(t, s, app)
+	ctx := context.Background()
+	// The attempt prepared its workspace and made a change before the server
+	// stopped during wrap-up.
+	before, err := workspacefs.CaptureSource(ctx, root, s.Dir(), workspacefs.DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(s.Dir(), "workspaces", r.ID)
+	history, err := workspacefs.Prepare(ctx, base, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "workspace", "file.txt"), []byte("hello\nworld\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	current := s.runs[r.ID]
+	current.GraphAttempt = &GraphAttempt{GraphID: "graph_restart"}
+	s.runs[r.ID] = current
+	if s.graphs == nil {
+		s.graphs = map[string]*WorkGraph{}
+	}
+	s.graphs["graph_restart"] = &WorkGraph{ID: "graph_restart", ProjectID: current.ProjectID, Status: "active", Policy: GraphPolicy{Mode: "adaptive"}, RootTask: "goal", Members: map[string]*GraphMember{}}
+	s.mu.Unlock()
+	if err := s.RecordWorkspace(r.ID, "workspace_prepared", "Agent workspace prepared.", WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint, Limits: before.Limits}); err != nil {
+		t.Fatal(err)
+	}
 	e, err := NewEngine(s, []Application{app}, root)
 	if err != nil {
 		t.Fatal(err)
@@ -142,37 +183,78 @@ func TestRestartAfterSubmitRecoversSettledResult(t *testing.T) {
 	if finished.Status != "done" || finished.Result == nil || finished.Result.Submission.Summary != "Appended 'world' as line 2 of file.txt." {
 		t.Fatalf("restart did not collect the submitted result: %+v", finished)
 	}
-	if !runEvidence(finished, "restart_after_submit") {
-		t.Fatalf("no restart_after_submit evidence: %+v", finished.Events)
+	if !runEvidence(finished, "restart_after_submit") || !runEvidence(finished, "workspace_harvested") {
+		t.Fatalf("recovery evidence: %+v", finished.Events)
 	}
 	if finished.Decision != nil {
 		t.Fatalf("recovery parked the attempt instead of settling it: %+v", finished.Decision)
 	}
+	patch, err := s.Artifact(r.ID, "changes.patch")
+	if err != nil || len(patch) == 0 {
+		t.Fatalf("workspace changes not recovered: %v", err)
+	}
+	if finished.Workspace == nil || finished.Workspace.ResultCommit == "" {
+		t.Fatalf("workspace record not settled: %+v", finished.Workspace)
+	}
 }
 
-// budgetExpired distinguishes a budget end from other cancellations.
-func TestBudgetExpiredDistinguishesGraceFromOtherCancels(t *testing.T) {
+// A submitted result whose workspace cannot be recovered keeps the
+// interruption state instead of completing without the harvested changes
+// (issue #127).
+func TestRestartAfterSubmitWithoutWorkspaceKeepsInterruption(t *testing.T) {
+	app := executionApp(t, `sleep 30 & wait`)
+	s := testStore(t)
+	r, root := submittedRun(t, s, app)
+	e, err := NewEngine(s, []Application{app}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	parked, err := s.Get(r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parked.Status != "parked" || parked.Decision == nil || parked.Result == nil {
+		t.Fatalf("unrecoverable attempt should keep its interruption state: %+v", parked)
+	}
+}
+
+// budgetEnd distinguishes a budget end from other cancellations and reports
+// the moment execution actually stopped.
+func TestBudgetEndDistinguishesGraceFromOtherCancels(t *testing.T) {
 	engineCtx, stop := context.WithCancel(context.Background())
 	defer stop()
 	e := &Engine{ctx: engineCtx, submitGrace: map[string]*resultGrace{}}
-	deadlineCtx, cancelDeadline := context.WithTimeout(engineCtx, 10*time.Millisecond)
+	deadline := time.Now().Add(50 * time.Millisecond)
+	deadlineCtx, cancelDeadline := context.WithDeadline(engineCtx, deadline)
 	defer cancelDeadline()
-	time.Sleep(20 * time.Millisecond)
-	if !e.budgetExpired(deadlineCtx, "run-x") {
-		t.Fatal("deadline not recognized")
+	time.Sleep(80 * time.Millisecond)
+	end, expired := e.budgetEnd(deadlineCtx, "run-x")
+	if !expired || !end.Equal(deadline) {
+		t.Fatalf("deadline not recognized: %v %v", end, expired)
 	}
+	graceDeadline := time.Now().Add(-time.Second)
 	graceCtx, cancelGrace := context.WithCancel(engineCtx)
-	e.submitGrace["run-x"] = &resultGrace{expired: true}
+	e.submitGrace["run-x"] = &resultGrace{deadline: graceDeadline, expired: true}
 	cancelGrace()
-	if !e.budgetExpired(graceCtx, "run-x") {
-		t.Fatal("expired grace not recognized")
+	// The grace ended execution before the original deadline; the reported
+	// end is the grace expiry, not the unused budget.
+	end, expired = e.budgetEnd(graceCtx, "run-x")
+	if !expired || !end.Equal(graceDeadline) {
+		t.Fatalf("expired grace not recognized: %v %v", end, expired)
 	}
-	if e.budgetExpired(engineCtx, "run-x") {
+	if _, expired = e.budgetEnd(engineCtx, "run-x"); expired {
 		t.Fatal("live context counted as expired")
 	}
 	plainCtx, cancelPlain := context.WithCancel(engineCtx)
 	cancelPlain()
-	if e.budgetExpired(plainCtx, "run-other") {
+	if _, expired = e.budgetEnd(plainCtx, "run-other"); expired {
 		t.Fatal("cancellation without a grace window counted as a budget end")
+	}
+	if !budgetEndedSession(context.Canceled) || !budgetEndedSession(context.DeadlineExceeded) {
+		t.Fatal("session-end classification is wrong")
+	}
+	if budgetEndedSession(errCommandFailed) {
+		t.Fatal("an ordinary failure classified as the budget ending the session")
 	}
 }
