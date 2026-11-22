@@ -1,6 +1,6 @@
 # ADR 0009: Runtime-evaluated watches with decision-model triage
 
-Status: proposed, 2026-11-20; delivery tracked by gates W1–W4.
+Status: accepted, 2026-11-22; gates W1–W4 implemented (#112, #113, #116, #117).
 Extends [ADR 0003](0003_DECISION_MODELS_AND_RUNNER.md) and
 [ADR 0007](0007_SESSIONS_ROUTING_AND_SUPERVISION.md).
 
