@@ -383,6 +383,92 @@ func (s *Store) graphFact(e Event, c *graphChange) watch.Fact {
 	return watch.Fact{Seq: e.Seq, At: e.At, Project: c.Graph.ProjectID, Graph: c.Graph.ID, Type: e.Type, Kind: e.Kind}
 }
 
+// agentRequestScopes attributes an agent request to the runs its fact
+// belongs to. An executing attempt's session is bound to its run, so the
+// question carries that run's project, graph, task and run, and attempt,
+// responsibility and project watches all see it (issue #130). An unbound
+// interactive session has only the review runs it opened.
+func (s *Store) agentRequestScopes(q *AgentRequest) []watch.Fact {
+	if a, ok := s.agentSessions[q.SessionID]; ok && a.RunID != "" {
+		if r := s.runs[a.RunID]; r != nil {
+			project := r.ProjectID
+			if project == "" {
+				project = r.Brief.ProjectID
+			}
+			f := watch.Fact{Project: project, Run: r.ID, Task: r.TaskID}
+			if r.GraphAttempt != nil {
+				f.Graph = r.GraphAttempt.GraphID
+				if f.Project == "" {
+					if g := s.graphs[f.Graph]; g != nil {
+						f.Project = g.ProjectID
+					}
+				}
+			}
+			return []watch.Fact{f}
+		}
+	}
+	facts := make([]watch.Fact, 0, len(q.Runs))
+	for _, r := range q.Runs {
+		facts = append(facts, watch.Fact{Project: r.ProjectID, Run: r.ID})
+	}
+	return facts
+}
+
+// agentRequestFacts projects agent request events into watch facts (spec 09
+// §2). The question an agent attempt is blocked on is a must-deliver wake
+// (reason agent_awaiting_answer), and its answer or invalidation is a notify
+// on the same attribution, so the open group can close. ended lists requests
+// this event ended (session close, expiry or thread end).
+func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fact {
+	var requests []AgentRequest
+	reason := ""
+	question := false
+	switch {
+	case e.Kind == "agent_approval_requested" && c.AgentRequest != nil && !c.AgentRequest.Invalidated:
+		requests = []AgentRequest{*c.AgentRequest}
+		question = true
+	case e.Kind == "approval_resolved" && c.AgentAnswer != nil:
+		if r := s.runs[e.RunID]; r != nil && r.Decision != nil && r.Decision.Source != nil {
+			if q, ok := s.agentRequests[r.Decision.Source.SessionID+"/"+r.Decision.Source.RequestID]; ok {
+				requests = []AgentRequest{q}
+			}
+		}
+		reason = "agent_answered"
+	case c.AgentRequest != nil && c.AgentRequest.Invalidated:
+		requests = []AgentRequest{*c.AgentRequest}
+		reason = "agent_request_ended"
+	default:
+		for _, key := range ended {
+			if q, ok := s.agentRequests[key]; ok {
+				requests = append(requests, q)
+			}
+		}
+		reason = "agent_request_ended"
+	}
+	facts := []watch.Fact{}
+	for _, q := range requests {
+		summary := factSummary(c.Summary, c.Stage)
+		if summary == "" {
+			if question && len(q.Request.Cards) > 0 {
+				summary = factSummary(q.Request.Cards[0].Question, "")
+			} else if !question {
+				summary = "The waiting request ended without an answer."
+			}
+		}
+		for _, scope := range s.agentRequestScopes(&q) {
+			scope.Seq, scope.At, scope.Type, scope.Kind = e.Seq, e.At, e.Type, e.Kind
+			scope.Summary = summary
+			if question {
+				scope.Rule, scope.Reason = watch.Wake, "agent_awaiting_answer"
+			} else {
+				scope.Rule, scope.Reason = watch.Notify, reason
+			}
+			facts = append(facts, scope)
+		}
+	}
+	return facts
+}
+
 // observeWatches folds one fact into every active watch. It runs inside apply,
 // both live and during replay.
 func (s *Store) observeWatches(f watch.Fact) {
