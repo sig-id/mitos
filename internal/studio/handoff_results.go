@@ -84,6 +84,9 @@ func (s *Store) submitJudgedResult(run string, in ResultSubmission, judgment *Ke
 			break
 		}
 	}
+	if permit != nil && permit.Resolver == "decision_application" && permit.ResolverRevision != nil && *permit.ResolverRevision != s.agentPolicy(r.ProjectID).Revision {
+		return ResultReceipt{}, ErrConflict
+	}
 	if permit == nil && (r.Status != "running" || t == nil || t.CurrentRunID != r.ID) {
 		return ResultReceipt{}, ErrConflict
 	}

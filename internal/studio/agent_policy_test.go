@@ -17,7 +17,7 @@ func TestAgentPolicyRequiresExplicitVersionedSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if setup.AgentPolicy.Autonomy != "manual" || len(setup.AgentPolicy.Rules) != 0 {
+	if setup.AgentPolicy.Autonomy != "delegated" || len(setup.AgentPolicy.Rules) != 0 {
 		t.Fatal("prose became authority")
 	}
 	p := agentpolicy.Default()

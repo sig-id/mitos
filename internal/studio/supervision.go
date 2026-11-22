@@ -63,9 +63,15 @@ func (e *Engine) resumeConfigured(ctx context.Context, r Run) error {
 	plan := r.Execution
 	base := filepath.Join(e.Store.Dir(), "workspaces", r.ID)
 	history := &workspacefs.History{Base: base, Directory: filepath.Join(base, "history.git"), BaselineCommit: plan.InitialCommit}
+	if r.Workspace != nil {
+		history.Limits = r.Workspace.Limits
+	}
 	before, err := history.Load(ctx, plan.InitialCommit, plan.InitialFingerprint)
 	if err != nil {
 		return err
+	}
+	if r.Workspace != nil {
+		before.OmittedSubmodules = r.Workspace.OmittedSubmodules
 	}
 	oracleDir := filepath.Join(base, "oracle")
 	oracle, err := workspacefs.CaptureResult(ctx, oracleDir, workspacefs.DefaultLimits)

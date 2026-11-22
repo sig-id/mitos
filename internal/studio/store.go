@@ -25,6 +25,7 @@ import (
 )
 
 type Store struct {
+	pendingWorkflowReview  map[string]string // owning attempt to unresolved operator review
 	taskContextVersions    map[string]map[string]taskContextVersion
 	tenantVersions         map[string]uint64
 	pendingInputWakes      map[string]bool
@@ -455,6 +456,16 @@ func (s *Store) apply(e Event) error {
 	}
 	if c.Status != "" {
 		r.Status = c.Status
+	}
+	if w := r.WorkflowReview; w != nil {
+		if r.Status == "parked" {
+			if s.pendingWorkflowReview == nil {
+				s.pendingWorkflowReview = map[string]string{}
+			}
+			s.pendingWorkflowReview[w.Owner] = r.ID
+		} else if s.pendingWorkflowReview[w.Owner] == r.ID {
+			delete(s.pendingWorkflowReview, w.Owner)
+		}
 	}
 	if c.BlockedReason != "" {
 		r.BlockedReason = c.BlockedReason

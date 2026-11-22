@@ -397,7 +397,7 @@ sys.__stdout__.write(json.dumps({'method':'item/started','params':{'threadId':'f
 sys.__stdout__.flush()
 time.sleep(60)
 `)
-	p := agentpolicy.Default()
+	p := e.Store.AgentPolicy(req.ProjectID)
 	p.Rules = []agentpolicy.Rule{{ID: "boundary", Command: "forbidden operation", Directory: ".", Action: "deny"}}
 	if _, err := e.SaveAgentPolicy(req.ProjectID, p); err != nil {
 		t.Fatal(err)

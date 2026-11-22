@@ -60,27 +60,28 @@ func (e *heldJudgment) Error() string {
 // While State is pending the record holds the affected submission; the settle
 // event journals the outcome next to the work it decided.
 type KernelJudgment struct {
-	ID            string                `json:"id"`
-	Code          string                `json:"code"`
-	Detail        string                `json:"detail"`
-	Question      string                `json:"question"`
-	Digest        string                `json:"digest"`
-	Proposals     int                   `json:"proposals"`
-	Mode          string                `json:"mode"`  // decision_application or operator
-	State         string                `json:"state"` // pending, applied, refused
-	Reason        string                `json:"reason,omitempty"`
-	Submission    *ResultSubmission     `json:"submission,omitempty"` // held while pending
-	DecisionID    string                `json:"decision_id,omitempty"`
-	GraphID       string                `json:"graph_id,omitempty"`
-	GraphRevision int64                 `json:"graph_revision,omitempty"`
-	Request       decisionmodel.Request `json:"request,omitempty"`
-	Config        *decisionmodel.Config `json:"config,omitempty"`
-	Answer        *decisionmodel.Answer `json:"answer,omitempty"`
-	Resolver      string                `json:"resolver,omitempty"`
-	ResolvedAt    *time.Time            `json:"resolved_at,omitempty"`
-	Deadline      time.Time             `json:"deadline,omitempty"`
-	Seq           int64                 `json:"seq"`
-	At            time.Time             `json:"at"`
+	ResolverRevision *int                  `json:"resolver_revision,omitempty"`
+	ID               string                `json:"id"`
+	Code             string                `json:"code"`
+	Detail           string                `json:"detail"`
+	Question         string                `json:"question"`
+	Digest           string                `json:"digest"`
+	Proposals        int                   `json:"proposals"`
+	Mode             string                `json:"mode"`  // decision_application or operator
+	State            string                `json:"state"` // pending, applied, refused
+	Reason           string                `json:"reason,omitempty"`
+	Submission       *ResultSubmission     `json:"submission,omitempty"` // held while pending
+	DecisionID       string                `json:"decision_id,omitempty"`
+	GraphID          string                `json:"graph_id,omitempty"`
+	GraphRevision    int64                 `json:"graph_revision,omitempty"`
+	Request          decisionmodel.Request `json:"request,omitempty"`
+	Config           *decisionmodel.Config `json:"config,omitempty"`
+	Answer           *decisionmodel.Answer `json:"answer,omitempty"`
+	Resolver         string                `json:"resolver,omitempty"`
+	ResolvedAt       *time.Time            `json:"resolved_at,omitempty"`
+	Deadline         time.Time             `json:"deadline,omitempty"`
+	Seq              int64                 `json:"seq"`
+	At               time.Time             `json:"at"`
 }
 
 // kernelJudgmentRule describes one judgment-shaped refusal: the operator
@@ -133,8 +134,8 @@ func (e *Engine) judgeSubmission(run string, in ResultSubmission, req *judgmentR
 	if err != nil {
 		return nil, judgmentRefusal(req.code, req.detail)
 	}
-	if cfg := e.judgmentApplication(g); cfg != nil {
-		j, err := s.beginApplicationJudgment(run, in, req, rule, *cfg)
+	if cfg, revision, _, err := e.workflowDecisionConfig(g); err == nil {
+		j, err := s.beginApplicationJudgment(run, in, req, rule, cfg, revision)
 		if err != nil {
 			if errors.Is(err, errJudgmentAllowance) {
 				// The graph's decision allowance is spent; failing closed keeps
@@ -177,22 +178,6 @@ func (e *Engine) judgeSubmission(run string, in ResultSubmission, req *judgmentR
 		return nil, err
 	}
 	return map[string]any{"held": "kernel_judgment", "judgment": j.ID, "code": j.Code, "detail": j.Detail, "note": "The submission is held for a judgment, not refused. Stop after submitting; this attempt continues with the judgment outcome."}, nil
-}
-
-// judgmentApplication returns the graph's configured decision application when
-// it can judge, or nil when the operator decides.
-func (e *Engine) judgmentApplication(g WorkGraph) *decisionmodel.Config {
-	if g.Status != "active" || g.Policy.DecisionApplication == "" {
-		return nil
-	}
-	if root := g.Members[g.RootTask]; root == nil || root.Sealed {
-		return nil
-	}
-	app, ok := e.App(g.Policy.DecisionApplication)
-	if !ok || app.DecisionModel == nil || app.DecisionModel.Validate() != nil {
-		return nil
-	}
-	return app.DecisionModel
 }
 
 // judgmentCard builds the operator card for a pending judgment. External
@@ -315,14 +300,14 @@ func (s *Store) chargeJudgmentGraphLocked(r *Run, graphID, kind string) (*graphC
 // beginApplicationJudgment records the trigger and charges the graph's
 // decision allowance before any inference. The submission stays on the
 // attempt; the run is not parked while the model call is in flight.
-func (s *Store) beginApplicationJudgment(id string, in ResultSubmission, req *judgmentRequired, rule kernelJudgmentRule, cfg decisionmodel.Config) (KernelJudgment, error) {
+func (s *Store) beginApplicationJudgment(id string, in ResultSubmission, req *judgmentRequired, rule kernelJudgmentRule, cfg decisionmodel.Config, revision int) (KernelJudgment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.runs[id]
 	if r == nil {
 		return KernelJudgment{}, ErrNotFound
 	}
-	if r.Status != "running" || r.HeldJudgment != nil || r.Result != nil || r.Decision != nil && r.Decision.Choice == "" {
+	if s.agentPolicy(r.ProjectID).Revision != revision || r.Status != "running" || r.HeldJudgment != nil || r.Result != nil || r.Decision != nil && r.Decision.Choice == "" {
 		return KernelJudgment{}, ErrConflict
 	}
 	now := time.Now().UTC()
@@ -340,6 +325,7 @@ func (s *Store) beginApplicationJudgment(id string, in ResultSubmission, req *ju
 	// The accounting bump below lands in the same commit, so the revision this
 	// judgment must still see is old.Revision + 1.
 	j.GraphRevision = old.Revision + 1
+	j.ResolverRevision = &revision
 	j.Seq = s.seq + 1
 	j.Deadline = minTime(now.Add(time.Duration(cfg.TimeoutMS)*time.Millisecond), old.Limits.Deadline)
 	if r.Execution != nil {
@@ -408,7 +394,7 @@ func (s *Store) finishApplicationJudgment(id, judgmentID string, answer decision
 	g := s.graphs[j.GraphID]
 	outcome, reason := "escalate", ""
 	switch {
-	case r.Status != "running" || g == nil || g.Status != "active" || g.Revision != j.GraphRevision:
+	case j.ResolverRevision != nil && *j.ResolverRevision != s.agentPolicy(r.ProjectID).Revision || r.Status != "running" || g == nil || g.Status != "active" || g.Revision != j.GraphRevision:
 		outcome, reason = "refuse", "state_changed_before_decision"
 	case !time.Now().Before(j.Deadline):
 		outcome, reason = "refuse", "deadline_expired"

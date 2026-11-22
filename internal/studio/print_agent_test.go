@@ -75,7 +75,7 @@ print('usage statistics')
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	e, req := graphEngine(t, true)
+	e, req := workflowTestEngine(t)
 	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "print-adapter", ProjectID: req.ProjectID, Goal: "Compute and review the answer", Execution: defaultExecution("opencode", "fixture/worker")})
 	if err != nil {
 		t.Fatal(err)
@@ -386,7 +386,7 @@ print('fixture turn complete')
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	e, req := graphEngine(t, true)
+	e, req := workflowTestEngine(t)
 	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "print-adapter-mcp", ProjectID: req.ProjectID, Goal: "Compute and review the answer", Execution: defaultExecution("pi", "fixture/worker")})
 	if err != nil {
 		t.Fatal(err)

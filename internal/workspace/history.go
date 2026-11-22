@@ -3,16 +3,21 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
-type History struct{ Base, Directory, BaselineCommit string }
+type History struct {
+	Base, Directory, BaselineCommit string
+	Limits                          Limits
+}
 
 type Change struct {
 	Path         string `json:"path"`
@@ -39,7 +44,7 @@ func Prepare(ctx context.Context, base string, snapshot Snapshot) (*History, err
 // PrepareContinuation retains the original patch baseline while materializing
 // the saved result of a previous attempt in a fresh private workspace.
 func PrepareContinuation(ctx context.Context, base string, snapshot, current Snapshot) (*History, error) {
-	history := &History{Base: base, Directory: filepath.Join(base, "history.git")}
+	history := &History{Limits: snapshot.Limits, Base: base, Directory: filepath.Join(base, "history.git")}
 	if err := os.MkdirAll(base, 0700); err != nil {
 		return nil, err
 	}
@@ -109,16 +114,23 @@ func (h *History) commit(ctx context.Context, snapshot Snapshot, parent, message
 	if _, err := git(ctx, h.Base, h.Directory, nil, "read-tree", "--empty"); err != nil {
 		return "", err
 	}
+	// Stream blobs through one Git process. Starting a process and syncing a
+	// loose object per file can exhaust the harvest deadline on large trees.
 	var index bytes.Buffer
+	var blobs []io.Reader
 	for _, file := range snapshot.Files {
 		if !safePath(file.Path) {
 			return "", fmt.Errorf("invalid snapshot path %q", file.Path)
 		}
-		oid, err := git(ctx, h.Base, h.Directory, file.Data, "hash-object", "-w", "--stdin", "--no-filters")
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&index, "%s %s\t%s\x00", file.Mode, strings.TrimSpace(string(oid)), file.Path)
+		hash := sha1.New() // Protected history is explicitly initialized as Git SHA-1.
+		fmt.Fprintf(hash, "blob %d\x00", len(file.Data))
+		hash.Write(file.Data)
+		fmt.Fprintf(&index, "%s %x\t%s\x00", file.Mode, hash.Sum(nil), file.Path)
+		blobs = append(blobs, strings.NewReader(fmt.Sprintf("blob\ndata %d\n", len(file.Data))), bytes.NewReader(file.Data), strings.NewReader("\n"))
+	}
+	blobs = append(blobs, strings.NewReader("done\n"))
+	if _, err := gitInput(ctx, h.Base, h.Directory, io.MultiReader(blobs...), defaultGitOutputLimit, "fast-import", "--quiet", "--done"); err != nil {
+		return "", err
 	}
 	if _, err := git(ctx, h.Base, h.Directory, index.Bytes(), "update-index", "-z", "--index-info"); err != nil {
 		return "", err
@@ -138,8 +150,14 @@ func (h *History) commit(ctx context.Context, snapshot Snapshot, parent, message
 	return strings.TrimSpace(string(commit)), nil
 }
 
+// Git binary patches encode both the forward and reverse change in base85.
+// Keep the standard allocation's 4:1 patch allowance for expanded workspaces.
+func (l Limits) patchOutputLimit() int64 {
+	return max(defaultGitOutputLimit, 4*l.Effective().Bytes)
+}
+
 func (h *History) Harvest(ctx context.Context, before Snapshot) (Harvest, error) {
-	after, err := CaptureResult(ctx, filepath.Join(h.Base, "workspace"), DefaultLimits)
+	after, err := CaptureResult(ctx, filepath.Join(h.Base, "workspace"), h.Limits.Effective())
 	if err != nil {
 		return Harvest{}, err
 	}
@@ -147,7 +165,7 @@ func (h *History) Harvest(ctx context.Context, before Snapshot) (Harvest, error)
 	if err != nil {
 		return Harvest{}, err
 	}
-	patch, err := git(ctx, h.Base, h.Directory, nil, "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", h.BaselineCommit, commit, "--")
+	patch, err := gitInput(ctx, h.Base, h.Directory, nil, h.Limits.patchOutputLimit(), "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames", h.BaselineCommit, commit, "--")
 	if err != nil {
 		return Harvest{}, err
 	}
@@ -212,7 +230,7 @@ func (h *History) VerificationTree(ctx context.Context, before Snapshot, harvest
 			return err
 		}
 	}
-	rebuilt, err := CaptureResult(ctx, directory, DefaultLimits)
+	rebuilt, err := CaptureResult(ctx, directory, h.Limits.Effective())
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"mitos/internal/resourcepolicy"
+	workspacefs "mitos/internal/workspace"
 	"net/url"
 	"slices"
 	"time"
@@ -34,12 +35,13 @@ type Request struct {
 	BrokerEndpoint string               `json:"broker_endpoint,omitempty"`
 }
 type Workspace struct {
-	Source              string `json:"source"`
-	Mode                string `json:"mode"`
-	Directory           string `json:"directory"`
-	HistoryDirectory    string `json:"history_directory,omitempty"`
-	BaselineCommit      string `json:"baseline_commit,omitempty"`
-	BaselineFingerprint string `json:"baseline_fingerprint,omitempty"`
+	Limits              workspacefs.Limits `json:"limits,omitzero"`
+	Source              string             `json:"source"`
+	Mode                string             `json:"mode"`
+	Directory           string             `json:"directory"`
+	HistoryDirectory    string             `json:"history_directory,omitempty"`
+	BaselineCommit      string             `json:"baseline_commit,omitempty"`
+	BaselineFingerprint string             `json:"baseline_fingerprint,omitempty"`
 }
 type LaunchSpec struct {
 	RunID         string       `json:"run_id"`

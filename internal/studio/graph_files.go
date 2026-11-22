@@ -41,6 +41,13 @@ func (s *Store) readRegisteredArtifact(r *Run, name string) ([]byte, error) {
 	return nil, ErrNotFound
 }
 
+func archiveLimits(r *Run) workspacefs.Limits {
+	if r.Workspace != nil {
+		return r.Workspace.Limits.Effective()
+	}
+	return workspacefs.DefaultLimits
+}
+
 // resolveResultFile binds a final-answer file item to the immutable evidence of
 // one exact run. Registered artifacts are authoritative; changed and unchanged
 // workspace files resolve through the checksum-verified retained archive.
@@ -82,8 +89,9 @@ func (s *Store) resolveResultFile(run, path string) (string, int64, error) {
 		return "", 0, errors.New("retained workspace archive is unreadable")
 	}
 	defer zipped.Close()
-	reader := tar.NewReader(io.LimitReader(zipped, workspacefs.DefaultLimits.Bytes+(20<<20)))
-	for count := 0; count < workspacefs.DefaultLimits.Files; count++ {
+	limits := archiveLimits(r)
+	reader := tar.NewReader(io.LimitReader(zipped, limits.Bytes+int64(limits.Files)*2048))
+	for count := 0; count < limits.Files; count++ {
 		header, err := reader.Next()
 		if err == io.EOF {
 			break
@@ -94,7 +102,7 @@ func (s *Store) resolveResultFile(run, path string) (string, int64, error) {
 		if header.Name != path {
 			continue
 		}
-		if header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > workspacefs.DefaultLimits.Bytes {
+		if header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > limits.Bytes {
 			return "", 0, errors.New("file is not a bounded regular file")
 		}
 		body, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
@@ -151,6 +159,10 @@ func (s *Store) GraphRunFile(graph, task, run, path string) ([]byte, error) {
 			break
 		}
 	}
+	r, err := s.Get(run)
+	if err != nil {
+		return nil, err
+	}
 	// Unchanged source files are also readable from the checksum-verified archive.
 	archive, err := s.Artifact(run, "workspace.tar.gz")
 	if err != nil {
@@ -161,8 +173,9 @@ func (s *Store) GraphRunFile(graph, task, run, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer zipped.Close()
-	reader := tar.NewReader(io.LimitReader(zipped, workspacefs.DefaultLimits.Bytes+(20<<20)))
-	for count := 0; count < workspacefs.DefaultLimits.Files; count++ {
+	limits := archiveLimits(&r)
+	reader := tar.NewReader(io.LimitReader(zipped, limits.Bytes+int64(limits.Files)*2048))
+	for count := 0; count < limits.Files; count++ {
 		header, err := reader.Next()
 		if err == io.EOF {
 			return nil, ErrNotFound
@@ -173,7 +186,7 @@ func (s *Store) GraphRunFile(graph, task, run, path string) ([]byte, error) {
 		if header.Name != path {
 			continue
 		}
-		if header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > workspacefs.DefaultLimits.Bytes {
+		if header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > limits.Bytes {
 			return nil, errors.New("result is not a bounded regular file")
 		}
 		body, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
@@ -192,7 +205,8 @@ func (s *Store) GraphRunFile(graph, task, run, path string) ([]byte, error) {
 // GraphRunWorkspaceFiles lists regular files from the retained archive so source
 // citations can resolve without granting access to the live filesystem.
 func (s *Store) GraphRunWorkspaceFiles(graph, task, run string) ([]workspacefs.Change, error) {
-	if _, err := s.GraphRun(graph, task, run); err != nil {
+	r, err := s.GraphRun(graph, task, run)
+	if err != nil {
 		return nil, err
 	}
 	data, err := s.Artifact(run, "workspace.tar.gz")
@@ -204,9 +218,10 @@ func (s *Store) GraphRunWorkspaceFiles(graph, task, run string) ([]workspacefs.C
 		return nil, err
 	}
 	defer zipped.Close()
-	reader := tar.NewReader(io.LimitReader(zipped, workspacefs.DefaultLimits.Bytes+(20<<20)))
+	limits := archiveLimits(&r)
+	reader := tar.NewReader(io.LimitReader(zipped, limits.Bytes+int64(limits.Files)*2048))
 	files := []workspacefs.Change{}
-	for count := 0; count < workspacefs.DefaultLimits.Files; count++ {
+	for count := 0; count < limits.Files; count++ {
 		h, err := reader.Next()
 		if err == io.EOF {
 			return files, nil
@@ -214,7 +229,7 @@ func (s *Store) GraphRunWorkspaceFiles(graph, task, run string) ([]workspacefs.C
 		if err != nil {
 			return nil, err
 		}
-		if h.Typeflag == tar.TypeReg && fs.ValidPath(h.Name) && h.Name != "." && h.Size >= 0 && h.Size <= workspacefs.DefaultLimits.Bytes {
+		if h.Typeflag == tar.TypeReg && fs.ValidPath(h.Name) && h.Name != "." && h.Size >= 0 && h.Size <= limits.Bytes {
 			files = append(files, workspacefs.Change{Path: h.Name, Kind: "snapshot"})
 		}
 	}

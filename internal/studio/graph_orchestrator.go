@@ -251,7 +251,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				}
 				continue
 			}
-			// A orchestrator deliberately exposes one typed proposal file. Native stdout
+			// An orchestrator deliberately exposes one typed proposal file. Native stdout
 			// remains untouched and cannot accidentally become a control command.
 			proposalName := "graph-proposal.json"
 			for _, artifact := range r.Artifacts {
@@ -266,16 +266,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				}
 				continue
 			}
-			var plan OrchestratorPlan
-			err = DecodeGraphJSON(body, &plan)
-			if err == nil {
-				err = e.applyOrchestratorPlan(snapshot, key, r, plan)
-			}
-			if err != nil {
-				if err = e.graphOrchestratorError(snapshot.ID, key, x.OrchestratorTask, "Orchestrator could not apply its proposal: "+err.Error()); err != nil {
-					return err
-				}
-			}
+			e.queuePlanReview(snapshot, key, r, body)
 		}
 	}
 	// Register event-driven planning obligations and their executable Task in a
@@ -502,6 +493,10 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 	return nil
 }
 func (e *Engine) graphOrchestratorError(id, key, task, reason string) error {
+	return e.setOrchestratorError(id, key, task, reason, nil, 0)
+}
+
+func (e *Engine) setOrchestratorError(id, key, task, reason string, selection *workflowSelection, revision int64) error {
 	s := e.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -510,19 +505,23 @@ func (e *Engine) graphOrchestratorError(id, key, task, reason string) error {
 		return ErrNotFound
 	}
 	x := old.Expansions[key]
-	if x == nil || x.OrchestratorTask != task || x.Outcome != "" || x.Error != "" {
+	if x == nil || x.OrchestratorTask != task || x.Outcome != "" || x.Error != "" || (revision != 0 && old.Revision != revision) {
 		return nil
 	}
 	g := graphClone(*old)
 	g.Expansions[key].Error = reason
-	if g.Policy.Automatic && strings.HasPrefix(reason, "Orchestrator could not apply") && g.OrchestratorCalls < g.Limits.OrchestratorCalls && g.Expansions[key].Failures < 2 {
+	if selection != nil && selection.Choice == "repair" && s.agentPolicy(g.ProjectID).Revision == selection.Revision && !s.supervisionHeld(g.ProjectID) && g.Status == "active" && time.Now().Before(x.Deadline) && g.Attempts < g.Limits.Attempts && g.OrchestratorCalls < g.Limits.OrchestratorCalls && x.Failures < g.Limits.Retries {
 		g.Expansions[key].Error = ""
 		g.Expansions[key].OrchestratorTask = ""
 		g.Revision++
 		g.Expansions[key].LastError = reason
 		g.Expansions[key].Failures++
 	}
-	return s.commit("", "effect", "graph_orchestrator_blocked", change{Graph: &graphChange{Graph: g}})
+	var evidence json.RawMessage
+	if selection != nil && selection.Evaluation != "" {
+		evidence, _ = json.Marshal(selection)
+	}
+	return s.commit("", "effect", "graph_orchestrator_blocked", change{Graph: &graphChange{Graph: g}, Evidence: evidence})
 }
 
 // graphTaskRead pages bounded graph detail for orchestrator attempts. The

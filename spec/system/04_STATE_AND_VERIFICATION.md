@@ -24,9 +24,11 @@ snapshots.
 
 Local batch capture MUST copy tracked and non-ignored files, honoring nested ignore
 rules, without modifying the source. Git metadata, Mitos data, and symlinks are
-excluded; special files and submodules are explicitly refused. Capture records
-paths, sizes, and hashes within 64 MiB / 10,000 files and initializes a private
-repository. Unsafe paths or detected source changes MUST fail or produce an explicitly
+excluded. Special files require a supported representation. Coordinated agent work
+selects an indexed submodule policy and a bounded capacity through workflow decisions.
+Other adapters require their declared source layout. Capture records paths, sizes,
+and hashes and initializes a private repository. The standard allocation is
+64 MiB / 10,000 files. See [workflow decisions](../ADRs/0010_WORKFLOW_DECISIONS.md). Unsafe paths or detected source changes MUST fail or produce an explicitly
 incomplete result, never an apparently complete baseline.
 
 After execution stops, including failure, cancellation, and timeout, harvest MUST

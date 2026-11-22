@@ -48,7 +48,7 @@ mutations still serialize through the same runtime transactions.
 
 These policies MUST compose with manual, scheduled, and event activation and with
 agent or program executors. They MUST NOT be separate task stores or incompatible
-work types. A decision provider is optional in every policy. Deterministic facts
+work types. Native and registered orchestrators submit eligible proposals and repairs to the configured Decisions API. Operator review handles unavailable or uncertain inference. See [workflow decisions](../ADRs/0010_WORKFLOW_DECISIONS.md). Deterministic facts
 such as dependency readiness, queue capacity, deadlines, and authenticated authority
 MUST be evaluated by code rather than repeatedly delegated to a model.
 
@@ -62,8 +62,8 @@ a policy-of-thumb about work shape (for example, that a review or context nature
 should not yield on follow-up work) rather than a safety fact. A judgment-shaped
 rule MUST NOT end as a silent synchronous refusal: when it triggers, the kernel
 records exactly one bounded decision with two candidates, apply or refuse, each
-with the kernel's rationale, and routes it to the graph's configured decision
-application when one is registered, or to the operator otherwise.
+with the kernel's rationale, and uses the graph decision application or the inherited project or system provider.
+The operator resolves choices when the provider is unavailable or uncertain.
 
 The affected submission is held, not lost: the attempt parks with the decision
 pending, and nothing proceeds while it does. The conservative default while

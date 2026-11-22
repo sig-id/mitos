@@ -32,7 +32,7 @@ type Policy struct {
 }
 
 func Default() Policy {
-	return Policy{Supervision: Supervision{Mode: "rules", MaxCalls: 16}, Autonomy: "manual", Fallback: "human", MaxCalls: 4, Rules: []Rule{}}
+	return Policy{Supervision: Supervision{Mode: "rules", MaxCalls: 16}, Autonomy: "delegated", Fallback: "human", MaxCalls: 4, Rules: []Rule{}}
 }
 func (p Policy) Validate() error {
 	if err := p.Supervision.Validate(); err != nil {

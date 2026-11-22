@@ -77,6 +77,7 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
+	WorkflowReview      *WorkflowReview        `json:"workflow_review,omitempty"`
 	AuthorityGeneration uint64                 `json:"authority_generation,omitempty"`
 	RestartRetry        bool                   `json:"restart_retry,omitempty"`
 	AdmissionLimits     *TenantLimits          `json:"tenant_limits,omitempty"`

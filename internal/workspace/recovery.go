@@ -33,7 +33,7 @@ func (h *History) Load(ctx context.Context, commit, fingerprint string) (Snapsho
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot := Snapshot{Files: []File{}}
+	snapshot := Snapshot{Limits: h.Limits, Files: []File{}}
 	type object struct {
 		file File
 		oid  string
@@ -57,22 +57,46 @@ func (h *History) Load(ctx context.Context, commit, fingerprint string) (Snapsho
 		}
 		snapshot.TotalBytes += size
 		objects = append(objects, object{File{Path: string(path), Mode: fields[0], Bytes: size}, fields[2]})
-		if snapshot.TotalBytes > DefaultLimits.Bytes || len(objects) > DefaultLimits.Files {
+		if snapshot.TotalBytes > h.Limits.Effective().Bytes || len(objects) > h.Limits.Effective().Files {
 			return Snapshot{}, errors.New("recovery tree exceeds workspace limits")
 		}
 	}
-	for _, object := range objects {
-		data, err := git(ctx, h.Base, h.Directory, nil, "cat-file", "blob", object.oid)
+	// Bound each batch so restoring a large tree does not start Git once per
+	// file or allocate a second buffer the size of the whole snapshot.
+	for len(objects) > 0 {
+		var ids strings.Builder
+		count := 0
+		var bytesRequested int64
+		for _, obj := range objects {
+			if count >= 256 || count > 0 && bytesRequested+obj.file.Bytes > 8<<20 {
+				break
+			}
+			fmt.Fprintln(&ids, obj.oid)
+			bytesRequested += obj.file.Bytes
+			count++
+		}
+		// Each object adds its hash, type, decimal size and two newlines.
+		raw, err := gitInput(ctx, h.Base, h.Directory, strings.NewReader(ids.String()), bytesRequested+128*int64(count), "cat-file", "--batch")
 		if err != nil {
 			return Snapshot{}, err
 		}
-		if int64(len(data)) != object.file.Bytes {
-			return Snapshot{}, errors.New("recovery blob size mismatch")
+		for _, obj := range objects[:count] {
+			header, rest, ok := bytes.Cut(raw, []byte{'\n'})
+			size := obj.file.Bytes
+			if !ok || string(header) != fmt.Sprintf("%s blob %d", obj.oid, size) || int64(len(rest)) <= size || rest[size] != '\n' {
+				return Snapshot{}, errors.New("recovery blob identity or size mismatch")
+			}
+			data := rest[:size:size]
+			raw = rest[size+1:]
+			sum := sha256.Sum256(data)
+			obj.file.SHA256 = hex.EncodeToString(sum[:])
+			obj.file.Data = data
+			snapshot.Files = append(snapshot.Files, obj.file)
 		}
-		sum := sha256.Sum256(data)
-		object.file.SHA256 = hex.EncodeToString(sum[:])
-		object.file.Data = data
-		snapshot.Files = append(snapshot.Files, object.file)
+		if len(raw) != 0 {
+			return Snapshot{}, errors.New("unexpected recovery batch data")
+		}
+		objects = objects[count:]
 	}
 	sort.Slice(snapshot.Files, func(i, j int) bool { return snapshot.Files[i].Path < snapshot.Files[j].Path })
 	encoded, err := json.Marshal(snapshot.Files)
@@ -107,7 +131,7 @@ func (h *History) Restore(ctx context.Context, commit, fingerprint, destination 
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("invalid existing recovery destination")
 		}
-		existing, err := CaptureResult(ctx, filepath.Join(destination, "workspace"), DefaultLimits)
+		existing, err := CaptureResult(ctx, filepath.Join(destination, "workspace"), h.Limits.Effective())
 		if err != nil || existing.Fingerprint != fingerprint {
 			return errors.New("existing recovery destination differs from the checkpoint")
 		}

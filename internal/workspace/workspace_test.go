@@ -104,6 +104,21 @@ func TestPlainDirectoryIgnoreRulesBoundsAndSymlinkIntake(t *testing.T) {
 	}
 }
 
+func TestPatchOutputLimitTracksApprovedWorkspace(t *testing.T) {
+	for _, tc := range []struct {
+		limits Limits
+		want   int64
+	}{
+		{Limits{}, 256 << 20},
+		{Limits{Bytes: 256 << 20, Files: 10000}, 1 << 30},
+		{MaxWorkflowLimits, 2 << 30},
+	} {
+		if got := tc.limits.patchOutputLimit(); got != tc.want {
+			t.Errorf("patch output limit for %+v = %d, want %d", tc.limits, got, tc.want)
+		}
+	}
+}
+
 func TestHarvestBinaryDeletesModesAndReconstruction(t *testing.T) {
 	source := t.TempDir()
 	put(t, source, "remove", "old")
@@ -259,5 +274,87 @@ func TestCheckpointLoadAndRestoreAreBoundToCommitAndFingerprint(t *testing.T) {
 	preserved, _ := os.ReadFile(filepath.Join(destination, "workspace", "file"))
 	if string(preserved) != "changed later" {
 		t.Fatal("altered destination was destroyed")
+	}
+}
+
+func TestWorkflowSubmoduleChoice(t *testing.T) {
+	root := t.TempDir()
+	gitOK(t, root, "init", "--template=")
+	module := filepath.Join(root, "wallet", "lib")
+	put(t, module, "contract.sol", "before")
+	put(t, module, ".gitignore", "*.tmp\n")
+	gitOK(t, module, "init", "--template=")
+	gitOK(t, module, "add", ".")
+	gitOK(t, module, "commit", "-m", "dependency")
+	gitOK(t, root, "add", "wallet/lib")
+	put(t, module, "contract.sol", "working copy")
+	put(t, module, "ignored.tmp", "ignored")
+	put(t, root, "source", "parent")
+	for _, choice := range []string{"include", "omit", "stop"} {
+		t.Run(choice, func(t *testing.T) {
+			called := 0
+			snapshot, err := CaptureWorkflowSource(context.Background(), root, "", func(subject string, facts any, choices []SourceChoice) (string, error) {
+				called++
+				if subject != "workspace_submodules" || !reflect.DeepEqual(facts.(submoduleInventory).Paths, []string{"wallet/lib"}) {
+					t.Fatalf("unexpected question: %s %+v", subject, facts)
+				}
+				return choice, nil
+			})
+			if called != 1 || (err != nil) != (choice == "stop") {
+				t.Fatalf("calls %d error %v", called, err)
+			}
+			switch choice {
+			case "include":
+				if !reflect.DeepEqual(paths(snapshot), []string{"source", "wallet/lib/.gitignore", "wallet/lib/contract.sol"}) || string(snapshot.Files[2].Data) != "working copy" {
+					t.Fatal(paths(snapshot))
+				}
+			case "omit":
+				if !reflect.DeepEqual(paths(snapshot), []string{"source"}) || !reflect.DeepEqual(snapshot.OmittedSubmodules, []string{"wallet/lib"}) {
+					t.Fatal(snapshot.Files, snapshot.OmittedSubmodules)
+				}
+			}
+		})
+	}
+	t.Run("uninitialized", func(t *testing.T) {
+		if err := os.Rename(module, filepath.Join(t.TempDir(), "saved")); err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		snapshot, err := CaptureWorkflowSource(context.Background(), root, "", func(_ string, facts any, choices []SourceChoice) (string, error) {
+			called = true
+			if facts.(submoduleInventory).LocalCheckoutAvailable || len(choices) != 2 || choices[0].Value != "omit" || choices[1].Value != "stop" {
+				t.Fatal(facts, choices)
+			}
+			return "omit", nil
+		})
+		if !called || err != nil || !reflect.DeepEqual(snapshot.OmittedSubmodules, []string{"wallet/lib"}) {
+			t.Fatal(called, snapshot.OmittedSubmodules, err)
+		}
+	})
+}
+
+func TestWorkflowCaptureCapacityDecision(t *testing.T) {
+	root := t.TempDir()
+	put(t, root, "large", "")
+	if err := os.Truncate(filepath.Join(root, "large"), DefaultLimits.Bytes+1); err != nil {
+		t.Fatal(err)
+	}
+	_, err := CaptureWorkflowSource(context.Background(), root, "", func(subject string, _ any, _ []SourceChoice) (string, error) {
+		if subject != "workspace_capacity" {
+			t.Fatal(subject)
+		}
+		return "stop", nil
+	})
+	var limit *LimitError
+	if !errors.As(err, &limit) {
+		t.Fatal(err)
+	}
+	result, err := CaptureWorkflowSource(context.Background(), root, "", func(subject string, _ any, _ []SourceChoice) (string, error) { return "expand", nil })
+	if err != nil || result.TotalBytes != DefaultLimits.Bytes+1 || result.Limits.Bytes <= DefaultLimits.Bytes {
+		t.Fatal(result.TotalBytes, result.Limits, err)
+	}
+	with, err := WithInstructions(result, "AGENTS.md", []byte("rules"))
+	if err != nil || with.Limits != result.Limits {
+		t.Fatal(with.Limits, err)
 	}
 }

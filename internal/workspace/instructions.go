@@ -40,7 +40,8 @@ func withDocument(snapshot Snapshot, name string, data []byte, remove []string, 
 		files = append(files, File{Path: name, Data: append([]byte(nil), data...), Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Mode: "100644"})
 		size += int64(len(data))
 	}
-	if size > DefaultLimits.Bytes || len(files) > DefaultLimits.Files {
+	limits := snapshot.Limits.Effective()
+	if size > limits.Bytes || len(files) > limits.Files {
 		return Snapshot{}, errors.New("frozen project instructions exceed workspace limits")
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
@@ -49,5 +50,5 @@ func withDocument(snapshot Snapshot, name string, data []byte, remove []string, 
 		return Snapshot{}, err
 	}
 	sum = sha256.Sum256(raw)
-	return Snapshot{Files: files, TotalBytes: size, Fingerprint: hex.EncodeToString(sum[:])}, nil
+	return Snapshot{OmittedSubmodules: snapshot.OmittedSubmodules, Limits: snapshot.Limits, Files: files, TotalBytes: size, Fingerprint: hex.EncodeToString(sum[:])}, nil
 }

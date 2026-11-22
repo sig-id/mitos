@@ -36,9 +36,11 @@ type File struct {
 }
 
 type Snapshot struct {
-	Files       []File `json:"files"`
-	TotalBytes  int64  `json:"total_bytes"`
-	Fingerprint string `json:"fingerprint"`
+	OmittedSubmodules []string `json:"omitted_submodules,omitempty"`
+	Limits            Limits   `json:"-"`
+	Files             []File   `json:"files"`
+	TotalBytes        int64    `json:"total_bytes"`
+	Fingerprint       string   `json:"fingerprint"`
 }
 
 type LimitError struct {

@@ -155,7 +155,7 @@ func TestAutomaticInstalledPi(t *testing.T) {
 	if os.Getenv("MITOS_TEST_NATIVE_PI") != "1" {
 		t.Skip("set MITOS_TEST_NATIVE_PI=1 for the authenticated native Pi smoke test")
 	}
-	e, req := graphEngine(t, true)
+	e, req := workflowTestEngine(t)
 	if _, err := e.SavePreferences(req.ProjectID, RuntimePreferences{Runtime: "pi"}); err != nil {
 		t.Fatal(err)
 	}

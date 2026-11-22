@@ -14,7 +14,9 @@ graphs as evidence arrives, including lessons from Chief Wiggum. Start with
 and [native observations](system/05_INTERFACES_AND_INTEGRATIONS.md#native-agent-observation-contract).
 [G1–G5](system/06_DELIVERY_AND_CONFORMANCE.md#adaptive-runtime-delivery-gates) define
 implementation order and acceptance; the local adapter implements only the subset
-listed in the delivery baseline.
+listed in the delivery baseline. [ADR 0010](ADRs/0010_WORKFLOW_DECISIONS.md)
+describes which workflow choices go through the Decisions API, how operator review
+works, and which constraints the runtime enforces directly.
 
 ## Agent-library reading path
 

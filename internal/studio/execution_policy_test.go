@@ -59,7 +59,7 @@ func TestMixedCoordinatedExecution(t *testing.T) {
 	for _, orchestrator := range []string{"code", "design"} {
 		t.Run(orchestrator, func(t *testing.T) {
 			executionFixture(t)
-			e, req := graphEngine(t, true)
+			e, req := workflowTestEngine(t)
 			configureExecutionRegistry(t, e)
 			policy := mixedExecution()
 			policy.Orchestrator.Harness = orchestrator

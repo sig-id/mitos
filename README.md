@@ -150,7 +150,9 @@ a separately reconstructed result. See [applications](spec/system/05_INTERFACES_
 
 The [adaptive runtime](docs/adaptive-runtime.md) supports dynamically added
 work, atomic graph amendments, automatic application dispatch, registered orchestrator
-applications, and optional typed decisions. Native worker output stays intact.
+applications, and typed decisions. Native and registered orchestrators submit plans
+for a Decisions API choice before Mitos applies them. Workspace preparation and
+plan repair use the same provider and operator fallback. See the [workflow decision policy](spec/ADRs/0010_WORKFLOW_DECISIONS.md).
 Every `/api` request sends `Mitos-API-Version: 1`; see
 [application API](docs/application-api.md), which also covers headless structured
 work with typed results.

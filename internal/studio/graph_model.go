@@ -208,11 +208,12 @@ type GraphFactEntry struct {
 	Facts         map[string]int64 `json:"facts,omitempty"`
 }
 type GraphReceipt struct {
-	Key      string            `json:"key"`
-	Digest   string            `json:"digest"`
-	Revision int64             `json:"revision"`
-	IDs      map[string]string `json:"ids,omitempty"`
-	At       time.Time         `json:"at"`
+	Evaluation string            `json:"evaluation,omitempty"`
+	Key        string            `json:"key"`
+	Digest     string            `json:"digest"`
+	Revision   int64             `json:"revision"`
+	IDs        map[string]string `json:"ids,omitempty"`
+	At         time.Time         `json:"at"`
 }
 type WorkGraph struct {
 	WorkState              string                          `json:"work_state,omitempty"`

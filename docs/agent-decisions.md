@@ -1,16 +1,15 @@
 # Agent request decisions
 
 Project setup's **Autonomy & approvals** panel stores operator settings independently
-of AGENTS.md. `manual` leaves questions and approvals to the operator. `delegated`
+of AGENTS.md. Projects without a saved policy default to `delegated` with an empty command allowlist. An explicitly saved `manual` policy takes precedence. `manual` leaves questions and approvals to the operator. `delegated`
 enables automatic handling within configured authority. Rule matching compares the
 complete command and exact relative working directory; it does not parse shell
 prefixes. A rule delegates the command's effects, not just its spelling. Additional
 network/filesystem permission requests are not implicitly included.
 
 A `decision_application` references an installed application's existing
-`decision_model` configuration (OpenAI Decisions or System One). Endpoints and API
-credential references are not accepted from agents. Existing batch and graph
-choices retain their behavior.
+`decision_model` configuration (OpenAI Decisions or System One). Only configured connections can supply endpoints and credential references.
+Workflow decisions use the graph binding first, then the project or system connection.
 
 The runtime first applies explicit rules. A matching `allow` or `deny` rule gives a
 direct answer. A `review` rule delegates a bounded approval choice. Without an exact grant or explicit project decision-review delegation, requests
@@ -190,4 +189,4 @@ Storage and implementation:
   for new sessions and continuations. Secret environment values are not serialized.
 
 Application workflow hooks configured with `decision_model` in `app.json` remain
-separate explicit execution profiles. System defaults govern agent-request review.
+separate explicit execution profiles. System defaults govern agent-request review and supply the inherited workflow decision provider. Automatic planning, workspace preparation and repair use the same provider precedence. [Workflow decision architecture](../spec/ADRs/0010_WORKFLOW_DECISIONS.md)

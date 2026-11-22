@@ -1,5 +1,11 @@
 # Adaptive work graphs
 
+Workspace preparation, orchestrator proposals and repair attempts use the workflow
+decision policy. Mitos offers eligible actions, evaluates them through the configured
+Decisions API and records the choice before applying it. An unresolved choice
+appears in Attention for the remaining deadline. [Workflow decision policy](../spec/ADRs/0010_WORKFLOW_DECISIONS.md)
+
+
 The backend composes existing Tasks and Run attempts into durable, mutable work
 graphs. An operator, registered orchestrator application, or deterministic client can
 discover tasks during execution. The scheduler launches eligible work without a
