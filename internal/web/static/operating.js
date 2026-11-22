@@ -61,7 +61,7 @@
  function selectTask(id){if($('earlier-work'))$('earlier-work').open=true;selected=id;detailTab='assignment';signature='';const u=new URL(location);u.searchParams.delete('graph');u.searchParams.delete('node');u.searchParams.set('task',id);history.replaceState(null,'',u);refreshProject().catch(showError)}
  function renderWork(){
   const w=snapshot.work,counts={};for(const t of w.tasks)counts[t.status]=(counts[t.status]||0)+1;$('work-counts').textContent=projectCounts(counts);
-  const resp=$('responsibilities');resp.replaceChildren();for(const r of w.responsibilities){const t=w.tasks.find(t=>t.id===r.task_id);if(!t||['accepted','cancelled'].includes(t.status))continue;const s=w.sessions.find(s=>s.id===r.orchestrator_session_id);const row=el('article',undefined,'responsibility'),info=el('div');info.append(el('h3',r.title),el('p',s?`Orchestrator: ${s.command} · ${s.status}`:'Coordination ready · no orchestrator running'));row.append(info);const actions=el('div',undefined,'actions');actions.append(button('Inbox'+(r.messages.length?` · ${r.messages.length}`:''),()=>openMessages(r)));if(s)actions.append(link('Open session',terminal(s)));actions.append(button(active(s)?'View work':'Assign orchestrator',()=>active(s)?selectTask(t.id):openWork(t)));row.append(actions);resp.append(row)}
+  const resp=$('responsibilities');resp.replaceChildren();for(const r of w.responsibilities){const t=w.tasks.find(t=>t.id===r.task_id);if(!t||['accepted','cancelled'].includes(t.status))continue;const s=w.sessions.find(s=>s.id===r.orchestrator_session_id);const row=el('article',undefined,'responsibility'),info=el('div');info.append(el('h3',r.title),el('p',s?`Orchestrator: ${s.command} · ${s.status}`:'Coordination ready · no orchestrator running'));row.append(info);const actions=el('div',undefined,'actions');actions.append(button('Inbox',()=>openMessages(r)));if(s)actions.append(link('Open session',terminal(s)));actions.append(button(active(s)?'View work':'Assign orchestrator',()=>active(s)?selectTask(t.id):openWork(t)));row.append(actions);resp.append(row)}
   const list=$('work-list'),query=$('work-search').value.toLowerCase();list.replaceChildren();
   if(!w.tasks.length&&!snapshot.batch_tasks.length)list.append(empty('What should this project achieve?','Create a bounded assignment or maintain an ongoing responsibility.',button('New native session',()=>openWork(),'primary')));
   for(const goal of w.goals){const tasks=w.tasks.filter(t=>t.goal_id===goal.id&&(!query||(t.title+' '+t.intent).toLowerCase().includes(query)));if(!tasks.length)continue;
@@ -164,7 +164,30 @@
  async function openResult(action){await refreshProject();resultAction=action;resultTask=currentTask();$('result-form').reset();$('result-title').textContent=action==='accept'?'Review the submitted report':'Submit a report';$('result-context').textContent=action==='accept'?'Record how this exact report satisfies the criteria. Acceptance covers this report, not unverified workspace changes.':'Submit findings and evidence for the current attempt. This does not mark the task accepted.';$('result-label-text').textContent=action==='accept'?'Review notes':'Report';$('result-submit').textContent=action==='accept'?'Accept report':'Submit report';dialog('result-dialog')}
  $('result-form').onsubmit=e=>{e.preventDefault();submit(e.target,async()=>{const t=resultTask;await api(endpoint(`work/${t.id}/${resultAction}`),{revision:t.revision,session_id:t.current_session_id,body:e.target.elements.body.value,digest:t.result?.digest||''});$('result-dialog').close();detailTab='result';signature='';await refreshProject()})};
  let responsibility=null;
- function openMessages(r){responsibility=r;$('message-history').replaceChildren();for(const m of r.messages){const row=el('div',undefined,'record');row.append(el('p',m.body,'prose'),el('small',date(m.created_at)));$('message-history').append(row)}$('message-form').elements.body.value='';dialog('message-dialog')}
+ async function openMessages(r){
+  responsibility=r;
+  const history=$('message-history');
+  history.replaceChildren();
+  async function page(before){
+   const url=endpoint(`responsibilities/${r.id}/messages`)+(before?`?before=${before}`:'');
+   const deliveries=await api(url);
+   if(responsibility!==r)return;
+   for(const d of deliveries){
+    const row=el('div',undefined,'record');
+    row.append(el('p',d.message,'prose'),el('small',date(d.at)+' · '+(d.outcome||d.route)));
+    history.append(row);
+   }
+   if(deliveries.length===50){
+    const older=button('Earlier messages',async()=>{older.disabled=true;try{await page(deliveries.at(-1).first_seq);older.remove()}finally{older.disabled=false}});
+    history.append(older);
+   }
+  }
+  await page();
+  if(responsibility!==r)return;
+  $('message-form').elements.body.value='';
+  dialog('message-dialog');
+ }
+ document.addEventListener('mitos-responsibility-inbox',e=>openMessages({id:e.detail}).catch(showError));
  $('message-form').onsubmit=e=>{e.preventDefault();submit(e.target,async()=>{await api(endpoint(`responsibilities/${responsibility.id}/messages`),{body:e.target.elements.body.value});$('message-dialog').close();signature='';await refreshProject()})};
  let services;
  async function refreshServices(){services=await api('/api/services');const list=$('service-list');list.replaceChildren();const units=services.catalog.config.units||[],bindings=services.catalog.work||{};let count=0;for(const u of units){const binding=bindings[u.id];if(binding?.project_id!==project)continue;count++;const runtime=(services.states||[]).find(v=>v.service_id===u.id),desired=services.desired.rows.find(v=>v.id===u.id);const card=el('article',undefined,'service-card');card.append(el('h2',u.description||u.id),el('p',binding.intent,'muted'));const facts=el('div',undefined,'service-facts');for(const [label,value]of [['Configuration',desired?.state==='active'?'Enabled':desired?.state||'Disabled'],['Execution',runtime?.lifecycle_stops?.length?'Operational hold':runtime?.in_flight?`${runtime.in_flight} active`:'Idle'],['Activation',u.trigger],['Next',runtime?.next_at?date(runtime.next_at):'On request']]){const n=el('div',label);n.append(el('strong',value));facts.append(n)}card.append(facts);const actions=el('div',undefined,'actions');actions.append(button('Run now',async()=>{await api('/api/services/'+u.id+'/trigger',{idempotency_key:key()});await refreshServices()}));for(const [action,label]of [['stop','Stop'],['resume','Resume'],['restart','Restart']])actions.append(button(label,async()=>{await api('/api/services/'+u.id+'/lifecycle',{action,idempotency_key:key()});await refreshServices()}));if(runtime?.last_run_id)actions.append(link('Latest result','/runs/'+runtime.last_run_id));card.append(actions);list.append(card)}if(!count)list.append(empty('No scheduled jobs','Automations run a configured plugin repeatedly. Start ordinary agent work from Conversation.',button('Schedule a job',()=>openService(),'primary')))}

@@ -172,3 +172,36 @@ func TestWorkspaceRejectsMalformedInputAndCrossOrigin(t *testing.T) {
 		t.Fatal("unknown output accepted")
 	}
 }
+
+func TestResponsibilityMessageAPI(t *testing.T) {
+	server, engine := testServer(t)
+	project, err := engine.Desk.CreateProject("Inbox", engine.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := engine.Desk.CreateWork(project.ID, desk.NewWork{Key: "inbox", Title: "Coordinate work", Intent: "Review findings", Criteria: "Record review", Role: "orchestrator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/projects/" + project.ID + "/responsibilities/" + task.ResponsibilityID + "/messages"
+	posted := deskRequest(server, "POST", path, map[string]string{"body": "Review the findings"})
+	if posted.Code != 200 {
+		t.Fatal(posted.Code, posted.Body.String())
+	}
+	var receipt struct {
+		ID    string
+		Route string
+	}
+	if err := json.Unmarshal(posted.Body.Bytes(), &receipt); err != nil || receipt.Route != "inbox" || receipt.ID == "" {
+		t.Fatal("post did not return the routed delivery", err, receipt)
+	}
+	for _, path := range []string{path, "/api/watch-inboxes/responsibility/" + task.ResponsibilityID} {
+		page := deskRequest(server, "GET", path, nil)
+		if page.Code != 200 || !strings.Contains(page.Body.String(), receipt.ID) || !strings.Contains(page.Body.String(), "Review the findings") {
+			t.Fatal("missing from delivery view", path, page.Code, page.Body.String())
+		}
+	}
+	if page := deskRequest(server, "GET", strings.Replace(path, project.ID, "other-project", 1), nil); page.Code != 404 {
+		t.Fatal("cross-project history read", page.Code)
+	}
+}

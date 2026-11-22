@@ -346,6 +346,7 @@ func (m *Manager) startLocked(project, name, role, command, serverURL string, la
 		return Session{}, err
 	}
 	s = cloneSession(*stored)
+	m.wakeResponsibilityLocked(s)
 	m.wg.Add(1)
 	go m.waitTerminal(s.ID, cmd, t)
 	return s, nil

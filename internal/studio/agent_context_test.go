@@ -126,7 +126,7 @@ func TestOrchestratorContextSplitsByKind(t *testing.T) {
 	var ca contextAssembly
 	ca.add(tierGraph, "constraints", "request", "Audit the gap.")
 	ca.add(tierTask, "assignment", "assignment", "Plan goal.")
-	if err := addOrchestratorContext(&ca, `{"facts":[{"id":"t1"}],"agent_library":[{"id":"mitos.engineer"}],"remaining_tasks":3,"remaining_attempts":5,"remaining_plans":2,"graph_id":"g"}`); err != nil {
+	if err := addOrchestratorContext(&ca, `{"graph_state":{"facts":[{"id":"t1"}]},"watch_inbox":{"pending":1,"recent":[{"operator_message_untrusted":"Review the findings"}]},"agent_library":[{"id":"mitos.engineer"}],"remaining_tasks":3,"remaining_attempts":5,"remaining_plans":2,"graph_id":"g"}`); err != nil {
 		t.Fatal(err)
 	}
 	prompt, r, err := ca.assemble(d, t.TempDir())
@@ -136,6 +136,9 @@ func TestOrchestratorContextSplitsByKind(t *testing.T) {
 	kinds := map[string]bool{}
 	for _, s := range r.Sections {
 		kinds[s.Kind] = s.Included
+	}
+	if !strings.Contains(prompt, "Review the findings") {
+		t.Fatal("automatic planning prompt dropped the responsibility inbox")
 	}
 	if !kinds["agent_library"] || !kinds["graph_state"] || !kinds["remaining_allowance"] {
 		t.Fatalf("orchestrator inputs: %+v", r.Sections)

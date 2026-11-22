@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"mitos/internal/agentcli"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -116,18 +117,7 @@ func noticeText(n Notice) string {
 }
 func (m *Manager) queueCodexNotice(s Session, n Notice) {
 	defer m.wg.Done()
-	launch, err := m.Agents.Prepare(agentcli.Request{AgentID: s.AgentID, ProfileID: s.ProfileID})
-	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, launch.Executable, "queue", "--thread", s.NativeSessionID, "--message", noticeText(n))
-		cmd.Env = launch.Env
-		cmd.Dir = s.Workspace
-		if cmd.Dir == "" {
-			cmd.Dir = m.root
-		}
-		err = cmd.Run()
-	}
+	err := m.queueCodexMessage(s, noticeText(n))
 	detail := "Native queue accepted the message; agent acknowledgment is still required."
 	state := "context_queued"
 	if err != nil {
@@ -136,10 +126,61 @@ func (m *Manager) queueCodexNotice(s Session, n Notice) {
 	}
 	_ = m.noticeDelivery(n.ID, s.ID, state, detail, n.ReleasedAt != nil)
 }
+func (m *Manager) queueCodexMessage(s Session, text string) error {
+	launch, err := m.Agents.Prepare(agentcli.Request{AgentID: s.AgentID, ProfileID: s.ProfileID})
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, launch.Executable, "queue", "--thread", s.NativeSessionID, "--message", text)
+		cmd.Env = launch.Env
+		cmd.Dir = s.Workspace
+		if cmd.Dir == "" {
+			cmd.Dir = m.root
+		}
+		err = cmd.Run()
+	}
+	return err
+}
+
+// The journal supplies interactive responsibility deliveries to the same
+// native inbox adapters that fetch and acknowledge session attention.
+type responsibilityInbox interface {
+	ResponsibilityNotices(Session) []Notice
+	ReceiveResponsibilityNotice(Session, string, bool) error
+}
+
+func (m *Manager) WakeResponsibility(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.state.Responsibilities {
+		if r.ID == id {
+			if s, err := m.sessionLocked(r.OrchestratorSessionID); err == nil {
+				m.wakeResponsibilityLocked(*s)
+			}
+			return
+		}
+	}
+}
+
+func (m *Manager) wakeResponsibilityLocked(s Session) {
+	if m.closed || s.AgentID != "codex" || s.Status != "running" || s.NativeSessionID == "" || s.ResponsibilityID == "" {
+		return
+	}
+	in, ok := m.storage.(responsibilityInbox)
+	if !ok || len(in.ResponsibilityNotices(s)) == 0 {
+		return
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		_ = m.queueCodexMessage(s, "Operator messages are waiting. Read your current responsibility inbox with \"$MITOS_BIN\" desk inbox.")
+	}()
+}
 func (m *Manager) Inbox(session string) ([]Notice, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, err := m.sessionLocked(session); err != nil {
+	s, err := m.sessionLocked(session)
+	if err != nil {
 		return nil, err
 	}
 	out := []Notice{}
@@ -150,6 +191,9 @@ func (m *Manager) Inbox(session string) ([]Notice, error) {
 				break
 			}
 		}
+	}
+	if in, ok := m.storage.(responsibilityInbox); ok && s.ResponsibilityID != "" {
+		out = append(out, in.ResponsibilityNotices(*s)...)
 	}
 	return out, nil
 }
@@ -167,6 +211,13 @@ func (m *Manager) noticeDelivery(id, session, state, detail string, release bool
 	}
 	if state != "context_queued" && state != "pending" {
 		return errors.New("invalid delivery state")
+	}
+	if in, ok := m.storage.(responsibilityInbox); ok && strings.HasPrefix(id, "delivery_") {
+		s, err := m.sessionLocked(session)
+		if err != nil {
+			return err
+		}
+		return in.ReceiveResponsibilityNotice(*s, id, false)
 	}
 	for i := range m.state.Notices {
 		n := &m.state.Notices[i]
@@ -197,6 +248,13 @@ func (m *Manager) Acknowledge(id, session string) error {
 	defer m.mu.Unlock()
 	if err := m.writable(); err != nil {
 		return err
+	}
+	if in, ok := m.storage.(responsibilityInbox); ok && strings.HasPrefix(id, "delivery_") {
+		s, err := m.sessionLocked(session)
+		if err != nil {
+			return err
+		}
+		return in.ReceiveResponsibilityNotice(*s, id, true)
 	}
 	for i := range m.state.Notices {
 		n := &m.state.Notices[i]

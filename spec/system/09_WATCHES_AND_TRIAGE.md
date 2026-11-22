@@ -109,6 +109,13 @@ level if that is higher:
 The list is runtime-owned, versioned with `mitos.watch/v1`, and cannot be narrowed by
 an author.
 
+The runtime folds new facts into watch groups on journal append. It evaluates
+due groups, lease expiry, silence and pending digests on a 250 ms tick. This
+keeps timer-driven and event-driven conditions on one clock and keeps provider
+dispatch off the append path. A due group can wait up to one additional tick
+under normal scheduling. This is an implementation decision without an S4
+latency measurement. Direct operator messages route on append.
+
 ## 3. Delivery levels and sinks
 
 Levels are totally ordered: `digest < notify < wake < escalate`. No level discards
@@ -149,7 +156,14 @@ reads with `watch_inbox`. The S4 task-input wait applies only to structured-work
 attempts and does not carry watch deliveries.
 
 Each responsibility and attempt owner has a bounded inbox of delivery receipts in
-the journal. This is separate from the interactive workspace's responsibility notes.
+the journal. Operator messages addressed to a responsibility are direct wake
+deliveries with no subscription or lease. The same journal event records the
+message body, owner generation, route and (for an adaptive graph) wake trigger.
+Interactive desk responsibilities expose these receipts through the current
+orchestrator session's attention inbox. Pending messages survive handover and
+messages sent before assignment await the first session. The operator's
+project-scoped message history includes acknowledged and folded receipts.
+
 - `digest` deliveries are always folded into the pending digest.
 - When the inbox holds 64 queued receipts, further `notify` deliveries fold too. A
   single `watch_degraded` notice, exempt from the capacity, records each fold episode.
@@ -298,6 +312,12 @@ states, verification failures and quiescence `steer` edges.
   tool) or an operator mark (`should_have_woken` or `needless_wake`; any
   delivery). All require the `Mitos-API-Version`
   header. Unknown request fields are refused.
+- `POST /api/projects/{project}/responsibilities/{id}/messages` accepts a
+  `body` of up to 8000 bytes and returns its delivery receipt. Use the graph ID
+  for an adaptive graph or the responsibility ID for an interactive assignment.
+- `GET /api/projects/{project}/responsibilities/{id}/messages` returns up to
+  50 direct-message receipts, newest first. Pass the oldest returned
+  `first_seq` as `before` to read the preceding page.
 - `GET /api/watch-inboxes/{responsibility|attempt}/{id}`: an owner's pending
   deliveries and digest, read-only.
 - Agent tools, granted by the `watch.manage` capability only: `watch_create`,

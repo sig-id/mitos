@@ -67,6 +67,7 @@ func (m *Manager) LinkNativeSession(id, reference string) (Session, error) {
 		return Session{}, err
 	}
 	if s.AgentID == "codex" && activeSession(*s) {
+		m.wakeResponsibilityLocked(*s)
 		for _, n := range m.state.Notices {
 			for _, target := range n.Targets {
 				if target.SessionID == s.ID && (target.State == "pending" || n.ReleasedAt != nil && !target.ReleaseQueued) {

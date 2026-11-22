@@ -362,7 +362,7 @@ func (s *Store) commitWatchRecord(kind string, w *Watch, ds []WatchDelivery, wc 
 		}
 		if in != nil {
 			for _, rd := range routed {
-				stageInbox(in, rd, s.watches[rd.Delivery.WatchID].Spec.Grouping.IntervalMS, now)
+				stageInbox(in, rd, s.deliveryInterval(rd.Delivery.WatchID), now)
 			}
 		}
 		wc.Deliveries = append(wc.Deliveries, routed...)

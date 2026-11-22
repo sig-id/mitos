@@ -42,18 +42,12 @@ type Goal struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Responsibility struct {
-	ID                    string        `json:"id"`
-	ProjectID             string        `json:"project_id"`
-	TaskID                string        `json:"task_id"`
-	Title                 string        `json:"title"`
-	Generation            int           `json:"generation"`
-	OrchestratorSessionID string        `json:"orchestrator_session_id"`
-	Messages              []WorkMessage `json:"messages"`
-}
-type WorkMessage struct {
-	ID        string    `json:"id"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                    string `json:"id"`
+	ProjectID             string `json:"project_id"`
+	TaskID                string `json:"task_id"`
+	Title                 string `json:"title"`
+	Generation            int    `json:"generation"`
+	OrchestratorSessionID string `json:"orchestrator_session_id"`
 }
 type WorkResult struct {
 	SessionID        string     `json:"session_id"`
@@ -257,7 +251,7 @@ func (m *Manager) bindWorkLocked(p Project, s *Session, options startOptions) er
 			}
 		}
 		if responsibility == nil {
-			m.state.Responsibilities = append(m.state.Responsibilities, Responsibility{ID: id("responsibility"), ProjectID: p.ID, TaskID: task.ID, Title: task.Title, Messages: []WorkMessage{}})
+			m.state.Responsibilities = append(m.state.Responsibilities, Responsibility{ID: id("responsibility"), ProjectID: p.ID, TaskID: task.ID, Title: task.Title})
 			responsibility = &m.state.Responsibilities[len(m.state.Responsibilities)-1]
 		}
 		responsibility.Generation++
@@ -386,29 +380,6 @@ func (m *Manager) UpdateWork(project, taskID, action string, in WorkAction) (Wor
 	}
 	return copy, nil
 }
-func (m *Manager) MessageResponsibility(project, responsibility, body string) (WorkMessage, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.writable(); err != nil {
-		return WorkMessage{}, err
-	}
-	if !validText(body, 8000) {
-		return WorkMessage{}, errors.New("provide a message of at most 8000 bytes")
-	}
-	for i := range m.state.Responsibilities {
-		r := &m.state.Responsibilities[i]
-		if r.ID != responsibility || r.ProjectID != project {
-			continue
-		}
-		if len(r.Messages) >= 256 {
-			return WorkMessage{}, errors.New("responsibility inbox is full")
-		}
-		msg := WorkMessage{ID: id("message"), Body: body, CreatedAt: time.Now().UTC()}
-		r.Messages = append(r.Messages, msg)
-		return msg, m.saveLocked()
-	}
-	return WorkMessage{}, ErrNotFound
-}
 
 type NewWork struct {
 	Key      string `json:"key"`
@@ -477,7 +448,7 @@ func (m *Manager) CreateWork(project string, in NewWork) (WorkAssignment, error)
 	t := WorkAssignment{ID: id("task"), ProjectID: project, GoalID: in.GoalID, ParentID: in.ParentID, Title: in.Title, Intent: in.Intent, Criteria: in.Criteria, Role: in.Role, CriteriaRevision: 1, Revision: 1, Status: "queued", RequestKey: in.Key, RequestDigest: digest, CreatedAt: now, UpdatedAt: now}
 	m.state.Work = append(m.state.Work, t)
 	if in.Role == "orchestrator" {
-		r := Responsibility{ID: id("responsibility"), ProjectID: project, TaskID: t.ID, Title: t.Title, Messages: []WorkMessage{}}
+		r := Responsibility{ID: id("responsibility"), ProjectID: project, TaskID: t.ID, Title: t.Title}
 		m.state.Responsibilities = append(m.state.Responsibilities, r)
 		m.state.Work[len(m.state.Work)-1].ResponsibilityID = r.ID
 		t.ResponsibilityID = r.ID

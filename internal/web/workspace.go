@@ -227,6 +227,23 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 		v, err := s.engine.Desk.UpdateWork(r.PathValue("project"), r.PathValue("task"), r.PathValue("action"), in)
 		deskResult(w, v, err)
 	})
+	mux.HandleFunc("GET /api/projects/{project}/responsibilities/{responsibility}/messages", func(w http.ResponseWriter, r *http.Request) {
+		var before int64
+		if raw := r.URL.Query().Get("before"); raw != "" {
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || n < 1 {
+				writeJSON(w, 400, map[string]string{"error": "before must be a positive journal sequence"})
+				return
+			}
+			before = n
+		}
+		v, err := s.engine.Store.ResponsibilityMessages(r.PathValue("project"), r.PathValue("responsibility"), before)
+		if err != nil {
+			watchError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	})
 	mux.HandleFunc("POST /api/projects/{project}/responsibilities/{responsibility}/messages", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Body string `json:"body"`
@@ -235,7 +252,11 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 			deskResult(w, nil, err)
 			return
 		}
-		v, err := s.engine.Desk.MessageResponsibility(r.PathValue("project"), r.PathValue("responsibility"), in.Body)
-		deskResult(w, v, err)
+		v, err := s.engine.MessageResponsibility(r.PathValue("project"), r.PathValue("responsibility"), in.Body)
+		if err != nil {
+			watchError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
 	})
 }

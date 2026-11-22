@@ -202,6 +202,12 @@ func (s *Store) resolveChoiceWithAutomation(id string, resolution decision.Resol
 	}
 	resolution.Resolver = principal.ID
 	resolution.ResolvedAt = time.Now().UTC()
+	if isGraphInterruption(r) && resolution.Choice != "rewind" {
+		return s.settleGraphInterruption(r, resolution, command)
+	}
+	if r.GraphAttempt != nil && d.Source == nil && resolution.Choice == "retry" {
+		return reject("retry this attempt through its graph", ErrConflict)
+	}
 	status := "cancelled"
 	stage := "Applying your choice"
 	if d.Source != nil || resolution.Choice == "rewind" || resolution.Choice == "retry" {
@@ -322,6 +328,13 @@ func (e *Engine) applyResolution(r Run) (string, error) {
 			return "", err
 		}
 		return "", ErrConflict
+	}
+	// Older journals may contain an accepted retry that never reached the graph.
+	if isGraphInterruption(&r) && d.Resolution.Choice != "rewind" {
+		s := e.Store
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return r.ID, s.settleGraphInterruption(s.runs[r.ID], *d.Resolution, nil)
 	}
 	switch d.Resolution.Choice {
 	case "cancel":

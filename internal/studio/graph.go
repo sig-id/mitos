@@ -750,17 +750,7 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			if !operator || op.Rationale == "" {
 				return fail(graphError("orchestrator replacement requires operator authority and rationale"))
 			}
-			e.Store.advanceGraphOrchestratorGeneration(&g)
-			for _, x := range g.Expansions {
-				if x.Outcome == "" && !strings.HasPrefix(x.ID, "decision:") {
-					x.Generation = g.OrchestratorGeneration
-					if member := g.Members[x.OrchestratorTask]; member != nil {
-						member.CancelRequested = true
-					}
-					x.OrchestratorTask = ""
-					x.Error = ""
-				}
-			}
+			e.Store.replaceGraphOrchestrator(&g)
 		case "accept_proposal", "reject_proposal":
 			rec := g.Proposals[op.Proposal]
 			if rec == nil || rec.Outcome != "" || strings.TrimSpace(op.Rationale) == "" {
@@ -1047,4 +1037,18 @@ func (s *Store) validateGraphPools(g *WorkGraph) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) replaceGraphOrchestrator(g *WorkGraph) {
+	s.advanceGraphOrchestratorGeneration(g)
+	for _, x := range g.Expansions {
+		if x.Outcome == "" && !strings.HasPrefix(x.ID, "decision:") {
+			x.Generation = g.OrchestratorGeneration
+			if member := g.Members[x.OrchestratorTask]; member != nil {
+				member.CancelRequested = true
+			}
+			x.OrchestratorTask = ""
+			x.Error = ""
+		}
+	}
 }
