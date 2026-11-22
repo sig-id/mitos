@@ -46,7 +46,9 @@ func recordingUpstream(t *testing.T) (*httptest.Server, func() []recordedRequest
 
 func testBroker(t *testing.T, upstream string) *ModelBroker {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "b.sock")
+	// unixSocketDir keeps the path inside every supported platform's unix
+	// socket address limit; the standard test temp root is longer on some.
+	path := filepath.Join(unixSocketDir(t), "b.sock")
 	broker, err := startModelBroker(path, map[string]string{BrokerVendorAnthropic: "sk-ant-real", BrokerVendorOpenAI: "sk-oai-real"}, map[string]string{BrokerVendorAnthropic: upstream, BrokerVendorOpenAI: upstream + "/"}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +162,7 @@ func TestModelBrokerStreamsResponses(t *testing.T) {
 }
 
 func TestModelBrokerRefusesUnusableConfiguration(t *testing.T) {
-	dir := t.TempDir()
+	dir := unixSocketDir(t)
 	for name, keys := range map[string]map[string]string{
 		"none":      {},
 		"vendor":    {"google": "k"},
