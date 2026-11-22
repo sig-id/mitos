@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"mitos/internal/compute"
+	"mitos/internal/workpool"
 	workspacefs "mitos/internal/workspace"
 )
 
@@ -256,5 +257,95 @@ func TestBudgetEndDistinguishesGraceFromOtherCancels(t *testing.T) {
 	}
 	if budgetEndedSession(errCommandFailed) {
 		t.Fatal("an ordinary failure classified as the budget ending the session")
+	}
+}
+
+// A recovered attempt with bound dependency inputs completes only when those
+// copies still match the fingerprint recorded at preparation; a changed copy
+// keeps the interruption state instead of completing through recovery (#131
+// review).
+func TestRestartRecoveryVerifiesDependencyInputs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		tamper  bool
+		settled bool
+	}{{"unchanged inputs settle", false, true}, {"changed inputs keep interruption", true, false}} {
+		t.Run(test.name, func(t *testing.T) {
+			app := executionApp(t, `sleep 30 & wait`)
+			s := testStore(t)
+			r, root := submittedRun(t, s, app)
+			ctx := context.Background()
+			before, err := workspacefs.CaptureSource(ctx, root, s.Dir(), workspacefs.DefaultLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := filepath.Join(s.Dir(), "workspaces", r.ID)
+			history, err := workspacefs.Prepare(ctx, base, before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(base, "workspace", "file.txt"), []byte("hello\nworld\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// Bound upstream inputs: one copied artifact under inputs/, with
+			// its preparation fingerprint journalled as the wrap-up would.
+			inputs := filepath.Join(base, "inputs", "upstream")
+			if err := os.MkdirAll(inputs, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(inputs, "changes.patch"), []byte("patch\n"), 0444); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := workspacefs.CaptureData(ctx, filepath.Join(base, "inputs"), workspacefs.DefaultLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.mu.Lock()
+			current := s.runs[r.ID]
+			current.GraphAttempt = &GraphAttempt{GraphID: "graph_restart"}
+			s.runs[r.ID] = current
+			if s.graphs == nil {
+				s.graphs = map[string]*WorkGraph{}
+			}
+			s.graphs["graph_restart"] = &WorkGraph{ID: "graph_restart", ProjectID: current.ProjectID, Status: "active", Policy: GraphPolicy{Mode: "adaptive"}, RootTask: "goal", Members: map[string]*GraphMember{}}
+			task := s.tasks[r.TaskID]
+			task.DependencyEvidence = []workpool.Witness{{TaskID: "upstream", RunID: "run-upstream", Artifacts: []workpool.Artifact{{Name: "changes.patch"}}}}
+			s.tasks[r.TaskID] = task
+			s.mu.Unlock()
+			if err := s.RecordWorkspace(r.ID, "workspace_prepared", "Agent workspace prepared.", WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint, Limits: before.Limits}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RecordEvidence(r.ID, "dependency_inputs_prepared", "Bound upstream artifacts were copied and verified before execution.", map[string]any{"fingerprint": snapshot.Fingerprint}); err != nil {
+				t.Fatal(err)
+			}
+			if test.tamper {
+				// A misbehaving agent can relax the read-only mode before
+				// changing its bound input copy.
+				if err := os.Chmod(filepath.Join(inputs, "changes.patch"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(inputs, "changes.patch"), []byte("tampered\n"), 0444); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e, err := NewEngine(s, []Application{app}, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(e.Close)
+			finished, err := s.Get(r.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.settled {
+				if finished.Status != "done" || finished.Result == nil || !runEvidence(finished, "restart_after_submit") {
+					t.Fatalf("recovery did not settle with verified inputs: %+v", finished)
+				}
+				return
+			}
+			if finished.Status != "parked" || finished.Decision == nil || finished.Result == nil {
+				t.Fatalf("changed inputs should keep the interruption state: %+v", finished)
+			}
+		})
 	}
 }

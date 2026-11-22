@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"time"
@@ -132,6 +133,11 @@ func (e *Engine) recoverSubmittedAttempt(r Run) bool {
 	if !e.harvestRecoveredAttempt(r) {
 		return false
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), recoverHarvestBudget)
+	defer cancel()
+	if !e.verifyRecoveredInputs(ctx, r) {
+		return false
+	}
 	return e.collectSubmittedResult(r.ID, "restart_after_submit", time.Time{})
 }
 
@@ -174,4 +180,56 @@ func (e *Engine) harvestRecoveredAttempt(r Run) bool {
 		return false
 	}
 	return e.Store.RecordWorkspace(r.ID, "workspace_harvested", "Recovered the agent's workspace changes after a restart.", WorkspaceRecord{OmittedSubmodules: r.Workspace.OmittedSubmodules, Limits: r.Workspace.Limits, Mode: "copy", BaselineCommit: r.Workspace.BaselineCommit, ResultCommit: harvested.ResultCommit, Fingerprint: harvested.Fingerprint, ChangedFiles: len(harvested.Changes)}) == nil
+}
+
+// verifyRecoveredInputs re-checks the attempt's bound upstream input copies
+// against the fingerprint journalled when they were prepared, the same guard
+// the normal wrap-up applies: an agent that changed its inputs must not
+// complete through recovery. It reports false when the copies changed or the
+// recorded baseline cannot be reconstructed, in which case the caller keeps
+// the interruption state.
+func (e *Engine) verifyRecoveredInputs(ctx context.Context, r Run) bool {
+	task, err := e.Store.Task(r.TaskID)
+	if err != nil {
+		return false
+	}
+	bound := false
+	for _, w := range task.DependencyEvidence {
+		if len(w.Artifacts) > 0 {
+			bound = true
+			break
+		}
+	}
+	if !bound {
+		return true // the attempt copied no upstream inputs
+	}
+	fingerprint := ""
+	for _, event := range r.Events {
+		if event.Kind != "dependency_inputs_prepared" {
+			continue
+		}
+		var c change
+		if json.Unmarshal(event.Data, &c) != nil || c.Evidence == nil {
+			return false
+		}
+		var recorded struct {
+			Fingerprint string `json:"fingerprint"`
+		}
+		if json.Unmarshal(c.Evidence, &recorded) != nil || recorded.Fingerprint == "" {
+			return false
+		}
+		fingerprint = recorded.Fingerprint
+	}
+	if fingerprint == "" {
+		return false // no recorded baseline to verify against
+	}
+	base := filepath.Join(e.Store.Dir(), "workspaces", r.ID)
+	after, err := workspacefs.CaptureData(ctx, filepath.Join(base, "inputs"), workspacefs.DefaultLimits)
+	if ctx.Err() != nil {
+		return false
+	}
+	if err != nil || after.Fingerprint != fingerprint {
+		return false
+	}
+	return true
 }

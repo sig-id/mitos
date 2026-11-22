@@ -34,9 +34,11 @@ deadline ends the session, the run settles with the submitted result instead of
 failing finished work and holding a worker slot for wrap-up; `deadline_after_submit`
 evidence records the submission sequence and how long after it the budget ended.
 A restart in the same window recovers to the same settled state: the leftover
-workspace changes are harvested and persisted before the result is collected
-(`restart_after_submit`), and an attempt whose workspace can no longer be
-recovered keeps its interruption decision for the operator instead.
+workspace changes are harvested and persisted, and the bound dependency input
+copies are re-verified against their recorded fingerprint, before the result is
+collected (`restart_after_submit`); an attempt whose workspace or input copies
+cannot be recovered unchanged keeps its interruption decision for the operator
+instead.
 
 ## Proposals and yield
 
