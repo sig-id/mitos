@@ -202,7 +202,7 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 				return nil, err
 			}
 		} else if !r.Sample && (r.Status == "running" || (r.Status == "queued" && r.Claim != nil && r.Claim.ReleasedAt == nil)) {
-			if err = s.Park(r.ID, checkpointOption(r, recoveryDecision())); err != nil {
+			if err = s.interruptExecution(r); err != nil {
 				cancel()
 				return nil, err
 			}
@@ -327,6 +327,15 @@ func (e *Engine) Workspace(path string) (string, error) {
 	return path, nil
 }
 func (e *Engine) Launch(b Brief, parent string) (Run, error) {
+	if parent != "" {
+		prior, err := e.Store.Get(parent)
+		if err != nil {
+			return Run{}, err
+		}
+		if prior.GraphAttempt != nil {
+			return Run{}, errGraphRetry
+		}
+	}
 	if b.Structured != nil {
 		if parent != "" {
 			return e.retryStructured(b, parent)
@@ -420,6 +429,9 @@ func (e *Engine) retry(id string) (Run, error) {
 	r, err := e.Store.Get(id)
 	if err != nil {
 		return Run{}, err
+	}
+	if r.GraphAttempt != nil {
+		return Run{}, errGraphRetry
 	}
 	if r.ExecutionKind == "interactive" {
 		return Run{}, errors.New("replace the executor through its durable task")
@@ -688,7 +700,7 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 			_ = e.Store.interruptStructured(r.ID, "Server shutdown interrupted structured work; a bounded replacement may resume the same Task after restart.")
 			return
 		}
-		_ = e.Store.Park(r.ID, checkpointOption(current, recoveryDecision()))
+		_ = e.Store.interruptExecution(current)
 		return
 	}
 	if errors.Is(err, errBlockedOnHuman) || errors.Is(err, errObservationLost) {

@@ -1016,7 +1016,7 @@ func addOrchestratorContext(ca *contextAssembly, raw string) error {
 		return string(out)
 	}
 	ca.add(tierGraph, "agent_library", "available agent definitions", pick("agent_library", "execution_policy"))
-	allowance := pick("remaining_tasks", "remaining_attempts", "remaining_plans", "inbox", "previous_error")
+	allowance := pick("remaining_tasks", "remaining_attempts", "remaining_plans", "inbox", "previous_error", "watch_inbox")
 	var prefix struct {
 		Bytes  int    `json:"bytes"`
 		SHA256 string `json:"sha256"`

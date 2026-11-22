@@ -245,6 +245,9 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 			if r.Status != "done" && r.Status != "failed" && r.Status != "parked" && r.Status != "cancelled" {
 				continue
 			}
+			if r.Status == "parked" && isGraphInterruption(&r) {
+				continue // The operator's graph recovery decision owns this expansion.
+			}
 			if r.Status != "done" || !r.Verified {
 				if err = e.graphOrchestratorError(snapshot.ID, key, x.OrchestratorTask, "orchestrator_execution_needs_review"); err != nil {
 					return err

@@ -10,6 +10,7 @@ import (
 	"mitos/internal/acceptance"
 	"mitos/internal/agentpolicy"
 	"mitos/internal/decision"
+	"mitos/internal/desk"
 	"mitos/internal/failpoint"
 	"mitos/internal/fleet"
 	"mitos/internal/messaging"
@@ -60,6 +61,8 @@ type Store struct {
 	supervisionIncidents   map[string]SupervisionIncident
 	watches                map[string]*Watch
 	watchDeliveries        map[string]*WatchDelivery
+	deskResponsibilities   map[string]desk.Responsibility
+	operatorMessages       map[string][]string // delivery IDs in journal order, by responsibility
 	watchOrder             map[string][]string
 	watchItems             map[string]*WatchItem
 	watchOpenItems         map[string]string

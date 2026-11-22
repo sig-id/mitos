@@ -49,7 +49,8 @@ type WatchDelivery struct {
 	ID         string         `json:"id"`
 	WatchID    string         `json:"watch_id"`
 	Owner      watch.Owner    `json:"owner"`
-	Kind       string         `json:"kind"` // group, expired, silent, revoked, degraded, digest
+	Kind       string         `json:"kind"`              // group, expired, silent, revoked, degraded, digest, operator_message
+	Message    string         `json:"message,omitempty"` // operator-authored body for a direct delivery
 	Level      watch.Level    `json:"level"`
 	Route      string         `json:"route"`
 	GroupKey   string         `json:"group_key,omitempty"`
@@ -145,6 +146,7 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.watches = map[string]*Watch{}
 		s.watchDeliveries = map[string]*WatchDelivery{}
 		s.watchOrder = map[string][]string{}
+		s.operatorMessages = map[string][]string{}
 		s.watchItems = map[string]*WatchItem{}
 		s.watchOpenItems = map[string]string{}
 		s.watchInboxes = map[string]*watchInbox{}
@@ -221,7 +223,8 @@ func (s *Store) applyWatchDelivery(e Event, rd *routedDelivery) error {
 	d := &rd.Delivery
 	w := s.watches[d.WatchID]
 	// A digest spans the owner's watches and may outlive the one it names.
-	if w == nil || w.State != "active" && d.Kind != "digest" || s.watchDeliveries[d.ID] != nil {
+	direct := d.WatchID == "" && d.Owner.Kind == watch.OwnerResponsibility && (d.Kind == "operator_message" || d.Kind == "digest")
+	if !direct && (w == nil || w.State != "active" && d.Kind != "digest") || s.watchDeliveries[d.ID] != nil {
 		return errors.New("delivery for inactive watch")
 	}
 	if (d.Route == routeInbox) != (rd.Inbox != nil) || d.Route != routeFeed && d.Route != routeInbox && d.Route != routeFolded {
@@ -270,7 +273,11 @@ func (s *Store) applyWatchDelivery(e Event, rd *routedDelivery) error {
 		return err
 	}
 	s.watchDeliveries[d.ID] = &saved
-	s.watchOrder[d.WatchID] = append(s.watchOrder[d.WatchID], d.ID)
+	if d.Kind == "operator_message" {
+		s.operatorMessages[d.Owner.ID] = append(s.operatorMessages[d.Owner.ID], d.ID)
+	} else if d.WatchID != "" {
+		s.watchOrder[d.WatchID] = append(s.watchOrder[d.WatchID], d.ID)
+	}
 	s.applyInbox(e, &saved, rd.Inbox)
 	return nil
 }

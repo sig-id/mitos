@@ -45,9 +45,10 @@ func (s *Store) LoadDesk() ([]byte, error) {
 }
 
 type deskProjection struct {
-	Version  int                   `json:"version"`
-	Work     []desk.WorkAssignment `json:"work"`
-	Sessions []desk.Session        `json:"sessions"`
+	Responsibilities []desk.Responsibility `json:"responsibilities"`
+	Version          int                   `json:"version"`
+	Work             []desk.WorkAssignment `json:"work"`
+	Sessions         []desk.Session        `json:"sessions"`
 }
 
 func decodeDesk(b []byte) (deskProjection, error) {
@@ -120,6 +121,10 @@ func (s *Store) applyDesk(e Event, b []byte) error {
 	}
 	if s.tasks == nil {
 		s.tasks = map[string]*Task{}
+	}
+	s.deskResponsibilities = make(map[string]desk.Responsibility, len(p.Responsibilities))
+	for _, owner := range p.Responsibilities {
+		s.deskResponsibilities[owner.ID] = owner
 	}
 	byTask := map[string][]desk.Session{}
 	for _, session := range p.Sessions {

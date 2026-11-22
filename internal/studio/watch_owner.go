@@ -57,9 +57,8 @@ type WatchFold struct {
 
 func (f *WatchFold) add(d *WatchDelivery, interval int64, at time.Time) {
 	if f.Receipts == 0 {
-		f.Since = at
-	}
-	if f.IntervalMS == 0 || interval < f.IntervalMS {
+		f.Since, f.IntervalMS = at, interval
+	} else if interval < f.IntervalMS {
 		f.IntervalMS = interval
 	}
 	f.Receipts++
@@ -140,6 +139,7 @@ func (s *Store) ownerGeneration(o watch.Owner) int64 {
 		if g := s.graphs[o.ID]; g != nil {
 			return g.OrchestratorGeneration
 		}
+		return int64(s.deskResponsibilities[o.ID].Generation)
 	}
 	return 0
 }
@@ -212,7 +212,7 @@ func (s *Store) routeDelivery(d WatchDelivery, w *Watch, now time.Time, in *watc
 			}
 			out = append(out, routedDelivery{Delivery: n, Inbox: &InboxEntry{DeliveryID: n.ID, Owner: o, Generation: n.Generation}})
 		}
-	case d.Kind == "group" && pending >= ownerInboxHardCapacity:
+	case (d.Kind == "group" || d.Kind == "operator_message") && pending >= ownerInboxHardCapacity:
 		d.Route = routeFolded
 	default:
 		d.Route = routeInbox
@@ -265,7 +265,7 @@ func (s *Store) applyInbox(e Event, d *WatchDelivery, entry *InboxEntry) {
 			in.Degraded = true
 		}
 	case routeFolded:
-		s.inbox(d.Owner).Fold.add(d, s.watches[d.WatchID].Spec.Grouping.IntervalMS, e.At)
+		s.inbox(d.Owner).Fold.add(d, s.deliveryInterval(d.WatchID), e.At)
 	}
 }
 
@@ -301,10 +301,10 @@ func (s *Store) flushDigests(now time.Time) error {
 			continue
 		}
 		w := s.watches[in.Fold.Watch]
-		if w == nil {
-			continue
+		d := WatchDelivery{ID: newID("delivery"), WatchID: in.Fold.Watch, Owner: in.Owner, Kind: "digest", Level: watch.Digest, Source: watch.SourceRule, FirstSeq: in.Fold.FirstSeq, LastSeq: in.Fold.LastSeq, Count: in.Fold.Count, Counts: graphClone(in.Fold.Counts)}
+		if w != nil {
+			d.Watches = []string{w.ID}
 		}
-		d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: in.Owner, Kind: "digest", Level: watch.Digest, Source: watch.SourceRule, FirstSeq: in.Fold.FirstSeq, LastSeq: in.Fold.LastSeq, Count: in.Fold.Count, Counts: graphClone(in.Fold.Counts), Watches: []string{w.ID}}
 		if err := s.commitWatchDelivery("watch_digest_delivered", w, &d, nil, now); err != nil {
 			return err
 		}
@@ -405,6 +405,9 @@ func (s *Store) deliveryObservation(item InboxItem, r *Run) (cooperation.Message
 		revision = t.Revision
 	}
 	m := cooperation.Message{Version: cooperation.Version, ID: d.ID, TaskID: r.TaskID, RunID: r.ID, Revision: revision, Kind: "observation", Body: observationPreamble + string(body)}
+	if d.Message != "" {
+		m.Body += "\nOperator message:\n" + d.Message
+	}
 	return m, m.Validate(time.Now())
 }
 
@@ -426,7 +429,11 @@ func (s *Store) planningWatchInbox(g *WorkGraph, budget int) map[string]any {
 		recent := []map[string]any{}
 		for _, item := range in.Pending[len(in.Pending)-n:] {
 			d := item.Delivery
-			recent = append(recent, map[string]any{"delivery_id": d.ID, "watch_id": d.WatchID, "level": d.Level, "kind": d.Kind, "count": d.Count, "first_seq": d.FirstSeq, "last_seq": d.LastSeq, "reasons": d.Reasons})
+			receipt := map[string]any{"delivery_id": d.ID, "watch_id": d.WatchID, "level": d.Level, "kind": d.Kind, "count": d.Count, "first_seq": d.FirstSeq, "last_seq": d.LastSeq, "reasons": d.Reasons}
+			if d.Message != "" {
+				receipt["operator_message_untrusted"] = d.Message
+			}
+			recent = append(recent, receipt)
 		}
 		summary["recent"] = recent
 		if raw, err := json.Marshal(summary); err == nil && len(raw) <= budget {

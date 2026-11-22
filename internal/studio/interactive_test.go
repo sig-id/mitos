@@ -142,8 +142,12 @@ func TestInteractiveJournalIdentityReplacementAndAcceptance(t *testing.T) {
 	if err != nil || childTask.Status != "accepted" {
 		t.Fatal("human acceptance", err)
 	}
-	if _, err = engine.Desk.MessageResponsibility(project.ID, first.ResponsibilityID, "Review recovery findings"); err != nil {
+	msg, err := engine.MessageResponsibility(project.ID, first.ResponsibilityID, "Review recovery findings")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if notices, err := engine.Desk.Inbox(first.ID); err != nil || len(notices) == 0 || notices[len(notices)-1].Body != msg.Message {
+		t.Fatal("current session did not receive the operator message", notices, err)
 	}
 	stopInteractive(t, engine.Desk, first.ID)
 	firstTask := findWork(t, engine.Desk, project.ID, task.ID)
@@ -156,6 +160,15 @@ func TestInteractiveJournalIdentityReplacementAndAcceptance(t *testing.T) {
 	}
 	if second.TaskID != first.TaskID || second.AttemptID == first.AttemptID || second.ProcessID == first.ProcessID || second.Generation != first.Generation+1 || second.ResponsibilityID != first.ResponsibilityID {
 		t.Fatal("replacement changed responsibility", second)
+	}
+	if err := engine.Desk.Acknowledge(msg.ID, first.ID); !errors.Is(err, desk.ErrConflict) {
+		t.Fatal("replaced orchestrator acknowledged the message", err)
+	}
+	if notices, err := engine.Desk.Inbox(second.ID); err != nil || len(notices) == 0 || notices[len(notices)-1].ID != msg.ID {
+		t.Fatal("replacement lost pending operator message", notices, err)
+	}
+	if err := engine.Desk.Acknowledge(msg.ID, second.ID); err != nil {
+		t.Fatal(err)
 	}
 	current := findWork(t, engine.Desk, project.ID, task.ID)
 	if _, err = engine.Desk.UpdateWork(project.ID, task.ID, "report", desk.WorkAction{Revision: current.Revision, SessionID: first.ID, Body: "late result"}); !errors.Is(err, desk.ErrConflict) {
@@ -200,7 +213,7 @@ func TestInteractiveJournalIdentityReplacementAndAcceptance(t *testing.T) {
 	if !reflect.DeepEqual(backup, preserved) {
 		t.Fatal("legacy backup overwritten")
 	}
-	if len(after.Responsibilities[0].Messages) != 1 {
+	if history, err := store.ResponsibilityMessages(project.ID, first.ResponsibilityID, 0); err != nil || len(history) != 1 || history[0].Message != "Review recovery findings" || history[0].Outcome != "acted" {
 		t.Fatal("supervisor inbox lost")
 	}
 	if _, err := ReportAutonomy(store.List()); err != nil {
