@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -26,15 +27,6 @@ func watchAttemptRun(t *testing.T) (*Store, Run, WorkGraph) {
 	return s, r, g
 }
 
-func containsReason(reasons []string, reason string) bool {
-	for _, r := range reasons {
-		if r == reason {
-			return true
-		}
-	}
-	return false
-}
-
 func agentWatchSpec(owner watch.Owner, scope watch.Scope, kinds []string) watch.Spec {
 	return watch.Spec{
 		Version: watch.Version, Owner: owner, Description: "test watch",
@@ -45,13 +37,32 @@ func agentWatchSpec(owner watch.Owner, scope watch.Scope, kinds []string) watch.
 	}
 }
 
+func routeAgentTestRequest(t *testing.T, s *Store, session AgentSession, token, raw string) AgentRequestView {
+	t.Helper()
+	view, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Routing decides who answers; the default policy has no decision
+	// provider, so the classifier falls back to a human.
+	e := &Engine{Store: s}
+	route, err := e.RouteAgentRequest(context.Background(), session.ID, token, view.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.Route.Resolver != "human" {
+		t.Fatalf("expected a human resolver, got %+v", route.Route)
+	}
+	return view
+}
+
 // An attempt blocked on a human answer is must-deliver: attempt, responsibility
 // and project watches each receive the request once at wake, even when their
 // kinds filter does not list it, and the answer notifies the same group
 // (issue #130).
 func TestAgentApprovalRequestReachesEveryWatchScope(t *testing.T) {
 	s, r, g := watchAttemptRun(t)
-	// The kinds filter deliberately does not list agent_approval_requested.
+	// The kinds filter deliberately does not list the request events.
 	attempt := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "attempt", ID: r.ID}, watch.Scope{Run: r.ID}, []string{"note"}))
 	responsibility := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "responsibility", ID: g.ID}, watch.Scope{Graph: g.ID}, []string{"note"}))
 	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
@@ -59,9 +70,7 @@ func TestAgentApprovalRequestReachesEveryWatchScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion)); err != nil {
-		t.Fatal(err)
-	}
+	routeAgentTestRequest(t, s, session, token, codexQuestion)
 	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -107,35 +116,91 @@ func TestAgentApprovalRequestReachesEveryWatchScope(t *testing.T) {
 		if len(got) != 2 || got[0].Level != watch.Notify {
 			t.Fatalf("%s watch answer delivery: %+v", w.name, got)
 		}
-		// A project watch also sees the review run's own parked notice; every
-		// scope must at least carry the answer notification.
-		if !containsReason(got[0].Reasons, "agent_answered") {
+		if len(got[0].Reasons) != 1 || got[0].Reasons[0] != "agent_answered" {
 			t.Fatalf("%s watch answer reasons: %+v", w.name, got[0].Reasons)
 		}
 	}
 }
 
-// Ending a request without an answer notifies the same scopes once.
-func TestAgentRequestEndNotifiesWatchScopes(t *testing.T) {
+// A request automatic review can answer wakes nobody at ingest, and wakes its
+// scopes when routing falls back to a human (issue #130).
+func TestAutomaticResolutionDoesNotWakeUntilRoutingLandsOnHuman(t *testing.T) {
 	s, r, g := watchAttemptRun(t)
-	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, nil))
+	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
 	session, token, err := s.CreateBoundAgentSession("codex", "Attempt question", t.TempDir(), g.ProjectID, "", r.ID, decision.LocalOperator())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion)); err != nil {
+	// Ingest alone stays quiet: the default delegated policy classifies the
+	// question before anyone is needed.
+	view, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CloseAgentSession(session.ID, token); err != nil {
+	if got := deliveries(t, s, project.ID); len(got) != 0 {
+		t.Fatalf("ingest woke scopes before routing: %+v", got)
+	}
+	e := &Engine{Store: s}
+	if _, err := e.RouteAgentRequest(context.Background(), session.ID, token, view.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, project.ID)
+	if len(got) != 1 || got[0].Level != watch.Wake || got[0].Reasons[0] != "agent_awaiting_answer" || got[0].Runs[0] != r.ID {
+		t.Fatalf("routed request did not wake the project watch: %+v", got)
+	}
+}
+
+// A command approval no rule delegated authority for needs a human by policy,
+// so it wakes at ingest without waiting for routing (issue #130).
+func TestUndelegatedCommandApprovalWakesAtIngest(t *testing.T) {
+	s, r, g := watchAttemptRun(t)
+	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
+	session, token, err := s.CreateBoundAgentSession("codex", "Command approval", t.TempDir(), g.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexApproval)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, project.ID)
+	if len(got) != 1 || got[0].Level != watch.Wake || got[0].Reasons[0] != "agent_awaiting_answer" {
+		t.Fatalf("undelegated approval did not wake at ingest: %+v", got)
+	}
+}
+
+// Ending a request without an answer notifies the same scopes once, and a
+// session that stays open after a thread ends does not repeat the notice.
+func TestAgentRequestEndNotifiesWatchScopesOnce(t *testing.T) {
+	s, r, g := watchAttemptRun(t)
+	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
+	session, token, err := s.CreateBoundAgentSession("codex", "Attempt question", t.TempDir(), g.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeAgentTestRequest(t, s, session, token, codexQuestion)
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EndAgentThread(session.ID, token, "thread_1"); err != nil {
+		t.Fatal(err)
+	}
+	// Later session traffic must not repeat the end notice.
+	if err := s.AgentHeartbeat(session.ID, token); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.EvaluateWatches(time.Now().Add(3 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	// Deliveries are returned newest first: the end notice, then the question.
+	// Deliveries are returned newest first: the end notice, then the wake.
 	got := deliveries(t, s, project.ID)
 	if len(got) != 2 || got[0].Level != watch.Notify || got[1].Level != watch.Wake {
 		t.Fatalf("unexpected deliveries: %+v", got)
@@ -149,15 +214,12 @@ func TestAgentRequestEndNotifiesWatchScopes(t *testing.T) {
 // it opened, so project watches still see them (issue #130).
 func TestUnboundAgentRequestReachesProjectWatch(t *testing.T) {
 	s, _, g := watchAttemptRun(t)
-	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, nil))
+	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
 	session, token, err := s.CreateBoundAgentSession("codex", "Operator session", t.TempDir(), g.ProjectID, "", "", decision.LocalOperator())
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion))
-	if err != nil {
-		t.Fatal(err)
-	}
+	view := routeAgentTestRequest(t, s, session, token, codexQuestion)
 	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -167,6 +229,53 @@ func TestUnboundAgentRequestReachesProjectWatch(t *testing.T) {
 	}
 	if len(got[0].Runs) != 1 || got[0].Runs[0] != view.RunIDs[0] {
 		t.Fatalf("review run attribution: %+v", got[0].Runs)
+	}
+}
+
+// A watch grouped by run receives the attributed answer notification: the
+// review run's own parked fact must not consume it by sequence dedup
+// (issue #130).
+func TestAnswerNotificationSurvivesRunGroupingDedup(t *testing.T) {
+	s, r, g := watchAttemptRun(t)
+	byRun := mustWatch(t, s, watch.Spec{
+		Version: watch.Version, Owner: watch.Owner{Kind: "operator"}, Description: "test watch",
+		Condition:    watch.Condition{Scope: watch.Scope{Project: g.ProjectID}},
+		Lease:        watch.Lease{ExpiresAt: time.Now().Add(time.Hour), MaxRenewals: 2},
+		Grouping:     watch.Grouping{By: []string{"run_id"}, WaitMS: 0, IntervalMS: 1000, MaxEvents: 64, RepeatIntervalMS: 60000},
+		DefaultLevel: watch.Digest,
+	})
+	session, token, err := s.CreateBoundAgentSession("codex", "Attempt question", t.TempDir(), g.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeAgentTestRequest(t, s, session, token, codexQuestion)
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, deviceToken := pairTestDevice(t, s, decision.LocalOperator())
+	snap, err := s.DeviceSnapshot(deviceToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := snap.Cards[0]
+	command := DeviceCommand{1, "answer_command", card.DecisionID, card.RunID, card.Revision, "answer", json.RawMessage(`"Alpha"`)}
+	body, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{Store: s}
+	if _, err := e.ResolveDevice(deviceToken, command, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, byRun.ID)
+	if len(got) != 2 || got[0].Level != watch.Notify || !containsReason(got[0].Reasons, "agent_answered") {
+		t.Fatalf("run-grouped answer delivery: %+v", got)
+	}
+	if got[0].Runs[0] != r.ID {
+		t.Fatalf("answer not attributed to the blocked attempt: %+v", got[0].Runs)
 	}
 }
 
@@ -182,9 +291,7 @@ func TestAgentRequestWatchFactsSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion)); err != nil {
-		t.Fatal(err)
-	}
+	routeAgentTestRequest(t, s, session, token, codexQuestion)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -197,14 +304,24 @@ func TestAgentRequestWatchFactsSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Pending != 1 || len(v.Groups) != 1 || v.Groups[0].Count != 1 {
-		t.Fatalf("replay lost the request fact: %+v", v)
+	// The unrouted ingest fact and the routed wake both wait for delivery.
+	if v.Pending != 2 || len(v.Groups) != 1 {
+		t.Fatalf("replay lost the request facts: %+v", v)
 	}
 	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	got := deliveries(t, s, w.ID)
-	if len(got) != 1 || got[0].Level != watch.Wake || got[0].Reasons[0] != "agent_awaiting_answer" {
+	if len(got) != 1 || got[0].Level != watch.Wake || !containsReason(got[0].Reasons, "agent_awaiting_answer") {
 		t.Fatalf("deliveries after restart: %+v", got)
 	}
+}
+
+func containsReason(reasons []string, reason string) bool {
+	for _, r := range reasons {
+		if r == reason {
+			return true
+		}
+	}
+	return false
 }

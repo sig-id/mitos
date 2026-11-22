@@ -294,6 +294,11 @@ func (s *Store) apply(e Event) error {
 				}
 			}
 		}
+		// Routing decides who can answer: a request that lands on a human
+		// wakes the scopes that contain the blocked attempt (issue #130).
+		for _, f := range s.agentRequestFacts(e, c, nil) {
+			s.observeWatches(f)
+		}
 		return nil
 	}
 	if c.ModelEvaluation != nil {
@@ -626,7 +631,16 @@ func (s *Store) apply(e Event) error {
 	if err := s.applyServiceDelivery(e, c); err != nil {
 		return err
 	}
-	s.observeWatches(s.runFact(e, r, c))
+	if facts, answered := s.agentAnswerFact(e, r, c); answered {
+		// The answer to an agent request is one attributed fact; the review
+		// run's own parked fact would share its sequence and be consumed by
+		// delivery dedup (issue #130).
+		for _, f := range facts {
+			s.observeWatches(f)
+		}
+	} else {
+		s.observeWatches(s.runFact(e, r, c))
+	}
 	s.settleAttemptWatches(e, r)
 	return nil
 }

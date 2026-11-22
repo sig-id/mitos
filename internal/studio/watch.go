@@ -415,25 +415,36 @@ func (s *Store) agentRequestScopes(q *AgentRequest) []watch.Fact {
 }
 
 // agentRequestFacts projects agent request events into watch facts (spec 09
-// §2). The question an agent attempt is blocked on is a must-deliver wake
-// (reason agent_awaiting_answer), and its answer or invalidation is a notify
-// on the same attribution, so the open group can close. ended lists requests
-// this event ended (session close, expiry or thread end).
+// §2). A question that needs a human answer is a must-deliver wake (reason
+// agent_awaiting_answer); a request automatic review can answer never wakes
+// anyone until routing falls back to a human. A request's end is a notify on
+// the same attribution, so the open group can close. ended lists requests this
+// event newly ended (session close, expiry or thread end).
 func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fact {
 	var requests []AgentRequest
 	reason := ""
 	question := false
+	wake := false
 	switch {
 	case e.Kind == "agent_approval_requested" && c.AgentRequest != nil && !c.AgentRequest.Invalidated:
-		requests = []AgentRequest{*c.AgentRequest}
+		q := *c.AgentRequest
+		requests = []AgentRequest{q}
 		question = true
-	case e.Kind == "approval_resolved" && c.AgentAnswer != nil:
-		if r := s.runs[e.RunID]; r != nil && r.Decision != nil && r.Decision.Source != nil {
-			if q, ok := s.agentRequests[r.Decision.Source.SessionID+"/"+r.Decision.Source.RequestID]; ok {
+		// Wake only when human resolution is actually required, projected the
+		// same way the activity surface projects it; a delegated or classified
+		// resolver answers without an operator.
+		wake = s.agentRequestNeedsHuman(&q)
+	case e.Kind == "agent_request_routed" || e.Kind == "agent_resolution_needs_operator":
+		if c.AgentRoute != nil {
+			if q, ok := s.agentRequests[c.AgentRoute.Key]; ok {
 				requests = []AgentRequest{q}
+				question = true
+				// Routing decides: a classifier or policy revision can still
+				// land the request on an operator after ingest projected
+				// otherwise, and a failed automatic review falls back to one.
+				wake = c.AgentRoute.Route.Resolver == "human"
 			}
 		}
-		reason = "agent_answered"
 	case c.AgentRequest != nil && c.AgentRequest.Invalidated:
 		requests = []AgentRequest{*c.AgentRequest}
 		reason = "agent_request_ended"
@@ -458,15 +469,52 @@ func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fac
 		for _, scope := range s.agentRequestScopes(&q) {
 			scope.Seq, scope.At, scope.Type, scope.Kind = e.Seq, e.At, e.Type, e.Kind
 			scope.Summary = summary
-			if question {
+			switch {
+			case wake:
 				scope.Rule, scope.Reason = watch.Wake, "agent_awaiting_answer"
-			} else {
+			case reason != "":
 				scope.Rule, scope.Reason = watch.Notify, reason
 			}
 			facts = append(facts, scope)
 		}
 	}
 	return facts
+}
+
+// agentRequestNeedsHuman projects whether an ingested request blocks on a
+// human answer, exactly as requestReview projects it for the activity
+// surface. Caller holds the store lock.
+func (s *Store) agentRequestNeedsHuman(q *AgentRequest) bool {
+	session, ok := s.agentSessions[q.SessionID]
+	if !ok {
+		// Without the session record nothing can answer automatically.
+		return true
+	}
+	route, _ := s.requestReview(session, *q)
+	return route.Resolver == "human"
+}
+
+// agentAnswerFact projects the answer to an agent request as one attributed
+// fact (notify, reason agent_answered) instead of the review run's own parked
+// fact: both would share this journal event's sequence, and delivery dedup
+// would silently consume whichever group delivered second (issue #130).
+// Caller holds the store lock; ok is false for ordinary decisions.
+func (s *Store) agentAnswerFact(e Event, r *Run, c change) ([]watch.Fact, bool) {
+	if e.Kind != "approval_resolved" || c.AgentAnswer == nil || r.Decision == nil || r.Decision.Source == nil {
+		return nil, false
+	}
+	q, ok := s.agentRequests[r.Decision.Source.SessionID+"/"+r.Decision.Source.RequestID]
+	if !ok {
+		return nil, false
+	}
+	facts := []watch.Fact{}
+	for _, scope := range s.agentRequestScopes(&q) {
+		scope.Seq, scope.At, scope.Type, scope.Kind = e.Seq, e.At, e.Type, e.Kind
+		scope.Summary = factSummary(c.Summary, c.Stage)
+		scope.Rule, scope.Reason = watch.Notify, "agent_answered"
+		facts = append(facts, scope)
+	}
+	return facts, true
 }
 
 // observeWatches folds one fact into every active watch. It runs inside apply,

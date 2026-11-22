@@ -329,7 +329,7 @@ func (s *Store) applyAgentEvent(e Event, c change) error {
 				for _, thread := range a.EndedThreads {
 					ended = ended || thread == request.Request.Thread
 				}
-				if request.SessionID == a.ID && ended {
+				if request.SessionID == a.ID && ended && !request.Invalidated {
 					s.endAgentRequest(key, e)
 					endedRequests = append(endedRequests, key)
 				}
