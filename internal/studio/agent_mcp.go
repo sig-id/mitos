@@ -302,5 +302,8 @@ func piAttemptConfig(server []string, base string) (string, string, error) {
 			return "", "", err
 		}
 	}
+	if err := stagePiNPM(host, config); err != nil {
+		return "", "", fmt.Errorf("stage Pi npm packages: %w", err)
+	}
 	return config, "PI_CODING_AGENT_DIR=" + config, nil
 }
