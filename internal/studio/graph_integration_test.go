@@ -22,11 +22,9 @@ func TestGraphTypedDecisionSelectionAndIdempotency(t *testing.T) {
 	}))
 	defer server.Close()
 	e, req := graphEngine(t, false)
-	app := executionApp(t, "true")
-	app.ID = "routing-model"
-	app.DecisionModel = modelConfig(server.URL, "before_segment")
-	e.Apps = append(e.Apps, app)
-	req.Policy.DecisionApplication = app.ID
+	if _, err := e.SaveSystemConfiguration(SystemConfiguration{DecisionProvider: modelConfig(server.URL, "before_segment")}); err != nil {
+		t.Fatal(err)
+	}
 	g := createGraphTest(t, e, req)
 	spec := graphWorker("new-worker", g.RootTask)
 	p := proposal(g, "choose")
@@ -106,7 +104,7 @@ func TestGraphOrchestratorDynamicallyAddsWorkFromNativeEvidence(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 fixture unavailable")
 	}
-	e, req := graphEngine(t, false)
+	e, req := workflowTestEngine(t)
 	orchestrator := executionApp(t, "unused")
 	orchestrator.ID = "orchestrator"
 	orchestrator.Command = []string{python, "-c", `import json,pathlib,sys
@@ -122,37 +120,22 @@ print('# Native orchestrator analysis\nNo worker response tags required.')`}
 	req.Policy.Applications = append(req.Policy.Applications, orchestrator.ID)
 	req.Policy.OrchestratorApplication = orchestrator.ID
 	g := createGraphTest(t, e, req)
-	// Run each admitted command through the real executor, keeping the fixture
-	// deterministic while exercising the same reconciliation/admission handlers.
-	for iteration := 0; iteration < 8; iteration++ {
-		if err = e.reconcileGraphs(); err != nil {
-			t.Fatal(err)
-		}
-		ready, err := e.Store.ReadyRuns(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, candidate := range ready {
-			ok, err := e.Store.Schedule(candidate.Run.ID, nil)
-			if err != nil || !ok {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			e.execute(ctx, candidate.Run)
-			cancel()
-		}
+	// Exercise the real executor and asynchronous planning reviewer.
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 		g, _ = e.Store.Graph(g.ID)
 		if len(g.Expansions) > 1 {
-			allClosed := true
+			closed := true
 			for _, x := range g.Expansions {
-				if x.Outcome == "" {
-					allClosed = false
+				if x.Error != "" {
+					t.Fatal(x.Error)
 				}
+				closed = closed && x.Outcome != ""
 			}
-			if allClosed {
+			if closed {
 				break
 			}
 		}
+		time.Sleep(30 * time.Millisecond)
 	}
 	g, _ = e.Store.Graph(g.ID)
 	workers, orchestrators := 0, 0

@@ -71,7 +71,7 @@ func TestSharedOrchestratorPlanPreservesScheduling(t *testing.T) {
 				t.Fatal(err)
 			}
 			run := Run{ID: "proposal", TaskID: x.OrchestratorTask}
-			if err := e.applyOrchestratorPlan(g, "initial", run, decoded); err != nil {
+			if err := e.admitOrchestratorPlan(g, "initial", run, decoded, false, &workflowSelection{Choice: "apply", Evaluation: "test-evaluation", Revision: e.Store.AgentPolicy(g.ProjectID).Revision}); err != nil {
 				t.Fatal(err)
 			}
 			next, _ := e.Store.Graph(g.ID)

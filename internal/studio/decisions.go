@@ -185,6 +185,14 @@ func (s *Store) resolveChoiceWithAutomation(id string, resolution decision.Resol
 			return reject("checkpoint recovery is no longer available", err)
 		}
 	}
+	if r.WorkflowReview != nil {
+		if !s.workflowReviewCurrent(r.WorkflowReview) || automation != nil {
+			return reject("workflow review has expired", ErrConflict)
+		}
+		resolution.Resolver = principal.ID
+		resolution.ResolvedAt = time.Now().UTC()
+		return s.commit(id, "effect", "workflow_review_answered", change{Resolution: &resolution, Choice: resolution.Choice, DecisionApplied: true, DeviceCommand: command, ResultRunID: r.WorkflowReview.Owner, Status: "done", Stage: "Decision recorded", Summary: "Operator selected " + resolution.Choice + "."})
+	}
 	if r.HeldJudgment != nil && r.HeldJudgment.DecisionID == d.ID {
 		// A kernel judgment card: the choice settles the held submission
 		// through the kernel, not through the retry/cancel/rewind actions.
@@ -353,6 +361,7 @@ func (e *Engine) applyResolution(r Run) (string, error) {
 	return resultID, nil
 }
 func (e *Engine) reconcileDecisions() {
+	e.Store.expireWorkflowReviews()
 	e.actions.Lock()
 	defer e.actions.Unlock()
 	for _, r := range e.Store.List() {

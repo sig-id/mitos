@@ -95,7 +95,10 @@ func (e *Engine) evaluateModel(ctx context.Context, project, scope, purpose stri
 	defer s.mu.Unlock()
 	evaluation.Status = "failed"
 	evaluation.Reason = "provider_failed_or_response_invalid"
-	if err == nil && answer.Validate(request) == nil {
+	if err == nil {
+		err = answer.Validate(request)
+	}
+	if err == nil {
 		evaluation.Answer = &answer
 		if answer.Meets(cfg) {
 			evaluation.Status = "selected"

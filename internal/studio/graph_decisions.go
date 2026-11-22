@@ -17,19 +17,20 @@ type GraphDecisionRequest struct {
 	Context    string             `json:"context"`
 }
 type GraphDecision struct {
-	Key          string                `json:"key"`
-	Digest       string                `json:"digest"`
-	Proposal     GraphProposal         `json:"proposal"`
-	Candidates   []OrchestratorPlan    `json:"candidates"`
-	Request      decisionmodel.Request `json:"request"`
-	Config       decisionmodel.Config  `json:"config"`
-	TaskID       string                `json:"task_id"`
-	RunID        string                `json:"run_id"`
-	Outcome      string                `json:"outcome"` // queued, pending, selected, rejected, applied, dismissed
-	Reason       string                `json:"reason,omitempty"`
-	CallDeadline *time.Time            `json:"call_deadline,omitempty"`
-	Answer       *decisionmodel.Answer `json:"answer,omitempty"`
-	Applied      *GraphReceipt         `json:"applied,omitempty"`
+	ResolverRevision *int                  `json:"resolver_revision,omitempty"`
+	Key              string                `json:"key"`
+	Digest           string                `json:"digest"`
+	Proposal         GraphProposal         `json:"proposal"`
+	Candidates       []OrchestratorPlan    `json:"candidates"`
+	Request          decisionmodel.Request `json:"request"`
+	Config           decisionmodel.Config  `json:"config"`
+	TaskID           string                `json:"task_id"`
+	RunID            string                `json:"run_id"`
+	Outcome          string                `json:"outcome"` // queued, pending, selected, rejected, applied, dismissed
+	Reason           string                `json:"reason,omitempty"`
+	CallDeadline     *time.Time            `json:"call_deadline,omitempty"`
+	Answer           *decisionmodel.Answer `json:"answer,omitempty"`
+	Applied          *GraphReceipt         `json:"applied,omitempty"`
 }
 
 func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, error) {
@@ -50,12 +51,19 @@ func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, 
 		}
 		return graphClone(*d), nil
 	}
-	app, ok := e.App(old.Policy.DecisionApplication)
-	if !ok || app.DecisionModel == nil {
-		return GraphDecision{}, graphError("no registered graph decision application")
-	}
-	if err := app.DecisionModel.Validate(); err != nil {
+	cfg, revision, _, err := e.workflowDecisionConfigLocked(*old)
+	if err != nil {
 		return GraphDecision{}, err
+	}
+	// A direct provider has no registered executable. The graph decision runner
+	// dispatches the frozen configuration and uses this identity for its task.
+	app := Application{ID: "workflow-decisions", Name: "Decisions API"}
+	providerApp := old.Policy.DecisionApplication
+	if providerApp == "" {
+		providerApp = s.agentPolicy(old.ProjectID).DecisionApplication
+	}
+	if providerApp != "" {
+		app, _ = e.App(providerApp)
 	}
 	if old.OrchestratorCalls >= old.Limits.OrchestratorCalls || old.Attempts >= old.Limits.Attempts || len(old.Expansions) >= old.Limits.Expansions || len(old.Members) >= old.Limits.Tasks {
 		return GraphDecision{}, graphError("decision allowance exhausted")
@@ -84,7 +92,7 @@ func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, 
 	p := req.Proposal
 	p.Revision = g.Revision
 	p.Key = "decision:" + req.Proposal.Key
-	d := GraphDecision{Key: req.Proposal.Key, Digest: digest, Proposal: p, Candidates: graphClone(req.Candidates), Config: *app.DecisionModel, TaskID: tid, RunID: rid, Outcome: "queued"}
+	d := GraphDecision{Key: req.Proposal.Key, Digest: digest, Proposal: p, Candidates: graphClone(req.Candidates), Config: cfg, ResolverRevision: &revision, TaskID: tid, RunID: rid, Outcome: "queued"}
 	state, _ := json.Marshal(map[string]any{"context": req.Context, "graph_id": g.ID, "revision": g.Revision, "reads": p.Reads, "candidates": d.Candidates})
 	if len(state) > 40000 {
 		return GraphDecision{}, graphError("decision projection exceeds 40 KB")
@@ -146,7 +154,7 @@ func (e *Engine) executeGraphDecision(ctx context.Context, r Run) error {
 	}
 	g := graphClone(*old)
 	copy := g.Decisions[key]
-	fresh := old.Status == "active" && old.Revision == d.Proposal.Revision && old.OrchestratorGeneration == d.Proposal.Generation && time.Now().Before(d.Proposal.Deadline)
+	fresh := (d.ResolverRevision == nil || *d.ResolverRevision == s.agentPolicy(old.ProjectID).Revision) && old.Status == "active" && old.Revision == d.Proposal.Revision && old.OrchestratorGeneration == d.Proposal.Generation && time.Now().Before(d.Proposal.Deadline)
 	for id, read := range d.Proposal.Reads {
 		m := old.Members[id]
 		if m == nil || m.Revision != read.Specification || m.FactRevision != read.Fact {
@@ -186,7 +194,7 @@ func (e *Engine) executeGraphDecision(ctx context.Context, r Run) error {
 	case old.Decisions[key].Outcome != "pending":
 		copy.Outcome = old.Decisions[key].Outcome
 		copy.Reason = "decision_no_longer_pending"
-	case current.Status != "running" || g.Status != "active" || g.OrchestratorGeneration != copy.Proposal.Generation || g.Revision != copy.Proposal.Revision:
+	case copy.ResolverRevision != nil && *copy.ResolverRevision != s.agentPolicy(g.ProjectID).Revision || current.Status != "running" || g.Status != "active" || g.OrchestratorGeneration != copy.Proposal.Generation || g.Revision != copy.Proposal.Revision:
 		copy.Reason = "state_changed"
 	case !time.Now().Before(deadline):
 		copy.Reason = "deadline_expired"
@@ -225,7 +233,7 @@ func (e *Engine) ApplyGraphDecision(id, key string) (GraphReceipt, error) {
 	if d.Applied != nil {
 		return graphClone(*d.Applied), nil
 	}
-	if d.Outcome != "selected" || d.Answer == nil {
+	if d.Outcome != "selected" || d.Answer == nil || (d.ResolverRevision != nil && *d.ResolverRevision != s.agentPolicy(old.ProjectID).Revision) {
 		return GraphReceipt{}, ErrConflict
 	}
 	index, err := strconv.Atoi(d.Answer.Choice)

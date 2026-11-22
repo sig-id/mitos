@@ -61,7 +61,7 @@ func (e *Engine) agentContinuation(ctx context.Context, r Run) (Run, workspacefs
 		return prior, workspacefs.Snapshot{}, workspacefs.Snapshot{}, nil
 	}
 	base := filepath.Join(e.Store.Dir(), "workspaces", prior.ID)
-	history := &workspacefs.History{Base: base, Directory: filepath.Join(base, "history.git"), BaselineCommit: prior.Workspace.BaselineCommit}
+	history := &workspacefs.History{Limits: prior.Workspace.Limits, Base: base, Directory: filepath.Join(base, "history.git"), BaselineCommit: prior.Workspace.BaselineCommit}
 	fingerprint := ""
 	for _, event := range prior.Events {
 		var c change
@@ -73,6 +73,7 @@ func (e *Engine) agentContinuation(ctx context.Context, r Run) (Run, workspacefs
 	if err != nil {
 		return prior, before, workspacefs.Snapshot{}, fmt.Errorf("restore agent baseline: %w", err)
 	}
+	before.OmittedSubmodules = prior.Workspace.OmittedSubmodules
 	current := before
 	if prior.Workspace.ResultCommit != "" {
 		current, err = history.Load(ctx, prior.Workspace.ResultCommit, prior.Workspace.Fingerprint)

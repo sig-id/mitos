@@ -14,11 +14,13 @@ import (
 )
 
 type WorkspaceRecord struct {
-	Mode           string `json:"mode"`
-	BaselineCommit string `json:"baseline_commit"`
-	ResultCommit   string `json:"result_commit,omitempty"`
-	Fingerprint    string `json:"fingerprint"`
-	ChangedFiles   int    `json:"changed_files"`
+	OmittedSubmodules []string           `json:"omitted_submodules,omitempty"`
+	Limits            workspacefs.Limits `json:"limits,omitzero"`
+	Mode              string             `json:"mode"`
+	BaselineCommit    string             `json:"baseline_commit"`
+	ResultCommit      string             `json:"result_commit,omitempty"`
+	Fingerprint       string             `json:"fingerprint"`
+	ChangedFiles      int                `json:"changed_files"`
 }
 
 var errOracleTampered = errors.New("oracle_tampered")
@@ -73,7 +75,7 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 		return err
 	}
 	base := filepath.Join(e.Store.Dir(), "workspaces", r.ID)
-	before, err := workspacefs.CaptureSource(ctx, source, e.Store.Dir(), workspacefs.DefaultLimits)
+	before, err := e.captureWorkflowSource(ctx, r, source)
 	if err != nil {
 		return err
 	}
@@ -81,6 +83,11 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	if app.Builtin {
 		if err = before.WriteTo(workspace); err != nil {
 			return err
+		}
+		if len(before.OmittedSubmodules) > 0 || before.Limits != (workspacefs.Limits{}) {
+			if err := e.Store.RecordWorkspace(r.ID, "workspace_prepared", "Inventory workspace prepared.", WorkspaceRecord{Mode: "copy", Fingerprint: before.Fingerprint, Limits: before.Limits, OmittedSubmodules: before.OmittedSubmodules}); err != nil {
+				return err
+			}
 		}
 		return e.inventory(ctx, r, workspace)
 	}
@@ -95,7 +102,7 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	if err = e.Store.SaveArtifact(r.ID, "baseline.json", baseline); err != nil {
 		return err
 	}
-	record := WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint}
+	record := WorkspaceRecord{OmittedSubmodules: before.OmittedSubmodules, Limits: before.Limits, Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint}
 	if err = e.Store.RecordWorkspace(r.ID, "workspace_prepared", "A separate workspace and Git baseline are ready.", record); err != nil {
 		return err
 	}
@@ -119,6 +126,7 @@ func (e *Engine) perform(ctx context.Context, r Run) error {
 	launch.RunID = r.ID
 	launch.CapabilityRef = app.ID
 	launch.Base = base
+	launch.Workspace.Limits = before.Limits
 	launch.Workspace.Source = source
 	launch.Workspace.Directory = workspace
 	launch.Workspace.HistoryDirectory = history.Directory
@@ -161,7 +169,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 	var err error
 	base := history.Base
 	workspace := filepath.Join(base, "workspace")
-	record := WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint}
+	record := WorkspaceRecord{OmittedSubmodules: before.OmittedSubmodules, Limits: before.Limits, Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint}
 	if err = e.Store.Transition(r.ID, "capability_started", "running", "Working on the brief", "The application is executing in its workspace copy."); err != nil {
 		return err
 	}
@@ -232,7 +240,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 		}
 		guestInputs[i] = in
 	}
-	input, err := json.Marshal(map[string]any{"graph": r.GraphAttempt, "run_id": r.ID, "task_id": r.TaskID, "dependencies": task.DependencyEvidence, "service_lifecycle": task.ServiceLifecycle, "service_ingress": task.ServiceIngress, "service_event": task.ServiceEvent, "service_cycle": task.ServiceCycle, "service_dependencies": task.ServiceDependencyEvidence, "service_health": healthInput, "inputs": guestInputs, "brief": r.Brief, "workspace": guestWorkspace, "segment": segment, "failure_memo": memo})
+	input, err := json.Marshal(map[string]any{"graph": r.GraphAttempt, "run_id": r.ID, "task_id": r.TaskID, "dependencies": task.DependencyEvidence, "service_lifecycle": task.ServiceLifecycle, "service_ingress": task.ServiceIngress, "service_event": task.ServiceEvent, "service_cycle": task.ServiceCycle, "service_dependencies": task.ServiceDependencyEvidence, "service_health": healthInput, "inputs": guestInputs, "brief": r.Brief, "workspace": guestWorkspace, "omitted_submodules": before.OmittedSubmodules, "segment": segment, "failure_memo": memo})
 	if err != nil {
 		return err
 	}

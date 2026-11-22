@@ -34,12 +34,12 @@ Return the shared OrchestratorPlan: operations, accept, complete, result, explan
 // The orchestrator's authority is deliberately narrower than operator amendments.
 // This transaction validates its frozen observations, adds/retries work, and
 // records evidence-based acceptance atomically. It cannot change policy.
-func (e *Engine) applyOrchestratorPlan(snapshot WorkGraph, key string, r Run, plan OrchestratorPlan) error {
+func (e *Engine) admitOrchestratorPlan(snapshot WorkGraph, key string, r Run, plan OrchestratorPlan, preview bool, selection *workflowSelection) error {
 	s := e.Store
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old := s.graphs[snapshot.ID]
-	if s.supervisionHeld(snapshot.ProjectID) {
+	if s.supervisionHeld(snapshot.ProjectID) || !preview && (selection == nil || selection.Evaluation == "" || selection.Choice != "apply" || s.agentPolicy(snapshot.ProjectID).Revision != selection.Revision) {
 		return ErrConflict
 	}
 	if old == nil {
@@ -120,9 +120,15 @@ func (e *Engine) applyOrchestratorPlan(snapshot WorkGraph, key string, r Run, pl
 	} else if old.Policy.Automatic && len(plan.Operations) == 0 && !orchestratorHasPendingWork(&next) {
 		return graphError("orchestrator must schedule work, wait for pending work, or complete an evidenced goal")
 	}
+	if selection != nil {
+		receipt.Evaluation = selection.Evaluation
+	}
 	next.Receipts[receiptKey] = receipt
 	if err = validateGraph(&next); err != nil {
 		return err
+	}
+	if preview {
+		return nil
 	}
 	gc := graphChange{Graph: next}
 	s.projectGraph(&gc, old)

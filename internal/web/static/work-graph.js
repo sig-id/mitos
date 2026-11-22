@@ -342,7 +342,7 @@
     if(failures.includes(error.orchestrator_task))continue;
     const item=node('div',undefined,'graph-attention-item');
     item.append(node('strong','Planning round stopped'),node('p',reasons[error.error]||error.error.replaceAll('_',' ')));
-    if(error.failures)item.append(node('p','Bounded replans used: '+error.failures+' of 2. The round is not retried again on its own.','muted'));
+    if(error.failures)item.append(node('p','Bounded replans used: '+error.failures+' of '+graph.limits.retries+'. The round is not retried again on its own.','muted'));
     if(error.last_error)item.append(node('p','Last refusal sent to the next round: '+error.last_error,'muted'));
     if(pendingTriggers.length)item.append(node('p',pendingTriggers.length+' outcome '+(pendingTriggers.length===1?'event is':'events are')+' waiting for a fresh planning round.','muted'));
     const controls=node('div',undefined,'actions');
@@ -674,7 +674,7 @@
   else if(type==='cancel')context.append(node('p','Requests a stop for this work and its child steps. Saved output and history remain available.'));
   else if(type==='retry')context.append(node('p','Creates a new attempt with the same assignment. The previous attempt and its evidence remain in the graph.'));
   else if(type==='replan')context.append(node('p','A new orchestrator will read the current graph. Existing worker steps keep running.'));
-  else if(type==='close-round'){const x=Object.values(graph.expansions).find(e=>e.id===target);context.append(node('p','Closes this stopped planning round. Outcome events still waiting for planning then schedule a fresh round with a new orchestrator attempt, keeping every finished step.'));if(x?.last_error)context.append(node('p','This round stopped after: '+x.last_error,'muted'));if(x?.failures)context.append(node('p','It already used '+x.failures+' of its 2 bounded replans.','muted'));}
+  else if(type==='close-round'){const x=Object.values(graph.expansions).find(e=>e.id===target);context.append(node('p','Closes this stopped planning round. Outcome events still waiting for planning then schedule a fresh round with a new orchestrator attempt, keeping every finished step.'));if(x?.last_error)context.append(node('p','This round stopped after: '+x.last_error,'muted'));if(x?.failures)context.append(node('p','It already used '+x.failures+' of its '+graph.limits.retries+' bounded replans.','muted'));}
   else if(type==='apply-decision'){const d=graph.decisions[target];context.append(node('p',d.candidates?.[Number(d.answer?.choice)]?.explanation||'Apply the recorded model choice to the current graph.'));}
   else context.append(node('p','Retains the decision record and closes its outstanding planning obligation.'));
   $('graph-action-dialog').showModal();

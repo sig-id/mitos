@@ -424,7 +424,7 @@ func (e *Engine) retry(id string) (Run, error) {
 	if r.ExecutionKind == "interactive" {
 		return Run{}, errors.New("replace the executor through its durable task")
 	}
-	if r.Decision != nil && r.Decision.Source != nil {
+	if r.WorkflowReview != nil || r.Decision != nil && r.Decision.Source != nil {
 		return Run{}, ErrConflict
 	}
 	if !r.Terminal() && !(r.Status == "parked" && r.Decision != nil && r.Decision.Resolution != nil && r.Decision.Choice == "retry") {

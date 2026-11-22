@@ -81,7 +81,7 @@ else:
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	e, req := graphEngine(t, true)
+	e, req := workflowTestEngine(t)
 	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "yield-e2e", ProjectID: req.ProjectID, Goal: "Answer with help"})
 	if err != nil {
 		t.Fatal(err)

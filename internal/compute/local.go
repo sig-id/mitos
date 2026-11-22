@@ -499,7 +499,7 @@ func (l *Local) Harvest(ctx context.Context, session Session) (Harvest, error) {
 	if spec.Workspace.HistoryDirectory == "" {
 		return result, nil
 	}
-	history := workspacefs.History{Base: spec.Base, Directory: spec.Workspace.HistoryDirectory, BaselineCommit: spec.Workspace.BaselineCommit}
+	history := workspacefs.History{Limits: spec.Workspace.Limits, Base: spec.Base, Directory: spec.Workspace.HistoryDirectory, BaselineCommit: spec.Workspace.BaselineCommit}
 	before, err := history.Load(ctx, spec.Workspace.BaselineCommit, spec.Workspace.BaselineFingerprint)
 	if err != nil {
 		return result, err

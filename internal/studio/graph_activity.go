@@ -33,6 +33,9 @@ func (s *Store) graphPendingRequests(runID string) []GraphPendingRequest {
 			pending = append(pending, GraphPendingRequest{Decision: *d, Blocking: true, Input: d.InputProfile(), Resolver: "human"})
 		}
 	}
+	if review := s.runs[s.pendingWorkflowReview[runID]]; review != nil && s.workflowReviewCurrent(review.WorkflowReview) {
+		pending = append(pending, GraphPendingRequest{Decision: *review.Decision, Blocking: true, Input: review.Decision.InputProfile(), Resolver: "human", Reason: review.Summary})
+	}
 	for _, request := range s.agentRequests {
 		session := s.agentSessions[request.SessionID]
 		if session.RunID != runID || session.Closed || request.Invalidated || time.Now().After(session.LeaseUntil) {
@@ -68,7 +71,7 @@ func (s *Store) requestReview(session AgentSession, request AgentRequest) (agent
 	_, _, command := agentrouting.Command(request.Request)
 	supported := command || len(request.Request.Questions) > 0 && agentrouting.CanChoose(request.Request)
 	missing := p.DecisionProvider == nil && p.DecisionApplication == ""
-	if missing && supported && (route.Resolver == "decision" || route.Resolver == "classify" || route.Reason == "automatic resolution is disabled" || route.Reason == "decision provider is not configured") {
+	if missing && supported && (route.Resolver == "decision" || route.Resolver == "classify" || route.Reason == "automatic resolution is disabled" || route.Reason == "no delegated authority for this exact operation" || route.Reason == "decision provider is not configured") {
 		route.Resolver = "human"
 		route.Reason = "Configure the Decisions API and approval boundaries to review routine requests automatically."
 		return route, true

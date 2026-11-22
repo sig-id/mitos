@@ -18,16 +18,23 @@ import (
 // Git runs without ambient configuration, hooks, filters, signing, credentials,
 // or optional index writes. Callers supply plumbing commands and argv, not shell.
 func git(ctx context.Context, dir, gitDir string, input []byte, args ...string) ([]byte, error) {
-	prefix := []string{"--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.fsync=all", "-c", "core.attributesFile=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "core.autocrlf=false", "-c", "core.fileMode=true", "-c", "protocol.allow=never", "-c", "safe.directory=" + dir}
+	return gitInput(ctx, dir, gitDir, bytes.NewReader(input), args...)
+}
+
+func gitInput(ctx context.Context, dir, gitDir string, input io.Reader, args ...string) ([]byte, error) {
+	prefix := []string{"--no-optional-locks", "--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false", "-c", "core.fsync=all", "-c", "core.attributesFile=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "commit.gpgSign=false", "-c", "tag.gpgSign=false", "-c", "core.autocrlf=false", "-c", "core.fileMode=true", "-c", "protocol.allow=never", "-c", "safe.directory=" + dir}
 	if gitDir != "" {
 		prefix = append(prefix, "--git-dir="+gitDir)
 	}
 	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/nonexistent", "LANG=C", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_ATTR_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_AUTHOR_NAME=Mitos", "GIT_AUTHOR_EMAIL=mitos@localhost", "GIT_COMMITTER_NAME=Mitos", "GIT_COMMITTER_EMAIL=mitos@localhost", "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z"}
-	cmd.Stdin = bytes.NewReader(input)
+	cmd.Stdin = input
 	var stdout cappedOutput
 	stdout.limit = 256 << 20
+	if len(args) > 0 && args[0] == "cat-file" {
+		stdout.limit = int(MaxWorkflowLimits.Bytes) + 128 // one maximum-sized blob and its batch header
+	}
 	var stderr cappedOutput
 	stderr.limit = 64 << 10
 	cmd.Stdout = &stdout

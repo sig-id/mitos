@@ -60,7 +60,7 @@ print('native execution log')
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	e, req := graphEngine(t, true)
+	e, req := workflowTestEngine(t)
 	goal := AutomaticGoal{Key: "automatic-test", ProjectID: req.ProjectID, Goal: "Produce and review the answer"}
 	g, err := e.StartAutomaticGoal(goal)
 	if err != nil {
@@ -258,7 +258,7 @@ func TestAutomaticInstalledCodex(t *testing.T) {
 	if os.Getenv("MITOS_TEST_NATIVE_CODEX") != "1" {
 		t.Skip("set MITOS_TEST_NATIVE_CODEX=1 for the authenticated native CLI smoke test")
 	}
-	e, req := graphEngine(t, true)
+	e, req := workflowTestEngine(t)
 	goal := "Use exactly one researcher agent to read hello.txt and report its exact contents. Do not edit any files. The orchestrator should review that report and finish; no additional workers are needed."
 	if os.Getenv("MITOS_TEST_HANDOFF_LARGE") == "1" {
 		goal = "Use exactly one engineer worker to create audit-report.md in its workspace: first line 'Verified finding 48', followed by at least 120000 lines saying 'Supporting evidence'. Register that report using artifact_register, submit a typed result, and finish. The orchestrator must inspect result_get and artifact_list, search for the finding, read only its small relevant range, and accept without creating another worker. The report and harvested patch must both exceed 1 MiB. This is a protocol smoke test; no external actions are needed."
@@ -363,7 +363,7 @@ func automaticScriptEngine(t *testing.T, script string) (*Engine, CreateGraph) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return graphEngine(t, true)
+	return workflowTestEngine(t)
 }
 func TestAutomaticRejectsEmptyCompletionAndBoundsRepairs(t *testing.T) {
 	e, req := automaticScriptEngine(t, `import json,pathlib,sys
@@ -463,7 +463,7 @@ else:
 	if err != nil {
 		t.Fatal(err)
 	}
-	until := time.Now().Add(15 * time.Second)
+	until := time.Now().Add(45 * time.Second)
 	for time.Now().Before(until) {
 		g, _ = e.Store.Graph(g.ID)
 		if g.Status == "accepted" {

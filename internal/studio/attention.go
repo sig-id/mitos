@@ -30,6 +30,9 @@ func (s *Store) attention() []Attention {
 		}
 		d := r.Decision
 		a := Attention{Blocking: true, ID: d.ID, Title: r.Brief.Title, ProjectID: r.Brief.ProjectID, OwnerRunID: r.ID, Reason: d.Context.BlockedBy, Resolver: "human", Card: *d, InputProfile: d.InputProfile()}
+		if r.WorkflowReview != nil {
+			a.OwnerRunID = r.WorkflowReview.Owner
+		}
 		if d.Source != nil {
 			session := s.agentSessions[d.Source.SessionID]
 			request := s.agentRequests[d.Source.SessionID+"/"+d.Source.RequestID]
