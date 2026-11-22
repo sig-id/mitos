@@ -151,6 +151,69 @@ func TestPiAttemptConfigIsolatesTheAgentDirectory(t *testing.T) {
 	}
 }
 
+func TestPiAttemptsReuseInstalledNPMPackages(t *testing.T) {
+	host := t.TempDir()
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := `{"packages":["npm:adapter",{"source":"npm:@team/tools@2.0.0","skills":[]},"npm:@team/missing"]}`
+	write(filepath.Join(host, "settings.json"), settings)
+	write(filepath.Join(host, "npm/package.json"), `{"scripts":{"install":"exit 1"},"dependencies":{"adapter":"^1","@team/tools":"2.0.0","@team/missing":"1","../escape":"1"}}`)
+	write(filepath.Join(host, "npm/escape/package.json"), "{}")
+	for _, name := range []string{"adapter", "@team/tools"} {
+		write(filepath.Join(host, "npm/node_modules", name, "package.json"), `{"name":"`+name+`"}`)
+	}
+	env := []string{"PI_CODING_AGENT_DIR=" + host}
+	for range 2 {
+		base := t.TempDir()
+		cfg, _, err := piAttemptConfig(env, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, err := os.ReadFile(filepath.Join(cfg, "settings.json")); err != nil || string(raw) != settings {
+			t.Fatalf("staged package sources and filters: %q, %v", raw, err)
+		}
+		for _, name := range []string{"adapter", "@team/tools"} {
+			rel := filepath.Join("npm/node_modules", name, "package.json")
+			source, err := os.Stat(filepath.Join(host, rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			staged, err := os.Stat(filepath.Join(cfg, rel))
+			if err != nil || !os.SameFile(source, staged) {
+				t.Fatalf("%s did not reuse the installed package: %v", name, err)
+			}
+		}
+		raw, err := os.ReadFile(filepath.Join(cfg, "npm/package.json"))
+		var manifest struct {
+			Dependencies map[string]string
+			Scripts      json.RawMessage
+		}
+		if err != nil || json.Unmarshal(raw, &manifest) != nil || len(manifest.Scripts) != 0 ||
+			len(manifest.Dependencies) != 2 || manifest.Dependencies["adapter"] != "^1" || manifest.Dependencies["@team/tools"] != "2.0.0" {
+			t.Fatalf("unexpected npm manifest: %s, %v", raw, err)
+		}
+		// A fallback install and a later staging pass use the attempt's own prefix.
+		missing := filepath.Join("npm/node_modules/@team/missing/package.json")
+		write(filepath.Join(cfg, missing), "{}")
+		if _, _, err = piAttemptConfig(env, base); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(filepath.Join(cfg, missing)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(filepath.Join(host, missing)); !os.IsNotExist(err) {
+			t.Fatalf("attempt wrote through to host: %v", err)
+		}
+	}
+}
+
 func TestAgentMCPArgumentsAndPrompt(t *testing.T) {
 	mcp, err := startAgentMCP(context.Background(), "pi", nil, testMCPOptions(), false, nil)
 	if err != nil {
