@@ -64,9 +64,23 @@ func (s *Store) graphPendingRequests(runID string) []GraphPendingRequest {
 // Caller holds the store lock. This projection does not authorize any operation.
 func (s *Store) requestReview(session AgentSession, request AgentRequest) (agentrouting.Route, bool) {
 	p := s.agentPolicy(session.ProjectID)
+	var saved *agentrouting.Route
+	if route, ok := s.agentRoutes[session.ID+"/"+request.Request.Key]; ok && route.PolicyRevision == p.Revision {
+		r := route.Route
+		saved = &r
+	}
+	return s.projectRequestRoute(session, request, saved)
+}
+
+// projectRequestRoute derives a request's resolver from the current policy
+// alone, or from savedRoute when a routing decision at the current policy
+// revision exists. A nil savedRoute is what an ingest-time observer saw.
+// Caller holds the store lock.
+func (s *Store) projectRequestRoute(session AgentSession, request AgentRequest, savedRoute *agentrouting.Route) (agentrouting.Route, bool) {
+	p := s.agentPolicy(session.ProjectID)
 	route := agentrouting.Prepare(p, request.Request, session.Workspace)
-	if saved, ok := s.agentRoutes[session.ID+"/"+request.Request.Key]; ok && saved.PolicyRevision == p.Revision {
-		route = saved.Route
+	if savedRoute != nil {
+		route = *savedRoute
 	}
 	_, _, command := agentrouting.Command(request.Request)
 	supported := command || len(request.Request.Questions) > 0 && agentrouting.CanChoose(request.Request)

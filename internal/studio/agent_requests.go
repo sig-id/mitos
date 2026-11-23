@@ -319,6 +319,7 @@ func (s *Store) applyAgentEvent(e Event, c change) error {
 	if s.deviceHistory == nil {
 		s.deviceHistory = map[string]decision.Card{}
 	}
+	var endedRequests []string
 	if c.AgentSession != nil {
 		a := *c.AgentSession
 		s.agentSessions[a.ID] = a
@@ -328,8 +329,9 @@ func (s *Store) applyAgentEvent(e Event, c change) error {
 				for _, thread := range a.EndedThreads {
 					ended = ended || thread == request.Request.Thread
 				}
-				if request.SessionID == a.ID && ended {
+				if request.SessionID == a.ID && ended && !request.Invalidated {
 					s.endAgentRequest(key, e)
+					endedRequests = append(endedRequests, key)
 				}
 			}
 		}
@@ -378,6 +380,12 @@ func (s *Store) applyAgentEvent(e Event, c change) error {
 				s.deviceHistory[run.ID+"/"+run.Decision.ID] = *run.Decision
 			}
 		}
+	}
+	// Agent request events carry no top-level run, so they reach watches as
+	// facts attributed here (issue #130): the question wakes the scopes that
+	// contain the blocked attempt, and its answer or end notifies them.
+	for _, f := range s.agentRequestFacts(e, c, endedRequests) {
+		s.observeWatches(f)
 	}
 	return nil
 }

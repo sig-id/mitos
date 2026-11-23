@@ -383,6 +383,162 @@ func (s *Store) graphFact(e Event, c *graphChange) watch.Fact {
 	return watch.Fact{Seq: e.Seq, At: e.At, Project: c.Graph.ProjectID, Graph: c.Graph.ID, Type: e.Type, Kind: e.Kind}
 }
 
+// agentRequestScopes attributes an agent request to the run its fact belongs
+// to, as exactly one fact per journal event: several facts would share one
+// sequence, and delivery deduplication would silently consume all but the
+// first-delivered group (issue #130). An executing attempt's session is bound
+// to its run, so the question carries that run's project, graph, task and run,
+// and attempt, responsibility and project watches all see it. An unbound
+// interactive session attributes to its first review run, deterministically.
+func (s *Store) agentRequestScopes(q *AgentRequest) []watch.Fact {
+	if a, ok := s.agentSessions[q.SessionID]; ok && a.RunID != "" {
+		if r := s.runs[a.RunID]; r != nil {
+			project := r.ProjectID
+			if project == "" {
+				project = r.Brief.ProjectID
+			}
+			f := watch.Fact{Project: project, Run: r.ID, Task: r.TaskID}
+			if r.GraphAttempt != nil {
+				f.Graph = r.GraphAttempt.GraphID
+				if f.Project == "" {
+					if g := s.graphs[f.Graph]; g != nil {
+						f.Project = g.ProjectID
+					}
+				}
+			}
+			return []watch.Fact{f}
+		}
+	}
+	if len(q.Runs) == 0 {
+		if a, ok := s.agentSessions[q.SessionID]; ok {
+			return []watch.Fact{{Project: a.ProjectID}}
+		}
+		return nil
+	}
+	return []watch.Fact{{Project: q.Runs[0].ProjectID, Run: q.Runs[0].ID}}
+}
+
+// agentRequestFacts projects agent request events into watch facts (spec 09
+// §2). A question that needs a human answer is a must-deliver wake (reason
+// agent_awaiting_answer); a request automatic review can answer never wakes
+// anyone until routing falls back to a human. A request's end is a notify on
+// the same attribution, so the open group can close. ended lists requests this
+// event newly ended (session close, expiry or thread end).
+func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fact {
+	var requests []AgentRequest
+	reason := ""
+	question := false
+	wake := false
+	switch {
+	case e.Kind == "agent_approval_requested" && c.AgentRequest != nil && !c.AgentRequest.Invalidated:
+		q := *c.AgentRequest
+		requests = []AgentRequest{q}
+		question = true
+		// Wake only when human resolution is actually required, projected the
+		// same way the activity surface projects it; a delegated or classified
+		// resolver answers without an operator.
+		wake = s.agentRequestNeedsHuman(&q)
+	case e.Kind == "agent_request_routed" || e.Kind == "agent_resolution_needs_operator":
+		if c.AgentRoute != nil {
+			if q, ok := s.agentRequests[c.AgentRoute.Key]; ok {
+				requests = []AgentRequest{q}
+				question = true
+				// Routing decides: a classifier or policy revision can still
+				// land the request on an operator after ingest projected
+				// otherwise, and a failed automatic review falls back to one.
+				// A request already woken is not woken again — the fold
+				// remembers the actual prior wake, not a recomputed
+				// projection, so a policy change in between neither skips
+				// nor repeats it — and the two events share no sequence, so
+				// a second wake could not be deduplicated away.
+				wake = c.AgentRoute.Route.Resolver == "human" && !s.agentWakes[c.AgentRoute.Key]
+			}
+		}
+	case c.AgentRequest != nil && c.AgentRequest.Invalidated:
+		requests = []AgentRequest{*c.AgentRequest}
+		reason = "agent_request_ended"
+	default:
+		for _, key := range ended {
+			if q, ok := s.agentRequests[key]; ok {
+				requests = append(requests, q)
+			}
+		}
+		reason = "agent_request_ended"
+	}
+	facts := []watch.Fact{}
+	for _, q := range requests {
+		summary := factSummary(c.Summary, c.Stage)
+		if summary == "" {
+			if question && len(q.Request.Cards) > 0 {
+				summary = factSummary(q.Request.Cards[0].Question, "")
+			} else if !question {
+				summary = "The waiting request ended without an answer."
+			}
+		}
+		for _, scope := range s.agentRequestScopes(&q) {
+			scope.Seq, scope.At, scope.Type, scope.Kind = e.Seq, e.At, e.Type, e.Kind
+			scope.Summary = summary
+			switch {
+			case wake:
+				scope.Rule, scope.Reason = watch.Wake, "agent_awaiting_answer"
+				s.rememberAgentWake(&q)
+			case reason != "":
+				scope.Rule, scope.Reason = watch.Notify, reason
+			}
+			facts = append(facts, scope)
+		}
+	}
+	return facts
+}
+
+// rememberAgentWake records that a request has delivered its
+// agent_awaiting_answer wake. Fold state over the journal, rebuilt identically
+// on replay; caller holds the store lock.
+func (s *Store) rememberAgentWake(q *AgentRequest) {
+	if s.agentWakes == nil {
+		s.agentWakes = map[string]bool{}
+	}
+	s.agentWakes[q.SessionID+"/"+q.Request.Key] = true
+}
+
+// agentRequestNeedsHuman projects whether an ingested request blocks on a
+// human answer, exactly as the activity surface projects it, from the current
+// policy alone: at ingest no routing decision exists yet, so this is also the
+// shape a routing event compares against to wake only on a change. Caller
+// holds the store lock.
+func (s *Store) agentRequestNeedsHuman(q *AgentRequest) bool {
+	session, ok := s.agentSessions[q.SessionID]
+	if !ok {
+		// Without the session record nothing can answer automatically.
+		return true
+	}
+	route, _ := s.projectRequestRoute(session, *q, nil)
+	return route.Resolver == "human"
+}
+
+// agentAnswerFact projects the answer to an agent request as one attributed
+// fact (notify, reason agent_answered) instead of the review run's own parked
+// fact: both would share this journal event's sequence, and delivery dedup
+// would silently consume whichever group delivered second (issue #130).
+// Caller holds the store lock; ok is false for ordinary decisions.
+func (s *Store) agentAnswerFact(e Event, r *Run, c change) ([]watch.Fact, bool) {
+	if e.Kind != "approval_resolved" || c.AgentAnswer == nil || r.Decision == nil || r.Decision.Source == nil {
+		return nil, false
+	}
+	q, ok := s.agentRequests[r.Decision.Source.SessionID+"/"+r.Decision.Source.RequestID]
+	if !ok {
+		return nil, false
+	}
+	facts := []watch.Fact{}
+	for _, scope := range s.agentRequestScopes(&q) {
+		scope.Seq, scope.At, scope.Type, scope.Kind = e.Seq, e.At, e.Type, e.Kind
+		scope.Summary = factSummary(c.Summary, c.Stage)
+		scope.Rule, scope.Reason = watch.Notify, "agent_answered"
+		facts = append(facts, scope)
+	}
+	return facts, true
+}
+
 // observeWatches folds one fact into every active watch. It runs inside apply,
 // both live and during replay.
 func (s *Store) observeWatches(f watch.Fact) {
@@ -620,8 +776,12 @@ func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level) WatchDe
 
 // groupDelivery builds the receipt for a due group. Entries that the owner's
 // other watches also hold join this delivery at the highest level any of them
-// assigned, so the owner receives each event once. A triage grade replaces
-// this watch's default for the group; it never lowers another watch's level.
+// assigned, so the owner receives each event once; sibling groups of this
+// watch that hold the same sequences join the same way, so a single journal
+// event projected into several run groups (a session ending several requests)
+// arrives as one delivery carrying every affected run instead of being
+// silently consumed by sequence deduplication. A triage grade replaces this
+// watch's default for the group; it never lowers another watch's level.
 func (s *Store) groupDelivery(w *Watch, g *watch.Group, grade *watch.Grade) WatchDelivery {
 	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: "group", GroupKey: g.Key, Source: watch.SourceDefault, Counts: map[string]int{}}
 	levels := map[int64]watch.Level{}
@@ -649,7 +809,18 @@ func (s *Store) groupDelivery(w *Watch, g *watch.Group, grade *watch.Grade) Watc
 		}
 	}
 	runs, reasons := map[string]bool{}, map[string]bool{}
-	for _, e := range g.Entries {
+	entries := slices.Clone(g.Entries)
+	for key, sibling := range w.Groups {
+		if key == g.Key {
+			continue
+		}
+		for _, e := range sibling.Entries {
+			if _, shared := levels[e.Seq]; shared {
+				entries = append(entries, e)
+			}
+		}
+	}
+	for _, e := range entries {
 		d.Seqs = append(d.Seqs, e.Seq)
 		d.Count++
 		d.Counts[e.Kind]++

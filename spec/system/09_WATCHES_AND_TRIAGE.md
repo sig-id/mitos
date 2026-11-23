@@ -102,6 +102,8 @@ level if that is higher:
 | --- | --- |
 | Run terminal: completed, failed, cancelled, parked | `notify` |
 | Quiescence `block` edge, `blocked_on_human` | `wake` |
+| An agent attempt blocked on a human answer (`agent_awaiting_answer`, when policy or routing leaves the request for an operator) | `wake` |
+| An agent request answered or ended (`agent_answered`, `agent_request_ended`) | `notify` |
 | `observation_failed`, supervision incident or hold | `escalate` |
 | Model decision parked or outcome unknown | `wake` |
 | Watch lease expiry, `watch_silent`, `watch_degraded`, scope revocation | `notify` |

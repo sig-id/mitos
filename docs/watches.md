@@ -46,9 +46,13 @@ Unknown fields are refused.
   while events continue, or immediately when it reaches `max_events`.
 - **Must-deliver events** reach every watch whose scope contains them, even
   when its `kinds` filter does not match: finished, failed, cancelled and parked
-  runs; quiescence `block` edges; `blocked_on_human`; `observation_failed`;
-  supervision incidents; parked model decisions. Rules at `wake` or `escalate`
-  are delivered immediately.
+  runs; quiescence `block` edges; `blocked_on_human`; an agent question that
+  policy or routing leaves for a human to answer (`agent_awaiting_answer`,
+  wake — automatically resolved requests stay quiet until a fallback lands on
+  an operator), and its answer or end (`agent_answered` /
+  `agent_request_ended`, notify); `observation_failed`; supervision incidents;
+  parked model decisions. Rules at `wake` or `escalate` are delivered
+  immediately.
 - **Levels.** `digest` and `notify` deliveries are kept in the watch's delivery
   feed. `wake` and `escalate` deliveries appear in **Notifications**. Further
   escalations for the same watch and group update the open item until you
