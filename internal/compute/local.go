@@ -343,7 +343,14 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 				s.err = errors.Join(protocolErr, commandCtx.Err(), waitErr)
 			}
 		} else {
-			s.err = cmd.Wait()
+			waitErr := cmd.Wait()
+			s.err = waitErr
+			if commandCtx.Err() != nil {
+				// The context ended the process; report that as part of the
+				// outcome, as the interactive path already does, so callers can
+				// distinguish a budget kill from an ordinary command failure.
+				s.err = errors.Join(commandCtx.Err(), waitErr)
+			}
 		}
 		_ = killGroup(s)
 		if s.sandbox != nil {

@@ -54,10 +54,13 @@ type Engine struct {
 	Root           string
 	mu             sync.Mutex
 	cancel         map[string]context.CancelFunc
-	ctx            context.Context
-	stop           context.CancelFunc
-	wg             sync.WaitGroup
-	actions        sync.Mutex
+	// submitGrace bounds the wrap-up of attempts that already submitted a
+	// result (issue #127); guarded by mu.
+	submitGrace map[string]*resultGrace
+	ctx         context.Context
+	stop        context.CancelFunc
+	wg          sync.WaitGroup
+	actions     sync.Mutex
 	// Serializes idempotent structured-work admission by request key.
 	structuredMu sync.Mutex
 	setupMu      sync.Mutex
@@ -202,6 +205,13 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 				return nil, err
 			}
 		} else if !r.Sample && (r.Status == "running" || (r.Status == "queued" && r.Claim != nil && r.Claim.ReleasedAt == nil)) {
+			// A restart between submission and completion settles the already
+			// submitted result — after persisting its leftover workspace
+			// changes — instead of parking a retry that would redo finished
+			// work (issue #127).
+			if e.recoverSubmittedAttempt(r) {
+				continue
+			}
 			if err = s.interruptExecution(r); err != nil {
 				cancel()
 				return nil, err
@@ -630,7 +640,12 @@ func (e *Engine) dispatch() {
 				go func() {
 					defer e.wg.Done()
 					defer cancel()
-					defer func() { e.mu.Lock(); delete(e.cancel, r.ID); e.mu.Unlock() }()
+					defer func() {
+						e.mu.Lock()
+						delete(e.cancel, r.ID)
+						e.releaseResultGrace(r.ID)
+						e.mu.Unlock()
+					}()
 					e.execute(ctx, r)
 				}()
 			}
@@ -713,7 +728,14 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 		_ = e.Store.blockAgentPrerequisite(r.ID, prerequisite.Error())
 		return
 	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if end, expired := e.budgetEnd(ctx, r.ID); expired {
+		// The attempt's time ran out. When it had already submitted its result
+		// and the failure is that ending itself — not a wrap-up failure such as
+		// harvesting or saving artifacts, which must stay visible — the result
+		// is collected instead of failing finished work (issue #127).
+		if budgetEndedSession(err) && e.collectSubmittedResult(r.ID, "deadline_after_submit", end) {
+			return
+		}
 		message = "The time limit was reached. Review the output and try again with a longer limit."
 	}
 	// Budget exhaustion is recorded structurally so calibration never scrapes
