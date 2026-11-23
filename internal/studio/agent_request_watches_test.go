@@ -404,3 +404,114 @@ func TestUnboundMultiQuestionRequestIsOneRunGroup(t *testing.T) {
 		t.Fatalf("undelivered groups remain: %+v", v.Groups)
 	}
 }
+
+// A request ingested under automatic review still wakes when the operator
+// switches the policy to manual before routing: the routing event compares
+// against the wake actually delivered, not a projection recomputed under the
+// current policy (issue #130 review).
+func TestPolicyChangeToManualStillWakesOnRouting(t *testing.T) {
+	s, r, g := watchAttemptRun(t)
+	project := mustWatch(t, s, agentWatchSpec(watch.Owner{Kind: "operator"}, watch.Scope{Project: g.ProjectID}, []string{"note"}))
+	session, token, err := s.CreateBoundAgentSession("codex", "Attempt question", t.TempDir(), g.ProjectID, "", r.ID, decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewEngine(s, nil, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(e.Close)
+	// Delegated autonomy with no decision provider classifies at ingest, so
+	// ingest alone wakes nobody.
+	view, err := s.IngestAgentRequest(session.ID, token, json.RawMessage(codexQuestion))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := wakeDeliveries(t, s, project.ID); len(got) != 0 {
+		t.Fatalf("ingest woke scopes before routing: %+v", got)
+	}
+	// The operator switches to manual review before the request is routed.
+	p := s.AgentPolicy(g.ProjectID)
+	p.Autonomy = "manual"
+	if _, err := e.SaveAgentPolicy(g.ProjectID, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RouteAgentRequest(context.Background(), session.ID, token, view.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := wakeDeliveries(t, s, project.ID)
+	if len(got) != 1 || got[0].Level != watch.Wake || got[0].Runs[0] != r.ID {
+		t.Fatalf("policy change lost the wake: %+v", got)
+	}
+}
+
+// wakeDeliveries filters a watch's receipts to agent_awaiting_answer wakes.
+func wakeDeliveries(t *testing.T, s *Store, id string) []WatchDelivery {
+	t.Helper()
+	out := []WatchDelivery{}
+	for _, d := range deliveries(t, s, id) {
+		if containsReason(d.Reasons, "agent_awaiting_answer") {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// Closing a session with several outstanding requests delivers one
+// notification carrying every affected run: the per-request facts share the
+// closing event's sequence, and a run-grouped watch's first delivery would
+// otherwise consume the others (issue #130 review).
+func TestSessionCloseWithSeveralRequestsDeliversEveryRun(t *testing.T) {
+	s, _, g := watchAttemptRun(t)
+	byRun := mustWatch(t, s, watch.Spec{
+		Version: watch.Version, Owner: watch.Owner{Kind: "operator"}, Description: "test watch",
+		Condition:    watch.Condition{Scope: watch.Scope{Project: g.ProjectID}},
+		Lease:        watch.Lease{ExpiresAt: time.Now().Add(time.Hour), MaxRenewals: 2},
+		Grouping:     watch.Grouping{By: []string{"run_id"}, WaitMS: 0, IntervalMS: 1000, MaxEvents: 64, RepeatIntervalMS: 60000},
+		DefaultLevel: watch.Digest,
+	})
+	session, token, err := s.CreateBoundAgentSession("codex", "Operator session", t.TempDir(), g.ProjectID, "", "", decision.LocalOperator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := routeAgentTestRequest(t, s, session, token, codexQuestion)
+	second := routeAgentTestRequest(t, s, session, token, codexMultiQuestion)
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := deliveries(t, s, byRun.ID); len(got) != 2 {
+		t.Fatalf("expected one wake per request: %+v", got)
+	}
+	// Closing the session ends both requests in one journal event.
+	if err := s.CloseAgentSession(session.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EvaluateWatches(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := deliveries(t, s, byRun.ID)
+	if len(got) != 3 || got[0].Level != watch.Notify || !containsReason(got[0].Reasons, "agent_request_ended") {
+		t.Fatalf("session close delivery: %+v", got)
+	}
+	if !containsID(got[0].Runs, first.RunIDs[0]) || !containsID(got[0].Runs, second.RunIDs[0]) {
+		t.Fatalf("closed requests missing from the delivery: %+v", got[0].Runs)
+	}
+	if v, _ := s.Watch(byRun.ID); v.Pending != 0 {
+		t.Fatalf("undelivered groups remain: %+v", v.Groups)
+	}
+}
+
+func containsID(ids []string, id string) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}

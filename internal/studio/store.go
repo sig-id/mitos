@@ -26,66 +26,71 @@ import (
 )
 
 type Store struct {
-	pendingWorkflowReview  map[string]string // owning attempt to unresolved operator review
-	taskContextVersions    map[string]map[string]taskContextVersion
-	tenantVersions         map[string]uint64
-	pendingInputWakes      map[string]bool
-	workerContexts         map[string]workerContextRecord
-	taskInputs             map[string][]TaskInput
-	taskInputKeys          map[string]TaskInput
-	taskWaits              map[string]taskWait
-	actionTargets          map[string]ActionTarget
-	externalOperations     map[string]ExternalOperation
-	operationKeys          map[string]string
-	actionHolds            map[string]string
-	workerIncarnations     map[string]bool
-	structuredCheckpoints  map[string]StructuredCheckpoint
-	workerOutbox           map[string]WorkerOutbox
-	workers                map[string]WorkerCredential
-	workerRegistrations    map[string]workerRegistration
-	workerLeases           map[string]structuredworker.LeaseRecord
-	workerGenerations      map[string]uint64
-	workerReceipts         map[string]workerReceipt
-	frozenAgents           atomic.Pointer[map[string]agents.Definition]
-	runtimePolicy          *RuntimePolicy
-	tenantScheduler        TenantScheduler
-	tenantEvents           map[string][]Event
-	servicePrincipals      map[string]ServicePrincipal
-	serviceTokens          map[string]string
-	structuredKeys         map[string]string
-	agentLibrary           atomic.Pointer[savedLibrary]
-	authorityEpoch         string
-	expiredRequestKeys     map[string]bool
-	systemConfiguration    SystemConfiguration
-	supervisorVerdicts     map[string]SupervisorVerdict
-	supervisionIncidents   map[string]SupervisionIncident
-	watches                map[string]*Watch
-	watchDeliveries        map[string]*WatchDelivery
-	deskResponsibilities   map[string]desk.Responsibility
-	operatorMessages       map[string][]string // delivery IDs in journal order, by responsibility
-	watchOrder             map[string][]string
-	watchItems             map[string]*WatchItem
-	watchOpenItems         map[string]string
-	watchInboxes           map[string]*watchInbox
-	inboxEntries           map[string]*InboxEntry
-	triageRequests         map[string]*TriageRequest
-	triagePending          map[string]string // watch\x00group -> pending request
-	triageUsed             map[string]int    // allowance key -> requests
-	triageLive             map[string]bool   // requests dispatched by this process; not journalled
-	watchMarks             map[string]*WatchMark
-	agentRoutes            map[string]AgentRoute
-	modelEvaluations       map[string]ModelEvaluation
-	cooperation            map[string]CooperationRecord
-	agentPolicies          map[string]agentpolicy.Policy
-	graphs                 map[string]*WorkGraph
-	graphCreations         map[string]graphCreation
-	messagesOut            map[string]messaging.Outbound
-	messagesIn             map[string]messaging.Inbound
-	deskState              json.RawMessage
-	home                   HomeServer
-	agentSessions          map[string]AgentSession
-	agentRequests          map[string]AgentRequest
-	agentAnswers           map[string]AgentAnswer
+	pendingWorkflowReview map[string]string // owning attempt to unresolved operator review
+	taskContextVersions   map[string]map[string]taskContextVersion
+	tenantVersions        map[string]uint64
+	pendingInputWakes     map[string]bool
+	workerContexts        map[string]workerContextRecord
+	taskInputs            map[string][]TaskInput
+	taskInputKeys         map[string]TaskInput
+	taskWaits             map[string]taskWait
+	actionTargets         map[string]ActionTarget
+	externalOperations    map[string]ExternalOperation
+	operationKeys         map[string]string
+	actionHolds           map[string]string
+	workerIncarnations    map[string]bool
+	structuredCheckpoints map[string]StructuredCheckpoint
+	workerOutbox          map[string]WorkerOutbox
+	workers               map[string]WorkerCredential
+	workerRegistrations   map[string]workerRegistration
+	workerLeases          map[string]structuredworker.LeaseRecord
+	workerGenerations     map[string]uint64
+	workerReceipts        map[string]workerReceipt
+	frozenAgents          atomic.Pointer[map[string]agents.Definition]
+	runtimePolicy         *RuntimePolicy
+	tenantScheduler       TenantScheduler
+	tenantEvents          map[string][]Event
+	servicePrincipals     map[string]ServicePrincipal
+	serviceTokens         map[string]string
+	structuredKeys        map[string]string
+	agentLibrary          atomic.Pointer[savedLibrary]
+	authorityEpoch        string
+	expiredRequestKeys    map[string]bool
+	systemConfiguration   SystemConfiguration
+	supervisorVerdicts    map[string]SupervisorVerdict
+	supervisionIncidents  map[string]SupervisionIncident
+	watches               map[string]*Watch
+	watchDeliveries       map[string]*WatchDelivery
+	deskResponsibilities  map[string]desk.Responsibility
+	operatorMessages      map[string][]string // delivery IDs in journal order, by responsibility
+	watchOrder            map[string][]string
+	watchItems            map[string]*WatchItem
+	watchOpenItems        map[string]string
+	watchInboxes          map[string]*watchInbox
+	inboxEntries          map[string]*InboxEntry
+	triageRequests        map[string]*TriageRequest
+	triagePending         map[string]string // watch\x00group -> pending request
+	triageUsed            map[string]int    // allowance key -> requests
+	triageLive            map[string]bool   // requests dispatched by this process; not journalled
+	watchMarks            map[string]*WatchMark
+	agentRoutes           map[string]AgentRoute
+	modelEvaluations      map[string]ModelEvaluation
+	cooperation           map[string]CooperationRecord
+	agentPolicies         map[string]agentpolicy.Policy
+	graphs                map[string]*WorkGraph
+	graphCreations        map[string]graphCreation
+	messagesOut           map[string]messaging.Outbound
+	messagesIn            map[string]messaging.Inbound
+	deskState             json.RawMessage
+	home                  HomeServer
+	agentSessions         map[string]AgentSession
+	agentRequests         map[string]AgentRequest
+	agentAnswers          map[string]AgentAnswer
+	// agentWakes remembers, as fold state rebuilt on replay, which requests
+	// already delivered their agent_awaiting_answer wake; routing events
+	// compare against it so a request wakes once whatever the policy did in
+	// between. Guarded by mu.
+	agentWakes             map[string]bool
 	devices                map[string]Device
 	deviceTokens           map[string]string
 	deviceCommands         map[string]DeviceCommandRecord

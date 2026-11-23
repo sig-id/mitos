@@ -446,10 +446,12 @@ func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fac
 				// Routing decides: a classifier or policy revision can still
 				// land the request on an operator after ingest projected
 				// otherwise, and a failed automatic review falls back to one.
-				// A request already woken at ingest is not woken again: the
-				// two events share no sequence, so a second wake could not be
-				// deduplicated away.
-				wake = c.AgentRoute.Route.Resolver == "human" && !s.agentRequestNeedsHuman(&q)
+				// A request already woken is not woken again — the fold
+				// remembers the actual prior wake, not a recomputed
+				// projection, so a policy change in between neither skips
+				// nor repeats it — and the two events share no sequence, so
+				// a second wake could not be deduplicated away.
+				wake = c.AgentRoute.Route.Resolver == "human" && !s.agentWakes[c.AgentRoute.Key]
 			}
 		}
 	case c.AgentRequest != nil && c.AgentRequest.Invalidated:
@@ -479,6 +481,7 @@ func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fac
 			switch {
 			case wake:
 				scope.Rule, scope.Reason = watch.Wake, "agent_awaiting_answer"
+				s.rememberAgentWake(&q)
 			case reason != "":
 				scope.Rule, scope.Reason = watch.Notify, reason
 			}
@@ -486,6 +489,16 @@ func (s *Store) agentRequestFacts(e Event, c change, ended []string) []watch.Fac
 		}
 	}
 	return facts
+}
+
+// rememberAgentWake records that a request has delivered its
+// agent_awaiting_answer wake. Fold state over the journal, rebuilt identically
+// on replay; caller holds the store lock.
+func (s *Store) rememberAgentWake(q *AgentRequest) {
+	if s.agentWakes == nil {
+		s.agentWakes = map[string]bool{}
+	}
+	s.agentWakes[q.SessionID+"/"+q.Request.Key] = true
 }
 
 // agentRequestNeedsHuman projects whether an ingested request blocks on a
@@ -763,8 +776,12 @@ func (s *Store) summaryDelivery(w *Watch, kind string, rule watch.Level) WatchDe
 
 // groupDelivery builds the receipt for a due group. Entries that the owner's
 // other watches also hold join this delivery at the highest level any of them
-// assigned, so the owner receives each event once. A triage grade replaces
-// this watch's default for the group; it never lowers another watch's level.
+// assigned, so the owner receives each event once; sibling groups of this
+// watch that hold the same sequences join the same way, so a single journal
+// event projected into several run groups (a session ending several requests)
+// arrives as one delivery carrying every affected run instead of being
+// silently consumed by sequence deduplication. A triage grade replaces this
+// watch's default for the group; it never lowers another watch's level.
 func (s *Store) groupDelivery(w *Watch, g *watch.Group, grade *watch.Grade) WatchDelivery {
 	d := WatchDelivery{ID: newID("delivery"), WatchID: w.ID, Owner: w.Spec.Owner, Kind: "group", GroupKey: g.Key, Source: watch.SourceDefault, Counts: map[string]int{}}
 	levels := map[int64]watch.Level{}
@@ -792,7 +809,18 @@ func (s *Store) groupDelivery(w *Watch, g *watch.Group, grade *watch.Grade) Watc
 		}
 	}
 	runs, reasons := map[string]bool{}, map[string]bool{}
-	for _, e := range g.Entries {
+	entries := slices.Clone(g.Entries)
+	for key, sibling := range w.Groups {
+		if key == g.Key {
+			continue
+		}
+		for _, e := range sibling.Entries {
+			if _, shared := levels[e.Seq]; shared {
+				entries = append(entries, e)
+			}
+		}
+	}
+	for _, e := range entries {
 		d.Seqs = append(d.Seqs, e.Seq)
 		d.Count++
 		d.Counts[e.Kind]++
