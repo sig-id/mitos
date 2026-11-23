@@ -199,6 +199,10 @@ proposals MUST be fenced, and continued orchestrators MUST observe current facts
 Continuation MUST wait for prior execution and claims to settle and MUST NOT
 bypass supervision holds or revive explicitly cancelled or accepted workflows.
 Service-owned occurrences remain subject to their parent's lifecycle and deadline.
+In an adaptive graph, every non-orchestrator agent task MUST be assigned to exactly
+one supervising watch from admission until it settles; the kernel maintains the
+assignment record (spec 09) and the orchestrator changes it through plan operations
+and tools.
 Native agent continuation MUST use the exact recorded conversation identity and
 restore saved workspace state, preserving cumulative changes and prior evidence.
 Where an older attempt has no native conversation identity, portable continuation

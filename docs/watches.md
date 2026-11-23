@@ -69,6 +69,31 @@ neither loses nor repeats it. A receipt never changes. Its `route` is `feed`,
 updated. Item state lives on the item (`mitos watch items`), and inbox state on
 the owner's inbox entry (`mitos watch inbox`).
 
+## The supervision record
+
+In an adaptive graph the kernel keeps every non-orchestrator agent task under
+exactly one **supervising watch** from admission until it settles (#126):
+
+- An amendment's `add`, `supersede` or `retry` may carry `watch` —
+  `{"assign": "watch_…"}` for an existing watch, or `{"create": {"template":
+  "child-terminal-states" | spec}}`. Omitted, the task joins the graph's
+  default watch, created from the `child-terminal-states` template on first
+  use. Malformed selections are refused at plan submission.
+- The assignment is committed in the same journal record as the member, so a
+  restart cannot lose it. The watch's condition carries the kernel-maintained
+  `members` list (authors cannot set it), matching events from every attempt
+  of those tasks.
+- The kernel renews the leases of watches with live members (without touching
+  their renewal allowance) and ends a watch when its last member settles.
+- The `supervision_graph` tool reads the record — members, templates, leases,
+  pending delivery counts — and `watch_assign` moves a task between watches.
+  `watch_create` with `template` returns an equivalent active watch instead of
+  duplicating it, and `watch_cancel` is refused while the watch has live
+  members.
+- A responsibility watch with no `kinds` filter and a `wake` default is
+  clamped to `notify`: terminal states are delivered by rule anyway, and the
+  kernel already replans on them.
+
 ## Watches for orchestrators and attempts
 
 `owner` can also be `{"kind": "responsibility", "id": "graph_…"}`, which is an

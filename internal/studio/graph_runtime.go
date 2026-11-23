@@ -117,7 +117,27 @@ func (e *Engine) reconcileGraphs() error {
 		if len(gc.Runs) > 0 || continued {
 			gc.Graph = g
 			s.projectGraph(&gc, old)
-			if err := s.commit("", "effect", "graph_attempts_queued", change{Graph: &gc}); err != nil {
+			// Supervision backstop (#126): a member reaching dispatch
+			// without an assignment — one admitted before the record
+			// existed — joins the graph's default watch in the same record
+			// as its first attempt.
+			var wc *watchChange
+			for _, tid := range graphIDs(&g) {
+				if m := g.Members[tid]; supervisedMember(&g, m) && m.SupervisionWatch == "" {
+					assigned, err := s.planSupervision(&g, []string{tid}, nil, nil)
+					if err != nil {
+						return err
+					}
+					if assigned != nil {
+						wc = assigned
+					}
+				}
+			}
+			if wc != nil {
+				gc.Graph = g
+				s.projectGraph(&gc, old)
+			}
+			if err := s.commit("", "effect", "graph_attempts_queued", change{Graph: &gc, Watch: wc}); err != nil {
 				return err
 			}
 		}

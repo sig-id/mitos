@@ -78,7 +78,7 @@ func (e *Engine) RequestGraphDecision(req GraphDecisionRequest) (GraphDecision, 
 		p := req.Proposal
 		p.Operations = candidate.Operations
 		p.Explanation = candidate.Explanation
-		if _, _, err := e.proposeGraph(old, p, graphDigest(p), false); err != nil {
+		if _, _, _, err := e.proposeGraph(old, p, graphDigest(p), false); err != nil {
 			return GraphDecision{}, err
 		}
 	}
@@ -249,14 +249,14 @@ func (e *Engine) ApplyGraphDecision(id, key string) (GraphReceipt, error) {
 	// deadlock sealing. A rejection publishes neither consumption nor graph edits.
 	base := graphClone(*old)
 	base.Decisions[key].Outcome = "applied"
-	next, receipt, err := e.proposeGraph(&base, p, graphDigest(p), false)
+	next, receipt, supervision, err := e.proposeGraph(&base, p, graphDigest(p), false)
 	if err != nil {
 		return GraphReceipt{}, err
 	}
 	next.Decisions[key].Applied = &receipt
 	gc := graphChange{Graph: next}
 	s.projectGraph(&gc, old)
-	if err = s.commit("", "effect", "graph_decision_applied", change{Graph: &gc}); err != nil {
+	if err = s.commit("", "effect", "graph_decision_applied", change{Graph: &gc, Watch: supervision}); err != nil {
 		return GraphReceipt{}, err
 	}
 	return receipt, nil

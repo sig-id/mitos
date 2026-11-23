@@ -79,6 +79,9 @@ func (o Owner) validate() error {
 	return nil
 }
 
+// WatchIDPattern matches the ids the runtime mints for watches.
+var WatchIDPattern = idPattern
+
 // MaxActive bounds an owner's active watches.
 func (o Owner) MaxActive() int {
 	if o.Kind == OwnerOperator {
@@ -108,7 +111,16 @@ type Condition struct {
 	Scope Scope    `json:"scope"`
 	Types []string `json:"types,omitempty"`
 	Kinds []string `json:"kinds,omitempty"`
+	// Members names graph tasks whose events this watch supervises. It is
+	// maintained only by the kernel (the supervision record, spec 09): an
+	// author cannot set it, and it matches events from every attempt of the
+	// member tasks whatever their scope fields narrow further.
+	Members []string `json:"members,omitempty"`
 }
+
+// HasMembers reports whether the condition carries kernel-maintained member
+// tasks.
+func (c Condition) HasMembers() bool { return len(c.Members) > 0 }
 
 type Lease struct {
 	ExpiresAt   time.Time `json:"expires_at"`
@@ -191,8 +203,16 @@ func ValidateExpiry(at, now time.Time) error {
 }
 
 func (c Condition) Validate() error {
-	if c.Scope.empty() {
+	if c.Scope.empty() && len(c.Members) == 0 {
 		return errors.New("condition.scope needs at least one of project, graph, task or run")
+	}
+	if len(c.Members) > 128 {
+		return errors.New("condition.members takes at most 128 tasks")
+	}
+	for i, id := range c.Members {
+		if !idPattern.MatchString(id) || slices.Index(c.Members, id) != i {
+			return errors.New("condition.members must be distinct valid task ids")
+		}
 	}
 	for _, id := range []string{c.Scope.Project, c.Scope.Graph, c.Scope.Task, c.Scope.Run} {
 		if id != "" && !idPattern.MatchString(id) {
@@ -255,8 +275,13 @@ type Fact struct {
 	Summary string `json:"summary,omitempty"`
 }
 
-// InScope reports whether every set scope field matches the fact.
+// InScope reports whether every set scope field matches the fact. Member
+// tasks count as scope: a supervision watch admits facts from every attempt
+// of its members.
 func (c Condition) InScope(f Fact) bool {
+	if len(c.Members) > 0 && (f.Task == "" || !slices.Contains(c.Members, f.Task)) {
+		return false
+	}
 	s := c.Scope
 	return (s.Project == "" || s.Project == f.Project) && (s.Graph == "" || s.Graph == f.Graph) &&
 		(s.Task == "" || s.Task == f.Task) && (s.Run == "" || s.Run == f.Run)

@@ -82,7 +82,7 @@ func (e *Engine) admitOrchestratorPlan(snapshot WorkGraph, key string, r Run, pl
 		ops = append(ops, op)
 	}
 	p := GraphProposal{Profile: GraphProfile, Key: receiptKey, GraphID: old.ID, Revision: x.Revision, PolicyRevision: old.PolicyRevision, Generation: x.Generation, Deadline: x.Deadline, Reads: x.Reads, Operations: ops, Explanation: plan.Explanation}
-	next, receipt, err := e.proposeGraph(old, p, graphDigest(plan), false)
+	next, receipt, supervision, err := e.proposeGraph(old, p, graphDigest(plan), false)
 	if err != nil {
 		return err
 	}
@@ -132,5 +132,5 @@ func (e *Engine) admitOrchestratorPlan(snapshot WorkGraph, key string, r Run, pl
 	}
 	gc := graphChange{Graph: next}
 	s.projectGraph(&gc, old)
-	return s.commit("", "effect", "orchestrator_plan_applied", change{Graph: &gc})
+	return s.commit("", "effect", "orchestrator_plan_applied", change{Graph: &gc, Watch: supervision})
 }
