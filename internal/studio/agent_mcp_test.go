@@ -73,7 +73,14 @@ func TestAgentMCPLoopbackEndpointLifecycle(t *testing.T) {
 }
 
 func TestAgentMCPAttachesToTheModelBrokerLocalRoute(t *testing.T) {
-	broker, err := compute.StartModelBroker(filepath.Join(t.TempDir(), "b.sock"), map[string]string{compute.BrokerVendorAnthropic: "sk-ant-test"})
+	// Keep the socket path inside every supported platform's unix socket
+	// address limit; the standard test temp root is longer on some machines.
+	dir, derr := os.MkdirTemp("", "mitos-mcp-")
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	broker, err := compute.StartModelBroker(filepath.Join(dir, "b.sock"), map[string]string{compute.BrokerVendorAnthropic: "sk-ant-test"})
 	if err != nil {
 		t.Fatal(err)
 	}

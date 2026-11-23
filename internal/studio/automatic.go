@@ -887,6 +887,11 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err = e.agentProvider.Stop(stopCtx, session); err != nil {
 		return err
 	}
+	// Harvest walks, commits and diffs the whole result tree; its cost scales
+	// with the workspace, not with the process stop. A budget shared with the
+	// stop timeout doomed any workspace of a few hundred files (issue #133).
+	harvestCtx, harvestCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer harvestCancel()
 	if err = e.Store.SaveArtifacts(r.ID, ArtifactData{Name: "output.txt", Data: output}, ArtifactData{Name: "activity.jsonl", Data: activity.Bytes()}); err != nil {
 		return err
 	}
@@ -901,7 +906,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			return err
 		}
 	}
-	harvested, err := history.Harvest(stopCtx, before)
+	harvested, err := history.Harvest(harvestCtx, before)
 	if err != nil {
 		return err
 	}
@@ -919,7 +924,7 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err = e.Store.RecordWorkspace(r.ID, "workspace_harvested", "Saved agent output and workspace changes.", WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, ResultCommit: harvested.ResultCommit, Fingerprint: harvested.Fingerprint, ChangedFiles: len(harvested.Changes)}); err != nil {
 		return err
 	}
-	if err = verifyDependencyInputs(stopCtx, base, inputSnapshot); err != nil {
+	if err = verifyDependencyInputs(harvestCtx, base, inputSnapshot); err != nil {
 		return err
 	}
 	if runErr != nil {

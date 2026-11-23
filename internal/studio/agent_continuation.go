@@ -76,10 +76,12 @@ func (e *Engine) agentContinuation(ctx context.Context, r Run) (Run, workspacefs
 	current := before
 	if prior.Workspace.ResultCommit != "" {
 		current, err = history.Load(ctx, prior.Workspace.ResultCommit, prior.Workspace.Fingerprint)
-	} else {
-		if started {
-			err = graphError("agent workspace was not harvested; inspect the interrupted execution before continuing")
-		}
+	} else if started {
+		// An interrupted execution whose workspace was never harvested lost
+		// its changes; the attempt chain stays, but the task must remain
+		// runnable (issue #133). Continue from the pristine baseline rather
+		// than refusing every future attempt.
+		current = before
 	}
 	return prior, before, current, err
 }
