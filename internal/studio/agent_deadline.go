@@ -130,6 +130,9 @@ func (e *Engine) recoverSubmittedAttempt(r Run) bool {
 	if _, ok := e.Store.SubmittedResult(r.ID); !ok {
 		return false
 	}
+	if !e.establishProcessStopped(r) {
+		return false
+	}
 	if !e.harvestRecoveredAttempt(r) {
 		return false
 	}
@@ -139,6 +142,55 @@ func (e *Engine) recoverSubmittedAttempt(r Run) bool {
 		return false
 	}
 	return e.collectSubmittedResult(r.ID, "restart_after_submit", time.Time{})
+}
+
+// establishProcessStopped checks that no process from the previous server
+// instance is still running for this attempt: with the unconfined local
+// provider a crashed server orphans the agent and its children, which would
+// keep writing to the workspace while recovery snapshots it and after the
+// attempt's claim is released. A recorded process group is probed and, when
+// its identity still matches this attempt, stopped and awaited; when
+// termination cannot be established the attempt keeps its interruption state.
+func (e *Engine) establishProcessStopped(r Run) bool {
+	pgid := recordedProcessGroup(r)
+	if pgid == 0 {
+		return false // no recorded process: termination cannot be established
+	}
+	if !processGroupAlive(pgid) {
+		return true
+	}
+	if !processGroupMatchesWorkspace(pgid, filepath.Join(e.Store.Dir(), "workspaces", r.ID, "workspace")) {
+		return false // the group may no longer be this attempt's; do not touch it
+	}
+	stopProcessGroup(pgid)
+	deadline := time.Now().Add(10 * time.Second)
+	for processGroupAlive(pgid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	return !processGroupAlive(pgid)
+}
+
+// recordedProcessGroup returns the process group id an attempt recorded when
+// its agent session started, or zero.
+func recordedProcessGroup(r Run) int {
+	pgid := 0
+	for _, event := range r.Events {
+		if event.Kind != "process_group_recorded" {
+			continue
+		}
+		var c change
+		if json.Unmarshal(event.Data, &c) != nil || c.Evidence == nil {
+			return 0
+		}
+		var recorded struct {
+			ProcessGroup int `json:"process_group"`
+		}
+		if json.Unmarshal(c.Evidence, &recorded) != nil || recorded.ProcessGroup <= 0 {
+			return 0
+		}
+		pgid = recorded.ProcessGroup
+	}
+	return pgid
 }
 
 // harvestRecoveredAttempt persists the workspace changes of an attempt whose

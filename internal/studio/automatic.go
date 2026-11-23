@@ -853,6 +853,15 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 	if err != nil {
 		return err
 	}
+	// The process group id is recorded so restart recovery can establish the
+	// attempt's termination before harvesting its workspace: an unconfined
+	// local agent survives a crashed server and would keep writing to it
+	// (issue #127 review).
+	if pid := session.PID(); pid > 0 {
+		if err = e.Store.RecordEvidence(r.ID, "process_group_recorded", "The agent process group was recorded so restart recovery can establish its termination.", map[string]int{"process_group": pid}); err != nil {
+			return err
+		}
+	}
 	stageErr := e.Store.Transition(r.ID, "agent_started", "running", "Agent working", b.Runtime+" is executing the assignment. Its report and files are saved when this attempt finishes.")
 	if stageErr != nil {
 		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)

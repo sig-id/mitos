@@ -3,7 +3,9 @@ package studio
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -11,6 +13,41 @@ import (
 	"mitos/internal/workpool"
 	workspacefs "mitos/internal/workspace"
 )
+
+// deadProcessGroup starts and finishes a process group, returning its now
+// vacant id the way a recorded agent group looks after the process exited.
+func deadProcessGroup(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+// liveProcessGroup starts a process group running in dir, mimicking an agent
+// orphaned by a crashed server. The waiter goroutine stands in for init, which
+// reaps the reparented orphan once it is killed.
+func liveProcessGroup(t *testing.T, dir string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	return cmd
+}
+
+func recordProcessGroup(t *testing.T, s *Store, run string, pgid int) {
+	t.Helper()
+	if err := s.RecordEvidence(run, "process_group_recorded", "The agent process group was recorded so restart recovery can establish its termination.", map[string]int{"process_group": pgid}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func submittedRun(t *testing.T, s *Store, app Application) (Run, string) {
 	t.Helper()
@@ -172,6 +209,8 @@ func TestRestartAfterSubmitRecoversSettledResult(t *testing.T) {
 	if err := s.RecordWorkspace(r.ID, "workspace_prepared", "Agent workspace prepared.", WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint, Limits: before.Limits}); err != nil {
 		t.Fatal(err)
 	}
+	// The attempt's agent process from the previous instance has exited.
+	recordProcessGroup(t, s, r.ID, deadProcessGroup(t))
 	e, err := NewEngine(s, []Application{app}, root)
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +357,7 @@ func TestRestartRecoveryVerifiesDependencyInputs(t *testing.T) {
 			if err := s.RecordEvidence(r.ID, "dependency_inputs_prepared", "Bound upstream artifacts were copied and verified before execution.", map[string]any{"fingerprint": snapshot.Fingerprint}); err != nil {
 				t.Fatal(err)
 			}
+			recordProcessGroup(t, s, r.ID, deadProcessGroup(t))
 			if test.tamper {
 				// A misbehaving agent can relax the read-only mode before
 				// changing its bound input copy.
@@ -345,6 +385,93 @@ func TestRestartRecoveryVerifiesDependencyInputs(t *testing.T) {
 			}
 			if finished.Status != "parked" || finished.Decision == nil || finished.Result == nil {
 				t.Fatalf("changed inputs should keep the interruption state: %+v", finished)
+			}
+		})
+	}
+}
+
+// Recovery of a submitted attempt first establishes that no process from the
+// previous server instance is still running: an orphaned agent whose group
+// still matches the attempt workspace is stopped and awaited, an unverified
+// group (possibly recycled) is left untouched and keeps the interruption
+// state, and an attempt with no recorded process never completes through
+// recovery (#127 review).
+func TestRestartRecoveryStopsOrphanedProcess(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		orphan  string // "", "workspace", "elsewhere", "none"
+		settled bool
+	}{
+		{"stopped process settles", "", true},
+		{"orphan in the workspace is stopped and settles", "workspace", true},
+		{"unverified orphan keeps interruption", "elsewhere", false},
+		{"no recorded process keeps interruption", "none", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := executionApp(t, `sleep 30 & wait`)
+			s := testStore(t)
+			r, root := submittedRun(t, s, app)
+			ctx := context.Background()
+			before, err := workspacefs.CaptureSource(ctx, root, s.Dir(), workspacefs.DefaultLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := filepath.Join(s.Dir(), "workspaces", r.ID)
+			history, err := workspacefs.Prepare(ctx, base, before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(base, "workspace", "file.txt"), []byte("hello\nworld\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			s.mu.Lock()
+			current := s.runs[r.ID]
+			current.GraphAttempt = &GraphAttempt{GraphID: "graph_restart"}
+			s.runs[r.ID] = current
+			if s.graphs == nil {
+				s.graphs = map[string]*WorkGraph{}
+			}
+			s.graphs["graph_restart"] = &WorkGraph{ID: "graph_restart", ProjectID: current.ProjectID, Status: "active", Policy: GraphPolicy{Mode: "adaptive"}, RootTask: "goal", Members: map[string]*GraphMember{}}
+			s.mu.Unlock()
+			if err := s.RecordWorkspace(r.ID, "workspace_prepared", "Agent workspace prepared.", WorkspaceRecord{Mode: "copy", BaselineCommit: history.BaselineCommit, Fingerprint: before.Fingerprint, Limits: before.Limits}); err != nil {
+				t.Fatal(err)
+			}
+			var orphan *exec.Cmd
+			switch test.orphan {
+			case "":
+				recordProcessGroup(t, s, r.ID, deadProcessGroup(t))
+			case "workspace":
+				orphan = liveProcessGroup(t, filepath.Join(base, "workspace"))
+				recordProcessGroup(t, s, r.ID, orphan.Process.Pid)
+			case "elsewhere":
+				orphan = liveProcessGroup(t, t.TempDir())
+				recordProcessGroup(t, s, r.ID, orphan.Process.Pid)
+			}
+			e, err := NewEngine(s, []Application{app}, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(e.Close)
+			finished, err := s.Get(r.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.settled {
+				if finished.Status != "done" || finished.Result == nil || !runEvidence(finished, "restart_after_submit") {
+					t.Fatalf("recovery did not settle: %+v", finished)
+				}
+				if orphan != nil && !processGroupAlive(orphan.Process.Pid) {
+					// stopped as established
+				} else if orphan != nil {
+					t.Fatal("verified orphan survived recovery")
+				}
+				return
+			}
+			if finished.Status != "parked" || finished.Decision == nil || finished.Result == nil {
+				t.Fatalf("unestablished termination should keep the interruption state: %+v", finished)
+			}
+			if orphan != nil && !processGroupAlive(orphan.Process.Pid) {
+				t.Fatal("unverified orphan was stopped anyway")
 			}
 		})
 	}
