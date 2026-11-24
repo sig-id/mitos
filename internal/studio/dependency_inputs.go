@@ -15,7 +15,10 @@ import (
 	workspacefs "mitos/internal/workspace"
 )
 
-const dependencyBytes = 64 << 20
+// Patches harvested from toolchain workspaces carry node_modules binaries
+// well past 64 MiB in total when several code tasks feed one consumer; the
+// bound guards against unbounded input staging, not realistic patch sets.
+const dependencyBytes = 256 << 20
 const dependencyFiles = 128
 
 var errDependencyUnavailable = errors.New("dependency_input_unavailable")
