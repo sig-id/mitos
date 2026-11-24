@@ -14,7 +14,7 @@ func TestDebugArgv(t *testing.T) {
 		t.Skip("bwrap required for confinement argv inspection")
 	}
 	c := Confinement{Tool: ConfinementBwrap, NetMode: NetUnrestricted, EgressSocket: "/tmp/egsock/model.sock", HelperExecutable: os.Args[0]}
-	argv, err := confineArgv(c, []string{"/bin/sh", "-c", "true"}, "/tmp/egattempt", "/tmp/egattempt/workspace", "/tmp/egattempt/workspace", resourcepolicy.Agent{})
+	argv, err := confineArgv(c, []string{"/bin/sh", "-c", "true"}, "/tmp/egattempt", "/tmp/egattempt/workspace", "/tmp/egattempt/workspace", resourcepolicy.Agent{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

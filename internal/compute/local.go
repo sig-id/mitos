@@ -228,8 +228,12 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 		}
 		dir = command.Directory
 	}
-	argv := command.Argv
 	base := h.spec.Base
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
+	if command.NativeEnv != nil {
+		env = append([]string(nil), command.NativeEnv...)
+	}
+	argv := command.Argv
 	if h.owner.Confinement.enabled() {
 		var confineErr error
 		posture := h.owner.Confinement
@@ -244,14 +248,12 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 			posture.EgressSocket = strings.TrimPrefix(h.spec.Posture.BrokerEndpoint, "unix://")
 			posture.HelperExecutable = h.owner.helper
 		}
-		if argv, confineErr = confineArgv(posture, argv, base, h.spec.Workspace.Directory, dir, h.spec.Posture.Resources); confineErr != nil {
+		// A VM guest inherits nothing from the host CLI process: the workload
+		// environment must be passed into the guest explicitly.
+		if argv, confineErr = confineArgv(posture, argv, base, h.spec.Workspace.Directory, dir, h.spec.Posture.Resources, env); confineErr != nil {
 			cancel()
 			return nil, confineErr
 		}
-	}
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
-	if command.NativeEnv != nil {
-		env = append([]string(nil), command.NativeEnv...)
 	}
 	if h.owner.sandbox != nil {
 		run, err := h.owner.sandbox.launch(h.spec, argv, dir, env)

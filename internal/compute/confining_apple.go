@@ -41,7 +41,7 @@ const (
 // confineArgvApple wraps argv in a per-launch apple/container VM. Failing
 // closed mirrors the bwrap path: a missing image, helper or mediated-egress
 // prerequisite refuses the launch instead of degrading the posture.
-func confineArgvApple(c Confinement, argv []string, base, workspace, workdir string, resources resourcepolicy.Agent) ([]string, error) {
+func confineArgvApple(c Confinement, argv []string, base, workspace, workdir string, resources resourcepolicy.Agent, env []string) ([]string, error) {
 	if len(argv) == 0 || !filepath.IsAbs(argv[0]) {
 		return nil, errors.New("command requires an absolute executable")
 	}
@@ -54,6 +54,25 @@ func confineArgvApple(c Confinement, argv []string, base, workspace, workdir str
 	helper := c.GuestHelper
 	if helper == "" {
 		helper = defaultGuestHelper
+	}
+	tools := ""
+	if c.ToolsDir != "" {
+		if !filepath.IsAbs(c.ToolsDir) {
+			return nil, errors.New("apple-container confinement requires an absolute tools directory")
+		}
+		info, statErr := os.Stat(c.ToolsDir)
+		if statErr != nil || !info.IsDir() {
+			return nil, errors.New("apple-container confinement tools directory is missing")
+		}
+		tools = c.ToolsDir
+		// One shared host toolchain (ADR 0011): workloads and the helper
+		// default into the mounted tools directory instead of the image.
+		if c.GuestBinDir == "" {
+			c.GuestBinDir = tools
+		}
+		if c.GuestHelper == "" {
+			helper = filepath.Join(tools, "mitos")
+		}
 	}
 	if !filepath.IsAbs(helper) {
 		return nil, errors.New("apple-container confinement requires an absolute guest helper path")
@@ -84,11 +103,15 @@ func confineArgvApple(c Confinement, argv []string, base, workspace, workdir str
 		args[len(args)-1] = workdir
 	}
 	// The guest boots from the image's rootfs; only the per-attempt state is
-	// shared with the host, at identical paths.
+	// shared with the host, at identical paths. A tools directory extends the
+	// same sharing to one read-only Linux toolchain for every VM.
 	binds := [][3]string{
 		{home, home, ""},
 		{tmp, tmp, ""},
 		{workspace, workspace, ""},
+	}
+	if tools != "" {
+		binds = append(binds, [3]string{tools, tools, "ro"})
 	}
 	if inputs := filepath.Join(base, "inputs"); dirExists(inputs) {
 		binds = append(binds, [3]string{inputs, inputs, "ro"})
@@ -117,6 +140,14 @@ func confineArgvApple(c Confinement, argv []string, base, workspace, workdir str
 	default:
 		// Unrestricted, unmediated: the default NAT network reaches the
 		// external world but never the host's loopback listeners.
+	}
+	// The guest inherits nothing from the host CLI process; every workload
+	// variable is passed explicitly so HOME, proxies and credentials reach
+	// the workload exactly as they do under bwrap.
+	for _, entry := range env {
+		if entry != "" {
+			args = append(args, "--env", entry)
+		}
 	}
 	if flag, value, ok := appleCPULimit(resources); ok {
 		args = append(args, flag, value)

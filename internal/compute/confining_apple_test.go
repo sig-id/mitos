@@ -62,14 +62,14 @@ func TestAppleConfinementFailsClosed(t *testing.T) {
 	}
 	// The image is the VM's rootfs: refusing to launch without it never
 	// degrades to an unconfined or wrong-toolchain execution.
-	argv, err := confineArgv(Confinement{Tool: ConfinementAppleContainer, NetMode: NetOff}, []string{"/bin/true"}, t.TempDir(), t.TempDir(), "", resourcepolicy.Agent{})
+	argv, err := confineArgv(Confinement{Tool: ConfinementAppleContainer, NetMode: NetOff}, []string{"/bin/true"}, t.TempDir(), t.TempDir(), "", resourcepolicy.Agent{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "OCI image") {
 		t.Fatalf("missing image did not fail closed: %v (%v)", err, argv)
 	}
 	// Mediation requires the unrestricted posture, exactly as under bwrap.
 	withheld := appleConfinement(NetOff)
 	withheld.EgressSocket = filepath.Join(t.TempDir(), "model.sock")
-	if _, err = confineArgv(withheld, []string{"/bin/true"}, t.TempDir(), t.TempDir(), "", resourcepolicy.Agent{}); err == nil {
+	if _, err = confineArgv(withheld, []string{"/bin/true"}, t.TempDir(), t.TempDir(), "", resourcepolicy.Agent{}, nil); err == nil {
 		t.Fatal("mediated socket without unrestricted mode accepted")
 	}
 }
@@ -112,7 +112,7 @@ func TestAppleConfineArgvMatchesTheBwrapContract(t *testing.T) {
 	capped := resourcepolicy.Agent{CPUMillicores: resourcepolicy.Capped(1500), MemoryMiB: resourcepolicy.Capped(2048)}
 
 	t.Run("network off", func(t *testing.T) {
-		argv, err := confineArgv(appleConfinement(NetOff), []string{"/opt/homebrew/bin/codex", "exec"}, base, workspace, workspace, capped)
+		argv, err := confineArgv(appleConfinement(NetOff), []string{"/opt/homebrew/bin/codex", "exec"}, base, workspace, workspace, capped, []string{"HOME=/vm/home", "HTTPS_PROXY=http://127.0.0.1:3128"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,13 +126,17 @@ func TestAppleConfineArgvMatchesTheBwrapContract(t *testing.T) {
 		if !containsPair(argv, "--cpus", "1.5") || !containsPair(argv, "--memory", "2048M") {
 			t.Fatalf("admitted ceilings not mapped onto the VM: %v", argv)
 		}
+		// The guest inherits nothing: every workload variable is explicit.
+		if !containsPair(argv, "--env", "HOME=/vm/home") || !containsPair(argv, "--env", "HTTPS_PROXY=http://127.0.0.1:3128") {
+			t.Fatalf("workload environment not passed into the guest: %v", argv)
+		}
 		if argv[len(argv)-3] != "mitos-worker:test" || argv[len(argv)-2] != "/usr/local/bin/codex" || argv[len(argv)-1] != "exec" {
 			t.Fatalf("image or guest toolchain path wrong: %v", argv)
 		}
 	})
 
 	t.Run("unrestricted without mediation keeps the default NAT network", func(t *testing.T) {
-		argv, err := confineArgv(appleConfinement(NetUnrestricted), []string{"/opt/homebrew/bin/codex"}, base, workspace, workspace, resourcepolicy.Agent{})
+		argv, err := confineArgv(appleConfinement(NetUnrestricted), []string{"/opt/homebrew/bin/codex"}, base, workspace, workspace, resourcepolicy.Agent{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +151,7 @@ func TestAppleConfineArgvMatchesTheBwrapContract(t *testing.T) {
 	t.Run("mediated egress mirrors the Linux loop", func(t *testing.T) {
 		c := appleConfinement(NetUnrestricted)
 		c.EgressSocket = socket
-		argv, err := confineArgv(c, []string{"/opt/homebrew/bin/codex", "--headless"}, base, workspace, workspace, resourcepolicy.Agent{})
+		argv, err := confineArgv(c, []string{"/opt/homebrew/bin/codex", "--headless"}, base, workspace, workspace, resourcepolicy.Agent{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -172,10 +176,57 @@ func TestAppleConfineArgvMatchesTheBwrapContract(t *testing.T) {
 		}
 	})
 
+	t.Run("a host tools directory is mounted once and shared", func(t *testing.T) {
+		tools := filepath.Join(base, "tools")
+		if err := os.MkdirAll(tools, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		c := appleConfinement(NetOff)
+		c.ToolsDir = tools
+		argv, err := confineArgv(c, []string{"/opt/homebrew/bin/pi"}, base, workspace, workspace, resourcepolicy.Agent{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !containsPair(argv, "--volume", tools+":"+tools+":ro") {
+			t.Fatalf("tools directory not mounted read-only: %v", argv)
+		}
+		if argv[len(argv)-1] != filepath.Join(tools, "pi") {
+			t.Fatalf("workload did not resolve into the tools directory: %v", argv)
+		}
+		mediated := appleConfinement(NetUnrestricted)
+		mediated.ToolsDir = tools
+		mediated.EgressSocket = socket
+		argv, err = confineArgv(mediated, []string{"/opt/homebrew/bin/pi"}, base, workspace, workspace, resourcepolicy.Agent{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		image := len(argv) - 6 // image, /bin/sh, -c, script, sh, workload
+		if !strings.Contains(argv[image+3], filepath.Join(tools, "mitos")+" egress-loop") {
+			t.Fatalf("helper did not default into the tools directory: %v", argv)
+		}
+		// An explicit GuestBinDir keeps winning over the tools default.
+		c.GuestBinDir = "/opt/tools/bin"
+		argv, err = confineArgv(c, []string{"/usr/bin/env"}, base, workspace, workspace, resourcepolicy.Agent{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if argv[len(argv)-1] != "/opt/tools/bin/env" {
+			t.Fatalf("explicit guest bin dir overridden: %v", argv)
+		}
+	})
+
+	t.Run("a missing tools directory fails closed", func(t *testing.T) {
+		c := appleConfinement(NetOff)
+		c.ToolsDir = filepath.Join(base, "absent")
+		if _, err := confineArgv(c, []string{"/bin/true"}, base, workspace, workspace, resourcepolicy.Agent{}, nil); err == nil || !strings.Contains(err.Error(), "tools directory") {
+			t.Fatalf("missing tools directory did not fail closed: %v", err)
+		}
+	})
+
 	t.Run("guest bin dir is configurable and the workdir honored", func(t *testing.T) {
 		c := appleConfinement(NetOff)
 		c.GuestBinDir = "/opt/tools/bin"
-		argv, err := confineArgv(c, []string{"/usr/bin/env"}, base, workspace, filepath.Join(workspace, "sub"), resourcepolicy.Agent{})
+		argv, err := confineArgv(c, []string{"/usr/bin/env"}, base, workspace, filepath.Join(workspace, "sub"), resourcepolicy.Agent{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

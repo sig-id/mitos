@@ -17,8 +17,8 @@ macOS, not a new one.
 
 Linux keeps bubblewrap. The confinement tool is selected per platform
 (`compute.DefaultConfinementTool()`): `bwrap` on Linux, `apple-container` on
-macOS. Hosts that cannot run the selected tool — no `container` CLI, no OCI
-image, Intel Macs, macOS older than 26 — keep the explicit fail-closed errors;
+macOS. Hosts that cannot run the selected tool – no `container` CLI, no OCI
+image, Intel Macs, macOS older than 26 – keep the explicit fail-closed errors;
 nothing silently degrades to advisory execution.
 
 ## What carries over unchanged
@@ -27,7 +27,7 @@ nothing silently degrades to advisory execution.
 | --- | --- |
 | Minimal explicit mounts | `--volume` virtiofs binds of the writable workspace copy, the per-attempt runtime home, tmp, and read-only dependency inputs; nothing else is host-visible |
 | Withheld network | `--network none` (reserved name, no interface at all) |
-| Mediated egress | the host egress relay keeps serving its allowlisted HTTP CONNECT on a UNIX socket; `--volume <socket>:<socket>` — apple/container converts socket bind mounts into vsock-backed `UnixSocketConfiguration(direction: .into)` — and the in-guest `mitos egress-loop` forwarder still listens on `127.0.0.1:3128`, so the workload's `HTTPS_PROXY` wiring is byte-identical to Linux |
+| Mediated egress | the host egress relay keeps serving its allowlisted HTTP CONNECT on a UNIX socket; `--volume <socket>:<socket>` – apple/container converts socket bind mounts into vsock-backed `UnixSocketConfiguration(direction: .into)` – and the in-guest `mitos egress-loop` forwarder still listens on `127.0.0.1:3128`, so the workload's `HTTPS_PROXY` wiring is byte-identical to Linux |
 | Loopback operator API unreachable | the guest has no route to host loopback in every mode; mediated runs additionally have no interface at all |
 | Independent workspace-write observation | host-side scanning of the virtiofs share; acceptance reconstruction is unchanged |
 | Fail-closed admission | `NewConfinement` refuses when the CLI is missing; `confineArgv` refuses when the image or the mediated-egress prerequisites are absent |
@@ -42,12 +42,19 @@ the allowlist stays the only route out.
 
 1. **Toolchain model inverts.** The Linux sandbox bind-mounts host toolchains
    read-only; a Linux guest cannot run macOS binaries, so every workload runs
-   from an OCI image that must contain its toolchain. The image contract is:
-   agent binaries under `/usr/local/bin/<name>` (the confinement rewrites the
-   workload's `argv[0]` to `GuestBinDir` + basename), a Linux `mitos` build at
-   `/usr/local/bin/mitos` for the egress loop, and `/bin/sh`. Operators build
-   or pull the image and name it via `MITOS_CONFINEMENT_IMAGE`; a configured
-   confinement without an image fails closed at startup.
+   from an OCI image that must contain its toolchain – or from one shared
+   host tools directory mounted read-only into every VM (`ToolsDir`), which
+   restores the bwrap "one copy, N sandboxes" economics for any toolchain
+   that ships Linux binaries (pi's npm package with platform prebuilds, for
+   example). The image contract is: agent binaries under
+   `/usr/local/bin/<name>` (the confinement rewrites the workload's `argv[0]`
+   to `GuestBinDir` + basename), a Linux `mitos` build at
+   `/usr/local/bin/mitos` for the egress loop, and `/bin/sh`; with a tools
+   directory the same slots resolve into it instead. Operators build or pull
+   the image and name it via `MITOS_CONFINEMENT_IMAGE`; a configured
+   confinement without an image fails closed at startup. Per-VM root
+   filesystems are APFS copy-on-write clones of the stored image, so N
+   concurrent VMs still cost one copy of the toolchain.
 2. **Resource caps become real.** The VM enforces `--cpus` and `--memory`, so
    the provider reports `cpu_quota` and `memory_limit` truthfully for
    apple-container where bubblewrap cannot enforce them; posture limits are
@@ -68,14 +75,14 @@ the allowlist stays the only route out.
 
 ## Alternatives rejected
 
-- **Seatbelt (`sandbox-exec`) with a startup canary probe** — expressible, and
+- **Seatbelt (`sandbox-exec`) with a startup canary probe** – expressible, and
   keeps the host-process observation contract, but the profile format is a
   deprecated private API; the boundary would rest on an unsupported format the
   canary only partially tests. Rejected as a trust boundary.
-- **Status quo (Linux-only confinement)** — zero risk, but tenant-scoped
+- **Status quo (Linux-only confinement)** – zero risk, but tenant-scoped
   structured execution stays impossible on macOS and the failure is a product
   gap, not a posture.
-- **Nucleus on macOS** — ADR 0008's runtime already provides a stronger
+- **Nucleus on macOS** – ADR 0008's runtime already provides a stronger
   attested container posture; it remains Linux-only for the same
   namespace/cgroup reasons and is unaffected by this decision.
 

@@ -73,7 +73,7 @@ func TestManualAppleEgressSmoke(t *testing.T) {
 	c.GuestBinDir = toolchain
 	c.GuestHelper = filepath.Join(toolchain, "mitos")
 	c.Image = "docker.io/library/alpine:latest"
-	argv, err := confineArgvApple(c, []string{"/usr/bin/tunnelprobe", "127.0.0.1:3128", "api.openai.com"}, base, workspace, workspace, resourcepolicy.Agent{})
+	argv, err := confineArgvApple(c, []string{"/usr/bin/tunnelprobe", "127.0.0.1:3128", "api.openai.com"}, base, workspace, workspace, resourcepolicy.Agent{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

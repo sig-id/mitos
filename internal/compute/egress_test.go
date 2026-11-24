@@ -284,8 +284,8 @@ func TestEgressMediationProbe(t *testing.T) {
 	os.Exit(0)
 }
 
-// A mediated sandbox must keep host listeners unreachable — including the
-// loopback operator API — while the allowlisted model transport still works.
+// A mediated sandbox must keep host listeners unreachable – including the
+// loopback operator API – while the allowlisted model transport still works.
 func TestConfinedMediatedEgressIsolatesHostAndMediatesModel(t *testing.T) {
 	if _, err := exec.LookPath(ConfinementBwrap); err != nil {
 		t.Skip("bwrap required for mediated egress tests")

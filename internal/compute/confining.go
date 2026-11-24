@@ -33,10 +33,17 @@ type Confinement struct {
 	HelperExecutable string `json:"-"`
 	// Image is the OCI image reference whose filesystem the apple-container
 	// workload boots from. It must ship the workload toolchain under
-	// GuestBinDir, a Linux mitos build at GuestHelper, and /bin/sh.
+	// GuestBinDir, a Linux mitos build at GuestHelper, and /bin/sh – unless
+	// ToolsDir provides the toolchain from the host instead.
 	Image string `json:"image,omitempty"`
+	// ToolsDir is a host directory of Linux guest binaries mounted read-only
+	// into every apple-container VM at the same path, mirroring the bwrap
+	// model of one shared host toolchain. When set, GuestBinDir defaults to
+	// it, so workloads resolve there without baking tools into the image.
+	ToolsDir string `json:"tools_dir,omitempty"`
 	// GuestBinDir is the in-image directory confinement rewrites the
-	// workload's argv[0] into (default /usr/local/bin). apple-container only.
+	// workload's argv[0] into (default /usr/local/bin, or ToolsDir when
+	// set). apple-container only.
 	GuestBinDir string `json:"guest_bin_dir,omitempty"`
 	// GuestHelper is the in-image mitos binary that runs the in-guest egress
 	// loop for mediated launches (default /usr/local/bin/mitos).
@@ -118,14 +125,16 @@ func (c Confinement) capabilities() Capabilities {
 
 // confineArgv wraps argv in the sandbox selected by the confinement tool.
 // Mounts stay minimal and explicit on every platform; workdir is the resolved
-// guest working directory and resources the admitted posture ceilings, which
-// VM-backed tools can enforce. Host control sockets under /run are
-// deliberately not mounted on Linux: a read-only mount still lets a confined
-// process issue requests to docker or the user's systemd manager over those
-// sockets, which would defeat the confinement.
-func confineArgv(c Confinement, argv []string, base, workspace, workdir string, resources resourcepolicy.Agent) ([]string, error) {
+// guest working directory, resources the admitted posture ceilings, which
+// VM-backed tools can enforce, and env the workload's environment, which a
+// VM guest does not inherit from the host process and must be passed
+// explicitly. Host control sockets under /run are deliberately not mounted
+// on Linux: a read-only mount still lets a confined process issue requests
+// to docker or the user's systemd manager over those sockets, which would
+// defeat the confinement.
+func confineArgv(c Confinement, argv []string, base, workspace, workdir string, resources resourcepolicy.Agent, env []string) ([]string, error) {
 	if c.Tool == ConfinementAppleContainer {
-		return confineArgvApple(c, argv, base, workspace, workdir, resources)
+		return confineArgvApple(c, argv, base, workspace, workdir, resources, env)
 	}
 	return confineArgvBwrap(c, argv, base, workspace)
 }
