@@ -68,6 +68,14 @@ type OrchestratorExecution struct {
 type SizeBudget struct {
 	Minutes  int `json:"minutes"`
 	MaxTurns int `json:"max_turns"`
+	// ProgressDeadlineMinutes is how long an attempt may go without progress
+	// before attempt_stalled is raised; Minutes is the soft budget that
+	// raises attempt_overrun (#128). MaxExtensions bounds granted extensions
+	// and GraceSeconds bounds the wrap-up window. Zero values take sized
+	// defaults (3/5/8 minutes, 3 extensions, 60s).
+	ProgressDeadlineMinutes int `json:"progress_deadline_minutes,omitempty"`
+	MaxExtensions           int `json:"max_extensions,omitempty"`
+	GraceSeconds            int `json:"grace_seconds,omitempty"`
 }
 
 // AgentExecutionPolicy separates the harness decision (driven by role and
@@ -218,6 +226,9 @@ func (p *AgentExecutionPolicy) validate() error {
 		b, ok := p.SizeBudgets[size]
 		if !ok || b.Minutes < 1 || b.Minutes > 120 || b.MaxTurns < 1 || b.MaxTurns > 1000 {
 			return graphError("size %s needs a budget of 1–120 minutes and 1–1000 turns", size)
+		}
+		if eff := effectiveSizeBudget(b); eff.ProgressDeadlineMinutes < 1 || eff.ProgressDeadlineMinutes > b.Minutes || eff.MaxExtensions > 8 || eff.GraceSeconds < 1 || eff.GraceSeconds > 600 || b.MaxExtensions < 0 || b.GraceSeconds < 0 || b.ProgressDeadlineMinutes < 0 {
+			return graphError("size %s needs a progress deadline within its minutes, at most 8 extensions and 1–600s grace", size)
 		}
 		if b.Minutes < prev.Minutes || b.MaxTurns < prev.MaxTurns {
 			return graphError("size budgets must not shrink as size grows")

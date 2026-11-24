@@ -222,7 +222,7 @@ Services and Task dependencies compose Runs above it. The phase contract is:
 |---|---|
 | Prepare | Copy source, preserve baseline and verifier, freeze execution plan; optionally evaluate the initial recovery predicate and checkpoint. |
 | Select segment | If configured, evaluate `before_segment`; choose `continue` or `escalate`. |
-| Execute | Record segment, invoke installed argv through the provider under the original deadline. |
+| Execute | Record segment, invoke installed argv through the provider under the original deadline. Native agent attempts carry a progress-deadline budget (#128): the soft budget and the progress deadline raise conditions (`attempt_overrun`, `attempt_stalled`) that a kernel judgment resolves — extend, wrap_up with a bounded grace, or stop — deterministically defaulting when the decision provider is unavailable; the graph elapsed limit is the hard ceiling. |
 | Settle | Stop execution, save output, harvest changes, check ownership and oracle integrity. |
 | Verify and checkpoint | Independently evaluate eligible results, pin the exact result, record checkpoint; a passing result completes the Run. |
 | Select recovery | For an eligible failure only, enforce deterministic restart/stall/deadline policy and choose a passing checkpoint; optionally evaluate `before_recovery` with `rewind` or `escalate`. |

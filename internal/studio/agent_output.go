@@ -19,6 +19,12 @@ type agentOutputPreview struct {
 	activity  *agentOutputPreview
 }
 
+func (p *agentOutputPreview) bytes() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.text)
+}
+
 func (p *agentOutputPreview) Write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -44,8 +50,23 @@ func (p *agentOutputPreview) Write(b []byte) (int, error) {
 // live preview. Its lock is shared by every producer of one attempt: the MCP
 // server's request handlers and the CLI's JSON event stream.
 type activitySink struct {
-	mu      sync.Mutex
-	writers []io.Writer
+	mu          sync.Mutex
+	writers     []io.Writer
+	written     int
+	toolActions int
+}
+
+func (s *activitySink) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.written
+}
+
+// actions returns the completed tool and command actions seen so far.
+func (s *activitySink) actions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolActions
 }
 
 func newActivitySink(writers ...io.Writer) *activitySink {
@@ -55,6 +76,8 @@ func newActivitySink(writers ...io.Writer) *activitySink {
 func (s *activitySink) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.toolActions += countCompletedActions(p)
+	s.written += len(p)
 	var err error
 	for _, w := range s.writers {
 		if _, werr := w.Write(p); werr != nil && err == nil {

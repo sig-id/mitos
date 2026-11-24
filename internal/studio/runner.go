@@ -633,6 +633,15 @@ func (e *Engine) dispatch() {
 				if taskDeadline := current.Brief.Scheduling.Deadline; taskDeadline != nil && taskDeadline.Before(deadline) {
 					deadline = *taskDeadline
 				}
+				if current.GraphAttempt != nil && current.GraphAttempt.Executor.Application.Agent != nil {
+					// A native agent attempt has no per-attempt hard timebox
+					// (#128): its soft budget raises a condition and a kernel
+					// judgment decides. The graph's elapsed limit is the hard
+					// ceiling, and it never refills.
+					if g := e.Store.graphForAttempt(current.GraphAttempt.GraphID); g != nil && g.Limits.Deadline.Before(deadline) {
+						deadline = g.Limits.Deadline
+					}
+				}
 				ctx, cancel := context.WithDeadline(e.ctx, deadline)
 				e.cancel[r.ID] = cancel
 				e.mu.Unlock()
@@ -737,6 +746,9 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 			return
 		}
 		message = "The time limit was reached. Review the output and try again with a longer limit."
+		if current.AttemptBudget != nil && current.AttemptBudget.WrapUpAt != nil {
+			message = "The budget judgment asked the attempt to wrap up and its grace period ended without a submission. Evidence is preserved."
+		}
 	}
 	// Budget exhaustion is recorded structurally so calibration never scrapes
 	// adapter-specific summary text.

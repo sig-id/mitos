@@ -1044,6 +1044,11 @@ func (e *Engine) watchLoop() {
 		case <-e.ctx.Done():
 			return
 		case now := <-tick.C:
+			// Budget evaluation shares the watch clock (#128): conditions,
+			// judgments and wrap-up grace advance with deliveries.
+			if err := e.evaluateAttemptBudgets(now.UTC()); err != nil && errors.Is(err, errJournalClosed) {
+				return
+			}
 			if err := e.evaluateWatches(e.ctx, now.UTC(), false); err != nil && errors.Is(err, errJournalClosed) {
 				return
 			}

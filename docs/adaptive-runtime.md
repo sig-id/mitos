@@ -199,8 +199,20 @@ preset bundled:
    larger context window, never lower it. An effort the harness cannot honour makes
    the policy invalid at validation, not at launch.
 
-Size budgets set `brief.timeout_minutes` and cap the definition's `max_turns`; the
-definition's own limits and the graph's allowances still bound them.
+Size budgets set the attempt's **soft budget** (`brief.timeout_minutes`) and cap
+the definition's `max_turns`; the definition's own limits and the graph's
+allowances still bound them. Since #128 the soft budget is not a hard kill: each
+size also carries `progress_deadline_minutes` (3/5/8 by default),
+`max_extensions` (3) and `grace_seconds` (60). An attempt that stops making
+progress raises `attempt_stalled`; one that passes its soft budget — extended by
+any granted extensions — raises `attempt_overrun`. Both reach the task's
+supervising watch at `wake` (#126), and a kernel judgment through the Decisions
+API decides `extend` (half the soft budget, bounded by `max_extensions`),
+`wrap_up` (a steering notice, then a hard stop after `grace_seconds`; a result
+submitted during grace is collected) or `stop`, with a deterministic default —
+extend while progressing with allowance left, wrap_up otherwise — whenever the
+provider is unconfigured, fails or is unconvincing. The graph's elapsed limit is
+the only hard per-attempt ceiling, and it never refills.
 
 The `execution` object is accepted in personal/project runtime preferences, the
 project instructions block, automatic goals and scheduled goals. A project policy
@@ -223,7 +235,8 @@ policy unless explicitly overridden.
 
 **Escalation on retry.** A `retry` may set `escalate`:
 
-- `size` when the attempt ran out of its time or turn budget: one size up;
+- `size` when the attempt ran out of its turn budget or its progress-deadline
+  judgments ended in wrap-up or stop: one size up;
 - `intelligence` when its work fell short on quality: one tier up within the same
   harness.
 

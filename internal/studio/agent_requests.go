@@ -11,20 +11,23 @@ import (
 )
 
 type AgentSession struct {
-	AuthorityEpoch string          `json:"authority_epoch,omitempty"`
-	ProjectID      string          `json:"project_id,omitempty"`
-	DeskSessionID  string          `json:"desk_session_id,omitempty"`
-	RunID          string          `json:"run_id,omitempty"`
-	EndedThreads   []string        `json:"ended_threads,omitempty"`
-	ID             string          `json:"session_id"`
-	Adapter        string          `json:"adapter"`
-	Title          string          `json:"title"`
-	Workspace      string          `json:"workspace"`
-	Operator       string          `json:"operator"`
-	Tenant         decision.Tenant `json:"tenant"`
-	TokenHash      string          `json:"token_hash,omitempty"`
-	LeaseUntil     time.Time       `json:"lease_until"`
-	Closed         bool            `json:"closed"`
+	AuthorityEpoch string   `json:"authority_epoch,omitempty"`
+	ProjectID      string   `json:"project_id,omitempty"`
+	DeskSessionID  string   `json:"desk_session_id,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	EndedThreads   []string `json:"ended_threads,omitempty"`
+	// Progress is the attempt's latest progress vector (#128), reported with
+	// the heartbeat and journalled when it changes.
+	Progress   *ProgressVector `json:"progress,omitempty"`
+	ID         string          `json:"session_id"`
+	Adapter    string          `json:"adapter"`
+	Title      string          `json:"title"`
+	Workspace  string          `json:"workspace"`
+	Operator   string          `json:"operator"`
+	Tenant     decision.Tenant `json:"tenant"`
+	TokenHash  string          `json:"token_hash,omitempty"`
+	LeaseUntil time.Time       `json:"lease_until"`
+	Closed     bool            `json:"closed"`
 }
 type AgentRequest struct {
 	SessionID   string          `json:"session_id"`
@@ -92,6 +95,12 @@ func (s *Store) agentSourceActive(source *decision.Source) bool {
 	return ok && exists && a.AuthorityEpoch == s.authorityEpoch && !a.Closed && time.Now().Before(a.LeaseUntil) && !r.Invalidated
 }
 func (s *Store) AgentHeartbeat(id, token string) error {
+	return s.AgentHeartbeatProgress(id, token, nil)
+}
+
+// AgentHeartbeatProgress renews the session lease and records the attempt's
+// progress vector with it (#128). A nil vector leaves the previous one.
+func (s *Store) AgentHeartbeatProgress(id, token string, progress *ProgressVector) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	a, err := s.agentSession(id, token)
@@ -99,7 +108,22 @@ func (s *Store) AgentHeartbeat(id, token string) error {
 		return err
 	}
 	a.LeaseUntil = time.Now().UTC().Add(30 * time.Second)
+	if progress != nil {
+		a.Progress = progress
+	}
 	return s.commit("", "effect", "agent_session_heartbeat", change{AgentSession: &a})
+}
+
+// agentSessionForRun returns the live agent session bound to a run, if any.
+// Caller holds the store lock.
+func (s *Store) agentSessionForRun(run string) *AgentSession {
+	for _, a := range s.agentSessions {
+		if a.RunID == run && !a.Closed {
+			saved := a
+			return &saved
+		}
+	}
+	return nil
 }
 func (s *Store) CloseAgentSession(id, token string) error {
 	s.mu.Lock()

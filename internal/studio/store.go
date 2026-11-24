@@ -90,7 +90,10 @@ type Store struct {
 	// already delivered their agent_awaiting_answer wake; routing events
 	// compare against it so a request wakes once whatever the policy did in
 	// between. Guarded by mu.
-	agentWakes             map[string]bool
+	agentWakes map[string]bool
+	// budgetDispatches marks in-flight budget judgment decision calls; fold
+	// state only, so a restart settles interrupted judgments by default.
+	budgetDispatches       map[string]bool
 	devices                map[string]Device
 	deviceTokens           map[string]string
 	deviceCommands         map[string]DeviceCommandRecord
@@ -495,6 +498,9 @@ func (s *Store) apply(e Event) error {
 	if c.Result != nil {
 		r.Result = c.Result
 	}
+	if c.AttemptBudget != nil && c.AttemptBudget.Budget != nil {
+		r.AttemptBudget = c.AttemptBudget.Budget
+	}
 	if c.Judgment != nil {
 		if c.Judgment.State == "pending" {
 			r.HeldJudgment = c.Judgment
@@ -786,6 +792,10 @@ func (s *Store) Get(id string) (Run, error) {
 	}
 	return cloneRun(r), nil
 }
+
+// graphForAttempt returns the graph an attempt belongs to, without locking.
+func (s *Store) graphForAttempt(id string) *WorkGraph { return s.graphs[id] }
+
 func (s *Store) List() []Run {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

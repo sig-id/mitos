@@ -77,59 +77,62 @@ func (b *Brief) Validate() error {
 }
 
 type Run struct {
-	WorkflowReview      *WorkflowReview        `json:"workflow_review,omitempty"`
-	AuthorityGeneration uint64                 `json:"authority_generation,omitempty"`
-	RestartRetry        bool                   `json:"restart_retry,omitempty"`
-	AdmissionLimits     *TenantLimits          `json:"tenant_limits,omitempty"`
-	PrincipalID         string                 `json:"principal_id,omitempty"`
-	HandoffProtocol     string                 `json:"handoff_protocol,omitempty"` // Frozen at attempt creation; absent in pre-contract history.
-	Result              *ResultReceipt         `json:"result,omitempty"`
-	HeldJudgment        *KernelJudgment        `json:"held_judgment,omitempty"`    // Pending judgment-gated rule holding this attempt's submission.
-	KernelJudgments     []KernelJudgment       `json:"kernel_judgments,omitempty"` // Settled judgment receipts, oldest first.
-	ReviewRuns          []string               `json:"review_runs,omitempty"`
-	HandoffBytes        int64                  `json:"handoff_bytes,omitempty"`
-	BlockedReason       string                 `json:"blocked_reason,omitempty"`
-	NativeThreadID      string                 `json:"native_thread_id,omitempty"`
-	GraphAttempt        *GraphAttempt          `json:"graph_attempt,omitempty"`
-	ModelDecisions      []ModelDecision        `json:"model_decisions,omitempty"`
-	RecordRefs          []RecordRef            `json:"record_refs,omitempty"`
-	VerificationMethod  string                 `json:"verification_method,omitempty"`
-	ExecutionKind       string                 `json:"execution_kind,omitempty"`
-	SessionID           string                 `json:"session_id,omitempty"`
-	ProcessID           string                 `json:"process_id,omitempty"`
-	ProjectID           string                 `json:"project_id,omitempty"`
-	Condition           *ServiceConditionState `json:"condition,omitempty"`
-	Health              *ServiceHealthState    `json:"health,omitempty"`
-	Claim               *fleet.Claim           `json:"claim,omitempty"`
-	ClaimConflicts      []fleet.Conflict       `json:"claim_conflicts,omitempty"`
-	UnattendedUntil     *time.Time             `json:"unattended_until,omitempty"`
-	PendingDecision     *HumanDecision         `json:"pending_decision,omitempty"`
-	Tenant              decision.Tenant        `json:"tenant"`
-	DecisionRewind      *autonomy.Rewind       `json:"decision_rewind,omitempty"`
-	Execution           *ExecutionPlan         `json:"execution,omitempty"`
-	Segments            []autonomy.Segment     `json:"segments,omitempty"`
-	Checkpoints         []autonomy.Checkpoint  `json:"checkpoints,omitempty"`
-	Rewinds             []autonomy.Rewind      `json:"rewinds,omitempty"`
-	PendingRewind       *autonomy.Rewind       `json:"pending_rewind,omitempty"`
-	ReadyRewind         *autonomy.Rewind       `json:"ready_rewind,omitempty"`
-	Workspace           *WorkspaceRecord       `json:"workspace_record,omitempty"`
-	Acceptance          *acceptance.Verdict    `json:"acceptance,omitempty"`
-	ID                  string                 `json:"id"`
-	TaskID              string                 `json:"task_id"`
-	ParentID            string                 `json:"parent_id,omitempty"`
-	Brief               Brief                  `json:"brief"`
-	AppName             string                 `json:"app_name"`
-	Status              string                 `json:"status"`
-	Stage               string                 `json:"stage"`
-	Summary             string                 `json:"summary"`
-	CreatedAt           time.Time              `json:"created_at"`
-	UpdatedAt           time.Time              `json:"updated_at"`
-	FinishedAt          time.Time              `json:"finished_at,omitempty"`
-	Verified            bool                   `json:"verified"`
-	Sample              bool                   `json:"sample"`
-	Artifacts           []Artifact             `json:"artifacts"`
-	Decision            *HumanDecision         `json:"decision,omitempty"`
-	Events              []Event                `json:"events"`
+	WorkflowReview      *WorkflowReview `json:"workflow_review,omitempty"`
+	AuthorityGeneration uint64          `json:"authority_generation,omitempty"`
+	RestartRetry        bool            `json:"restart_retry,omitempty"`
+	AdmissionLimits     *TenantLimits   `json:"tenant_limits,omitempty"`
+	PrincipalID         string          `json:"principal_id,omitempty"`
+	HandoffProtocol     string          `json:"handoff_protocol,omitempty"` // Frozen at attempt creation; absent in pre-contract history.
+	// AttemptBudget is the kernel's progress-deadline bookkeeping (#128);
+	// nil for attempts that do not run under one.
+	AttemptBudget      *AttemptBudget         `json:"attempt_budget,omitempty"`
+	Result             *ResultReceipt         `json:"result,omitempty"`
+	HeldJudgment       *KernelJudgment        `json:"held_judgment,omitempty"`    // Pending judgment-gated rule holding this attempt's submission.
+	KernelJudgments    []KernelJudgment       `json:"kernel_judgments,omitempty"` // Settled judgment receipts, oldest first.
+	ReviewRuns         []string               `json:"review_runs,omitempty"`
+	HandoffBytes       int64                  `json:"handoff_bytes,omitempty"`
+	BlockedReason      string                 `json:"blocked_reason,omitempty"`
+	NativeThreadID     string                 `json:"native_thread_id,omitempty"`
+	GraphAttempt       *GraphAttempt          `json:"graph_attempt,omitempty"`
+	ModelDecisions     []ModelDecision        `json:"model_decisions,omitempty"`
+	RecordRefs         []RecordRef            `json:"record_refs,omitempty"`
+	VerificationMethod string                 `json:"verification_method,omitempty"`
+	ExecutionKind      string                 `json:"execution_kind,omitempty"`
+	SessionID          string                 `json:"session_id,omitempty"`
+	ProcessID          string                 `json:"process_id,omitempty"`
+	ProjectID          string                 `json:"project_id,omitempty"`
+	Condition          *ServiceConditionState `json:"condition,omitempty"`
+	Health             *ServiceHealthState    `json:"health,omitempty"`
+	Claim              *fleet.Claim           `json:"claim,omitempty"`
+	ClaimConflicts     []fleet.Conflict       `json:"claim_conflicts,omitempty"`
+	UnattendedUntil    *time.Time             `json:"unattended_until,omitempty"`
+	PendingDecision    *HumanDecision         `json:"pending_decision,omitempty"`
+	Tenant             decision.Tenant        `json:"tenant"`
+	DecisionRewind     *autonomy.Rewind       `json:"decision_rewind,omitempty"`
+	Execution          *ExecutionPlan         `json:"execution,omitempty"`
+	Segments           []autonomy.Segment     `json:"segments,omitempty"`
+	Checkpoints        []autonomy.Checkpoint  `json:"checkpoints,omitempty"`
+	Rewinds            []autonomy.Rewind      `json:"rewinds,omitempty"`
+	PendingRewind      *autonomy.Rewind       `json:"pending_rewind,omitempty"`
+	ReadyRewind        *autonomy.Rewind       `json:"ready_rewind,omitempty"`
+	Workspace          *WorkspaceRecord       `json:"workspace_record,omitempty"`
+	Acceptance         *acceptance.Verdict    `json:"acceptance,omitempty"`
+	ID                 string                 `json:"id"`
+	TaskID             string                 `json:"task_id"`
+	ParentID           string                 `json:"parent_id,omitempty"`
+	Brief              Brief                  `json:"brief"`
+	AppName            string                 `json:"app_name"`
+	Status             string                 `json:"status"`
+	Stage              string                 `json:"stage"`
+	Summary            string                 `json:"summary"`
+	CreatedAt          time.Time              `json:"created_at"`
+	UpdatedAt          time.Time              `json:"updated_at"`
+	FinishedAt         time.Time              `json:"finished_at,omitempty"`
+	Verified           bool                   `json:"verified"`
+	Sample             bool                   `json:"sample"`
+	Artifacts          []Artifact             `json:"artifacts"`
+	Decision           *HumanDecision         `json:"decision,omitempty"`
+	Events             []Event                `json:"events"`
 }
 
 // RecordRef identifies a canonical shared journal event without copying its
@@ -257,6 +260,7 @@ type change struct {
 	Workspace              *WorkspaceRecord           `json:"workspace_record,omitempty"`
 	Acceptance             *acceptance.Verdict        `json:"acceptance,omitempty"`
 	Evidence               json.RawMessage            `json:"evidence,omitempty"`
+	AttemptBudget          *attemptBudgetChange       `json:"attempt_budget,omitempty"`
 	Run                    *Run                       `json:"run,omitempty"`
 	Status                 string                     `json:"status,omitempty"`
 	Stage                  string                     `json:"stage,omitempty"`
