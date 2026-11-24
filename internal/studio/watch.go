@@ -22,7 +22,10 @@ type Watch struct {
 	State string     `json:"state"` // active, expired, cancelled, settled, revoked
 	// Grant is the scope the owner held at creation; Spec.Condition.Scope is
 	// within it. Revocation compares the owner's current grant against it.
-	Grant         watch.Scope             `json:"grant"`
+	Grant watch.Scope `json:"grant"`
+	// Template names the kernel template this watch was created from, when
+	// it was (#126); template creations are deduplicated per graph.
+	Template      string                  `json:"template,omitempty"`
 	CreatedBy     *watchCreator           `json:"created_by,omitempty"`
 	CreatedAt     time.Time               `json:"created_at"`
 	CreatedSeq    int64                   `json:"created_seq"`
@@ -117,19 +120,26 @@ type routedDelivery struct {
 }
 
 type watchChange struct {
-	Create     *Watch           `json:"create,omitempty"`
-	Renew      *watchRenewal    `json:"renew,omitempty"`
-	Deliveries []routedDelivery `json:"deliveries,omitempty"`
-	End        *watchEnd        `json:"end,omitempty"`
-	Resolve    *watchResolve    `json:"resolve,omitempty"`
-	Outcome    *watchOutcome    `json:"outcome,omitempty"`
-	Mark       *watchMark       `json:"mark,omitempty"`
-	Triage     *TriageRequest   `json:"triage,omitempty"`
-	Triaged    *triageOutcome   `json:"triaged,omitempty"`
+	Creates []*Watch `json:"creates,omitempty"`
+	// Create is the singular form histories written before batch creation
+	// (#126) still carry; it applies like a one-element Creates.
+	Create      *Watch                   `json:"create,omitempty"`
+	Renew       *watchRenewal            `json:"renew,omitempty"`
+	Memberships []supervisionWatchChange `json:"memberships,omitempty"`
+	Deliveries  []routedDelivery         `json:"deliveries,omitempty"`
+	End         *watchEnd                `json:"end,omitempty"`
+	Resolve     *watchResolve            `json:"resolve,omitempty"`
+	Outcome     *watchOutcome            `json:"outcome,omitempty"`
+	Mark        *watchMark               `json:"mark,omitempty"`
+	Triage      *TriageRequest           `json:"triage,omitempty"`
+	Triaged     *triageOutcome           `json:"triaged,omitempty"`
 }
 type watchRenewal struct {
 	ID        string    `json:"id"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// Kernel marks a supervision lease renewal by the runtime, which does
+	// not consume the owner's renewal allowance (#126).
+	Kernel bool `json:"kernel,omitempty"`
 }
 type watchEnd struct {
 	ID    string `json:"id"`
@@ -156,7 +166,11 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.triageUsed = map[string]int{}
 		s.watchMarks = map[string]*WatchMark{}
 	}
-	if w := c.Create; w != nil {
+	created := append(slices.Clone(c.Creates), c.Create)
+	for _, w := range created {
+		if w == nil {
+			continue
+		}
 		if s.watches[w.ID] != nil {
 			return errors.New("duplicate watch")
 		}
@@ -171,7 +185,31 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 			return errors.New("renewal of inactive watch")
 		}
 		w.Spec.Lease.ExpiresAt = r.ExpiresAt
-		w.Renewals++
+		if !r.Kernel {
+			w.Renewals++
+		}
+	}
+	for _, m := range c.Memberships {
+		w := s.watches[m.Watch]
+		if w == nil {
+			return errors.New("membership change for unknown watch")
+		}
+		for _, tid := range m.Remove {
+			// A settled or revoked watch keeps its record; removing a member
+			// from it is still meaningful bookkeeping.
+			w.Spec.Condition.Members = slices.DeleteFunc(w.Spec.Condition.Members, func(id string) bool { return id == tid })
+		}
+		if len(m.Add) > 0 {
+			if w.State != "active" {
+				return errors.New("membership change for inactive watch")
+			}
+			for _, tid := range m.Add {
+				if !slices.Contains(w.Spec.Condition.Members, tid) {
+					w.Spec.Condition.Members = append(w.Spec.Condition.Members, tid)
+				}
+			}
+			slices.Sort(w.Spec.Condition.Members)
+		}
 	}
 	if t := c.Triage; t != nil {
 		if err := s.applyTriageRequest(e, t); err != nil {
@@ -345,6 +383,10 @@ func watchRule(e Event, r *Run, c change) (watch.Level, string) {
 	switch e.Kind {
 	case "blocked_on_human":
 		return watch.Wake, "blocked_on_human"
+	case "attempt_overrun":
+		return watch.Wake, "attempt_overrun"
+	case "attempt_stalled":
+		return watch.Wake, "attempt_stalled"
 	case "observation_failed":
 		return watch.Escalate, "observation_failed"
 	case "quiescent":
@@ -576,6 +618,10 @@ func (s *Store) CreateWatch(spec watch.Spec) (Watch, error) {
 }
 
 func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, error) {
+	templateName := ""
+	if by != nil {
+		templateName = by.Template
+	}
 	now := time.Now().UTC()
 	grant, err := s.ownerGrant(spec.Owner)
 	if err != nil {
@@ -592,9 +638,20 @@ func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, err
 			*f.field = f.value
 		}
 	}
+	// Member tasks are kernel-maintained (#126); an author never sets them,
+	// not even an empty list.
+	if spec.Condition.Members != nil {
+		return Watch{}, errors.New("condition.members is maintained by the kernel")
+	}
 	// Validate after clamping: an owner watch may leave its scope to the grant.
 	if err := spec.Validate(now); err != nil {
 		return Watch{}, err
+	}
+	// A responsibility watch with no kinds filter and a wake-or-higher
+	// default would wake on every event; terminal states are delivered by
+	// rule regardless. Clamp it to notify (#126).
+	if spec.Owner.Kind == watch.OwnerResponsibility && len(spec.Condition.Kinds) == 0 && spec.DefaultLevel.Rank() >= watch.Wake.Rank() {
+		spec.DefaultLevel = watch.Notify
 	}
 	if !scope.Within(grant) {
 		return Watch{}, errors.New("condition.scope must stay within the owner's graph")
@@ -609,8 +666,8 @@ func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, err
 		return Watch{}, errWatchLimit
 	}
 	spec.Lease.ExpiresAt = spec.Lease.ExpiresAt.UTC()
-	w := Watch{ID: newID("watch"), Spec: spec, State: "active", CreatedAt: now, Grant: grant, CreatedBy: by}
-	if err := s.commit("", "effect", "watch_created", change{Watch: &watchChange{Create: &w}}); err != nil {
+	w := Watch{ID: newID("watch"), Spec: spec, State: "active", CreatedAt: now, Grant: grant, Template: templateName, CreatedBy: by}
+	if err := s.commit("", "effect", "watch_created", change{Watch: &watchChange{Creates: []*Watch{&w}}}); err != nil {
 		return Watch{}, err
 	}
 	return s.watchView(s.watches[w.ID]).Watch, nil
@@ -686,6 +743,11 @@ func (s *Store) evaluateWatches(now time.Time, bind triageBinder) ([]triageDispa
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.settleStaleTriage(now); err != nil {
+		return nil, err
+	}
+	// The kernel maintains the supervision record first (#126): lease
+	// renewal for live members, and watches whose last member settled.
+	if err := s.reconcileSupervision(now); err != nil {
 		return nil, err
 	}
 	dispatches := []triageDispatch{}

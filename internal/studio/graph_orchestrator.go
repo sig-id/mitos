@@ -433,7 +433,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 				if g.Policy.Automatic {
 					limit = orchestratorPlanLimit
 				}
-				planContext := map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "inbox": graphInboxAddress(&g, s.seq), "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json using the shared OrchestratorPlan: operations, accept, complete, result and explanation. Use the same scheduling dependencies and joins as the graph API. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."}
+				planContext := map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "expansion": key, "supervision": s.supervisionProjection(&g), "inbox": graphInboxAddress(&g, s.seq), "facts": facts, "triggers": g.Triggers, "policy": g.Policy, "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "instruction": "Propose the next work from the goal and available evidence. Write graph-proposal.json using the shared OrchestratorPlan: operations, accept, complete, result and explanation. Use the same scheduling dependencies and joins as the graph API. Ordinary worker output remains native. Do not close this expansion or classify triggers; the kernel does that. Scope acceptance requires operator review."}
 				raw, _ := s.withWatchInbox(planContext, &g, limit)
 				if g.Policy.Automatic {
 					// The automatic planning state is an append-only journal: entries are
@@ -446,7 +446,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 					g.PlanPrefixCharacters = prefixBytes
 					g.PlanPrefixSHA256 = prefixSHA
 					library := e.AutomaticAgents()["agents"]
-					planContext = map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "graph_state": json.RawMessage(state), "agent_library": library, "execution_policy": graphExecution(&g), "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError, "plan_prefix": map[string]any{"bytes": prefixBytes, "sha256": prefixSHA}}
+					planContext = map[string]any{"graph_id": g.ID, "root_task": g.RootTask, "graph_state": json.RawMessage(state), "agent_library": library, "execution_policy": graphExecution(&g), "supervision": s.supervisionProjection(&g), "remaining_tasks": g.Limits.Tasks - len(g.Members) - 1, "remaining_attempts": g.Limits.Attempts - g.Attempts, "remaining_plans": g.Limits.OrchestratorCalls - g.OrchestratorCalls, "inbox": graphInboxAddress(&g, s.seq), "previous_error": x.LastError, "plan_prefix": map[string]any{"bytes": prefixBytes, "sha256": prefixSHA}}
 					raw, _ = s.withWatchInbox(planContext, &g, limit)
 				}
 				if len(raw) > limit {

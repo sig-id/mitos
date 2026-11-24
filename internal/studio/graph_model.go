@@ -97,6 +97,9 @@ type GraphMember struct {
 	Escalations []GraphEscalation `json:"escalations,omitempty"`
 	// Requester is who added the task: operator or orchestrator.
 	Requester string `json:"requester,omitempty"`
+	// SupervisionWatch is the task's supervising watch in the kernel's
+	// supervision record (#126): exactly one from admission until settle.
+	SupervisionWatch string `json:"supervision_watch,omitempty"`
 	// ProposedBy links a task admitted for a worker proposal to its record.
 	ProposedBy string `json:"proposed_by,omitempty"`
 }
@@ -216,7 +219,10 @@ type GraphReceipt struct {
 	At         time.Time         `json:"at"`
 }
 type WorkGraph struct {
-	WorkState              string                          `json:"work_state,omitempty"`
+	WorkState string `json:"work_state,omitempty"`
+	// SupervisionWatch is the graph's default supervising watch (#126),
+	// created from the child-terminal-states template on first use.
+	SupervisionWatch       string                          `json:"supervision_watch,omitempty"`
 	ServiceRunID           string                          `json:"service_run_id,omitempty"`
 	Setup                  *FrozenSetup                    `json:"setup,omitempty"`
 	Result                 *GraphResult                    `json:"result,omitempty"`
@@ -285,6 +291,10 @@ type GraphOperation struct {
 	// Escalate raises one trait for a retry: size (budget) or intelligence
 	// (model tier within the same harness).
 	Escalate string `json:"escalate,omitempty"`
+	// Watch assigns the task to a supervising watch (#126): an existing one
+	// by id, or a new one created from a template or spec. Omitted joins the
+	// graph's default supervising watch.
+	Watch *GraphWatchSelection `json:"watch,omitempty"`
 }
 type GraphProposal struct {
 	Profile        string               `json:"profile"`
@@ -408,11 +418,11 @@ func graphError(format string, args ...any) error { return fmt.Errorf("work grap
 // Reject irrelevant fields rather than silently ignoring a misspelled operation
 // shape (for example dependencies attached to a cancellation).
 var graphOperationFields = map[string][]string{
-	"add": {"spec"}, "supersede": {"task", "spec", "rationale"}, "amend": {"task", "spec"},
+	"add": {"spec", "watch"}, "supersede": {"task", "spec", "rationale", "watch"}, "amend": {"task", "spec"},
 	"dependencies": {"task", "dependencies", "join"}, "priority": {"task", "priority"},
 	"open_expansion": {"task", "expansion"}, "close_expansion": {"expansion", "rationale"},
 	"classify_trigger": {"trigger", "rationale"}, "seal": {"task", "cursor"}, "reopen": {"task"},
-	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task", "escalate"},
+	"cancel": {"task", "rationale"}, "replace_orchestrator": {"rationale"}, "retry": {"task", "escalate", "watch"},
 	"accept": {"task", "evidence", "rationale"}, "dismiss_decision": {"expansion", "rationale"},
 	"accept_proposal": {"proposal", "dependencies", "rationale"}, "reject_proposal": {"proposal", "rationale"},
 }

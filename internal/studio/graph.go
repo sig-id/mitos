@@ -519,7 +519,7 @@ func (e *Engine) amendGraph(p GraphProposal, preview, operator bool) (WorkGraph,
 		}
 		return graphClone(*g), graphClone(old), nil
 	}
-	next, receipt, err := e.proposeGraph(g, p, digest, operator)
+	next, receipt, supervision, err := e.proposeGraph(g, p, digest, operator)
 	if err != nil {
 		return WorkGraph{}, GraphReceipt{}, err
 	}
@@ -528,13 +528,15 @@ func (e *Engine) amendGraph(p GraphProposal, preview, operator bool) (WorkGraph,
 	}
 	gc := graphChange{Graph: next}
 	s.projectGraph(&gc, g)
-	if err = s.commit("", "effect", "graph_amended", change{Graph: &gc}); err != nil {
+	if err = s.commit("", "effect", "graph_amended", change{Graph: &gc, Watch: supervision}); err != nil {
 		return WorkGraph{}, GraphReceipt{}, err
 	}
 	return graphClone(*s.graphs[g.ID]), receipt, nil
 }
-func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, operator bool) (WorkGraph, GraphReceipt, error) {
-	fail := func(err error) (WorkGraph, GraphReceipt, error) { return WorkGraph{}, GraphReceipt{}, err }
+func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, operator bool) (WorkGraph, GraphReceipt, *watchChange, error) {
+	fail := func(err error) (WorkGraph, GraphReceipt, *watchChange, error) {
+		return WorkGraph{}, GraphReceipt{}, nil, err
+	}
 	if !operator && e.Store.graphPrerequisiteBlocked(prior) {
 		return fail(graphError("an agent is blocked on an external prerequisite; operator continuation is required"))
 	}
@@ -556,6 +558,8 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 	}
 	g := graphClone(*prior)
 	g.UpdatedAt = now
+	supervisionAssigns, supervisionSettles := []string{}, []string{}
+	supervisionRequests := map[string]*GraphWatchSelection{}
 	refs := map[string]string{}
 	for _, op := range p.Operations {
 		if err := validateGraphOperation(op); err != nil {
@@ -623,6 +627,13 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 				requester = "operator"
 			}
 			g.Members[spec.ID] = &GraphMember{Spec: normalized, Executor: executor, Revision: 1, FactRevision: 1, State: "queued", Requester: requester}
+			supervisionAssigns = append(supervisionAssigns, spec.ID)
+			if op.Watch != nil {
+				supervisionRequests[spec.ID] = op.Watch
+			}
+			if op.Kind == "supersede" {
+				supervisionSettles = append(supervisionSettles, id)
+			}
 		case "amend":
 			if err := pending(id); err != nil {
 				return fail(err)
@@ -728,6 +739,9 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			for tid, child := range g.Members {
 				if graphDescendant(&g, tid, id) && child.Accepted == nil {
 					child.CancelRequested = true
+					if child.SupervisionWatch != "" {
+						supervisionSettles = append(supervisionSettles, tid)
+					}
 				}
 			}
 			if id == g.RootTask {
@@ -810,6 +824,10 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 			m.CurrentRunID = ""
 			m.State = "queued"
 			m.FactRevision++
+			supervisionAssigns = append(supervisionAssigns, id)
+			if op.Watch != nil {
+				supervisionRequests[id] = op.Watch
+			}
 		case "accept":
 			if !operator || m == nil || op.Evidence == "" || op.Rationale == "" {
 				return fail(graphError("acceptance requires operator authority and evidence"))
@@ -860,10 +878,17 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 	if err := e.Store.validateGraphPools(&g); err != nil {
 		return fail(err)
 	}
+	// Supervision assignment (#126): members touched by this plan join their
+	// supervising watch, created from a template on first use, in the same
+	// journal record as the member.
+	supervision, err := e.Store.planSupervision(&g, supervisionAssigns, supervisionSettles, supervisionRequests)
+	if err != nil {
+		return fail(err)
+	}
 	g.Revision++
 	receipt := GraphReceipt{Key: p.Key, Digest: digest, Revision: g.Revision, IDs: refs, At: now}
 	g.Receipts[p.Key] = receipt
-	return g, receipt, nil
+	return g, receipt, supervision, nil
 }
 func graphDescendant(g *WorkGraph, id, parent string) bool {
 	for id != "" {
