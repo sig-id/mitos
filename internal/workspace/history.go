@@ -33,8 +33,12 @@ type Harvest struct {
 	ResultCommit   string   `json:"result_commit"`
 	Fingerprint    string   `json:"fingerprint"`
 	Changes        []Change `json:"changes"`
-	Patch          []byte   `json:"-"`
-	Snapshot       Snapshot `json:"-"`
+	// OmittedDerivable records the derivable dependency and cache directories
+	// excluded from this harvest so the omission is visible, never silent
+	// (issue #137).
+	OmittedDerivable []OmittedDirectory `json:"omitted_derivable,omitempty"`
+	Patch            []byte             `json:"-"`
+	Snapshot         Snapshot           `json:"-"`
 }
 
 func Prepare(ctx context.Context, base string, snapshot Snapshot) (*History, error) {
@@ -172,7 +176,7 @@ func (h *History) Harvest(ctx context.Context, before Snapshot) (Harvest, error)
 	if _, err = git(ctx, h.Base, h.Directory, nil, "update-ref", "refs/mitos/result", commit); err != nil {
 		return Harvest{}, err
 	}
-	return Harvest{BaselineCommit: h.BaselineCommit, ResultCommit: commit, Fingerprint: after.Fingerprint, Changes: Changes(before, after), Patch: patch, Snapshot: after}, nil
+	return Harvest{BaselineCommit: h.BaselineCommit, ResultCommit: commit, Fingerprint: after.Fingerprint, Changes: Changes(before, after), OmittedDerivable: after.OmittedDerivable, Patch: patch, Snapshot: after}, nil
 }
 
 func Changes(before, after Snapshot) []Change {

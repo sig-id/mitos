@@ -250,6 +250,10 @@ type WorkGraph struct {
 	PlanPrefixCharacters   int                             `json:"plan_prefix_characters,omitempty"`
 	PlanPrefixSHA256       string                          `json:"plan_prefix_sha256,omitempty"`
 	Proposals              map[string]*GraphProposalRecord `json:"proposals,omitempty"`
+	// ExpiredNotice records when the engine first journalled that this work
+	// item's deadline passed with work still pending (issue #137). Zero means
+	// the expiry has not been announced yet.
+	ExpiredNotice time.Time `json:"expired_notice,omitempty"`
 }
 type CreateGraph struct {
 	serviceRunID string

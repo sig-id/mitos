@@ -542,7 +542,13 @@ func (e *Engine) proposeGraph(prior *WorkGraph, p GraphProposal, digest string, 
 	if p.Profile != GraphProfile || !validGraphKey(p.Key) || len(p.Operations) < 1 || len(p.Operations) > 128 || len(p.Explanation) > 4000 {
 		return fail(graphError("invalid proposal envelope"))
 	}
-	if p.Revision != prior.Revision || p.PolicyRevision != prior.PolicyRevision || p.Generation != prior.OrchestratorGeneration || !p.Deadline.After(now) || p.Deadline.After(prior.Limits.Deadline) || prior.Status != "active" {
+	// Deadline expiry is its own error, not a conflict: an expired work item
+	// fails every amendment until it is resumed, and misattributing that to
+	// concurrent modification sends operators chasing ghosts (issue #137).
+	if !prior.Limits.Deadline.After(now) || !p.Deadline.After(now) {
+		return fail(ErrWorkExpired)
+	}
+	if p.Revision != prior.Revision || p.PolicyRevision != prior.PolicyRevision || p.Generation != prior.OrchestratorGeneration || p.Deadline.After(prior.Limits.Deadline) || prior.Status != "active" {
 		return fail(ErrConflict)
 	}
 	if len(prior.Receipts) >= prior.Limits.Amendments {

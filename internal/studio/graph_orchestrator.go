@@ -202,6 +202,37 @@ func pendingGraphProposals(g *WorkGraph, s *Store) []pendingProposal {
 	return out
 }
 
+// orchestratorAttemptMinutes sizes the orchestrator attempt budget from the
+// materialized evidence the round must actually read (issue #137): the fact
+// journal plus the artifacts graph_read pages in for completed workers.
+// Worker attempts already scale with their declared size; review rounds used
+// to inherit a flat five minutes while their input grew with every completed
+// task, so late rounds systematically hit the attempt time limit. The caller
+// holds the store lock.
+func orchestratorAttemptMinutes(g WorkGraph, s *Store) int {
+	minutes := 5
+	if g.Policy.Automatic && g.OrchestratorCalls > 0 {
+		// Review rounds read prior reports as well as the goal and journal.
+		minutes = 10
+	}
+	// The fact journal is bounded (32 KiB serialized) and so is not a scaling
+	// signal; the artifacts graph_read pages in are the growing input.
+	evidence := 0
+	for _, tid := range graphIDs(&g) {
+		m := g.Members[tid]
+		if m.OrchestratorFor != "" {
+			continue
+		}
+		if r := s.runs[m.CurrentRunID]; r != nil {
+			for _, artifact := range r.Artifacts[:min(8, len(r.Artifacts))] {
+				evidence += int(artifact.Bytes)
+			}
+		}
+	}
+	minutes += evidence / (512 << 10)
+	return min(minutes, 30)
+}
+
 // pendingProposal is one unreviewed worker proposal in the planning payload.
 type pendingProposal struct {
 	ID     string         `json:"id"`
@@ -455,7 +486,7 @@ func (e *Engine) reconcileGraphOrchestrators() error {
 					break
 				}
 				tid := newID("task")
-				spec := GraphSpec{ID: tid, Parent: x.Scope, Kind: "application", Required: false, Criteria: "Produce a valid graph proposal within policy", Acceptance: "application", Context: string(raw), Brief: Brief{Title: "Plan the next work", Intent: "Read the graph context and propose a bounded amendment. Write graph-proposal.json; leave normal analysis in your native output.", AppID: g.Policy.OrchestratorApplication, TimeoutMinutes: 5}}
+				spec := GraphSpec{ID: tid, Parent: x.Scope, Kind: "application", Required: false, Criteria: "Produce a valid graph proposal within policy", Acceptance: "application", Context: string(raw), Brief: Brief{Title: "Plan the next work", Intent: "Read the graph context and propose a bounded amendment. Write graph-proposal.json; leave normal analysis in your native output.", AppID: g.Policy.OrchestratorApplication, TimeoutMinutes: orchestratorAttemptMinutes(g, s)}}
 				if g.Policy.Automatic {
 					spec.Brief.Title = "Plan goal"
 					if g.OrchestratorCalls > 0 {
