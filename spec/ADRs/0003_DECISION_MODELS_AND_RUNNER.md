@@ -68,6 +68,15 @@ confidence semantics, or calibration.
 
 ## Decision
 
+Amendment (2026-11, #128): per-attempt time limits became progress deadlines on
+the Kubernetes model — `progressDeadlineSeconds` maps to the attempt's progress
+deadline (a stall reports through conditions and the supervising watch, it does
+not kill), `activeDeadlineSeconds` maps to the graph elapsed limit (the only hard
+ceiling), and `terminationGracePeriodSeconds` maps to the wrap-up grace after a
+budget judgment, during which a submitted result is collected. Budget judgments
+are kernel judgments on the path above, defaulting deterministically when the
+provider is unavailable; watch triage still only grades urgency.
+
 Name the current runtime `batch-segments/v1`: one installed command step, sequential
 segments, independently checked results, and bounded checkpoint recovery. Keep service
 activation and inter-task dependencies above it. Keep interactive adapters distinct

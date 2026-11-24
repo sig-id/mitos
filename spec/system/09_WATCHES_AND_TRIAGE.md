@@ -70,7 +70,19 @@ unversioned form.
   scope field is required. The scope MUST be within what the creator may read.
   A watch cannot match events outside that scope, including after the creator's
   grant changes. Revocation ends the watch with a must-deliver notice. There are no
-  expressions, regular expressions or free-text matches in v1.
+  expressions, regular expressions or free-text matches in v1. The kernel-maintained
+  `members` list names supervised graph tasks and matches events from every attempt
+  of those tasks; an author cannot set it.
+- **Supervision record.** Every non-orchestrator agent task in an adaptive graph has
+  exactly one supervising watch from admission until it settles. The kernel maintains
+  the assignments and the watches' member lists in the same journal record that
+  admits, moves or settles the member; an amendment's `watch` selection assigns an
+  existing watch or creates one from a template (`child-terminal-states`), and an
+  omitted selection joins the graph's default watch. The kernel renews the leases of
+  watches with live members without consuming their renewal allowance, and ends a
+  watch when its last member settles. The `supervision_graph` and `watch_assign`
+  tools read and change the record; `watch_create` deduplicates equivalent active
+  watches, and `watch_cancel` is refused while the watch has live members.
 - **Lease.** Every watch has an absolute expiry, at most 24 hours after creation or
   renewal. Renewal is an explicit owner or operator operation, bounded by
   `max_renewals` (1–1024). Expiry ends the watch and produces a must-deliver notice
@@ -103,6 +115,7 @@ level if that is higher:
 | Run terminal: completed, failed, cancelled, parked | `notify` |
 | Quiescence `block` edge, `blocked_on_human` | `wake` |
 | An agent attempt blocked on a human answer (`agent_awaiting_answer`, when policy or routing leaves the request for an operator) | `wake` |
+| `attempt_overrun`, `attempt_stalled` | `wake` |
 | An agent request answered or ended (`agent_answered`, `agent_request_ended`) | `notify` |
 | `observation_failed`, supervision incident or hold | `escalate` |
 | Model decision parked or outcome unknown | `wake` |

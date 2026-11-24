@@ -20,6 +20,7 @@ import (
 	"mitos/internal/compute"
 	"mitos/internal/fleet"
 	"mitos/internal/harness"
+	"mitos/internal/watch"
 )
 
 // agentMCPPath reports whether a print runtime gets the native-tools MCP
@@ -50,6 +51,13 @@ func mcpPlanRules(plan json.RawMessage) []string {
 					Ownership fleet.Ownership `json:"ownership"`
 				} `json:"brief"`
 			} `json:"spec"`
+			Watch *struct {
+				Assign string `json:"assign"`
+				Create *struct {
+					Template string `json:"template"`
+					Owner    string `json:"owner"`
+				} `json:"create"`
+			} `json:"watch"`
 		} `json:"operations"`
 		Accept []struct {
 			Task string `json:"task"`
@@ -77,6 +85,23 @@ func mcpPlanRules(plan json.RawMessage) []string {
 				}
 				problems = append(problems, fmt.Sprintf("operation %s %s: %v — owned paths are literal workspace-relative directory prefixes like \"src/module\" (no globs, absolute paths, .., trailing or duplicate separators; each path once), leases are unique bounded resource names", op.Kind, ref, err))
 			}
+		}
+		// Supervision assignment is shape-checked here so mistakes are
+		// refused in-session; watch existence is verified when the plan is
+		// applied (#126).
+		if op.Watch != nil && (op.Kind == "add" || op.Kind == "supersede" || op.Kind == "retry") {
+			if op.Watch.Assign != "" && op.Watch.Create != nil {
+				problems = append(problems, fmt.Sprintf("operation %s: watch takes either assign or create, not both", op.Kind))
+			} else if op.Watch.Assign == "" && op.Watch.Create == nil {
+				problems = append(problems, fmt.Sprintf("operation %s: watch needs assign (a watch id from supervision_graph) or create", op.Kind))
+			} else if op.Watch.Assign != "" && !watch.WatchIDPattern.MatchString(op.Watch.Assign) {
+				problems = append(problems, fmt.Sprintf("operation %s: watch.assign must be an active watch id from supervision_graph", op.Kind))
+			} else if c := op.Watch.Create; c != nil && c.Template == "" && c.Owner == "" {
+				problems = append(problems, fmt.Sprintf("operation %s: watch.create needs a template (child-terminal-states) or a watch spec", op.Kind))
+			}
+		}
+		if op.Watch != nil && op.Kind != "add" && op.Kind != "supersede" && op.Kind != "retry" {
+			problems = append(problems, fmt.Sprintf("operation %s: watch assignment applies to add, supersede and retry only", op.Kind))
 		}
 	}
 	return problems

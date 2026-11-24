@@ -257,7 +257,7 @@ for line in sys.stdin:
 		t.Fatal("replanning repeated the missing prerequisite")
 	}
 	p := proposal(g, "automatic-retry", GraphOperation{Kind: "retry", Task: task})
-	if _, _, err := e.proposeGraph(&g, p, graphDigest(p), false); err == nil {
+	if _, _, _, err := e.proposeGraph(&g, p, graphDigest(p), false); err == nil {
 		t.Fatal("planner bypassed prerequisite hold")
 	}
 	path := e.Store.Dir()

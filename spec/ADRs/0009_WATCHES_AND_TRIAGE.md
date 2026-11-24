@@ -61,6 +61,12 @@ before paging. We adopt these instead of inventing per-line and summary modes.
    cannot steer, stop, continue, approve or accept work, and it cannot widen a
    watch's scope. Steering stays with runtime policy and supervision.
 7. **Watches belong to responsibilities, attempts or operators, never to sessions.**
+   Amendment (2026-11, #126): watch conditions gained a kernel-maintained
+   `members` list, and the kernel keeps a supervision record assigning every
+   non-orchestrator agent task in an adaptive graph to exactly one supervising
+   watch from admission until it settles, renewing its lease and ending it with
+   its last member. Rule 6 is unchanged: membership never grants execution
+   effect.
    Responsibility watches survive orchestrator replacement, fenced by generation.
    Attempt watches end when the attempt settles. An owner holds many watches, and an
    event can match many of them. Each owner receives an event once, at the highest

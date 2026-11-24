@@ -251,7 +251,7 @@ func (e *Engine) handoffCall(run, workspace, method string, raw json.RawMessage)
 		// The work is done; only a bounded wrap-up remains (issue #127).
 		e.noteResultSubmitted(run)
 		return map[string]any{"id": receipt.ID, "run_id": receipt.RunID, "revision": receipt.Revision, "seq": receipt.Seq, "at": receipt.At, "digest": receipt.Digest, "proposal_ids": receipt.ProposalIDs}, nil
-	case "watch_create", "watch_renew", "watch_cancel", "watch_inbox", "delivery_outcome":
+	case "watch_create", "watch_renew", "watch_cancel", "watch_inbox", "delivery_outcome", "watch_assign", "supervision_graph":
 		return e.handoffWatch(run, method, raw)
 	case "artifact_list":
 		var in ArtifactList

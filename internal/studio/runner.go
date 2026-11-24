@@ -620,18 +620,15 @@ func (e *Engine) dispatch() {
 					_ = e.startServiceGraph(r.ID)
 					continue
 				}
-				deadline := time.Now().Add(time.Duration(r.Brief.TimeoutMinutes) * time.Minute)
-				if current.Execution != nil {
-					deadline = current.Execution.Deadline
-				}
-				e.Store.mu.RLock()
-				taskDeadline := e.Store.structuredTaskDeadline(&current)
-				e.Store.mu.RUnlock()
-				if !taskDeadline.IsZero() && taskDeadline.Before(deadline) {
-					deadline = taskDeadline
-				}
-				if taskDeadline := current.Brief.Scheduling.Deadline; taskDeadline != nil && taskDeadline.Before(deadline) {
-					deadline = *taskDeadline
+				deadline := e.executionDeadline(current)
+				if current.GraphAttempt != nil && current.GraphAttempt.Executor.Application.Agent != nil {
+					// A native agent attempt has no per-attempt hard timebox
+					// (#128): its soft budget raises a condition and a kernel
+					// judgment decides. The graph's elapsed limit is the hard
+					// ceiling, and it never refills.
+					if g := e.Store.graphForAttempt(current.GraphAttempt.GraphID); g != nil && g.Limits.Deadline.Before(deadline) {
+						deadline = g.Limits.Deadline
+					}
 				}
 				ctx, cancel := context.WithDeadline(e.ctx, deadline)
 				e.cancel[r.ID] = cancel
@@ -651,6 +648,38 @@ func (e *Engine) dispatch() {
 			}
 		}
 	}
+}
+
+// executionDeadline derives the hard deadline for a dispatched run. A
+// native agent attempt has no per-attempt hard timebox (#128): its soft
+// budget raises a condition and a kernel judgment decides, so the deadline
+// starts from the graph elapsed limit — the only hard ceiling, never
+// refilled — instead of the soft budget, which would still cancel a
+// progressing attempt at its original size budget. Structured and scheduling
+// deadlines still cap any run.
+func (e *Engine) executionDeadline(current Run) time.Time {
+	var deadline time.Time
+	if current.GraphAttempt != nil && current.GraphAttempt.Executor.Application.Agent != nil {
+		deadline = time.Now().Add(24 * time.Hour)
+		if g := e.Store.graphForAttempt(current.GraphAttempt.GraphID); g != nil && g.Limits.Deadline.After(time.Now()) {
+			deadline = g.Limits.Deadline
+		}
+	} else {
+		deadline = time.Now().Add(time.Duration(current.Brief.TimeoutMinutes) * time.Minute)
+		if current.Execution != nil {
+			deadline = current.Execution.Deadline
+		}
+	}
+	e.Store.mu.RLock()
+	taskDeadline := e.Store.structuredTaskDeadline(&current)
+	e.Store.mu.RUnlock()
+	if !taskDeadline.IsZero() && taskDeadline.Before(deadline) {
+		deadline = taskDeadline
+	}
+	if taskDeadline := current.Brief.Scheduling.Deadline; taskDeadline != nil && taskDeadline.Before(deadline) {
+		deadline = *taskDeadline
+	}
+	return deadline
 }
 
 func (e *Engine) execute(ctx context.Context, r Run) {
@@ -737,6 +766,9 @@ func (e *Engine) execute(ctx context.Context, r Run) {
 			return
 		}
 		message = "The time limit was reached. Review the output and try again with a longer limit."
+		if current.AttemptBudget != nil && current.AttemptBudget.WrapUpAt != nil {
+			message = "The budget judgment asked the attempt to wrap up and its grace period ended without a submission. Evidence is preserved."
+		}
 	}
 	// Budget exhaustion is recorded structurally so calibration never scrapes
 	// adapter-specific summary text.

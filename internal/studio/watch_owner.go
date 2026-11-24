@@ -33,6 +33,8 @@ const (
 type watchCreator struct {
 	Run        string `json:"run"`
 	Generation int64  `json:"generation,omitempty"`
+	// Template names the kernel template a watch was created from (#126).
+	Template string `json:"template,omitempty"`
 }
 
 type watchOutcome struct {

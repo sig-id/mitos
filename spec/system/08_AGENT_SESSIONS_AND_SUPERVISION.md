@@ -142,6 +142,20 @@ references remain operator configuration. Automated workers MUST use the same
 question/approval service as explicit sessions; headless attempts MUST not fabricate
 answers or treat an unanswered question as successful completion.
 
+## 5a. Kernel judgments for attempt budgets (#128)
+
+When an attempt raises `attempt_overrun` or `attempt_stalled`, the kernel opens one
+Choice judgment — `extend`, `wrap_up` or `stop` — carrying bounded runtime-created
+evidence: the progress vector and its recency, elapsed time against the (extended)
+soft budget, extensions used, whether a result was submitted, and the task traits.
+Acceptance is asymmetric (#110): the deterministic default (extend while
+progressing with allowance left; wrap_up otherwise; stop at the graph ceiling)
+applies at any confidence, and any other choice must clear the provider's
+thresholds. An interrupted judgment settles with its default and `outcome_unknown`
+consumption; the judgment never parks the run. Records: `attempt_judgment_requested`,
+`attempt_judgment_settled`, `attempt_extended`, `attempt_wrap_up`,
+`attempt_condition_changed`.
+
 ## 6. Independent boundary supervision
 
 Supervision is independent of task planning, request routing and result acceptance.
