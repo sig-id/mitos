@@ -220,6 +220,14 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 	if !h.spec.Posture.Deadline.IsZero() {
 		commandCtx, cancel = context.WithDeadline(ctx, h.spec.Posture.Deadline)
 	}
+	dir := h.spec.Workspace.Directory
+	if command.Directory != "" {
+		if !filepath.IsAbs(command.Directory) {
+			cancel()
+			return nil, errors.New("working directory must be absolute")
+		}
+		dir = command.Directory
+	}
 	argv := command.Argv
 	base := h.spec.Base
 	if h.owner.Confinement.enabled() {
@@ -236,18 +244,10 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 			posture.EgressSocket = strings.TrimPrefix(h.spec.Posture.BrokerEndpoint, "unix://")
 			posture.HelperExecutable = h.owner.helper
 		}
-		if argv, confineErr = confineArgv(posture, argv, base, h.spec.Workspace.Directory); confineErr != nil {
+		if argv, confineErr = confineArgv(posture, argv, base, h.spec.Workspace.Directory, dir, h.spec.Posture.Resources); confineErr != nil {
 			cancel()
 			return nil, confineErr
 		}
-	}
-	dir := h.spec.Workspace.Directory
-	if command.Directory != "" {
-		if !filepath.IsAbs(command.Directory) {
-			cancel()
-			return nil, errors.New("working directory must be absolute")
-		}
-		dir = command.Directory
 	}
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(base, "home"), "TMPDIR=" + filepath.Join(base, "tmp"), "LANG=C.UTF-8", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CEILING_DIRECTORIES=" + base + string(os.PathListSeparator) + filepath.Dir(dir), "GIT_TERMINAL_PROMPT=0", "MITOS_WORKSPACE=" + h.spec.Workspace.Directory}
 	if command.NativeEnv != nil {
@@ -353,6 +353,12 @@ func (l *Local) startCommand(ctx context.Context, h *localHandle, command Comman
 			}
 		}
 		_ = killGroup(s)
+		// A VM-backed confinement has no die-with-parent; reap the container
+		// recorded in the cidfile so a killed CLI leaves nothing running. A
+		// clean exit already removed its --rm container.
+		if code := cmd.ProcessState.ExitCode(); code != 0 {
+			reapAppleContainer(s.handle.owner.Confinement, s.handle.spec.Base)
+		}
 		if s.sandbox != nil {
 			if err := s.sandbox.finish(); err != nil {
 				s.err = errors.Join(s.err, err)

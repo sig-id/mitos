@@ -6,31 +6,62 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+
+	"mitos/internal/resourcepolicy"
 )
 
 // Confinement describes an OS-enforced local sandbox for the local provider.
-// The Linux-first implementation wraps every launched process in bubblewrap
-// with only the workspace copy, dependency inputs, the per-attempt runtime
-// home and required toolchains mounted. Nothing outside those mounts is
-// visible, so reads are confined rather than advisory.
+// On Linux every launched process is wrapped in bubblewrap with only the
+// workspace copy, dependency inputs, the per-attempt runtime home and required
+// toolchains mounted. On macOS (ADR 0011) every confined launch runs in its
+// own lightweight Linux VM through apple/container, with the same minimal
+// explicit mounts expressed as virtiofs volumes. Nothing outside those mounts
+// is visible, so reads are confined rather than advisory.
 type Confinement struct {
 	Tool    string `json:"tool"`
 	NetMode string `json:"net_mode"`
 	// EgressSocket names a host UNIX socket carrying the mediated model
-	// transport. When set, even an "unrestricted" posture runs in an
-	// isolated network namespace whose only route out is that socket, so
-	// host services — including loopback listeners — stay unreachable.
+	// transport. When set, even an "unrestricted" posture runs without a
+	// route to any host service – in a private network namespace on Linux, or
+	// behind a vsock-forwarded socket with no interface at all on macOS – so
+	// host services, including loopback listeners, stay unreachable.
 	EgressSocket string `json:"egress_socket,omitempty"`
 	// HelperExecutable is the host binary that provides the in-sandbox
-	// egress loop. It is mounted read-only next to the workload.
+	// egress loop. It is mounted read-only next to the workload. Linux only:
+	// the apple-container guest runs GuestHelper from the image instead.
 	HelperExecutable string `json:"-"`
+	// Image is the OCI image reference whose filesystem the apple-container
+	// workload boots from. It must ship the workload toolchain under
+	// GuestBinDir, a Linux mitos build at GuestHelper, and /bin/sh.
+	Image string `json:"image,omitempty"`
+	// GuestBinDir is the in-image directory confinement rewrites the
+	// workload's argv[0] into (default /usr/local/bin). apple-container only.
+	GuestBinDir string `json:"guest_bin_dir,omitempty"`
+	// GuestHelper is the in-image mitos binary that runs the in-guest egress
+	// loop for mediated launches (default /usr/local/bin/mitos).
+	GuestHelper string `json:"guest_helper,omitempty"`
 }
 
 const (
-	ConfinementBwrap = "bwrap"
-	NetOff           = "off"
-	NetUnrestricted  = "unrestricted"
+	ConfinementBwrap          = "bwrap"
+	ConfinementAppleContainer = "apple-container"
+	// ConfinementContainerCLI is the executable apple/container installs.
+	ConfinementContainerCLI = "container"
+	NetOff                  = "off"
+	NetUnrestricted         = "unrestricted"
 )
+
+// DefaultConfinementTool names the platform's supported confinement backend:
+// bubblewrap on Linux, apple/container on macOS (ADR 0011). Hosts without the
+// tool fail closed inside NewConfinement, never by silently dropping the
+// confinement.
+func DefaultConfinementTool() string {
+	if runtime.GOOS == "darwin" {
+		return ConfinementAppleContainer
+	}
+	return ConfinementBwrap
+}
 
 // NewConfinement validates the requested sandbox. It fails closed when the
 // tool is missing instead of silently degrading to advisory execution.
@@ -38,17 +69,23 @@ func NewConfinement(tool, netMode string) (Confinement, error) {
 	if tool == "" {
 		return Confinement{}, nil
 	}
-	if tool != ConfinementBwrap {
-		return Confinement{}, fmt.Errorf("unsupported confinement tool %q", tool)
-	}
 	if netMode == "" {
 		netMode = NetOff
 	}
 	if netMode != NetOff && netMode != NetUnrestricted {
 		return Confinement{}, fmt.Errorf("unsupported confinement network mode %q", netMode)
 	}
-	if _, err := exec.LookPath(ConfinementBwrap); err != nil {
-		return Confinement{}, errors.New("confinement requested but bwrap is not installed")
+	switch tool {
+	case ConfinementBwrap:
+		if _, err := exec.LookPath(ConfinementBwrap); err != nil {
+			return Confinement{}, errors.New("confinement requested but bwrap is not installed")
+		}
+	case ConfinementAppleContainer:
+		if _, err := exec.LookPath(ConfinementContainerCLI); err != nil {
+			return Confinement{}, errors.New("confinement requested but the apple/container CLI (\"container\") is not installed; see ADR 0011")
+		}
+	default:
+		return Confinement{}, fmt.Errorf("unsupported confinement tool %q", tool)
 	}
 	return Confinement{Tool: tool, NetMode: netMode}, nil
 }
@@ -69,16 +106,31 @@ func (c Confinement) capabilities() Capabilities {
 		modes = []string{NetOff, NetUnrestricted}
 		egress = NetUnrestricted
 	}
-	return Capabilities{Isolation: "container", Egress: egress, DataMount: "bind-ro", NetModes: modes, WorkspaceConfined: true}
+	caps := Capabilities{Isolation: "container", Egress: egress, DataMount: "bind-ro", NetModes: modes, WorkspaceConfined: true}
+	// A per-container VM enforces real CPU and memory ceilings (ADR 0011),
+	// where a bubblewrap process sandbox cannot.
+	if c.Tool == ConfinementAppleContainer {
+		caps.CPUQuota = true
+		caps.MemoryLimit = true
+	}
+	return caps
 }
 
-// confineArgv wraps argv in the sandbox. Mounts are minimal and explicit: the
-// toolchains and system configuration read-only, a fresh /tmp, the per-attempt
-// runtime home, read-only dependency inputs and the writable workspace copy.
-// Host control sockets under /run are deliberately not mounted: a read-only
-// mount still lets a confined process issue requests to docker or the user's
-// systemd manager over those sockets, which would defeat the confinement.
-func confineArgv(c Confinement, argv []string, base, workspace string) ([]string, error) {
+// confineArgv wraps argv in the sandbox selected by the confinement tool.
+// Mounts stay minimal and explicit on every platform; workdir is the resolved
+// guest working directory and resources the admitted posture ceilings, which
+// VM-backed tools can enforce. Host control sockets under /run are
+// deliberately not mounted on Linux: a read-only mount still lets a confined
+// process issue requests to docker or the user's systemd manager over those
+// sockets, which would defeat the confinement.
+func confineArgv(c Confinement, argv []string, base, workspace, workdir string, resources resourcepolicy.Agent) ([]string, error) {
+	if c.Tool == ConfinementAppleContainer {
+		return confineArgvApple(c, argv, base, workspace, workdir, resources)
+	}
+	return confineArgvBwrap(c, argv, base, workspace)
+}
+
+func confineArgvBwrap(c Confinement, argv []string, base, workspace string) ([]string, error) {
 	if len(argv) == 0 || !filepath.IsAbs(argv[0]) {
 		return nil, errors.New("command requires an absolute executable")
 	}
@@ -127,7 +179,7 @@ func confineArgv(c Confinement, argv []string, base, workspace string) ([]string
 			return nil, errors.New("mediated egress requires the helper executable")
 		}
 		args = append(args, "--unshare-net", "--ro-bind", c.EgressSocket, c.EgressSocket, "--ro-bind-try", c.HelperExecutable, c.HelperExecutable)
-		argv = egressLoopArgv(c, argv)
+		argv = egressLoopArgv(c, argv, base)
 	} else if c.NetMode == NetOff {
 		args = append(args, "--unshare-net")
 	} else {
@@ -136,12 +188,13 @@ func confineArgv(c Confinement, argv []string, base, workspace string) ([]string
 	return append(args, append([]string{"--"}, argv...)...), nil
 }
 
-// egressLoopArgv starts the in-sandbox loop forwarder in the background and
-// execs the workload in place, so process identity, signals and the protocol
-// streams stay with the workload. The forwarder's output is discarded: the
-// workload owns stdio.
-func egressLoopArgv(c Confinement, argv []string) []string {
-	script := fmt.Sprintf("%s egress-loop --socket %q --listen %q >/dev/null 2>&1 & exec \"$@\"", c.HelperExecutable, c.EgressSocket, EgressLoopAddr)
+// egressLoopArgv starts the in-sandbox loop forwarder in the background, waits
+// until its listener is ready, and execs the workload in place, so process
+// identity, signals and the protocol streams stay with the workload. The
+// forwarder's output is discarded: the workload owns stdio.
+func egressLoopArgv(c Confinement, argv []string, base string) []string {
+	ready := filepath.Join(base, "tmp", "egress.ready")
+	script := fmt.Sprintf("%s egress-loop --socket %q --listen %q --ready %q >/dev/null 2>&1 & i=0; while [ ! -e %q ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; exec \"$@\"", c.HelperExecutable, c.EgressSocket, EgressLoopAddr, ready, ready)
 	return append([]string{"/bin/sh", "-c", script, "sh"}, argv...)
 }
 

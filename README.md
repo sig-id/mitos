@@ -33,8 +33,11 @@ Requires Go 1.26.11+, Git, and Bash. Linux is the primary target;
 macOS (Apple Silicon) also builds and serves with the fixes in this tree:
 the workspace observer counts writes by rescanning, reads process trees and
 argv through sysctl, `mitos stop` identifies the server through lsof, and
-restore publishes with an exclusive rename; bubblewrap confinement remains
-Linux-only, and interactive coding CLIs must be installed on the Mac.
+restore publishes with an exclusive rename. Confinement is platform-native
+(ADR 0011): bubblewrap on Linux, apple/container per-launch Linux VMs on
+macOS – set `MITOS_CONFINEMENT_IMAGE` to an image shipping the workload
+toolchain and the guest mitos helper (`examples/container/`) – and
+interactive coding CLIs must be installed for unconfined use.
 The first build downloads pinned Go dependencies. Serving the workspace needs no Node build, database service, or CDN;
 browser assets are vendored.
 

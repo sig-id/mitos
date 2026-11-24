@@ -56,9 +56,21 @@ func workerClient(args []string) error {
 	if len(token) != 64 {
 		return errors.New("worker credential missing from token environment variable")
 	}
-	confinement, err := compute.NewConfinement(compute.ConfinementBwrap, compute.NetUnrestricted)
+	tool := compute.DefaultConfinementTool()
+	if env := os.Getenv("MITOS_AGENT_CONFINEMENT"); env != "" {
+		tool = env
+	}
+	confinement, err := compute.NewConfinement(tool, compute.NetUnrestricted)
 	if err != nil {
 		return err
+	}
+	if confinement.Tool == compute.ConfinementAppleContainer {
+		// A VM confinement boots from an OCI image: the toolchain inversion
+		// of ADR 0011. Configured but unusable fails startup.
+		confinement.Image = os.Getenv("MITOS_CONFINEMENT_IMAGE")
+		if confinement.Image == "" {
+			return errors.New("apple-container confinement requires MITOS_CONFINEMENT_IMAGE naming an OCI image that ships the workload toolchain and the guest mitos helper (ADR 0011)")
+		}
 	}
 	// The worker mediates its sandbox model transport itself: the confined
 	// workload runs in an isolated network namespace whose only egress is this
