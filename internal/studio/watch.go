@@ -120,7 +120,10 @@ type routedDelivery struct {
 }
 
 type watchChange struct {
-	Creates     []*Watch                 `json:"creates,omitempty"`
+	Creates []*Watch `json:"creates,omitempty"`
+	// Create is the singular form histories written before batch creation
+	// (#126) still carry; it applies like a one-element Creates.
+	Create      *Watch                   `json:"create,omitempty"`
 	Renew       *watchRenewal            `json:"renew,omitempty"`
 	Memberships []supervisionWatchChange `json:"memberships,omitempty"`
 	Deliveries  []routedDelivery         `json:"deliveries,omitempty"`
@@ -163,7 +166,11 @@ func (s *Store) applyWatch(e Event, c *watchChange) error {
 		s.triageUsed = map[string]int{}
 		s.watchMarks = map[string]*WatchMark{}
 	}
-	for _, w := range c.Creates {
+	created := append(slices.Clone(c.Creates), c.Create)
+	for _, w := range created {
+		if w == nil {
+			continue
+		}
 		if s.watches[w.ID] != nil {
 			return errors.New("duplicate watch")
 		}
@@ -631,8 +638,9 @@ func (s *Store) createWatchLocked(spec watch.Spec, by *watchCreator) (Watch, err
 			*f.field = f.value
 		}
 	}
-	// Member tasks are kernel-maintained (#126); an author never sets them.
-	if spec.Condition.HasMembers() {
+	// Member tasks are kernel-maintained (#126); an author never sets them,
+	// not even an empty list.
+	if spec.Condition.Members != nil {
 		return Watch{}, errors.New("condition.members is maintained by the kernel")
 	}
 	// Validate after clamping: an owner watch may leave its scope to the grant.

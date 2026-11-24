@@ -474,3 +474,128 @@ else:
 		}
 	}
 }
+
+// Histories written before batch watch creation still carry the singular
+// create field; replay must restore those watches (#126 review).
+func TestLegacySingularWatchCreateReplays(t *testing.T) {
+	s := testStore(t)
+	w := Watch{ID: "watch_legacy", Spec: watch.Spec{Version: watch.Version, Owner: watch.Owner{Kind: watch.OwnerOperator}, Description: "legacy", Condition: watch.Condition{Scope: watch.Scope{Project: "proj"}}, Lease: watch.Lease{ExpiresAt: time.Now().Add(time.Hour), MaxRenewals: 2}, Grouping: watch.Grouping{IntervalMS: 1000, MaxEvents: 8, RepeatIntervalMS: 60000}, DefaultLevel: watch.Notify}, State: "active", CreatedAt: time.Now().UTC()}
+	raw, err := json.Marshal(map[string]any{"watch": map[string]any{"create": w}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	err = s.apply(Event{Seq: 1, RunID: "", Type: "effect", Kind: "watch_created", At: time.Now().UTC(), Data: raw})
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.watches["watch_legacy"] == nil {
+		t.Fatal("legacy watch creation discarded on replay")
+	}
+	// A later record for the same watch applies against the restored state.
+	renewal, mErr := json.Marshal(map[string]any{"watch": map[string]any{"renew": map[string]any{"id": "watch_legacy", "expires_at": time.Now().Add(2 * time.Hour)}}})
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
+	s.mu.Lock()
+	err = s.apply(Event{Seq: 2, RunID: "", Type: "effect", Kind: "watch_renewed", At: time.Now().UTC(), Data: renewal})
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatalf("renewal after legacy creation failed: %v", err)
+	}
+}
+
+// A supervision watch whose last member was removed matches nothing and is
+// settled by the kernel instead of leaking graph-wide (#126 review).
+func TestEmptiedSupervisionWatchMatchesNothingAndSettles(t *testing.T) {
+	s, g, tid := supervisedGraph(t)
+	g = commitSupervision(t, s, g, []string{tid}, nil)
+	watchID := g.Members[tid].SupervisionWatch
+	// Remove the member the way watch_assign does.
+	s.mu.Lock()
+	moved := graphClone(g)
+	wc := &watchChange{Memberships: []supervisionWatchChange{{Watch: watchID, Remove: []string{tid}, Kernel: true}}}
+	moved.Members[tid].SupervisionWatch = ""
+	gc := graphChange{Graph: moved}
+	s.projectGraph(&gc, s.graphs[g.ID])
+	if err := s.commit("", "effect", "watch_removal_test", change{Graph: &gc, Watch: wc}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Unlock()
+	if members := s.watches[watchID].Spec.Condition.Members; members == nil || len(members) != 0 {
+		t.Fatalf("removal left members %v", members)
+	}
+	// The emptied watch no longer matches graph events.
+	f := watch.Fact{Seq: 999, At: time.Now(), Project: g.ProjectID, Graph: g.ID, Task: "other", Type: "effect", Kind: "run_finished"}
+	if (watch.Condition{Scope: watch.Scope{Graph: g.ID}, Members: s.watches[watchID].Spec.Condition.Members}).Matches(f) {
+		t.Fatal("emptied supervision watch matched a foreign task")
+	}
+	// The kernel settles it.
+	if err := s.EvaluateWatches(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.Watch(watchID); v.State != "settled" {
+		t.Fatalf("emptied watch not settled: %s", v.State)
+	}
+}
+
+// Assignments only move tasks to watches owned by the graph's responsibility
+// (#126 review).
+func TestWatchAssignRefusesAttemptOwnedWatch(t *testing.T) {
+	s, g, tid := supervisedGraph(t)
+	g = commitSupervision(t, s, g, []string{tid}, nil)
+	// An attempt-owned watch needs a live attempt in the graph.
+	attempt := createRun(t, s)
+	s.mu.Lock()
+	current := s.runs[attempt.ID]
+	current.TaskID = tid
+	current.ProjectID = g.ProjectID
+	current.GraphAttempt = &GraphAttempt{GraphID: g.ID}
+	current.Status = "running"
+	s.runs[attempt.ID] = current
+	s.mu.Unlock()
+	attemptWatch, err := s.CreateWatch(watch.Spec{
+		Version: watch.Version, Owner: watch.Owner{Kind: watch.OwnerAttempt, ID: attempt.ID}, Description: "attempt watch",
+		Condition:    watch.Condition{Scope: watch.Scope{Graph: g.ID}},
+		Lease:        watch.Lease{ExpiresAt: time.Now().Add(time.Hour), MaxRenewals: 2},
+		Grouping:     watch.Grouping{IntervalMS: 1000, MaxEvents: 8, RepeatIntervalMS: 60000},
+		DefaultLevel: watch.Notify,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	clone := graphClone(g)
+	_, err = s.assignSupervisionWatch(&clone, tid, attemptWatch.ID)
+	s.mu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "responsibility") {
+		t.Fatalf("assignment to an attempt watch accepted: %v", err)
+	}
+}
+
+// One planning call assigns a whole batch of legacy members, sharing the
+// default watch it creates (#126 review).
+func TestBackstopBatchSharesOneDefaultWatch(t *testing.T) {
+	s, g, tid := supervisedGraph(t)
+	s.mu.Lock()
+	clone := graphClone(g)
+	clone.Members["second"] = &GraphMember{Spec: GraphSpec{ID: "second", Parent: g.RootTask, Kind: "application", Required: true, Acceptance: "operator", Criteria: "Report 43", Brief: Brief{Title: "Second answer"}}, Executor: clone.Members[tid].Executor, Revision: 1, FactRevision: 1, State: "queued"}
+	s.mu.Unlock()
+	s.mu.Lock()
+	wc, err := s.planSupervision(&clone, []string{tid, "second"}, nil, nil)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wc == nil || len(wc.Creates) != 1 {
+		t.Fatalf("batch did not share one watch: %+v", wc)
+	}
+	created := wc.Creates[0]
+	if len(created.Spec.Condition.Members) != 2 {
+		t.Fatalf("shared watch membership wrong: %v", created.Spec.Condition.Members)
+	}
+	if clone.Members[tid].SupervisionWatch != created.ID || clone.Members["second"].SupervisionWatch != created.ID {
+		t.Fatal("batch members not all assigned to the shared watch")
+	}
+}

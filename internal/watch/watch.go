@@ -122,6 +122,11 @@ type Condition struct {
 // tasks.
 func (c Condition) HasMembers() bool { return len(c.Members) > 0 }
 
+// IsSupervision reports whether the condition is a kernel supervision
+// condition: a present members list, empty after its last member was removed.
+// A supervision condition matches only its member tasks, never everything.
+func (c Condition) IsSupervision() bool { return c.Members != nil }
+
 type Lease struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	MaxRenewals int       `json:"max_renewals"`
@@ -279,7 +284,7 @@ type Fact struct {
 // tasks count as scope: a supervision watch admits facts from every attempt
 // of its members.
 func (c Condition) InScope(f Fact) bool {
-	if len(c.Members) > 0 && (f.Task == "" || !slices.Contains(c.Members, f.Task)) {
+	if c.Members != nil && (f.Task == "" || !slices.Contains(c.Members, f.Task)) {
 		return false
 	}
 	s := c.Scope
