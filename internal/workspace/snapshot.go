@@ -104,14 +104,23 @@ func CaptureSource(ctx context.Context, source, dataDir string, limits Limits) (
 // because they are regenerated from manifests, bloat patches and every
 // downstream private copy (issue #137).
 func CaptureResult(ctx context.Context, root string, limits Limits) (Snapshot, error) {
-	return captureResult(ctx, root, limits, true)
+	return captureResult(ctx, root, limits, true, true)
+}
+
+// CaptureInstalled captures an installed application tree the way
+// CaptureSource does – Git metadata omitted, every real file kept. Re-captures
+// must use these semantics, not CaptureResult's derivable exclusions, or an
+// installed __pycache__ would look like tampering against the intake
+// fingerprint.
+func CaptureInstalled(ctx context.Context, root string, limits Limits) (Snapshot, error) {
+	return captureResult(ctx, root, limits, true, false)
 }
 
 // CaptureData includes every data file, including names used for Git metadata.
 func CaptureData(ctx context.Context, root string, limits Limits) (Snapshot, error) {
-	return captureResult(ctx, root, limits, false)
+	return captureResult(ctx, root, limits, false, false)
 }
-func captureResult(ctx context.Context, root string, limits Limits, omitGit bool) (Snapshot, error) {
+func captureResult(ctx context.Context, root string, limits Limits, omitGit, excludeDerivable bool) (Snapshot, error) {
 	var paths []string
 	var omitted []OmittedDirectory
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -130,7 +139,7 @@ func captureResult(ctx context.Context, root string, limits Limits, omitGit bool
 			}
 			return nil
 		}
-		if d.IsDir() && derivableDirectories[d.Name()] {
+		if excludeDerivable && d.IsDir() && derivableDirectories[d.Name()] {
 			files, bytes, statErr := directoryFootprint(path)
 			if statErr != nil {
 				return statErr

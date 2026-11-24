@@ -103,6 +103,17 @@ print('native execution log')
 		raw, _ := json.Marshal(g)
 		t.Fatalf("goal did not finish: %s", raw)
 	}
+	// The orchestrator rounds must carry budgets from the scaling rule, not
+	// a flat constant (issue #137): first rounds are five minutes, later
+	// review rounds at least ten, everything capped at thirty.
+	for _, m := range g.Members {
+		if m.OrchestratorFor == "" {
+			continue
+		}
+		if m.Spec.Brief.TimeoutMinutes < 5 || m.Spec.Brief.TimeoutMinutes > 30 {
+			t.Fatalf("orchestrator round carries a non-scaled budget: %d", m.Spec.Brief.TimeoutMinutes)
+		}
+	}
 	workers := 0
 	generated := false
 	for _, m := range g.Members {

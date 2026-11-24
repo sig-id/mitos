@@ -3,7 +3,7 @@ package studio
 import "testing"
 
 // Issue #137 part 1: the orchestrator attempt budget must scale with the
-// materialized evidence the round reads — the artifacts graph_read pages in —
+// materialized evidence the round reads – the artifacts graph_read pages in –
 // instead of a flat five minutes that late review rounds systematically
 // exceed.
 
