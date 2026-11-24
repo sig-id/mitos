@@ -63,7 +63,7 @@ func supervisionSettled(m *GraphMember) bool {
 // watchMembersLive reports whether any of a watch's member tasks still needs
 // supervision. Caller holds the store lock.
 func (s *Store) watchMembersLive(w *Watch) bool {
-	if !w.Spec.Condition.HasMembers() {
+	if !w.Spec.Condition.IsSupervision() {
 		return false
 	}
 	g := s.graphs[w.Grant.Graph]
@@ -199,8 +199,14 @@ func (s *Store) planSupervision(g *WorkGraph, assigns, settles []string, request
 		}
 		if old := m.SupervisionWatch; old != "" && old != target {
 			record(old, "", tid)
+			if w := pending[old]; w != nil && !slices.Contains(w.Spec.Condition.Members, tid) {
+				w.Spec.Condition.Members = append(w.Spec.Condition.Members, tid)
+			}
 		}
 		m.SupervisionWatch = target
+		if w := pending[target]; w != nil && !slices.Contains(w.Spec.Condition.Members, tid) {
+			w.Spec.Condition.Members = append(w.Spec.Condition.Members, tid)
+		}
 		record(target, tid, "")
 	}
 	for _, tid := range settles {
@@ -253,7 +259,7 @@ func (s *Store) watchCreateSpec(in WatchCreate, g *WorkGraph, c *watchCaller) (w
 		owner = watch.Owner{Kind: watch.OwnerAttempt, ID: attempt}
 	}
 	condition := base.Condition
-	if in.Condition.Scope != (watch.Scope{}) || len(in.Condition.Types) > 0 || len(in.Condition.Kinds) > 0 || len(in.Condition.Members) > 0 {
+	if in.Condition.Scope != (watch.Scope{}) || len(in.Condition.Types) > 0 || len(in.Condition.Kinds) > 0 || in.Condition.Members != nil {
 		condition = in.Condition
 	}
 	scope := &condition.Scope
@@ -266,7 +272,7 @@ func (s *Store) watchCreateSpec(in WatchCreate, g *WorkGraph, c *watchCaller) (w
 		}
 		*f.field = f.value
 	}
-	if len(condition.Members) > 0 {
+	if condition.Members != nil {
 		return watch.Spec{}, &HandoffFailure{Code: "members_kernel_only", Detail: "condition.members is maintained by the kernel; assign tasks through plan operations or watch_assign"}
 	}
 	description := in.Description
@@ -370,7 +376,7 @@ func (s *Store) supervisionRecordLocked(g *WorkGraph) SupervisionRecord {
 		if !supervisedMember(g, m) {
 			continue
 		}
-		if m.SupervisionWatch == "" {
+		if m.SupervisionWatch == "" || s.watches[m.SupervisionWatch] == nil {
 			record.Unassigned = append(record.Unassigned, tid)
 			continue
 		}
@@ -421,8 +427,8 @@ func (s *Store) assignSupervisionWatch(g *WorkGraph, tid, watchID string) (*watc
 		return nil, graphError("only the graph's agent tasks are supervised")
 	}
 	target := s.watches[watchID]
-	if target == nil || target.State != "active" || target.Grant.Graph != g.ID {
-		return nil, graphError("watch_assign must name an active watch of this graph")
+	if target == nil || target.State != "active" || target.Grant.Graph != g.ID || target.Spec.Owner.Kind != watch.OwnerResponsibility || target.Spec.Owner.ID != g.ID {
+		return nil, graphError("watch_assign must name an active watch of this graph's responsibility")
 	}
 	if m.SupervisionWatch == watchID {
 		return nil, nil
@@ -442,7 +448,7 @@ func (s *Store) assignSupervisionWatch(g *WorkGraph, tid, watchID string) (*watc
 func (s *Store) reconcileSupervision(now time.Time) error {
 	ids := make([]string, 0, len(s.watches))
 	for id, w := range s.watches {
-		if w.State == "active" && w.Spec.Condition.HasMembers() {
+		if w.State == "active" && w.Spec.Condition.IsSupervision() {
 			ids = append(ids, id)
 		}
 	}
