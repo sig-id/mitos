@@ -265,6 +265,13 @@ func (s *Store) settleAttemptJudgmentLocked(id, outcome, source, detail string, 
 	next.JudgmentPending = ""
 	switch outcome {
 	case "extend":
+		// The allowance is enforced at settlement (#128 review): a confident
+		// provider answer cannot exceed the configured extension cap.
+		if next.Extensions >= next.MaxExtensions {
+			wrap := at.Add(time.Duration(next.GraceSeconds) * time.Second)
+			next.WrapUpAt = &wrap
+			return s.commit(id, "effect", "attempt_wrap_up", change{AttemptBudget: &attemptBudgetChange{Budget: &next, Summary: fmt.Sprintf("Extension allowance exhausted (%d of %d); wrapping up within %d seconds.", next.Extensions, next.MaxExtensions, next.GraceSeconds), Evidence: mustMarshal(map[string]string{"outcome": "wrap_up", "source": source, "detail": "extension allowance exhausted; " + detail})}})
+		}
 		grant := max(next.SoftMinutes/2, 1)
 		next.Extensions++
 		next.ExtendedMinutes += grant

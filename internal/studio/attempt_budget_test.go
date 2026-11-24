@@ -405,3 +405,61 @@ func TestProgressVectorJournalledOnChange(t *testing.T) {
 		t.Fatalf("heartbeat did not carry the vector: %+v", recorded)
 	}
 }
+
+// The extension allowance is enforced at settlement: a confident provider
+// extend answer beyond the cap wraps up instead (#128 review).
+func TestExtensionAllowanceEnforcedAtSettlement(t *testing.T) {
+	_, s, _, run := budgetedAttempt(t)
+	armBudget(t, s, run, func(b *AttemptBudget) { b.Extensions, b.ExtendedMinutes = 2, 2 })
+	if err := s.settleAttemptJudgmentLockedForTest(run, "extend", "decision", "confident but exhausted", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	b := budgetOf(t, s, run)
+	if b.Extensions != 2 || b.WrapUpAt == nil || !hasEvent(t, s, run, "attempt_wrap_up") {
+		t.Fatalf("exhausted allowance extended anyway: %+v events=%v", b, runEventsOf(t, s, run))
+	}
+}
+
+// A native agent attempt's execution deadline starts from the graph ceiling,
+// not the soft budget, so extensions are not cancelled mid-flight; scheduling
+// deadlines still cap the run, and non-agent runs keep the brief timeout
+// (#128 review).
+func TestAgentDeadlineStartsFromGraphCeiling(t *testing.T) {
+	root := t.TempDir()
+	app := executionApp(t, `sleep 30 & wait`)
+	e, s := testEngine(t, root, []Application{app})
+	project, err := e.Desk.CreateProject("Deadline test", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := createGraphTest(t, e, CreateGraph{Profile: GraphProfile, Key: "k", ProjectID: project.ID, GoalRevision: 1, Activation: "manual", Policy: GraphPolicy{Mode: "adaptive", Applications: []string{"change-app"}}, Limits: GraphLimits{Tasks: 8, Amendments: 16, Attempts: 8, Retries: 2, Expansions: 4, OrchestratorCalls: 8, Depth: 8, Fanout: 8, Deadline: time.Now().UTC().Add(6 * time.Hour)}, Tasks: []GraphSpec{{ID: "goal", Kind: "scope", Required: true, Criteria: "Do it", Acceptance: "operator", Brief: Brief{Title: "Goal"}}}})
+	agent := &AgentBinding{Runtime: "codex", Selection: &ExecutionSelection{Harness: "codex", HarnessName: "codex", Traits: TaskTraits{Size: "small"}}}
+	r, err := s.Create(Brief{Title: "Agent", Workspace: root, AppID: "change-app", TimeoutMinutes: 5}, "agent", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	current := s.runs[r.ID]
+	current.GraphAttempt = &GraphAttempt{GraphID: g.ID, Executor: GraphExecutor{Application: Application{Agent: agent}}}
+	s.runs[r.ID] = current
+	s.mu.Unlock()
+	fetched, _ := s.Get(r.ID)
+	if d := e.executionDeadline(fetched); d.Sub(time.Now()) < 5*time.Hour {
+		t.Fatalf("agent deadline still bound to the soft budget: %v", d)
+	}
+	// A scheduling deadline still caps the run.
+	earlier := time.Now().UTC().Add(30 * time.Minute)
+	fetched.Brief.Scheduling.Deadline = &earlier
+	if d := e.executionDeadline(fetched); d.After(earlier.Add(time.Minute)) {
+		t.Fatalf("scheduling deadline ignored: %v", d)
+	}
+	// Non-agent runs keep the brief timeout.
+	plain, err := s.Create(Brief{Title: "Plain", Workspace: root, AppID: "change-app", TimeoutMinutes: 5}, app.Name, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainRun, _ := s.Get(plain.ID)
+	if d := e.executionDeadline(plainRun); d.Sub(time.Now()) > 6*time.Minute {
+		t.Fatalf("plain run lost its brief timeout: %v", d)
+	}
+}
