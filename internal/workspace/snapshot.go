@@ -25,7 +25,10 @@ type Limits struct {
 	Files int
 }
 
-var DefaultLimits = Limits{Bytes: 64 << 20, Files: 10000}
+// Real toolchains put derived binaries (esbuild, swc, platform packages)
+// under node_modules well past 64 MiB; the bound guards against runaway
+// workspaces, not against legitimate dependency installs.
+var DefaultLimits = Limits{Bytes: 256 << 20, Files: 10000}
 
 type File struct {
 	Path   string `json:"path"`
