@@ -191,9 +191,12 @@ Workspace/PTY work retains inspection-based recovery. Cancellation never trigger
 a replacement. Exact definition bodies are in the admission journal and backups;
 recovery never silently selects the current bundled revision.
 
-Tenant application execution requires `MITOS_AGENT_CONFINEMENT=bwrap` and
-`MITOS_AGENT_NETWORK=unrestricted`. Workers then run in an isolated network
-namespace whose only egress is a mediated model transport: an allowlisted
+Tenant application execution requires `MITOS_AGENT_CONFINEMENT` to name the
+platform's confinement tool (`bwrap` on Linux, `apple-container` on macOS with
+`MITOS_CONFINEMENT_IMAGE` set, per ADR 0011) and
+`MITOS_AGENT_NETWORK=unrestricted`. Workers then run with no route to any host
+service: on Linux an isolated network namespace, on macOS a VM without a
+network interface, whose only egress is a mediated model transport: an allowlisted
 CONNECT relay on a UNIX socket admitting just the model API endpoints, reached
 through a loopback forwarder inside the sandbox (`HTTPS_PROXY`). Host services —
 including the loopback operator listener — are unreachable from the sandbox, and

@@ -66,6 +66,10 @@ enforcing local provider for [M4](system/06_DELIVERY_AND_CONFORMANCE.md#m4--enfo
 one enforcing layer per attempt, posture attested by the runtime's event stream,
 and model credentials held by a host broker. Read it with
 [grants, resources and providers](system/02_RUNTIME.md#grants-resources-and-providers).
+[ADR 0011](ADRs/0011_MACOS_CONFINEMENT_APPLE_CONTAINER.md) decides how macOS
+confines the same local launches: per-worker apple/container Linux VMs behind
+the existing Confinement interface, with the toolchain moving into OCI images
+and the mediated model transport carried over unchanged.
 
 ## Authority
 

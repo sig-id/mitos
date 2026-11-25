@@ -171,7 +171,7 @@ func TestConfinementOmitsHostControlSockets(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := Confinement{Tool: ConfinementBwrap, NetMode: NetOff}
-	argv, err := confineArgv(c, []string{sh, "-c", "true"}, filepath.Join(root, "attempt"), workspace)
+	argv, err := confineArgv(c, []string{sh, "-c", "true"}, filepath.Join(root, "attempt"), workspace, workspace, resourcepolicy.Agent{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

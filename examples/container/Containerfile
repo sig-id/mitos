@@ -1,0 +1,37 @@
+# Mitos confined-worker image (ADR 0011)
+#
+# macOS confines local workers with apple/container: every confined launch
+# boots this image in its own lightweight Linux VM. The confinement contract:
+#
+#   - workload binaries live under /usr/local/bin and are addressed by name
+#     (the provider rewrites the workload's argv[0] to GuestBinDir + basename)
+#   - a Linux arm64 build of mitos sits at /usr/local/bin/mitos and provides
+#     the in-guest egress loop for mediated model transport
+#   - /bin/sh exists to start that loop
+#
+# Build (Apple Silicon, `container` CLI installed and started):
+#
+#   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o build/mitos ./cmd/mitos
+#   cp "$(command -v codex)" build/codex   # a Linux codex build, not the macOS one
+#   container build -t mitos-worker:latest examples/container
+#
+# Then point the worker at it:
+#
+#   export MITOS_CONFINEMENT_IMAGE=mitos-worker:latest
+#   mitos worker --id ... --url ... --data ...
+#
+# The image is operator-built and named; mitos never fetches one implicitly.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates git \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --create-home --shell /bin/bash mitos
+
+# The guest helper that runs the in-guest egress loop (mediated transport).
+COPY build/mitos /usr/local/bin/mitos
+# The confined workload's own runtime, addressed by basename.
+COPY build/codex /usr/local/bin/codex
+
+USER mitos
+WORKDIR /workspace

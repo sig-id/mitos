@@ -19,8 +19,8 @@ import (
 // namespace whose only route to the outside is the host-side egress relay,
 // reached over a mounted UNIX socket. The relay speaks HTTP CONNECT and admits
 // only the model endpoints on its allowlist, so the worker's HTTPS egress is
-// restricted to model transport while every host service — including the
-// loopback operator listener — stays unreachable.
+// restricted to model transport while every host service – including the
+// loopback operator listener – stays unreachable.
 
 // EgressLoopAddr is the loopback address the in-sandbox forwarder listens on.
 // Proxies are wired through HTTPS_PROXY/HTTP_PROXY; the runtime's own TLS still
@@ -201,8 +201,10 @@ func pipe(a, b net.Conn) {
 // RunEgressLoop is the in-sandbox half of the mediated transport. It ensures
 // the namespace's loopback interface is usable, accepts local CONNECT requests
 // and forwards each tunnel over the mounted relay socket, where the allowlist
-// is enforced.
-func RunEgressLoop(ctx context.Context, socket, listen string) error {
+// is enforced. When ready is non-empty, an empty file is created there once
+// the listener accepts, so the launching wrapper can gate the workload
+// instead of racing the loop's startup.
+func RunEgressLoop(ctx context.Context, socket, listen, ready string) error {
 	if !filepath.IsAbs(socket) {
 		return errors.New("egress loop needs an absolute relay socket path")
 	}
@@ -217,6 +219,12 @@ func RunEgressLoop(ctx context.Context, socket, listen string) error {
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
+	}
+	if ready != "" {
+		if err = os.WriteFile(ready, nil, 0o644); err != nil {
+			listener.Close()
+			return err
+		}
 	}
 	go func() {
 		<-ctx.Done()

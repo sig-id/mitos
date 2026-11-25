@@ -19,7 +19,7 @@ import (
 // confined argv wrapper starts "<helper> egress-loop ..." in the background.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "egress-loop" {
-		socket, listen := "", EgressLoopAddr
+		socket, listen, ready := "", EgressLoopAddr, ""
 		args := os.Args[2:]
 		for i := 0; i < len(args); i++ {
 			switch args[i] {
@@ -29,6 +29,9 @@ func TestMain(m *testing.M) {
 			case "--listen":
 				i++
 				listen = args[i]
+			case "--ready":
+				i++
+				ready = args[i]
 			}
 		}
 		if socket == "" {
@@ -36,7 +39,7 @@ func TestMain(m *testing.M) {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if err := RunEgressLoop(ctx, socket, listen); err != nil {
+		if err := RunEgressLoop(ctx, socket, listen, ready); err != nil {
 			fmt.Fprintln(os.Stderr, "egress-loop:", err)
 			os.Exit(1)
 		}
@@ -281,8 +284,8 @@ func TestEgressMediationProbe(t *testing.T) {
 	os.Exit(0)
 }
 
-// A mediated sandbox must keep host listeners unreachable — including the
-// loopback operator API — while the allowlisted model transport still works.
+// A mediated sandbox must keep host listeners unreachable – including the
+// loopback operator API – while the allowlisted model transport still works.
 func TestConfinedMediatedEgressIsolatesHostAndMediatesModel(t *testing.T) {
 	if _, err := exec.LookPath(ConfinementBwrap); err != nil {
 		t.Skip("bwrap required for mediated egress tests")

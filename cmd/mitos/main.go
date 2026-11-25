@@ -84,6 +84,7 @@ func egressLoop(args []string) error {
 	f := flag.NewFlagSet("egress-loop", flag.ContinueOnError)
 	socket := f.String("socket", "", "Host relay UNIX socket mounted in this namespace")
 	listen := f.String("listen", compute.EgressLoopAddr, "Loopback listen address")
+	ready := f.String("ready", "", "Optional file created once the loop accepts connections")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -92,7 +93,12 @@ func egressLoop(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return compute.RunEgressLoop(ctx, *socket, *listen)
+	defer func() {
+		if *ready != "" {
+			_ = os.Remove(*ready)
+		}
+	}()
+	return compute.RunEgressLoop(ctx, *socket, *listen, *ready)
 }
 
 func serve(args []string) error {

@@ -302,7 +302,7 @@ func (e *Engine) performStructured(ctx context.Context, r Run) error {
 	provider := e.provider
 	if scoped {
 		if !e.confinement.Enabled() || confinementBlocksTransport(e.confinement) {
-			return errors.New("application_execution_unavailable: configure MITOS_AGENT_CONFINEMENT=bwrap and MITOS_AGENT_NETWORK=unrestricted for isolated model transport")
+			return fmt.Errorf("application_execution_unavailable: configure MITOS_AGENT_CONFINEMENT=%s and MITOS_AGENT_NETWORK=unrestricted for isolated model transport", compute.DefaultConfinementTool())
 		}
 		// Mediated transport is mandatory for tenant workers: without it the
 		// sandbox would share the host network namespace and could reach

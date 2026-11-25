@@ -92,6 +92,15 @@ func NewEngine(s *Store, apps []Application, root string) (*Engine, error) {
 			cancel()
 			return nil, confineErr
 		}
+		if confinement.Tool == compute.ConfinementAppleContainer {
+			// ADR 0011: a VM confinement boots from an OCI image shipping the
+			// workload toolchain. Configured but unusable fails startup.
+			confinement.Image = os.Getenv("MITOS_CONFINEMENT_IMAGE")
+			if confinement.Image == "" {
+				cancel()
+				return nil, errors.New("apple-container confinement requires MITOS_CONFINEMENT_IMAGE naming an OCI image that ships the workload toolchain and the guest mitos helper (ADR 0011)")
+			}
+		}
 		// Withheld networks stay withheld. An unrestricted posture is mediated:
 		// the worker sandbox gets its own network namespace whose only egress
 		// is this allowlisted relay, so host listeners – including the
