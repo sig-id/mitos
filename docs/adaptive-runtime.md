@@ -358,9 +358,9 @@ capability. Setup runtime/model selection is independent of automatic task execu
 which supports all built-in coding agents. A setup reply requires operator review before saving.
 
 Coordinated work uses native protocols for Codex and Claude Code. OpenCode, Pi,
-Gemini CLI, GitHub Copilot, Aider, Goose, Amp, Cursor Agent, Qwen Code, Cline
-and Kilo Code use their non-interactive CLI. Cline uses ACP over stdio so Mitos
-can approve individual native reads, edits, commands and web requests using
+Gemini CLI, GitHub Copilot, Aider, Goose, Amp, Cursor Agent, Qwen Code, Cline,
+Kilo Code, and Antigravity CLI use their non-interactive CLI. Cline uses ACP over
+stdio so Mitos can approve individual native reads, edits, commands and web requests using
 the task's grants. Unknown tools and native subagent requests are denied.
 Each invocation can submit a Mitos
 tool request, ask for an operator decision or return a final answer. Mitos passes
@@ -371,6 +371,16 @@ during one invocation. On the local process provider, native tools follow each
 CLI's own permissions. Strict policies refuse capabilities the provider cannot
 enforce. Confined print clients need model credentials available inside the
 sandbox, such as an API key supplied by the selected environment profile.
+
+Antigravity uses `agy models` for model discovery and accepts a model slug and
+reasoning effort in execution presets. It streams progress from `agy` and reads
+the completed response for each Mitos handoff. Headless tool permissions follow
+Antigravity's native settings. Mitos selects `accept-edits` for write grants and
+enables sandboxed commands for command grants when the native sandbox is available.
+For Bubblewrap with unrestricted network access, supply `GEMINI_API_KEY` in the
+environment profile. The headless adapter was checked with Antigravity CLI 1.5.16.
+Nucleus requires a runtime with brokered model access. [Antigravity CLI headless mode](https://antigravity.google/docs/cli/headless/)
+
 Conversations and pending proposals persist in the server data directory, survive a
 browser reload, and appear interrupted after a server restart. They have bounded
 history/output, a cancellation endpoint and an eight-minute reply timeout.

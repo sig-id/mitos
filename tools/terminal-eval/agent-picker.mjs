@@ -14,7 +14,7 @@ const bin=path.join(temporary,'bin'),data=path.join(temporary,'data');
 await mkdir(bin);await mkdir(data);
 const bash=execFileSync('which',['bash'],{encoding:'utf8'}).trim();
 // All selectable built-in fixtures are local processes; no model is called.
-for(const id of ['codex','claude','pi','opencode','aider']){
+for(const id of ['codex','claude','pi','opencode','aider','agy']){
  await writeFile(path.join(bin,id),`#!${bash}\nprintf 'SESSION_READY profile=%s\\n' "$PICKER_PROFILE"\nprintf 'arg=%s\\n' "$@"\nwhile read -r line; do printf '%s\\n' "$line"; done\n`,{mode:0o700});
 }
 await writeFile(path.join(data,'agents.json'),JSON.stringify({
@@ -56,7 +56,7 @@ try{
   await page.unrouteAll({behavior:'wait'});
  }
  await page.locator('#agent-session-dialog [data-close]').click();
- for(const id of ['pi','opencode','custom-agent']){
+ for(const id of ['pi','opencode','antigravity','custom-agent']){
   await page.locator('#start-agent-session').click();await picker.selectOption(id);
   assert.match(await note.textContent(),/native session/);assert.match(await note.textContent(),/not routed to Mitos Notifications/);
   if(id==='pi')await page.locator('#agent-session-form [name=profile_id]').selectOption('pi-work');
@@ -70,6 +70,7 @@ try{
   await page.locator('.xterm-screen').waitFor();
   let output='';await wait(async()=>{output=Buffer.from((await api('/api/sessions/'+sessionID+'/output?offset=0')).data||'','base64').toString();return output.includes('SESSION_READY')});
   assert.match(output,new RegExp(assignment));
+  if(id==='antigravity')assert.match(output,/arg=--prompt-interactive/);
   if(id==='pi')assert.match(output,/selected-work-account/);
   await api('/api/sessions/'+sessionID+'/stop',{});
   await wait(async()=>(await api('/api/sessions/'+sessionID)).status==='stopped');
@@ -84,7 +85,7 @@ try{
   await page.locator('#agent-session-dialog [data-close]').click();await page.unrouteAll({behavior:'wait'});
  }
  assert.deepEqual(errors,[]);
- console.log('PASS: detected agent picker, managed transport, Pi/OpenCode/custom native launches, profile and assignment preservation, unsupported capabilities, empty and failed discovery');
+ console.log('PASS: detected agent picker, managed transport, Pi/OpenCode/Antigravity/custom native launches, profile and assignment preservation, unsupported capabilities, empty and failed discovery');
 }finally{
  await browser?.close();if(server.exitCode===null){server.kill('SIGTERM');await exited}
  await rm(temporary,{recursive:true,force:true});

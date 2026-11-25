@@ -31,6 +31,7 @@ echo '{"type":"control_response","response":{"subtype":"success","request_id":"m
 `)
 	fakeCLI(t, dir, "cursor-agent", `[ "$1" = --list-models ] && echo 'fixture/model - Studio model'`)
 	fakeCLI(t, dir, "opencode", `[ "$1" = models ] && echo fixture/model`)
+	fakeCLI(t, dir, "agy", `[ "$1" = models ] && printf 'Fetching available models...\nfixture/model\tFixture model (Medium)\n'`)
 	fakeCLI(t, dir, "aider", `echo unexpected >> "$CALLS"`)
 	pi := fakeCLI(t, dir, "pi-wrapper", `echo "fixture model 32K 2K yes no"`)
 	r, err := New(Builtins(), Config{Profiles: []Profile{
@@ -45,7 +46,7 @@ echo '{"type":"control_response","response":{"subtype":"success","request_id":"m
 	for range 2 {
 		for _, a := range r.ListWithModels(t.Context(), dir) {
 			switch a.ID {
-			case "opencode", "aider", "pi", "cursor":
+			case "opencode", "aider", "pi", "cursor", "antigravity":
 				profile := ""
 				if a.ID == "pi" {
 					profile = "pi-account"
@@ -56,6 +57,9 @@ echo '{"type":"control_response","response":{"subtype":"success","request_id":"m
 				models := a.HarnessEnvironments[0].Models
 				if a.ID != "aider" && (len(models) != 1 || models[0].ID != "fixture/model") {
 					t.Fatal(a.ID, models)
+				}
+				if a.ID == "antigravity" && models[0].Name != "Fixture model (Medium)" {
+					t.Fatal(models)
 				}
 			case "codex":
 				want := []HarnessModel{{ID: "model-a", Default: true, Efforts: []string{"low"}}, {ID: "model-b", Efforts: []string{}}}

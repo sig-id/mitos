@@ -99,6 +99,9 @@ func resources(id, workspace string, env map[string]string) []Resource {
 		add("memory", "user", user(".gemini", "GEMINI.md"))
 		project("config", ".gemini/settings.json")
 		project("memory", "GEMINI.md")
+	case "antigravity":
+		add("config", "user", user(".gemini", "antigravity-cli", "settings.json"))
+		add("history", "user", user(".gemini", "antigravity-cli", "conversations"))
 	case "copilot":
 		add("config", "user", user(".copilot", "config.json"))
 		add("skills", "user", user(".copilot", "skills"))

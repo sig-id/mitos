@@ -19,11 +19,15 @@ func TestNativeSessionArguments(t *testing.T) {
 		{"opencode", "fork", "ses_123456789", []string{"--session", "ses_123456789", "--fork", "--prompt", "--not-a-flag"}},
 		{"pi", "resume", uuid, []string{"--session", uuid, "--", "--not-a-flag"}},
 		{"pi", "fork", uuid, []string{"--fork", uuid, "--", "--not-a-flag"}},
+		{"antigravity", "resume", uuid, []string{"--conversation", uuid, "--prompt-interactive", "--not-a-flag"}},
 	} {
 		t.Run(tc.protocol+"/"+tc.mode, func(t *testing.T) {
 			prompt := "positional"
 			if tc.protocol == "opencode" {
 				prompt = "--prompt"
+			}
+			if tc.protocol == "antigravity" {
+				prompt = "--prompt-interactive"
 			}
 			c := CLI{Definition{SessionProtocol: tc.protocol, Prompt: prompt}}
 			args, err := c.SessionArguments(tc.mode, tc.reference, "--not-a-flag")
@@ -36,6 +40,27 @@ func TestNativeSessionArguments(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAntigravityNativeLaunch(t *testing.T) {
+	dir := t.TempDir()
+	agy := fakeCLI(t, dir, "agy", `echo 1.5.16`)
+	r, err := New(Builtins(), Config{}, []string{"PATH=" + dir, "HOME=" + dir, "GEMINI_API_KEY=fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := r.Inspect("antigravity", "", dir)
+	if err != nil || a.Executable != agy || !a.Capabilities.InitialPrompt || !a.Capabilities.Resume || a.Capabilities.Fork || a.Capabilities.RequestBridge {
+		t.Fatal(a, err)
+	}
+	launch, err := r.Prepare(Request{AgentID: "antigravity", Prompt: "Inspect the workspace"})
+	if err != nil || !reflect.DeepEqual(launch.Args, []string{"--prompt-interactive", "Inspect the workspace"}) || launch.NativeSessionID != "" {
+		t.Fatal(launch, err)
+	}
+	const conversation = "11111111-2222-4333-8444-555555555555"
+	if _, err = r.PrepareContinuation(Request{AgentID: "antigravity"}, "fork", conversation); err == nil {
+		t.Fatal("native fork accepted")
 	}
 }
 

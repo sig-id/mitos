@@ -87,6 +87,11 @@ func (c CLI) SessionArguments(mode, reference, prompt string) ([]string, error) 
 			flag = "--fork"
 		}
 		args = append(args, flag, reference)
+	case "antigravity":
+		if mode == "fork" {
+			return nil, errors.New("Antigravity CLI forks conversations inside its terminal; use context handover to start a separate Mitos session")
+		}
+		args = append(args, "--conversation", reference)
 	}
 	c.Spec.Args = args
 	return c.Arguments(prompt)

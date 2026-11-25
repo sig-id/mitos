@@ -1,6 +1,7 @@
 package agentcli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,6 +41,18 @@ func PrintArguments(id, model, effort string, granted func(string) bool) ([]stri
 			}
 			args = append(args, "--approval-mode", mode)
 		}
+	case "antigravity":
+		// Pin the session mode because agy may otherwise default to Auto.
+		settings := map[string]any{"agentMode": "", "toolPermission": "request-review", "allowNonWorkspaceAccess": false}
+		if granted("workspace.write") {
+			settings["agentMode"] = "accept-edits"
+		}
+		if granted("command.run") {
+			settings["enableTerminalSandbox"] = true
+			settings["toolPermission"] = "proceed-in-sandbox"
+		}
+		body, _ := json.Marshal(settings)
+		args = []string{"--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands", "--settings", string(body)}
 	case "copilot":
 		args = []string{"-s", "--no-ask-user", "--excluded-tools=task"}
 		if granted("workspace.write") {
@@ -74,7 +87,7 @@ func PrintArguments(id, model, effort string, granted func(string) bool) ([]stri
 			flag = "--variant"
 		case "pi", "cline":
 			flag = "--thinking"
-		case "amp":
+		case "amp", "antigravity":
 			flag = "--effort"
 		default:
 			return nil, fmt.Errorf("%s cannot select reasoning effort", id)
