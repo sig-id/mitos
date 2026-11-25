@@ -20,6 +20,12 @@ import (
 // Exercise the stdin/stdout protocol through an actual graph, including a
 // fresh native process for each tool response and access to the same workspace.
 func TestPrintAdapterCoordinatedGoal(t *testing.T) {
+	for _, runtime := range []string{"opencode", "antigravity"} {
+		t.Run(runtime, func(t *testing.T) { testPrintAdapterCoordinatedGoal(t, runtime) })
+	}
+}
+
+func testPrintAdapterCoordinatedGoal(t *testing.T, runtime string) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 required for CLI fixture")
@@ -27,10 +33,24 @@ func TestPrintAdapterCoordinatedGoal(t *testing.T) {
 	bin := t.TempDir()
 	script := `import json, pathlib, sys
 args=sys.argv[1:]
-assert args[0]=='run' and args[args.index('--model')+1]=='fixture/worker',args
-p=sys.stdin.read()
+assert args[args.index('--model')+1]=='fixture/worker',args
+is_agy=pathlib.Path(sys.argv[0]).name=='agy'
+if is_agy:
+    assert args[:4]==['--input-format','stream-json','--output-format','stream-json'],args
+    event=json.loads(sys.stdin.readline())
+    assert event['event']=='user',event
+    p=event['message']['content']
+else:
+    assert args[0]=='run',args
+    p=sys.stdin.read()
 prefix=p.split('\nReply prefix: ')[-1]
 history=json.loads(p.split('\nPrior turns: ')[-1].split('\nReply prefix: ')[0]) or []
+def respond(text):
+    if is_agy:
+        print(json.dumps({'event':'step_update','step_update':{'step_type':'agent_response','text_delta':prefix+'{"final":"preview only"}'}}))
+        print(json.dumps({'event':'result','result':{'status':'SUCCESS','response':text}}))
+    else:
+        print(text)
 if 'You are the orchestrator: the final field' in p:
     state=json.JSONDecoder().raw_decode(p.split('\n## graph_state (')[1].split('\n',1)[1])[0]
     workers=[e for e in state['journal'] if e['kind']=='application']
@@ -47,8 +67,7 @@ if 'You are the orchestrator: the final field' in p:
         reply={'tool':'artifact_read','arguments':{'run_id':workers[-1]['run_id'],'artifact_id':ref['id'],'offset':0,'limit':32768}}
     elif not workers and not history:
         # A broken first plan (an extra brace, as GLM sent) is returned for resending.
-        print('Plan follows.')
-        print(prefix+'{"final":{"operations":[]}}}')
+        respond('Plan follows.\n'+prefix+'{"final":{"operations":[]}}}')
         sys.exit(0)
     else:
         assert not workers or 'rejected_reply' not in history[0],history
@@ -68,15 +87,18 @@ else:
     assert 'error' not in history[-1]['response']
     reply={'final':'The answer is '+pathlib.Path('answer.txt').read_text().strip()+'.'}
 print(prefix+'{"final":"wrong stream"}',file=sys.stderr)
-print(prefix+json.dumps(reply))
-print('usage statistics')
+respond(prefix+json.dumps(reply)+'\nusage statistics')
 `
-	if err = os.WriteFile(filepath.Join(bin, "opencode"), []byte("#!"+python+"\n"+script), 0700); err != nil {
+	executable := runtime
+	if runtime == "antigravity" {
+		executable = "agy"
+	}
+	if err = os.WriteFile(filepath.Join(bin, executable), []byte("#!"+python+"\n"+script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	e, req := workflowTestEngine(t)
-	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "print-adapter", ProjectID: req.ProjectID, Goal: "Compute and review the answer", Execution: defaultExecution("opencode", "fixture/worker")})
+	g, err := e.StartAutomaticGoal(AutomaticGoal{Key: "print-adapter", ProjectID: req.ProjectID, Goal: "Compute and review the answer", Execution: defaultExecution(runtime, "fixture/worker")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +112,7 @@ print('usage statistics')
 			break
 		}
 		for _, run := range e.Store.List() {
-			if d := run.Decision; d != nil && d.Resolution == nil && d.Source != nil && d.Source.Adapter == "opencode" {
+			if d := run.Decision; d != nil && d.Resolution == nil && d.Source != nil && d.Source.Adapter == runtime {
 				err = e.Store.ResolveChoice(run.ID, decision.Resolution{DecisionID: d.ID, Choice: "answer", Value: json.RawMessage(`"42"`), Via: "api"}, decision.LocalOperator(), nil)
 				if err != nil {
 					t.Fatal(err)

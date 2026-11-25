@@ -80,9 +80,9 @@ anything. See [automatic workflow](docs/adaptive-runtime.md#automatic-workflow).
 
 Use **Start agent session** to select an automatically detected coding CLI and
 environment profile, then enter an assignment. Codex and Claude sessions route
-supported questions and approvals to **Inbox**. Other agents, including Pi and
-OpenCode, open native sessions with questions and approvals handled in the browser
-terminal; the picker explains this before launch. Installed agents whose adapters
+supported questions and approvals to **Inbox**. Other agents, including Pi,
+OpenCode, and Antigravity CLI, handle questions and approvals in the browser
+terminal. The picker explains this before launch. Installed agents whose adapters
 cannot receive an initial assignment appear disabled with an explanation.
 The CLI equivalent is `./bin/mitos agent codex --workspace /path/to/project` while
 Mitos is serving. Add `--keep-open --prompt "Assignment"` to supply the initial
@@ -90,6 +90,12 @@ assignment and keep the conversation open. Codex supports live turn steering and
 Independent boundary review is configured in **Project setup → Autonomy & approvals**;
 [supervision incidents](docs/independent-supervision.md) appear on the project page.
 Bridge resume/fork is not yet supported; ordinary native sessions remain available below.
+
+For Antigravity CLI, put `agy` on the Studio server's `PATH` and sign in once by
+running `agy` as the same user, or configure its Gemini API key authentication.
+Select **Antigravity CLI** in the session picker or as a coordinated runtime in
+the project's execution policy. To resume a native session from Mitos, enter its
+Antigravity conversation UUID. [Google Antigravity authentication](https://antigravity.google/docs/install?tab=cli)
 
 Installed interactive agent terminals are separate executors. **Sessions & earlier
 work → New native session** retains their assignment, coordination inbox, reports,

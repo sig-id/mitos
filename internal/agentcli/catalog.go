@@ -18,7 +18,7 @@ func (c CLI) Capabilities() Capabilities {
 		Transport:        "pty",
 		InitialPrompt:    c.Spec.Prompt != "none",
 		Resume:           c.Spec.SessionProtocol != "",
-		Fork:             c.Spec.SessionProtocol != "",
+		Fork:             c.Spec.SessionProtocol != "" && c.Spec.SessionProtocol != "antigravity",
 	}
 }
 func (c CLI) Resources(workspace string, env map[string]string) []Resource {
@@ -49,6 +49,7 @@ func Builtins() []Adapter {
 		{ID: "opencode", SessionProtocol: "opencode", Name: "OpenCode", Kind: "agent", Executables: []string{"opencode"}, Prompt: "--prompt", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"}, Docs: "https://opencode.ai/docs/cli/"},
 		{ID: "pi", SessionProtocol: "pi", Name: "Pi", Kind: "agent", Executables: []string{"pi"}, Prompt: "positional", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"}, Docs: "https://github.com/earendil-works/pi/tree/main/packages/coding-agent"},
 		{ID: "gemini", Name: "Gemini CLI", Kind: "agent", Executables: []string{"gemini"}, Prompt: "--prompt-interactive", EnvNames: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"}, Docs: "https://geminicli.com/docs/cli/cli-reference/"},
+		{ID: "antigravity", SessionProtocol: "antigravity", Name: "Antigravity CLI", Kind: "agent", Executables: []string{"agy"}, Prompt: "--prompt-interactive", EnvNames: []string{"GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL", "AGY_ADC_AUTH", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_QUOTA_PROJECT", "GOOGLE_CLOUD_LOCATION"}, Docs: "https://antigravity.google/docs/cli/reference/"},
 		{ID: "copilot", Name: "GitHub Copilot", Kind: "agent", Executables: []string{"copilot"}, Prompt: "--interactive", EnvNames: []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}, Docs: "https://docs.github.com/en/copilot/reference/cli-command-reference"},
 		{ID: "aider", Name: "Aider", Kind: "agent", Executables: []string{"aider"}, Prompt: "none", EnvNames: []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "AIDER_MODEL", "AIDER_CONFIG"}, Docs: "https://aider.chat/docs/config/options.html"},
 		{ID: "goose", Name: "Goose", Kind: "agent", Executables: []string{"goose"}, Args: []string{"session"}, Prompt: "none", EnvNames: []string{"GOOSE_PROVIDER", "GOOSE_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"}, Docs: "https://block.github.io/goose/"},

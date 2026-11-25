@@ -50,6 +50,17 @@ func stageConfinementHome(base, runtime string, env []string) ([]string, error) 
 	if !stageLogin {
 		// These clients can use credentials supplied by their environment
 		// profile. Keep their native caches and settings in the attempt home.
+		if runtime == "antigravity" && envValue(env, "GEMINI_API_KEY") != "" {
+			// agy requires an explicit provider selection even when the key
+			// is set. Stage only that selection into the isolated home.
+			config := filepath.Join(home, ".gemini", "antigravity-cli")
+			if err := os.MkdirAll(config, 0o700); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(config, "settings.json"), []byte(`{"modelProvider":"gemini"}`), 0o600); err != nil {
+				return nil, err
+			}
+		}
 		out := []string{"HOME=" + home}
 		for _, entry := range env {
 			if !strings.HasPrefix(entry, "HOME=") {

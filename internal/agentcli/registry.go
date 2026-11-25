@@ -88,7 +88,9 @@ func New(adapters []Adapter, config Config, environ []string) (*Registry, error)
 		if !identifier.MatchString(d.ID) || ids[d.ID] || strings.TrimSpace(d.Name) == "" || len(d.Executables) == 0 || (d.Prompt != "none" && d.Prompt != "positional" && !strings.HasPrefix(d.Prompt, "--")) {
 			return nil, fmt.Errorf("invalid or duplicate agent definition %q", d.ID)
 		}
-		if d.SessionProtocol != "" && d.SessionProtocol != "codex" && d.SessionProtocol != "claude" && d.SessionProtocol != "opencode" && d.SessionProtocol != "pi" {
+		switch d.SessionProtocol {
+		case "", "codex", "claude", "opencode", "pi", "antigravity":
+		default:
 			return nil, fmt.Errorf("unknown session protocol %q", d.SessionProtocol)
 		}
 		ids[d.ID] = true

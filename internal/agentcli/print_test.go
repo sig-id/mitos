@@ -1,6 +1,7 @@
 package agentcli
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 // Every coordinated CLI must have a non-interactive invocation, accept a
 // selected model verbatim and expose only efforts it can pass to that CLI.
 func TestCoordinatedPrintArguments(t *testing.T) {
-	modes := map[string]string{"opencode": "run", "kilo": "run", "pi": "--print", "gemini": "--output-format", "qwen": "--output-format", "copilot": "-s", "goose": "run", "amp": "--execute", "cursor": "--print", "cline": "--acp", "aider": "--message-file"}
+	modes := map[string]string{"opencode": "run", "kilo": "run", "pi": "--print", "gemini": "--output-format", "antigravity": "--input-format", "qwen": "--output-format", "copilot": "-s", "goose": "run", "amp": "--execute", "cursor": "--print", "cline": "--acp", "aider": "--message-file"}
 	for _, adapter := range Builtins() {
 		spec := adapter.Definition()
 		if spec.Kind != "agent" {
@@ -51,5 +52,31 @@ func TestEditApprovalModes(t *testing.T) {
 		if err != nil || !slices.Equal(args, []string{"--output-format", "text", "--approval-mode", mode}) {
 			t.Fatalf("%s: %v %v", runtime, args, err)
 		}
+	}
+}
+
+func TestAntigravityPrintSettings(t *testing.T) {
+	for _, tc := range []struct {
+		grant, mode, permission string
+		sandbox                 bool
+	}{
+		{"workspace.read", "", "request-review", false},
+		{"workspace.write", "accept-edits", "request-review", false},
+		{"command.run", "", "proceed-in-sandbox", true},
+	} {
+		t.Run(tc.grant, func(t *testing.T) {
+			args, err := PrintArguments("antigravity", "gemini-4-carbon", "high", func(capability string) bool { return capability == tc.grant })
+			if err != nil || len(args) != 11 || !slices.Equal(args[:6], []string{"--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands", "--settings"}) || !slices.Equal(args[7:], []string{"--model", "gemini-4-carbon", "--effort", "high"}) {
+				t.Fatal(args, err)
+			}
+			var settings map[string]any
+			if err = json.Unmarshal([]byte(args[6]), &settings); err != nil {
+				t.Fatal(err)
+			}
+			sandbox, _ := settings["enableTerminalSandbox"].(bool)
+			if settings["agentMode"] != tc.mode || settings["toolPermission"] != tc.permission || settings["allowNonWorkspaceAccess"] != false || sandbox != tc.sandbox {
+				t.Fatal(settings)
+			}
+		})
 	}
 }

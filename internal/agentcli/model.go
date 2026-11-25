@@ -19,7 +19,7 @@ type Capabilities struct {
 
 type Definition struct {
 	ContextArgs     []string `json:"context_args,omitempty"`     // explicit noninteractive custom adapter; JSON profile on stdout
-	SessionProtocol string   `json:"session_protocol,omitempty"` // codex, claude, opencode, or pi
+	SessionProtocol string   `json:"session_protocol,omitempty"` // codex, claude, opencode, pi, or antigravity
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`
 	Kind            string   `json:"kind"` // agent, application, or shell

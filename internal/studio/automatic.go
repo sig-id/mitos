@@ -837,11 +837,16 @@ func (e *Engine) performAgent(ctx context.Context, r Run) error {
 			}
 			turnCommand = func(input []byte) compute.Command {
 				cmd := compute.Command{Argv: append([]string{native.Executable}, cliArgs...), Directory: dir, NativeEnv: agentEnv}
-				if b.Runtime == "cline" {
+				switch b.Runtime {
+				case "antigravity":
+					cmd.Interact = func(_ context.Context, stream io.ReadWriteCloser, output io.Writer) error {
+						return harness.RunAntigravity(stream, io.MultiWriter(&turns.output, output), preview, string(input))
+					}
+				case "cline":
 					cmd.Interact = func(ctx context.Context, stream io.ReadWriteCloser, output io.Writer) error {
 						return harness.RunClineACP(ctx, stream, io.MultiWriter(&turns.output, output), dir, string(input), b.Model, authority.Granted)
 					}
-				} else {
+				default:
 					cmd.Input, cmd.Stdout = input, &turns.output
 				}
 				return cmd

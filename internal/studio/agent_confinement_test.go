@@ -81,6 +81,15 @@ func TestStageConfinementHomeStagesAuthentication(t *testing.T) {
 	if err != nil || !slices.Contains(printEnv, "HOME="+home) || slices.Contains(printEnv, "HOME="+host) || !slices.Contains(printEnv, "OTHER=1") {
 		t.Fatalf("unexpected print adapter environment: %v %v", printEnv, err)
 	}
+	// Antigravity needs a provider setting in addition to the profile key.
+	printEnv, err = stageConfinementHome(base, "antigravity", append(env, "GEMINI_API_KEY=fixture"))
+	if err != nil || !slices.Contains(printEnv, "HOME="+home) || !slices.Contains(printEnv, "GEMINI_API_KEY=fixture") {
+		t.Fatalf("unexpected Antigravity environment: %v %v", printEnv, err)
+	}
+	body, err = os.ReadFile(filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"))
+	if err != nil || string(body) != `{"modelProvider":"gemini"}` {
+		t.Fatalf("Antigravity provider not staged: %q %v", body, err)
+	}
 	// Unrelated runtimes keep their environment.
 	same, err := stageConfinementHome(base, "custom", env)
 	if err != nil || strings.Join(same, "\n") != strings.Join(env, "\n") {

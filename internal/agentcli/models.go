@@ -272,7 +272,7 @@ func printCatalog(ctx context.Context, launch Launch) modelCatalog {
 	}
 	var args []string
 	switch launch.AgentID {
-	case "opencode", "kilo":
+	case "opencode", "kilo", "antigravity":
 		args = []string{"models"}
 	case "cursor":
 		args = []string{"--list-models"}
@@ -304,6 +304,16 @@ func printCatalog(ctx context.Context, launch Launch) modelCatalog {
 	for line := range strings.SplitSeq(lines, "\n") {
 		fields := strings.Fields(line)
 		switch launch.AgentID {
+		case "antigravity":
+			// agy prints a slug and a display name in tab-separated columns.
+			line = strings.TrimSpace(line)
+			id, name, ok := strings.Cut(line, "\t")
+			if !ok {
+				id, name, ok = strings.Cut(line, "  ")
+			}
+			if ok {
+				catalog.add(strings.TrimSpace(id), strings.TrimSpace(name), false, nil)
+			}
 		case "cursor":
 			id, name, ok := strings.Cut(strings.TrimSpace(line), " - ")
 			if ok {
