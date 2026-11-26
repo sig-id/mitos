@@ -47,6 +47,25 @@ func (e *Engine) reconcileGraphs() error {
 	slices.Sort(ids)
 	for _, id := range ids {
 		old := s.graphs[id]
+		// A work item whose deadline passed with work still pending gets one
+		// journalled announcement, so the stall is visible instead of silent
+		// and every later amendment's distinct expiry error has a cause in the
+		// journal (issue #137). Supervision holds orchestration, not facts.
+		if old.Status == "active" && !time.Now().Before(old.Limits.Deadline) && old.ExpiredNotice.IsZero() {
+			g := graphClone(*old)
+			now := time.Now().UTC()
+			g.ExpiredNotice = now
+			g.UpdatedAt = now
+			gc := graphChange{Graph: g}
+			s.projectGraph(&gc, old)
+			// The graph change itself is the payload: ExpiredNotice, the limits
+			// and every member state are in it, so consumers can derive the
+			// pending count without a parallel metadata field.
+			if err := s.commit("", "effect", "work_deadline_passed", change{Graph: &gc}); err != nil {
+				return err
+			}
+			continue
+		}
 		if s.supervisionHeld(old.ProjectID) || old.Status != "active" || !time.Now().Before(old.Limits.Deadline) {
 			continue
 		}

@@ -74,7 +74,7 @@ func (e *Engine) resumeConfigured(ctx context.Context, r Run) error {
 		before.OmittedSubmodules = r.Workspace.OmittedSubmodules
 	}
 	oracleDir := filepath.Join(base, "oracle")
-	oracle, err := workspacefs.CaptureResult(ctx, oracleDir, workspacefs.DefaultLimits)
+	oracle, err := workspacefs.CaptureInstalled(ctx, oracleDir, workspacefs.DefaultLimits)
 	if err != nil || oracle.Fingerprint != plan.OracleFingerprint {
 		return errOracleTampered
 	}

@@ -37,10 +37,39 @@ type File struct {
 
 type Snapshot struct {
 	OmittedSubmodules []string `json:"omitted_submodules,omitempty"`
-	Limits            Limits   `json:"-"`
-	Files             []File   `json:"files"`
-	TotalBytes        int64    `json:"total_bytes"`
-	Fingerprint       string   `json:"fingerprint"`
+	// OmittedDerivable records directories excluded from the capture because
+	// their contents are derivable dependencies and caches, not work products
+	// (issue #137). The omission is recorded so it is visible, never silent.
+	OmittedDerivable []OmittedDirectory `json:"omitted_derivable,omitempty"`
+	Limits           Limits             `json:"-"`
+	Files            []File             `json:"files"`
+	TotalBytes       int64              `json:"total_bytes"`
+	Fingerprint      string             `json:"fingerprint"`
+}
+
+// OmittedDirectory names one excluded derivable directory with the file and
+// byte counts the capture skipped.
+type OmittedDirectory struct {
+	Name  string `json:"name"`
+	Files int    `json:"files"`
+	Bytes int64  `json:"bytes"`
+}
+
+// derivableDirectories are excluded from result captures wherever they
+// appear in the tree. The list is fixed, not worker-controlled: a worker
+// cannot use it to conceal an edit, and the excluded names are exactly the
+// ones package managers regenerate from manifests. The intake snapshot
+// (CaptureSource) already omits them through Git's ignore semantics, so the
+// verification tree's before and after sides stay symmetric.
+var derivableDirectories = map[string]bool{
+	"node_modules":  true, // npm/pnpm/yarn/bun dependencies
+	"__pycache__":   true, // Python bytecode caches
+	".venv":         true, // virtual environments
+	"venv":          true,
+	".pytest_cache": true,
+	".mypy_cache":   true,
+	"target":        true, // Cargo build output
+	".gradle":       true, // Gradle caches
 }
 
 type LimitError struct {
@@ -68,18 +97,32 @@ func CaptureSource(ctx context.Context, source, dataDir string, limits Limits) (
 	return capture(ctx, source, paths, dataDir, limits, false)
 }
 
-// CaptureResult ignores worker Git metadata but never trusts worker ignore rules:
-// a worker cannot conceal an oracle edit by adding its path to .gitignore.
+// CaptureResult ignores worker Git metadata and never trusts worker ignore
+// rules: a worker cannot conceal an oracle edit by adding its path to
+// .gitignore. Fixed, well-known derivable dependency and cache directories
+// are excluded instead – recorded in the snapshot so the omission is visible –
+// because they are regenerated from manifests, bloat patches and every
+// downstream private copy (issue #137).
 func CaptureResult(ctx context.Context, root string, limits Limits) (Snapshot, error) {
-	return captureResult(ctx, root, limits, true)
+	return captureResult(ctx, root, limits, true, true)
+}
+
+// CaptureInstalled captures an installed application tree the way
+// CaptureSource does – Git metadata omitted, every real file kept. Re-captures
+// must use these semantics, not CaptureResult's derivable exclusions, or an
+// installed __pycache__ would look like tampering against the intake
+// fingerprint.
+func CaptureInstalled(ctx context.Context, root string, limits Limits) (Snapshot, error) {
+	return captureResult(ctx, root, limits, true, false)
 }
 
 // CaptureData includes every data file, including names used for Git metadata.
 func CaptureData(ctx context.Context, root string, limits Limits) (Snapshot, error) {
-	return captureResult(ctx, root, limits, false)
+	return captureResult(ctx, root, limits, false, false)
 }
-func captureResult(ctx context.Context, root string, limits Limits, omitGit bool) (Snapshot, error) {
+func captureResult(ctx context.Context, root string, limits Limits, omitGit, excludeDerivable bool) (Snapshot, error) {
 	var paths []string
+	var omitted []OmittedDirectory
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -96,6 +139,18 @@ func captureResult(ctx context.Context, root string, limits Limits, omitGit bool
 			}
 			return nil
 		}
+		if excludeDerivable && d.IsDir() && derivableDirectories[d.Name()] {
+			files, bytes, statErr := directoryFootprint(path)
+			if statErr != nil {
+				return statErr
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			omitted = append(omitted, OmittedDirectory{Name: filepath.ToSlash(rel), Files: files, Bytes: bytes})
+			return filepath.SkipDir
+		}
 		if !d.IsDir() {
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
@@ -108,7 +163,37 @@ func captureResult(ctx context.Context, root string, limits Limits, omitGit bool
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return capturePaths(ctx, root, paths, "", limits, true, !omitGit)
+	snapshot, err := capturePaths(ctx, root, paths, "", limits, true, !omitGit)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snapshot.OmittedDerivable = omitted
+	return snapshot, nil
+}
+
+// directoryFootprint counts the regular files and bytes under one excluded
+// derivable directory, so the manifest can state exactly what was skipped.
+func directoryFootprint(root string) (int, int64, error) {
+	files, bytes := 0, int64(0)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || path == root {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		files++
+		bytes += info.Size()
+		return nil
+	})
+	return files, bytes, err
 }
 
 func within(root, path string) bool {

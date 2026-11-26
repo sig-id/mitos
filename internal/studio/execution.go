@@ -343,7 +343,7 @@ func (e *Engine) attempt(ctx context.Context, r Run, app Application, history *w
 		}
 		return err
 	}
-	currentOracle, oracleErr := workspacefs.CaptureResult(harvestCtx, oracleDir, workspacefs.DefaultLimits)
+	currentOracle, oracleErr := workspacefs.CaptureInstalled(harvestCtx, oracleDir, workspacefs.DefaultLimits)
 	if oracleErr != nil || currentOracle.Fingerprint != oracle.Fingerprint {
 		touched = append(touched, "installed acceptance files")
 	}
@@ -453,7 +453,7 @@ func (e *Engine) evaluate(ctx context.Context, r Run, app Application, history *
 	}
 	// Verifiers can create build output in their own result tree, but cannot
 	// rewrite the saved oracle and still produce a trusted local verdict.
-	currentOracle, err := workspacefs.CaptureResult(verifyCtx, oracleDir, workspacefs.DefaultLimits)
+	currentOracle, err := workspacefs.CaptureInstalled(verifyCtx, oracleDir, workspacefs.DefaultLimits)
 	if err == nil && currentOracle.Fingerprint != oracle.Fingerprint {
 		if err = e.Store.RecordEvidence(r.ID, "oracle_tampered", "Acceptance modified its saved oracle files.", map[string]string{"before": oracle.Fingerprint, "after": currentOracle.Fingerprint}); err != nil {
 			return err

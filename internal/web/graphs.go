@@ -23,6 +23,11 @@ func graphFailure(w http.ResponseWriter, err error) {
 	if errors.Is(err, studio.ErrConflict) {
 		code = 409
 	}
+	if errors.Is(err, studio.ErrWorkExpired) {
+		// The work item's own deadline passed (issue #137): gone for this
+		// deadline; resuming with a later one is the remedy.
+		code = 410
+	}
 	var failure *studio.HandoffFailure
 	if errors.As(err, &failure) {
 		writeJSON(w, code, map[string]any{"error": err.Error(), "details": failure})

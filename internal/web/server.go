@@ -437,6 +437,11 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, studio.ErrConflict) {
 		code = 409
 	}
+	if errors.Is(err, studio.ErrWorkExpired) {
+		// The work item's own deadline passed (issue #137): the resource is
+		// gone for this deadline, and resuming with a later one is the remedy.
+		code = 410
+	}
 	p := s.base("error", "Something needs attention", "work")
 	p.Error = err.Error()
 	s.render(w, r, p, code)

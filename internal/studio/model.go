@@ -20,6 +20,12 @@ import (
 var ErrConflict = errors.New("this work has already changed; refresh and try again")
 var ErrNotFound = errors.New("work not found")
 
+// ErrWorkExpired reports that the work item's own deadline has passed. It is
+// distinct from ErrConflict so operators are pointed at the actual remedy –
+// resuming with a later deadline – instead of chasing phantom concurrent
+// modifications (issue #137).
+var ErrWorkExpired = errors.New("work deadline passed; resume with a later deadline")
+
 type Brief struct {
 	Execution      *AgentExecutionPolicy `json:"execution,omitempty"`
 	ProjectID      string                `json:"project_id,omitempty"`
